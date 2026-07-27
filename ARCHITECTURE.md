@@ -160,9 +160,10 @@ The sole authoritative workflow-state writer. It:
 
 In the current Worker path it also commits a Context-bound Attempt atomically,
 claims dispatch against the exact active Workflow version, owns cancellation
-and `AbortSignal` ordering, and converts a validated Worker event into a
-runtime-authored internal command. The Worker cannot choose that command or
-mutate state through its delivery identity.
+and `AbortSignal` ordering, reloads that claim before every event admission,
+and converts a validated Worker event into a runtime-authored internal command.
+Every durable receipt retains dispatch causality. The Worker cannot choose that
+command or mutate state through its delivery identity.
 
 The M1 package root exposes a narrow Goal application capability for public
 adapters. That capability contains only public Goal commands; the internal
@@ -190,6 +191,14 @@ and entry projection before the Store commits them with Attempt start. Dispatch
 consumes an immutable version-fenced claim; Worker event receipts use an
 identity domain separate from application commands. See
 [ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+
+M1 does not yet have a durable resolver for selected Fact, Human Decision, or
+project-source authority, and Slice 4 has no Candidate Manager authority port.
+Its Context Packages therefore contain no selected entries, omission decisions,
+or Candidate bindings; only compiler-owned Goal and criterion Manifest entries
+are allowed. A factory cannot create authority by assigning a trusted-looking
+label or a self-consistent Candidate digest. See
+[ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md).
 
 ### Candidate Manager
 
@@ -314,6 +323,17 @@ codec rules as defense in depth, and strengthening migrations fail closed for
 retained rows that cannot prove the new contract. See
 [ADR 0013](docs/adr/0013-authority-boundary-validation-closure.md).
 
+Policy installation follows the same closure. The Runtime accepts a definition
+without caller-authored identity, computes its canonical digest, and assigns
+installation time and audit identity. The Store independently recomputes the
+digest. The Policy row and installation audit commit or roll back together;
+startup rechecks retained Policy content, and migration 0010 refuses unaudited
+Policy authority. After migrations, every Store startup also rederives retained
+M1 Context identity from its authoritative sources and validates dispatch
+claims, terminal Attempt time, and every Worker receipt's causal link to its
+claim. SQLite triggers protect normal writes; startup checks detect authority
+data changed while the Store was offline.
+
 ## Capability Enforcement
 
 The Workflow Runtime derives a capability grant from phase and policy. The
@@ -355,6 +375,9 @@ See [ADR 0009](docs/adr/0009-command-idempotency-and-worker-boundary.md).
 The concrete M1 Context binding, durable dispatch claim, cancellation ordering,
 and Worker receipt transaction are specified by
 [ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+The M1 source closure, Policy installation authority, receipt causality, and
+stream termination rules are specified by
+[ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md).
 
 ## Dependency Direction
 
@@ -424,6 +447,16 @@ inside one strict runtime boundary and remain evaluation failures. Runtime
 computation/invariant failures retain their own error category, and none of
 these infrastructure failures is recorded as a deterministic domain-command
 outcome.
+
+Worker stream termination is also explicit. An empty or invalid-delivery-only
+M1 stream records non-retryable `PROTOCOL_ERROR`; an uncancelled iterator or
+process throw records `ABRUPT_TERMINATION` and requires reconciliation.
+Recording either failure first reloads and exactly binds the durable dispatch
+claim. Its `claimedAt` is the causal floor for every later Worker result,
+failure, cancellation, or restart reconciliation. A successful cancellation
+remains interruption. Worker non-admission results distinguish untrusted
+delivery from control-plane failure, so a Store or Runtime failure is never
+relabelled as a Worker protocol defect simply because no event committed.
 
 On restart, the runtime:
 

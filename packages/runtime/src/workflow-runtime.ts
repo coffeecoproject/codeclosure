@@ -4,6 +4,7 @@ import {
   AttemptFailureClass,
   AttemptRejectionCode,
   AttemptInterruptionReason,
+  ContextEntryKind,
   GuardOutcome,
   RunStatus,
   WorkflowGuard,
@@ -34,6 +35,7 @@ import {
   workflowVersion,
   workerSessionId,
   type AttemptDecision,
+  type Attempt,
   type AttemptId,
   type AttemptStarted,
   type AttemptRejection,
@@ -83,6 +85,8 @@ import type {
 } from './ports.js';
 import {
   WorkerEventDisposition,
+  WorkerEventNonAdmissionClass,
+  assertWorkerDispatchClaimBindsRequest,
   assertWorkerEventBindsRequest,
   createWorkerRequest,
   decodeWorkerDispatchClaim,
@@ -90,6 +94,7 @@ import {
   decodeWorkerEventReceipt,
   decodeWorkerRequest,
   type WorkerDispatchResult,
+  type WorkerDispatchClaim,
   type WorkerEvent,
   type WorkerEventAdmissionResult,
   type WorkerEventReceipt,
@@ -614,11 +619,11 @@ export class WorkflowRuntimeKernel {
     this.#ids = dependencies.ids;
     this.#digests = dependencies.digests;
     this.#phaseGuards = dependencies.phaseGuards ?? unavailablePhaseGuards;
+    this.#workerStore = isWorkerControlStore(dependencies.store) ? dependencies.store : undefined;
     if (dependencies.workerContext !== undefined) {
-      if (!isWorkerControlStore(dependencies.store)) {
+      if (this.#workerStore === undefined) {
         throw new TypeError('Worker Context requires the complete WorkerControlStore port');
       }
-      this.#workerStore = dependencies.store;
       this.#workerContext = Object.freeze({
         identities: dependencies.workerContext.identities,
         factory: dependencies.workerContext.factory,
@@ -799,6 +804,7 @@ export class WorkflowRuntimeKernel {
         status: 'REJECTED',
         reasonCode: 'MALFORMED_WORKER_EVENT',
         message: error instanceof Error ? error.message : 'Worker Event is malformed',
+        nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
       });
     }
 
@@ -811,6 +817,7 @@ export class WorkflowRuntimeKernel {
         eventId: event.id,
         reasonCode: 'WORKER_COMMAND_ID_FAILURE',
         message: error instanceof Error ? error.message : 'Worker command ID generation failed',
+        nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
       });
     }
 
@@ -818,6 +825,39 @@ export class WorkflowRuntimeKernel {
       const payloadDigest = this.digest(operationId, event, 'WORKER_EVENT_PAYLOAD_DIGEST_FAILURE');
       for (let attemptNumber = 0; attemptNumber < 2; attemptNumber += 1) {
         const workerStore = this.requireWorkerStore();
+        const rawDispatchClaim = this.storeOperation(
+          operationId,
+          'WORKER_DISPATCH_CLAIM_READ_FAILURE',
+          () => workerStore.getWorkerDispatchClaim(request.attemptId),
+        );
+        if (rawDispatchClaim === undefined) {
+          return Object.freeze({
+            status: 'REJECTED',
+            eventId: event.id,
+            reasonCode: 'WORKER_DISPATCH_CLAIM_MISSING',
+            message: `Worker Event ${event.id} has no durable dispatch authority`,
+            nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
+          });
+        }
+        const dispatchClaim = this.decodeStoreSnapshot(
+          operationId,
+          'WORKER_DISPATCH_CLAIM_INVALID',
+          () => decodeWorkerDispatchClaim(rawDispatchClaim),
+        );
+        try {
+          assertWorkerDispatchClaimBindsRequest(dispatchClaim, request);
+        } catch (error) {
+          return Object.freeze({
+            status: 'REJECTED',
+            eventId: event.id,
+            reasonCode: 'WORKER_DISPATCH_CLAIM_MISMATCH',
+            message:
+              error instanceof Error
+                ? error.message
+                : `Worker Event ${event.id} does not bind dispatched authority`,
+            nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
+          });
+        }
         const rawExisting = this.storeOperation(
           operationId,
           'WORKER_EVENT_RECEIPT_READ_FAILURE',
@@ -840,6 +880,7 @@ export class WorkflowRuntimeKernel {
                 eventId: event.id,
                 reasonCode: 'WORKER_EVENT_ID_CONFLICT',
                 message: `Worker Event ${event.id} was reused with different payload`,
+                nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
               });
         }
 
@@ -853,6 +894,7 @@ export class WorkflowRuntimeKernel {
             eventId: event.id,
             reasonCode: 'WORKER_AUTHORITY_UNAVAILABLE',
             receiptRecorded: false,
+            nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
           });
         }
         const { workflow } = authority.context;
@@ -870,6 +912,7 @@ export class WorkflowRuntimeKernel {
             eventId: event.id,
             reasonCode: 'WORKER_BINDING_NOT_FOUND',
             receiptRecorded: false,
+            nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
           });
         }
         const currentAttempt = this.decodeStoreSnapshot(operationId, 'WORKER_ATTEMPT_INVALID', () =>
@@ -884,6 +927,7 @@ export class WorkflowRuntimeKernel {
           operationId,
           workflow.updatedAt,
           currentAttempt.startedAt,
+          dispatchClaim.claimedAt,
         );
 
         let ignoredReason: string | undefined;
@@ -951,6 +995,7 @@ export class WorkflowRuntimeKernel {
               eventId: event.id,
               reasonCode: ignoredReason,
               receiptRecorded: false,
+              nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
             });
           }
           const ignoredStoreResult = this.decodeStoreSnapshot(
@@ -974,6 +1019,7 @@ export class WorkflowRuntimeKernel {
               eventId: event.id,
               reasonCode: 'WORKER_EVENT_ID_CONFLICT',
               message: ignoredStoreResult.message,
+              nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
             });
           }
           if (ignoredStoreResult.status === 'REPLAYED') {
@@ -994,6 +1040,7 @@ export class WorkflowRuntimeKernel {
               eventId: event.id,
               reasonCode: receipt.reasonCode,
               receiptRecorded: true,
+              nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
             });
           }
           continue;
@@ -1026,6 +1073,7 @@ export class WorkflowRuntimeKernel {
             eventId: event.id,
             reasonCode: decision.accepted ? 'WORKER_EVENT_NOT_TERMINAL' : decision.rejection.code,
             receiptRecorded: false,
+            nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
           });
         }
         const attemptEvent = decision.events[0];
@@ -1087,6 +1135,7 @@ export class WorkflowRuntimeKernel {
             eventId: event.id,
             reasonCode: 'WORKER_EVENT_ID_CONFLICT',
             message: storeResult.message,
+            nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
           });
         }
         if (storeResult.status === 'REPLAYED') {
@@ -1130,6 +1179,7 @@ export class WorkflowRuntimeKernel {
         eventId: event.id,
         reasonCode: 'WORKER_EVENT_RETRY_EXHAUSTED',
         message: 'Worker Event admission raced with Workflow mutation twice',
+        nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
       });
     } catch (error) {
       const failure =
@@ -1145,16 +1195,37 @@ export class WorkflowRuntimeKernel {
         eventId: event.id,
         reasonCode: failure.detailCode,
         message: failure.message,
+        nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
       });
     }
   }
 
   public recordWorkerPortFailure(
     rawRequest: WorkerRequest,
+    failureClass: AttemptFailureClass,
     reason: string,
   ): RuntimeCommandResult | undefined {
     const request = decodeWorkerRequest(rawRequest);
     const operationId = this.nextWorkerCommandId();
+    const workerStore = this.requireWorkerStore();
+    const rawDispatchClaim = this.storeOperation(
+      operationId,
+      'WORKER_FAILURE_DISPATCH_CLAIM_READ',
+      () => workerStore.getWorkerDispatchClaim(request.attemptId),
+    );
+    if (rawDispatchClaim === undefined) {
+      return undefined;
+    }
+    const dispatchClaim = this.decodeStoreSnapshot(
+      operationId,
+      'WORKER_FAILURE_DISPATCH_CLAIM_INVALID',
+      () => decodeWorkerDispatchClaim(rawDispatchClaim),
+    );
+    try {
+      assertWorkerDispatchClaimBindsRequest(dispatchClaim, request);
+    } catch {
+      return undefined;
+    }
     const rawWorkflow = this.storeOperation(operationId, 'WORKER_FAILURE_WORKFLOW_READ', () =>
       this.#store.getWorkflow(request.contextPackage.workflowId),
     );
@@ -1185,7 +1256,7 @@ export class WorkflowRuntimeKernel {
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: attempt.id,
-      failureClass: AttemptFailureClass.ABRUPT_TERMINATION,
+      failureClass,
       reason:
         normalizedReason.length === 0
           ? 'Worker port terminated without a valid result'
@@ -1426,12 +1497,17 @@ export class WorkflowRuntimeKernel {
       missingResource: 'Goal',
       missingIdentifier: input.goalId,
       plan: ({ workflow }, inputDigest) => {
+        const dispatchClaim = this.resolveActiveDispatchClaim(input.commandId, workflow);
         const decision = decideWorkflow(workflow, {
           type: 'CANCEL_WORKFLOW',
           commandId: input.commandId,
           workflowId: workflow.id,
           expectedVersion: input.expectedWorkflowVersion,
-          occurredAt: this.causalNow(input.commandId, workflow.updatedAt),
+          occurredAt: this.causalNow(
+            input.commandId,
+            workflow.updatedAt,
+            ...(dispatchClaim === undefined ? [] : [dispatchClaim.claimedAt]),
+          ),
           reason: input.reason,
         });
         if (!decision.accepted) {
@@ -1579,7 +1655,13 @@ export class WorkflowRuntimeKernel {
             ),
           );
         }
-        const decision = this.decideFinishAttempt(workflow, attempt, input);
+        const dispatchClaim = this.resolveAttemptDispatchClaim(input.commandId, workflow, attempt);
+        const decision = this.decideFinishAttempt(
+          workflow,
+          attempt,
+          input,
+          dispatchClaim?.claimedAt,
+        );
         if (!decision.accepted) {
           return this.domainRejectPlan(decision.rejection);
         }
@@ -1607,13 +1689,19 @@ export class WorkflowRuntimeKernel {
     workflow: WorkflowInstance,
     attempt: NonNullable<ReturnType<WorkflowControlStore['getAttempt']>>,
     input: FinishAttemptRequest,
+    dispatchClaimedAt?: IsoTimestamp,
   ): AttemptDecision {
     const base = {
       commandId: input.commandId,
       workflowId: input.workflowId,
       expectedWorkflowVersion: input.expectedWorkflowVersion,
       attemptId: input.attemptId,
-      occurredAt: this.causalNow(input.commandId, workflow.updatedAt, attempt.startedAt),
+      occurredAt: this.causalNow(
+        input.commandId,
+        workflow.updatedAt,
+        attempt.startedAt,
+        ...(dispatchClaimedAt === undefined ? [] : [dispatchClaimedAt]),
+      ),
       reason: input.reason,
     };
     switch (input.type) {
@@ -1760,6 +1848,90 @@ export class WorkflowRuntimeKernel {
     return this.#workerStore;
   }
 
+  private resolveActiveDispatchClaim(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): WorkerDispatchClaim | undefined {
+    const workerStore = this.#workerStore;
+    const activeAttemptId = workflow.activeAttemptId;
+    if (workerStore === undefined || activeAttemptId === undefined) {
+      return undefined;
+    }
+    const rawAttempt = this.storeOperation(
+      commandIdentifier,
+      'ACTIVE_WORKER_ATTEMPT_READ_FAILURE',
+      () => this.#store.getAttempt(activeAttemptId),
+    );
+    if (rawAttempt === undefined) {
+      throw new TypeError(`Active Attempt ${activeAttemptId} does not exist`);
+    }
+    const attempt = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACTIVE_WORKER_ATTEMPT_INVALID',
+      () => decodeAttemptSnapshot(rawAttempt),
+    );
+    return this.resolveAttemptDispatchClaim(commandIdentifier, workflow, attempt);
+  }
+
+  private resolveAttemptDispatchClaim(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+    attempt: Attempt,
+  ): WorkerDispatchClaim | undefined {
+    const workerStore = this.#workerStore;
+    const manifestId = attempt.contextManifestId;
+    if (
+      workerStore === undefined ||
+      manifestId === undefined ||
+      attempt.workerSessionRef === undefined
+    ) {
+      return undefined;
+    }
+    const rawClaim = this.storeOperation(
+      commandIdentifier,
+      'ATTEMPT_DISPATCH_CLAIM_READ_FAILURE',
+      () => workerStore.getWorkerDispatchClaim(attempt.id),
+    );
+    if (rawClaim === undefined) {
+      return undefined;
+    }
+    const claim = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ATTEMPT_DISPATCH_CLAIM_INVALID',
+      () => decodeWorkerDispatchClaim(rawClaim),
+    );
+    const rawManifest = this.storeOperation(
+      commandIdentifier,
+      'ATTEMPT_DISPATCH_CONTEXT_READ_FAILURE',
+      () => workerStore.getContextManifest(manifestId),
+    );
+    if (rawManifest === undefined) {
+      throw new TypeError(`Dispatch claim ${claim.attemptId} has no Context Manifest authority`);
+    }
+    const manifest = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ATTEMPT_DISPATCH_CONTEXT_INVALID',
+      () => decodeContextManifest(rawManifest),
+    );
+    if (
+      attempt.workflowId !== workflow.id ||
+      claim.workflowId !== workflow.id ||
+      claim.workflowVersion !== workflow.version ||
+      claim.attemptId !== attempt.id ||
+      claim.workerSessionId !== attempt.workerSessionRef ||
+      claim.contextManifestId !== attempt.contextManifestId ||
+      manifest.workflowId !== workflow.id ||
+      manifest.workflowVersion !== claim.workflowVersion ||
+      manifest.attemptId !== attempt.id ||
+      manifest.id !== claim.contextManifestId ||
+      manifest.manifestDigest !== claim.contextManifestDigest ||
+      manifest.packageDigest !== claim.packageDigest
+    ) {
+      throw new TypeError(`Dispatch claim ${claim.attemptId} does not bind its active Attempt`);
+    }
+    return claim;
+  }
+
   private workerEventMatchesReceipt(
     event: WorkerEvent,
     payloadDigest: ReturnType<typeof sha256Digest>,
@@ -1837,6 +2009,19 @@ export class WorkflowRuntimeKernel {
     }
     const contextPackage = decodeContextPackage(Reflect.get(raw, 'package'));
     const manifest = decodeContextManifest(Reflect.get(raw, 'manifest'));
+    if (
+      contextPackage.selectedEntries.length !== 0 ||
+      contextPackage.candidateGenerationId !== undefined ||
+      contextPackage.candidateDigest !== undefined ||
+      manifest.omissionDecisions.length !== 0 ||
+      manifest.candidateGenerationId !== undefined ||
+      manifest.candidateDigest !== undefined ||
+      manifest.entries.some((entry) => entry.kind === ContextEntryKind.CANDIDATE)
+    ) {
+      throw new TypeError(
+        'M1 Context cannot admit selected, omitted, or Candidate authority before its owner exists',
+      );
+    }
     const packageDigest = this.digest(
       commandIdentifier,
       contextPackage,
@@ -1920,8 +2105,6 @@ export class WorkflowRuntimeKernel {
       contextPackage.phase !== applied.workflow.phase ||
       contextPackage.attemptId !== applied.attempt.id ||
       contextPackage.candidateGenerationId !== applied.workflow.activeCandidateGenerationId ||
-      contextPackage.candidateGenerationId !== manifest.candidateGenerationId ||
-      contextPackage.candidateDigest !== manifest.candidateDigest ||
       contextPackage.policyBundleId !== manifest.policyBundleId ||
       contextPackage.policyBundleDigest !== manifest.policyBundleDigest ||
       contextPackage.policyBundleId !== installedPolicy.id ||

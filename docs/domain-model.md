@@ -268,6 +268,15 @@ Admission ordering and stored-outcome binding are specified by
 [ADR 0010](adr/0010-command-admission-and-outcome-binding.md) and
 [ADR 0011](adr/0011-store-authored-command-outcome-semantics.md).
 
+Every Worker receipt has a prior immutable dispatch claim for the same Attempt,
+Workflow, and Context Manifest. An admitted receipt matches the claim's exact
+version, Worker Session, and digests. An ignored receipt may preserve the
+mismatched Worker fields that explain its rejection, but it still cannot exist
+without dispatch causality. Deterministic FakeWorker IDs include request
+identity plus fixture and ordinal; unrelated Attempts never share an ID merely
+because they use the same fixture. See
+[ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
+
 ## Transition Request and Transition Record
 
 ```text
@@ -315,8 +324,15 @@ shape above. It admits either `PROPOSALS` during `DISCOVERY`/`PLAN`, a
 binds an independent `WorkerEventId`, Worker Session, Attempt, Context Manifest,
 and exact Manifest/package digests. A valid result records only an Attempt
 result and returns the Workflow to `READY`; it does not advance phase or issue
-Acceptance. See
-[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+Acceptance. Empty or invalid-only stream completion is a `PROTOCOL_ERROR`;
+uncancelled iterator termination is `ABRUPT_TERMINATION`. A typed
+`WorkerEventNonAdmissionClass` keeps control-plane admission failure separate
+from untrusted delivery so persistence failure is not misrecorded as Worker
+failure. Runtime-authored stream failure has the same durable dispatch-causality
+precondition as event admission. Every later terminal or interruption time is
+at or after the claim's `claimedAt`. See
+[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md) and
+[ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
 
 ## Completion Request
 
@@ -460,6 +476,33 @@ HumanDecision
 - `CANCEL_OR_PAUSE`
 
 There is no generic `BYPASS_TECHNICAL_GATE` type.
+
+## Policy Bundle
+
+```text
+PolicyBundleDefinition
+  id
+  schemaVersion
+  version
+  transitionRules[]
+  capabilityRules[]
+  contextRules[]
+  checkSpecifications[]
+  applicabilityRules[]
+  acceptanceRules[]
+  checkerVersions[]
+
+PolicyBundle extends PolicyBundleDefinition
+  digest
+```
+
+The composition boundary proposes a definition; it does not author its digest
+or installation timestamp. The Runtime validates the definition, computes the
+canonical digest, and assigns time and audit identity. The Store independently
+recomputes the digest and persists the immutable Policy plus installation audit
+in one transaction. A Policy row without its matching audit, or whose retained
+content does not reproduce its digest, is invalid authority. See
+[ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
 
 ## Candidate and Candidate Generation
 

@@ -28,13 +28,18 @@ remains unavailable until Slice 6 supplies a current Acceptance Decision, and
 store conflicts are typed.
 
 The Slice 4 path now compiles a deterministic minimal Context package, verifies
-its authoritative Goal and source bindings, binds a Runtime-selected installed
-Policy, and atomically persists its Manifest with the Attempt. A typed
-`WorkerPort` is reached only after a durable dispatch claim wins its transaction
-against cancellation. Independently identified Worker events are
+its authoritative Goal bindings, rejects external source entries until M1 has
+a durable source resolver, binds a Runtime-selected installed Policy, and
+atomically persists its Manifest with the Attempt. Policy identity is computed
+by Runtime, independently rechecked by the Store, and committed with its audit.
+A typed `WorkerPort` is reached only after a durable dispatch claim wins its
+transaction against cancellation. Every Worker receipt retains that causal
+claim; admitted events match it exactly. Request-bound Worker event IDs are
 schema-checked, digest-bound, replay-safe, and stored with their resulting
-Attempt mutation in one transaction. Adversarial `FakeWorker` fixtures exercise
-malformed, stale, duplicate, fabricated, and abrupt-failure behavior.
+Attempt mutation in one transaction. Empty or invalid-only streams become
+protocol failures, while abrupt termination and control-plane failures remain
+distinct. Adversarial `FakeWorker` fixtures exercise malformed, stale,
+duplicate, fabricated, empty-stream, and abrupt-failure behavior.
 Runtime-owned timestamps preserve causal order across clock rollback, while
 reducers, the Store, and SQLite reject older bypassed events, relationship
 forgery, immutable-record rewrites, and repeated terminal Workflow mutations.
@@ -69,10 +74,11 @@ rejection replay, persistence decoding, stale-command admission precedence,
 replay target binding, evaluator-failure classification, API-capability
 boundaries, forged-closeout rejection, Context source cross-validation,
 canonical digest vectors, dispatch/cancellation ordering, adversarial Worker
-events, causal clock rollback, terminal event bypass, and injected transaction
-rollback checks. Later M1 slices add Candidate/evidence and Acceptance proof,
-CLI integration, recovery orchestration, and an invariant-coverage check before
-any M1 completion claim.
+events, Policy installation audit/digest closure, dispatch-claim causality,
+causal clock rollback, terminal event bypass, poisoned migration preflights,
+and injected transaction rollback checks. Later M1 slices add
+Candidate/evidence and Acceptance proof, CLI integration, recovery
+orchestration, and an invariant-coverage check before any M1 completion claim.
 
 ## Why CodeClosure Exists
 

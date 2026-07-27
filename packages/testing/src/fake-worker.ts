@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   AttemptFailureClass,
   WorkerResultKind,
@@ -41,6 +43,25 @@ function assertNotAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw abortError();
   }
+}
+
+function eventIdFor(request: WorkerRequest, fixture: FakeWorkerFixture, ordinal: number) {
+  const requestIdentity = [
+    request.workerSessionId,
+    request.attemptId,
+    request.contextManifestId,
+    request.contextManifestDigest,
+    request.packageDigest,
+    fixture,
+    String(ordinal),
+  ].join('\u0000');
+  const requestHash = createHash('sha256')
+    .update(requestIdentity, 'utf8')
+    .digest('hex')
+    .slice(0, 24);
+  return workerEventId(
+    `worker-event_${fixture}-${requestHash}-${String(ordinal).padStart(3, '0')}`,
+  );
 }
 
 export class FakeWorker implements WorkerPort {
@@ -101,7 +122,7 @@ export class FakeWorker implements WorkerPort {
   private eventFor(request: WorkerRequest): unknown {
     const common = {
       schemaVersion: 1,
-      id: workerEventId(`worker-event_${this.#fixture}-001`),
+      id: eventIdFor(request, this.#fixture, 1),
       workerSessionId: request.workerSessionId,
       attemptId: request.attemptId,
       contextManifestId: request.contextManifestId,

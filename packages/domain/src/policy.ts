@@ -11,7 +11,7 @@ export interface PolicyCheckerIdentity {
   readonly checkerDigest: Sha256Digest;
 }
 
-export interface PolicyBundle {
+export interface PolicyBundleDefinition {
   readonly id: PolicyBundleId;
   readonly schemaVersion: 1;
   readonly version: string;
@@ -22,6 +22,9 @@ export interface PolicyBundle {
   readonly applicabilityRules: readonly string[];
   readonly acceptanceRules: readonly string[];
   readonly checkerVersions: readonly PolicyCheckerIdentity[];
+}
+
+export interface PolicyBundle extends PolicyBundleDefinition {
   readonly digest: Sha256Digest;
 }
 
@@ -46,9 +49,8 @@ function field(value: object, key: PropertyKey): unknown {
   return Reflect.get(value, key) as unknown;
 }
 
-export function assertPolicyBundleInvariant(bundle: PolicyBundle): void {
+export function assertPolicyBundleDefinitionInvariant(bundle: PolicyBundleDefinition): void {
   policyBundleId(bundle.id);
-  sha256Digest(bundle.digest);
   if (field(bundle, 'schemaVersion') !== 1) {
     throw new TypeError('Policy Bundle schema version is unsupported');
   }
@@ -71,7 +73,12 @@ export function assertPolicyBundleInvariant(bundle: PolicyBundle): void {
   }
 }
 
-export function policyBundleProjection(bundle: Omit<PolicyBundle, 'digest'>): unknown {
+export function assertPolicyBundleInvariant(bundle: PolicyBundle): void {
+  assertPolicyBundleDefinitionInvariant(bundle);
+  sha256Digest(bundle.digest);
+}
+
+export function policyBundleProjection(bundle: PolicyBundleDefinition): unknown {
   return {
     id: bundle.id,
     schemaVersion: bundle.schemaVersion,

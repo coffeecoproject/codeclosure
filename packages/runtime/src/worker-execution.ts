@@ -1,4 +1,10 @@
-import { decodeWorkflowSnapshot, goalId, type GoalId, type WorkflowId } from '@codeclosure/domain';
+import {
+  AttemptFailureClass,
+  decodeWorkflowSnapshot,
+  goalId,
+  type GoalId,
+  type WorkflowId,
+} from '@codeclosure/domain';
 
 import type { RuntimeCommandResult } from './contracts.js';
 import type { WorkerControlStore, WorkerPort } from './ports.js';
@@ -8,7 +14,12 @@ import {
   type StartGoalRequest,
   type WorkflowRuntimeKernelDependencies,
 } from './workflow-runtime.js';
-import type { WorkerDispatchResult, WorkerEventAdmissionResult } from './worker-contracts.js';
+import {
+  WorkerEventDisposition,
+  WorkerEventNonAdmissionClass,
+  type WorkerDispatchResult,
+  type WorkerEventAdmissionResult,
+} from './worker-contracts.js';
 
 export interface WorkerExecutionDependencies extends WorkflowRuntimeKernelDependencies {
   readonly store: WorkerControlStore;
@@ -116,15 +127,21 @@ class WorkerExecutionCoordinator implements WorkerExecutionApplication {
     try {
       const stream: unknown = this.#worker.run(request, controller.signal);
       if (!isAsyncIterable(stream)) {
-        throw new TypeError('WorkerPort returned a non-async event stream');
-      }
-      for await (const rawEvent of stream) {
-        admissions.push(this.#kernel.admitWorkerEvent(rawEvent, request));
+        workerFailure = this.#kernel.recordWorkerPortFailure(
+          request,
+          AttemptFailureClass.PROTOCOL_ERROR,
+          'WorkerPort returned a non-async event stream',
+        );
+      } else {
+        for await (const rawEvent of stream) {
+          admissions.push(this.#kernel.admitWorkerEvent(rawEvent, request));
+        }
       }
     } catch (error) {
       if (!isAbortError(error, controller.signal)) {
         workerFailure = this.#kernel.recordWorkerPortFailure(
           request,
+          AttemptFailureClass.ABRUPT_TERMINATION,
           error instanceof Error ? error.message : 'Worker port failed without an Error value',
         );
       }
@@ -132,6 +149,32 @@ class WorkerExecutionCoordinator implements WorkerExecutionApplication {
       if (this.#activeByGoal.get(goalIdentifier)?.controller === controller) {
         this.#activeByGoal.delete(goalIdentifier);
       }
+    }
+    if (
+      workerFailure === undefined &&
+      !controller.signal.aborted &&
+      !admissions.some(
+        (admission) =>
+          admission.status === 'ADMITTED' ||
+          (admission.status === 'DUPLICATE' &&
+            admission.originalDisposition === WorkerEventDisposition.ADMITTED),
+      ) &&
+      !admissions.some(
+        (admission) =>
+          (admission.status === 'REJECTED' || admission.status === 'IGNORED') &&
+          admission.nonAdmissionClass === WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
+      )
+    ) {
+      const rejectedReasons = admissions
+        .filter((admission) => admission.status === 'REJECTED' || admission.status === 'IGNORED')
+        .map((admission) => admission.reasonCode);
+      workerFailure = this.#kernel.recordWorkerPortFailure(
+        request,
+        AttemptFailureClass.PROTOCOL_ERROR,
+        rejectedReasons.length === 0
+          ? 'Worker stream ended without a terminal event'
+          : `Worker stream ended without an admitted terminal event: ${rejectedReasons.join(', ')}`,
+      );
     }
     return Object.freeze({
       command,

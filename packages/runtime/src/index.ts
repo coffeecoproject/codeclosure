@@ -2,6 +2,7 @@ export * from './canonical-json.js';
 export * from './contracts.js';
 export * from './context-compiler.js';
 export * from './ports.js';
+export * from './policy-installer.js';
 export * from './worker-contracts.js';
 export { createWorkerExecutionApplication } from './worker-execution.js';
 export type {

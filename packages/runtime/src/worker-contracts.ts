@@ -86,6 +86,13 @@ export const WorkerEventDisposition = {
 export type WorkerEventDisposition =
   (typeof WorkerEventDisposition)[keyof typeof WorkerEventDisposition];
 
+export const WorkerEventNonAdmissionClass = {
+  UNTRUSTED_DELIVERY: 'UNTRUSTED_DELIVERY',
+  CONTROL_PLANE_FAILURE: 'CONTROL_PLANE_FAILURE',
+} as const;
+export type WorkerEventNonAdmissionClass =
+  (typeof WorkerEventNonAdmissionClass)[keyof typeof WorkerEventNonAdmissionClass];
+
 interface WorkerEventReceiptBase {
   readonly schemaVersion: 1;
   readonly eventId: WorkerEventId;
@@ -149,12 +156,14 @@ export type WorkerEventAdmissionResult =
       readonly eventId: WorkerEventId;
       readonly reasonCode: string;
       readonly receiptRecorded: boolean;
+      readonly nonAdmissionClass: WorkerEventNonAdmissionClass;
     }
   | {
       readonly status: 'REJECTED';
       readonly eventId?: WorkerEventId;
       readonly reasonCode: string;
       readonly message: string;
+      readonly nonAdmissionClass: WorkerEventNonAdmissionClass;
     };
 
 const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 0, {
@@ -399,6 +408,23 @@ export function assertWorkerEventBindsRequest(event: WorkerEvent, request: Worke
     !request.contextPackage.responseContract.allowedResultKinds.includes(event.result.kind)
   ) {
     throw new TypeError('Worker Event result kind is not allowed by the response contract');
+  }
+}
+
+export function assertWorkerDispatchClaimBindsRequest(
+  claim: WorkerDispatchClaim,
+  request: WorkerRequest,
+): void {
+  if (
+    claim.workflowId !== request.contextPackage.workflowId ||
+    claim.workflowVersion !== request.contextPackage.workflowVersion ||
+    claim.attemptId !== request.attemptId ||
+    claim.workerSessionId !== request.workerSessionId ||
+    claim.contextManifestId !== request.contextManifestId ||
+    claim.contextManifestDigest !== request.contextManifestDigest ||
+    claim.packageDigest !== request.packageDigest
+  ) {
+    throw new TypeError('Worker dispatch claim does not bind the Worker Request');
   }
 }
 

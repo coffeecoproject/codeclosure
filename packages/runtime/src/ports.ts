@@ -108,7 +108,7 @@ export interface ClaimWorkerDispatch extends AuditWriteIdentity {
   readonly claim: WorkerDispatchClaim;
 }
 
-export interface InstallPolicyBundle {
+export interface InstallPolicyBundle extends AuditWriteIdentity {
   readonly bundle: PolicyBundle;
   readonly installedAt: IsoTimestamp;
 }

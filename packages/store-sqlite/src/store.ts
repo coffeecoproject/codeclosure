@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 
 import {
   AttemptStatus,
+  ContextEntryKind,
   GoalStatus,
   RunStatus,
   WorkflowPhase,
@@ -15,6 +16,7 @@ import {
   auditEventId,
   commandId,
   contextManifestId,
+  decodeContextPackage,
   decodeContextManifest,
   decodeAttemptEvent,
   decodeGoalSnapshot,
@@ -43,26 +45,35 @@ import {
   type Goal,
   type GoalId,
   type IsoTimestamp,
+  type PolicyBundle,
   type PolicyBundleId,
   type Sha256Digest,
   type WorkflowEvent,
   type WorkflowId,
   type WorkflowInstance,
+  type WorkflowVersion,
   type WorkerEventId,
 } from '@codeclosure/domain';
 import {
+  CanonicalJsonSha256DigestProvider,
+  contextManifestDigestProjection,
   createAppliedStoredCommandOutcome,
   createRejectedStoredCommandOutcome,
+  canonicalizeJson,
   decodeCommandTarget,
   decodeDeterministicCommandError,
   decodeJsonValue,
   decodeStoredCommandOutcome,
   decodeWorkerDispatchClaim,
   decodeWorkerEventReceipt,
+  deriveContextManifestEntries,
+  m1PhaseObjective,
+  m1WorkerResponseContract,
   assertStoredCommandOutcomeBinding,
   StoredCommandDisposition,
   storedCommandOutcomeToJson,
   type CommandTarget,
+  type AdmittedWorkerEventReceipt,
   type ClaimWorkerDispatch,
   type CommitContextBoundAttemptStart,
   type CommittedContextAttempt,
@@ -120,6 +131,7 @@ export const WorkerTransactionStep = {
   AFTER_CONTEXT_MANIFEST_WRITE: 'AFTER_CONTEXT_MANIFEST_WRITE',
   AFTER_DISPATCH_CLAIM_WRITE: 'AFTER_DISPATCH_CLAIM_WRITE',
   AFTER_WORKER_RECEIPT_WRITE: 'AFTER_WORKER_RECEIPT_WRITE',
+  AFTER_POLICY_AUDIT_WRITE: 'AFTER_POLICY_AUDIT_WRITE',
   AFTER_POLICY_WRITE: 'AFTER_POLICY_WRITE',
 } as const;
 export type WorkerTransactionStep =
@@ -184,6 +196,8 @@ interface InsertAuditInput {
 function systemNow(): IsoTimestamp {
   return isoTimestamp(new Date().toISOString());
 }
+
+const canonicalAuthorityDigests = new CanonicalJsonSha256DigestProvider();
 
 function normalizeFilename(filename: string): string {
   if (filename === ':memory:') {
@@ -339,9 +353,15 @@ function validateIgnoredWorkerEvent(rawInput: RecordIgnoredWorkerEvent): RecordI
 }
 
 function validateInstallPolicyBundle(rawInput: InstallPolicyBundle): InstallPolicyBundle {
+  const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
+  const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
   return Object.freeze({
     bundle: decodePolicyBundle(rawInput.bundle),
     installedAt: isoTimestamp(rawInput.installedAt),
+    auditEventId: auditEventId(rawInput.auditEventId),
+    payloadDigest: sha256Digest(rawInput.payloadDigest),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(causationId === undefined ? {} : { causationId }),
   });
 }
 
@@ -402,7 +422,9 @@ export class SqliteControlStore implements WorkerControlStore {
         options.migrationsDirectory ?? defaultMigrationsDirectory(),
         options.now ?? systemNow,
       );
-      return new SqliteControlStore(database, migrations, options.transactionProbe);
+      const store = new SqliteControlStore(database, migrations, options.transactionProbe);
+      store.assertRetainedWorkerAuthorityClosure();
+      return store;
     } catch (error) {
       database.close();
       throw error;
@@ -493,7 +515,7 @@ export class SqliteControlStore implements WorkerControlStore {
     const row = this.#database
       .prepare('SELECT * FROM context_manifests WHERE id = ?')
       .get(manifestIdentifier);
-    return row === undefined ? undefined : decodeContextManifestRow(row);
+    return row === undefined ? undefined : this.decodeVerifiedContextManifestRow(row);
   }
 
   public getPolicyBundle(
@@ -504,7 +526,7 @@ export class SqliteControlStore implements WorkerControlStore {
     const row = this.#database
       .prepare('SELECT * FROM policy_bundles WHERE id = ?')
       .get(policyIdentifier);
-    return row === undefined ? undefined : decodePolicyBundleRow(row);
+    return row === undefined ? undefined : this.decodeVerifiedPolicyBundleRow(row);
   }
 
   public getWorkerDispatchClaim(rawAttemptIdentifier: AttemptId): WorkerDispatchClaim | undefined {
@@ -571,20 +593,23 @@ export class SqliteControlStore implements WorkerControlStore {
   public installPolicyBundle(rawInput: InstallPolicyBundle): PolicyInstallResult {
     this.assertOpen();
     const input = validateInstallPolicyBundle(rawInput);
-    const canonicalContent = serializeJson(decodeJsonValue(policyBundleProjection(input.bundle)));
-    const checkerIdentities = serializeJson(decodeJsonValue(input.bundle.checkerVersions));
+    const expectedDigest = this.policyDigest(input.bundle);
+    if (input.bundle.digest !== expectedDigest || input.payloadDigest !== expectedDigest) {
+      throw new StoreInvariantError('Policy Bundle digest does not match its canonical projection');
+    }
+    const canonicalContent = canonicalizeJson(policyBundleProjection(input.bundle));
+    const checkerIdentities = canonicalizeJson(input.bundle.checkerVersions);
 
     return this.runImmediate(() => {
       const existingRow = this.#database
         .prepare('SELECT * FROM policy_bundles WHERE id = ? OR bundle_digest = ?')
         .get(input.bundle.id, input.bundle.digest);
       if (existingRow !== undefined) {
-        const existing = decodePolicyBundleRow(existingRow);
+        const existing = this.decodeVerifiedPolicyBundleRow(existingRow);
         const same =
           existing.bundle.id === input.bundle.id &&
           existing.bundle.digest === input.bundle.digest &&
-          serializeJson(decodeJsonValue(policyBundleProjection(existing.bundle))) ===
-            canonicalContent;
+          canonicalizeJson(policyBundleProjection(existing.bundle)) === canonicalContent;
         return same
           ? { status: 'EXISTING', value: existing }
           : {
@@ -593,6 +618,17 @@ export class SqliteControlStore implements WorkerControlStore {
             };
       }
 
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'POLICY',
+        aggregateId: input.bundle.id,
+        eventType: 'POLICY_BUNDLE_INSTALLED',
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: expectedDigest,
+        occurredAt: input.installedAt,
+      });
+      this.probe(WorkerTransactionStep.AFTER_POLICY_AUDIT_WRITE);
       this.#database
         .prepare(
           `INSERT INTO policy_bundles(
@@ -614,6 +650,7 @@ export class SqliteControlStore implements WorkerControlStore {
       if (installed === undefined) {
         throw new StoreInvariantError(`Policy ${input.bundle.id} was not persisted readably`);
       }
+      this.assertAuditEventsReadable([input.auditEventId]);
       return { status: 'INSTALLED', value: installed };
     });
   }
@@ -912,6 +949,7 @@ export class SqliteControlStore implements WorkerControlStore {
             };
       }
 
+      this.assertAdmittedWorkerEventHasDispatchClaim(input.receipt);
       const result = this.commitAttemptEventInsideTransaction(input);
       if (result.status === 'REPLAYED' || result.status === 'COMMAND_CONFLICT') {
         return {
@@ -950,6 +988,7 @@ export class SqliteControlStore implements WorkerControlStore {
               message: `Worker Event ${input.receipt.eventId} was reused with different payload`,
             };
       }
+      this.assertWorkerEventHasDispatchCausality(input.receipt);
       const workflow = this.getWorkflowInsideTransaction(input.receipt.workflowId);
       if (workflow.version !== input.receipt.observedWorkflowVersion) {
         return {
@@ -1008,6 +1047,14 @@ export class SqliteControlStore implements WorkerControlStore {
           ? undefined
           : this.getAttemptInsideTransaction(currentWorkflow.activeAttemptId)
         : this.getAttemptInsideTransaction(input.event.attemptId);
+    if (input.event.type !== 'ATTEMPT_STARTED') {
+      this.assertAttemptControlEventAfterDispatchClaim(
+        currentAttempt,
+        input.event.workflowId,
+        input.event.fromWorkflowVersion,
+        input.event.occurredAt,
+      );
+    }
     const applied = applyAttemptEvent(currentWorkflow, currentAttempt, input.event);
 
     if (input.event.type === 'ATTEMPT_STARTED') {
@@ -1173,6 +1220,12 @@ export class SqliteControlStore implements WorkerControlStore {
             );
           }
           const currentAttempt = this.getAttemptInsideTransaction(input.event.interruptedAttemptId);
+          this.assertAttemptControlEventAfterDispatchClaim(
+            currentAttempt,
+            input.event.workflowId,
+            input.event.fromVersion,
+            input.event.occurredAt,
+          );
           const applied = applyWorkflowCancellationToAttempt(current, currentAttempt, input.event);
           if (applied.attempt === undefined) {
             throw new StoreInvariantError('Cancellation failed to interrupt its active Attempt');
@@ -1587,6 +1640,276 @@ export class SqliteControlStore implements WorkerControlStore {
       );
   }
 
+  private policyDigest(bundle: PolicyBundle): Sha256Digest {
+    return sha256Digest(canonicalAuthorityDigests.digest(policyBundleProjection(bundle)));
+  }
+
+  private decodeVerifiedContextManifestRow(row: unknown): ContextManifest {
+    const manifest = decodeContextManifestRow(row);
+    if (
+      manifest.candidateGenerationId !== undefined ||
+      manifest.candidateDigest !== undefined ||
+      manifest.omissionDecisions.length !== 0 ||
+      manifest.entries.some(
+        (entry) =>
+          entry.kind !== ContextEntryKind.GOAL && entry.kind !== ContextEntryKind.SUCCESS_CRITERION,
+      )
+    ) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} contains authority without an M1 owner`,
+      );
+    }
+
+    const expectedManifestDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(contextManifestDigestProjection(manifest)),
+    );
+    if (manifest.manifestDigest !== expectedManifestDigest) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} digest does not match its canonical projection`,
+      );
+    }
+
+    const goalView = this.getGoalWithWorkflow(manifest.goalId);
+    const attempt = this.getAttempt(manifest.attemptId);
+    const installedPolicy = this.getPolicyBundle(manifest.policyBundleId);
+    if (goalView === undefined || attempt === undefined || installedPolicy === undefined) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} cannot resolve its authoritative M1 sources`,
+      );
+    }
+    const { goal, workflow } = goalView;
+    if (
+      manifest.goalRevision !== goal.revision ||
+      manifest.workflowId !== workflow.id ||
+      manifest.workflowVersion > workflow.version ||
+      manifest.phase !== attempt.phase ||
+      attempt.workflowId !== workflow.id ||
+      attempt.contextManifestId !== manifest.id ||
+      attempt.workerSessionRef === undefined ||
+      manifest.createdAt !== attempt.startedAt ||
+      manifest.createdAt < workflow.createdAt ||
+      manifest.policyBundleDigest !== installedPolicy.bundle.digest ||
+      installedPolicy.installedAt > manifest.createdAt
+    ) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} does not bind its authoritative M1 sources`,
+      );
+    }
+
+    const expectedPackage = decodeContextPackage({
+      schemaVersion: 1,
+      goalId: goal.id,
+      goalRevision: goal.revision,
+      workflowId: workflow.id,
+      workflowVersion: manifest.workflowVersion,
+      phase: manifest.phase,
+      attemptId: attempt.id,
+      phaseObjective: m1PhaseObjective(manifest.phase),
+      capabilityGrant: attempt.capabilityGrant,
+      goal: {
+        objective: goal.objective,
+        successCriteria: goal.successCriteria,
+        scope: goal.scope,
+        nonGoals: goal.nonGoals,
+      },
+      selectedEntries: [],
+      policyBundleId: installedPolicy.bundle.id,
+      policyBundleDigest: installedPolicy.bundle.digest,
+      responseContract: m1WorkerResponseContract(manifest.phase),
+    });
+    const expectedEntries = deriveContextManifestEntries(
+      expectedPackage,
+      canonicalAuthorityDigests,
+    );
+    const expectedPackageDigest = sha256Digest(canonicalAuthorityDigests.digest(expectedPackage));
+    const expectedCapabilityGrantDigest = sha256Digest(
+      canonicalAuthorityDigests.digest({
+        schemaVersion: 1,
+        capabilityGrant: expectedPackage.capabilityGrant,
+      }),
+    );
+    const expectedResponseContractDigest = sha256Digest(
+      canonicalAuthorityDigests.digest({
+        schemaVersion: 1,
+        responseContract: expectedPackage.responseContract,
+      }),
+    );
+    if (
+      manifest.packageDigest !== expectedPackageDigest ||
+      manifest.capabilityGrantDigest !== expectedCapabilityGrantDigest ||
+      manifest.responseContractDigest !== expectedResponseContractDigest ||
+      canonicalizeJson(manifest.entries) !== canonicalizeJson(expectedEntries)
+    ) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} does not match its authoritative M1 sources`,
+      );
+    }
+    return manifest;
+  }
+
+  private decodeVerifiedPolicyBundleRow(row: unknown): InstalledPolicyBundle {
+    const installed = decodePolicyBundleRow(row);
+    if (installed.bundle.digest !== this.policyDigest(installed.bundle)) {
+      throw new StoreInvariantError(
+        `Policy ${installed.bundle.id} digest does not match its canonical projection`,
+      );
+    }
+    return installed;
+  }
+
+  private assertAttemptControlEventAfterDispatchClaim(
+    attempt: Attempt | undefined,
+    expectedWorkflowId: WorkflowId,
+    expectedWorkflowVersion: WorkflowVersion,
+    occurredAt: IsoTimestamp,
+  ): void {
+    if (attempt === undefined) {
+      throw new StoreInvariantError('Attempt control event has no current Attempt authority');
+    }
+    const claim = this.getWorkerDispatchClaim(attempt.id);
+    if (claim === undefined) {
+      return;
+    }
+    const manifest = this.getContextManifest(claim.contextManifestId);
+    if (
+      manifest === undefined ||
+      attempt.workflowId !== expectedWorkflowId ||
+      attempt.contextManifestId !== claim.contextManifestId ||
+      attempt.workerSessionRef !== claim.workerSessionId ||
+      claim.workflowId !== expectedWorkflowId ||
+      claim.workflowVersion !== expectedWorkflowVersion ||
+      claim.attemptId !== attempt.id ||
+      manifest.workflowId !== expectedWorkflowId ||
+      manifest.workflowVersion !== claim.workflowVersion ||
+      manifest.attemptId !== attempt.id ||
+      manifest.manifestDigest !== claim.contextManifestDigest ||
+      manifest.packageDigest !== claim.packageDigest
+    ) {
+      throw new StoreInvariantError(
+        `Attempt ${attempt.id} control event does not bind its dispatch authority`,
+      );
+    }
+    if (occurredAt < claim.claimedAt) {
+      throw new StoreInvariantError(
+        `Attempt ${attempt.id} control event predates its dispatch claim`,
+      );
+    }
+  }
+
+  private assertRetainedDispatchClaimClosure(claim: WorkerDispatchClaim): void {
+    const workflow = this.getWorkflow(claim.workflowId);
+    const attempt = this.getAttempt(claim.attemptId);
+    const manifest = this.getContextManifest(claim.contextManifestId);
+    if (
+      workflow === undefined ||
+      attempt === undefined ||
+      manifest === undefined ||
+      workflow.version < claim.workflowVersion ||
+      attempt.workflowId !== claim.workflowId ||
+      attempt.contextManifestId !== claim.contextManifestId ||
+      attempt.workerSessionRef !== claim.workerSessionId ||
+      manifest.workflowId !== claim.workflowId ||
+      manifest.workflowVersion !== claim.workflowVersion ||
+      manifest.attemptId !== claim.attemptId ||
+      manifest.manifestDigest !== claim.contextManifestDigest ||
+      manifest.packageDigest !== claim.packageDigest ||
+      claim.claimedAt < attempt.startedAt
+    ) {
+      throw new StoreInvariantError(
+        `Dispatch claim for ${claim.attemptId} does not bind retained authority`,
+      );
+    }
+    if (attempt.status === AttemptStatus.RUNNING) {
+      if (
+        workflow.version !== claim.workflowVersion ||
+        workflow.runStatus !== RunStatus.RUNNING ||
+        workflow.activeAttemptId !== attempt.id ||
+        claim.claimedAt < workflow.updatedAt
+      ) {
+        throw new StoreInvariantError(
+          `Running Attempt ${attempt.id} does not retain its dispatch-time Workflow authority`,
+        );
+      }
+      return;
+    }
+    if (attempt.endedAt < claim.claimedAt) {
+      throw new StoreInvariantError(
+        `Attempt ${attempt.id} ended before its retained dispatch claim`,
+      );
+    }
+    if (
+      workflow.version <= claim.workflowVersion ||
+      workflow.updatedAt < attempt.endedAt ||
+      workflow.activeAttemptId === attempt.id
+    ) {
+      throw new StoreInvariantError(
+        `Terminal Attempt ${attempt.id} does not retain its post-dispatch Workflow authority`,
+      );
+    }
+  }
+
+  private assertRetainedWorkerAuthorityClosure(): void {
+    if (this.hasTable('policy_bundles')) {
+      const rows = this.#database.prepare('SELECT * FROM policy_bundles ORDER BY id').all();
+      for (const row of rows) {
+        const installed = this.decodeVerifiedPolicyBundleRow(row);
+        const matchingAudit = this.listAuditEvents('POLICY', installed.bundle.id).some(
+          (audit) =>
+            audit.eventType === 'POLICY_BUNDLE_INSTALLED' &&
+            audit.actorType === 'RUNTIME' &&
+            audit.commandId === undefined &&
+            audit.beforeVersion === undefined &&
+            audit.afterVersion === undefined &&
+            audit.payloadDigest === installed.bundle.digest &&
+            audit.occurredAt === installed.installedAt,
+        );
+        if (!matchingAudit) {
+          throw new StoreInvariantError(
+            `Policy ${installed.bundle.id} has no matching installation audit authority`,
+          );
+        }
+      }
+    }
+
+    if (this.hasTable('context_manifests')) {
+      const rows = this.#database.prepare('SELECT * FROM context_manifests ORDER BY id').all();
+      for (const row of rows) {
+        this.decodeVerifiedContextManifestRow(row);
+      }
+    }
+
+    if (this.hasTable('worker_dispatch_claims')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM worker_dispatch_claims ORDER BY attempt_id')
+        .all();
+      for (const row of rows) {
+        this.assertRetainedDispatchClaimClosure(decodeWorkerDispatchClaimRow(row));
+      }
+    }
+
+    if (this.hasTable('worker_event_receipts')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM worker_event_receipts ORDER BY event_id')
+        .all();
+      for (const row of rows) {
+        const receipt = decodeWorkerEventReceiptRow(row);
+        if (receipt.disposition === 'ADMITTED') {
+          this.assertAdmittedWorkerEventHasDispatchClaim(receipt);
+        } else {
+          this.assertWorkerEventHasDispatchCausality(receipt);
+        }
+      }
+    }
+  }
+
+  private hasTable(name: string): boolean {
+    return (
+      this.#database
+        .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(name) !== undefined
+    );
+  }
+
   private checkWorkerEvent(
     receipt: WorkerEventReceipt,
   ):
@@ -1609,6 +1932,39 @@ export class SqliteControlStore implements WorkerControlStore {
       existing.contextManifestDigest === receipt.contextManifestDigest &&
       existing.packageDigest === receipt.packageDigest;
     return { status: matches ? 'MATCH' : 'CONFLICT', receipt: existing };
+  }
+
+  private assertAdmittedWorkerEventHasDispatchClaim(receipt: AdmittedWorkerEventReceipt): void {
+    const claim = this.assertWorkerEventHasDispatchCausality(receipt);
+    if (
+      claim.workflowVersion !== receipt.observedWorkflowVersion ||
+      claim.workerSessionId !== receipt.workerSessionId ||
+      claim.contextManifestDigest !== receipt.contextManifestDigest ||
+      claim.packageDigest !== receipt.packageDigest
+    ) {
+      throw new StoreInvariantError(
+        `Admitted Worker Event ${receipt.eventId} has no exact dispatch authority`,
+      );
+    }
+  }
+
+  private assertWorkerEventHasDispatchCausality(receipt: WorkerEventReceipt): WorkerDispatchClaim {
+    const claim = this.getWorkerDispatchClaim(receipt.attemptId);
+    if (claim === undefined) {
+      throw new StoreInvariantError(
+        `Worker Event ${receipt.eventId} has no durable dispatch causality`,
+      );
+    }
+    if (
+      claim.workflowId !== receipt.workflowId ||
+      claim.contextManifestId !== receipt.contextManifestId ||
+      receipt.receivedAt < claim.claimedAt
+    ) {
+      throw new StoreInvariantError(
+        `Worker Event ${receipt.eventId} has no durable dispatch causality`,
+      );
+    }
+    return claim;
   }
 
   private insertWorkerEventReceipt(receipt: WorkerEventReceipt): void {

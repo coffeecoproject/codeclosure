@@ -69,8 +69,10 @@ import {
   type WorkflowInstance,
 } from './model.js';
 import {
+  assertPolicyBundleDefinitionInvariant,
   assertPolicyBundleInvariant,
   type PolicyBundle,
+  type PolicyBundleDefinition,
   type PolicyCheckerIdentity,
 } from './policy.js';
 import {
@@ -588,7 +590,7 @@ const policyCheckerIdentitySchema = z
   })
   .strict();
 
-const policyBundleSchema = z
+const policyBundleDefinitionSchema = z
   .object({
     id: z.string(),
     schemaVersion: z.literal(1),
@@ -600,12 +602,14 @@ const policyBundleSchema = z
     applicabilityRules: z.array(nonBlankStringSchema),
     acceptanceRules: z.array(nonBlankStringSchema),
     checkerVersions: z.array(policyCheckerIdentitySchema),
-    digest: z.string(),
   })
   .strict();
 
-export function decodePolicyBundle(value: unknown): PolicyBundle {
-  const parsed = policyBundleSchema.parse(value);
+const policyBundleSchema = policyBundleDefinitionSchema.extend({ digest: z.string() }).strict();
+
+function materializePolicyBundleDefinition(
+  parsed: z.infer<typeof policyBundleDefinitionSchema>,
+): PolicyBundleDefinition {
   const checkerVersions: readonly PolicyCheckerIdentity[] = Object.freeze(
     parsed.checkerVersions.map((checker) =>
       Object.freeze({
@@ -615,7 +619,7 @@ export function decodePolicyBundle(value: unknown): PolicyBundle {
       }),
     ),
   );
-  const bundle: PolicyBundle = Object.freeze({
+  const definition: PolicyBundleDefinition = Object.freeze({
     id: policyBundleId(parsed.id),
     schemaVersion: parsed.schemaVersion,
     version: parsed.version,
@@ -626,6 +630,20 @@ export function decodePolicyBundle(value: unknown): PolicyBundle {
     applicabilityRules: Object.freeze([...parsed.applicabilityRules]),
     acceptanceRules: Object.freeze([...parsed.acceptanceRules]),
     checkerVersions,
+  });
+  assertPolicyBundleDefinitionInvariant(definition);
+  return definition;
+}
+
+export function decodePolicyBundleDefinition(value: unknown): PolicyBundleDefinition {
+  return materializePolicyBundleDefinition(policyBundleDefinitionSchema.parse(value));
+}
+
+export function decodePolicyBundle(value: unknown): PolicyBundle {
+  const parsed = policyBundleSchema.parse(value);
+  const definition = materializePolicyBundleDefinition(parsed);
+  const bundle: PolicyBundle = Object.freeze({
+    ...definition,
     digest: sha256Digest(parsed.digest),
   });
   assertPolicyBundleInvariant(bundle);

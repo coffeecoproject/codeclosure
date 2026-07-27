@@ -298,6 +298,18 @@ authority resolver. Migration 0008 preflights retained control records and adds
 SQLite scalar and relationship backstops. A Store `APPLIED` result is tested as
 an immediate-read and close/reopen guarantee, not only as a returned tag.
 
+Migration 0010 closes the remaining Worker-path authority relationships. It
+refuses unaudited retained Policies, unresolved external or Candidate M1
+Context sources, Worker receipts without a prior dispatch claim, and terminal
+Attempts whose end time predates dispatch. New Policy installation computes
+identity in the Runtime, independently recomputes it in the Store, and commits
+the Policy plus audit as one unit. After migrations, Store startup revalidates
+retained Policy content and audit linkage, rederives M1 Context identity from
+its authoritative sources, and checks claim, terminal-Attempt, and receipt
+causality so offline database changes cannot become trusted merely by reopening
+the Store. See
+[ADR 0015](../adr/0015-close-m1-worker-authority-causality.md).
+
 The store port returns version and command-identity conflicts as discriminated
 results. Runtime code MUST NOT inspect adapter exception names to recover those
 protocol outcomes. Only calls through the store port map to persistence
@@ -345,6 +357,8 @@ copy them from a public request.
 ## 8. FakeWorker contract
 
 `FakeWorker` is deterministic from a fixture plus the incoming Worker Request.
+Its event IDs are derived from that request, fixture, and event ordinal rather
+than from the fixture alone.
 It can emit:
 
 - valid proposals and Completion Requests;
@@ -369,10 +383,13 @@ Repair creates a child generation; no command transitions `FROZEN -> MUTABLE`.
 
 ### Context
 
-Each Attempt receives a canonical Context Manifest containing schema/compiler
-versions, Goal/Workflow/Attempt identity, phase, capabilities, explicit
-fact/decision references, Candidate identity where applicable, policy and
-response-contract identity, package digest, and manifest digest.
+Each current M1 Worker Attempt receives a canonical Context Manifest containing
+schema/compiler versions, Goal/Workflow/Attempt identity, phase, capabilities,
+policy and response-contract identity, package digest, and manifest digest.
+Until the durable source resolver is implemented, selected entries and
+omissions are empty and only compiler-owned Goal and criterion entries may
+appear in the Manifest. Candidate Context remains closed until Slice 5 supplies
+a Candidate Manager authority resolver.
 
 ### Evidence
 
@@ -392,7 +409,9 @@ The M1 engine evaluates the exact rules listed in
 immutable decision and trace. The closeout command rechecks the manifest,
 decision, Candidate, policy, and Workflow version inside its transaction.
 The minimal M1 Policy Bundle is installed and persisted by the runtime before it
-is referenced; it is never loaded from a FakeWorker-writable path.
+is referenced; it is never loaded from a FakeWorker-writable path. Composition
+supplies an undigested definition, while Runtime and Store independently bind
+its canonical identity and persist its installation audit atomically.
 
 ## 10. Build slices
 
@@ -455,14 +474,20 @@ an M1 completion claim.
 - typed, manifest-bound dispatch serialized against cancellation.
 
 Exit: worker text, result shape tricks, stale context, and duplicates cannot
-advance authority.
+advance authority. Empty or invalid-only streams terminate as
+`PROTOCOL_ERROR`, abrupt termination remains distinct, and control-plane event
+admission failure is not relabelled as Worker failure. Runtime-authored stream
+failures require the same exact durable dispatch claim as event admission. Its
+claim time is the causal floor for every later result, failure, cancellation,
+or restart reconciliation.
 
-The proof includes Context/source-authority cross-validation, Runtime-owned
-selection of an installed Policy, atomic Attempt-plus-Manifest start, durable
-dispatch claims serialized against cancellation, independent Worker receipts,
-restart reads, SQLite relationship backstops, and injected rollback failures
-after each new authority write. See
-[ADR 0014](../adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+The proof includes fail-closed M1 Context source authority, Runtime-owned
+selection and installation identity for Policy, atomic Attempt-plus-Manifest
+start, durable dispatch claims serialized against cancellation, causal Worker
+receipts, restart reads, SQLite relationship backstops, and injected rollback
+failures after each new authority write. See
+[ADR 0014](../adr/0014-context-bound-worker-dispatch-and-event-admission.md)
+and [ADR 0015](../adr/0015-close-m1-worker-authority-causality.md).
 
 ### Slice 5 — Candidate and evidence
 

@@ -20,6 +20,7 @@ supersedes it.
 | [0012](0012-causal-control-timestamps.md) | Preserve causal ordering across Runtime, domain, Store, audit, and SQLite timestamps | Accepted |
 | [0013](0013-authority-boundary-validation-closure.md) | Close authority validation across Runtime, Store, replay, and persistence | Accepted |
 | [0014](0014-context-bound-worker-dispatch-and-event-admission.md) | Bind Worker dispatch and event admission to durable Context authority | Accepted |
+| [0015](0015-close-m1-worker-authority-causality.md) | Close M1 Context, Policy, dispatch, identity, and stream causality gaps | Accepted |
 
 ## ADR lifecycle
 

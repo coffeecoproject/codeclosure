@@ -48,13 +48,29 @@ the claim; after a claim, cancellation commits the Workflow interruption before
 the Runtime aborts the active Worker signal.
 
 Worker delivery uses `WorkerEventId`, not caller- or Worker-selected
-`CommandId`. Only a current, schema-valid, request-bound event lets the Runtime
-create an internal command. That command commits the Attempt result or failure,
-Workflow state, audits, processed outcome, and admitted receipt atomically.
-Stale or mismatched delivery creates no state change, success audit, or
-processed command; an independent ignored receipt may record that delivery for
-deduplication. See
-[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+`CommandId`. Before considering any event, the Runtime reloads and exactly
+binds the request to its durable dispatch claim. Only a current, schema-valid,
+request-bound event lets the Runtime create an internal command. That command
+commits the Attempt result or failure, Workflow state, audits, processed
+outcome, and admitted receipt atomically. Stale or mismatched delivery creates
+no state change, success audit, or processed command; an independent ignored
+receipt may record that delivery for deduplication, but it still requires the
+same claimed Attempt, Workflow, and Context Manifest as its causal predecessor.
+See [ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md)
+and [ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
+
+An M1 Worker stream must establish a terminal delivery outcome. An admitted
+result or admitted Worker failure is terminal. If the stream is empty or ends
+after only malformed, rejected, or ignored Worker deliveries, the Runtime
+records `PROTOCOL_ERROR` while the Attempt is still current. An uncancelled
+iterator/process throw records `ABRUPT_TERMINATION`; successful cancellation is
+an `INTERRUPTED` Attempt. A control-plane failure during admission is classified
+separately and must not be rewritten as a Worker protocol error merely because
+no receipt committed. Runtime-authored stream failure also reloads and exactly
+binds the durable dispatch claim before it can terminate the Attempt; missing
+dispatch authority leaves the Attempt available for explicit recovery. Once a
+claim exists, its `claimedAt` is the timestamp floor for Worker result,
+Runtime-authored failure, cancellation, and restart reconciliation.
 
 For a new command, the Runtime first resolves the top-level Goal/Workflow
 snapshot and applies one freshness gate. Goal commands check the expected Goal
@@ -411,6 +427,11 @@ Each automatic retry records:
 - maximum budget;
 - backoff;
 - whether external reality must be reconciled first.
+
+In the current classification, `PROTOCOL_ERROR` is non-retryable and moves the
+Workflow to `FAILED`. `ABRUPT_TERMINATION` requires reconciliation and moves it
+to `BLOCKED`. A persistence or Runtime admission failure retains its own
+control-plane category so recovery can inspect the still-running Attempt.
 
 ## Crash Recovery
 

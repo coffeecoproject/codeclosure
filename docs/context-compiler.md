@@ -5,9 +5,9 @@
 This document defines the target Context Compiler contract. The current M1
 Slice 4 implementation provides the deterministic subset described under
 [M1 Boundary](#m1-boundary): canonical Context Packages and Manifests,
-source-authority cross-validation, exact digest binding, atomic Attempt binding,
-and `FakeWorker` dispatch. Retrieval, relevance packing, a full Fact Graph, and
-Codex Thread policy remain planned for later milestones.
+a fail-closed compiler-owned source subset, exact digest binding, atomic
+Attempt binding, and `FakeWorker` dispatch. Retrieval, relevance packing, a
+full Fact Graph, and Codex Thread policy remain planned for later milestones.
 
 ## Purpose
 
@@ -178,6 +178,13 @@ independent `WorkerEventId`; a current event is admitted transactionally, while
 a stale or mismatched event can create only an ignored delivery receipt. See
 [ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
 
+M1 has no durable resolver that can prove the status, scope, revision, and
+provenance of a selected Fact, Human Decision, or project source. The Runtime
+therefore rejects all externally selected entries and omission decisions, even
+when a factory returns a self-consistent package and Manifest. This deliberate
+restriction is specified by
+[ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
+
 ## Compilation Pipeline
 
 ### 1. Bind identity
@@ -295,17 +302,19 @@ sufficient for `FakeWorker`:
 
 - Goal identity and criteria;
 - Workflow, phase, Attempt, and capability-grant identity;
-- explicit fact/decision references;
-- current Candidate reference when applicable;
 - response contract;
 - Context Manifest, package digest, and manifest digest;
 - invalidation on Goal or phase revision.
 
-Explicit selected entries are supplied by a trusted M1 composition boundary
-and remain labelled by source reference, revision, optional source digest, and
-authority class. Durable relationship lookup and relevance selection over the
-Fact/Decision stores remain M3 work; worker-authored content cannot enter as a
-confirmed source merely by changing its prose.
+The M1 package has an empty `selectedEntries` collection, its Manifest has no
+omission decisions, and its entries are limited to compiler-owned Goal and
+success-criterion bindings. Candidate binding is also closed in Slice 4:
+the factory cannot prove Candidate lifecycle or digest merely from the active
+Workflow identifier. Slice 5 must introduce the Candidate Manager resolver
+before Candidate Context is enabled. The Context factory is not a source
+authority. Durable relationship lookup and relevance selection over the
+Fact/Decision stores remain M3 work; a later accepted ADR must introduce the
+owning resolver before those entries can enter Worker Context.
 
 Code relevance retrieval, full Fact Graph traversal, token-aware packing, and
 Codex Thread policy belong to later milestones.
@@ -318,4 +327,6 @@ Codex Thread policy belong to later milestones.
 - lower-authority working context cannot override a Goal field;
 - required oversized content fails explicitly;
 - stale worker results referencing an old manifest cannot advance state;
+- a factory-labelled Fact or Human Decision without durable source authority
+  cannot enter the M1 package;
 - no authority field depends solely on a transcript excerpt.

@@ -15,11 +15,13 @@ import {
   decodeAttemptSnapshot,
   decodeCandidateGeneration,
   decodeGoalSnapshot,
+  decodePolicyBundleDefinition,
   decodeWorkflowSnapshot,
   decideAttempt,
   goalId,
   goalRevision,
   isoTimestamp,
+  policyBundleId,
   sha256Digest,
   successCriterionId,
   workerSessionId,
@@ -72,12 +74,25 @@ const candidate = {
   createdAt,
   updatedAt: createdAt,
 };
+const policyDefinition = {
+  id: policyBundleId('policy_codec-contract'),
+  schemaVersion: 1,
+  version: 'codec-v1',
+  transitionRules: ['workflow-runtime-only'],
+  capabilityRules: ['phase-derived-capabilities'],
+  contextRules: ['durable-source-authority-only'],
+  checkSpecifications: [],
+  applicabilityRules: [],
+  acceptanceRules: ['acceptance-engine-only'],
+  checkerVersions: [],
+} as const;
 
 void test('[I-006] authority codecs materialize immutable canonical snapshots', () => {
   const decodedGoal = decodeGoalSnapshot(goal);
   const decodedWorkflow = decodeWorkflowSnapshot(workflow);
   const decodedAttempt = decodeAttemptSnapshot(attempt);
   const decodedCandidate = decodeCandidateGeneration(candidate);
+  const decodedPolicyDefinition = decodePolicyBundleDefinition(policyDefinition);
 
   assert.equal(Object.isFrozen(decodedGoal), true);
   assert.equal(Object.isFrozen(decodedGoal.successCriteria), true);
@@ -88,6 +103,8 @@ void test('[I-006] authority codecs materialize immutable canonical snapshots', 
   assert.equal(Object.isFrozen(decodedAttempt), true);
   assert.equal(Object.isFrozen(decodedAttempt.capabilityGrant.allowedActions), true);
   assert.equal(Object.isFrozen(decodedCandidate), true);
+  assert.equal(Object.isFrozen(decodedPolicyDefinition), true);
+  assert.equal(Object.isFrozen(decodedPolicyDefinition.transitionRules), true);
 });
 
 void test('[I-006][I-023] closed codecs reject poisoned scalar, enum, field, and capability data', () => {
@@ -132,6 +149,17 @@ void test('[I-006][I-023] closed codecs reject poisoned scalar, enum, field, and
         ...candidate,
         state: CandidateGenerationState.INVALIDATED,
         invalidationReason: '',
+      },
+    },
+    {
+      decode: decodePolicyBundleDefinition,
+      value: { ...policyDefinition, digest: sha256Digest(`sha256:${'b'.repeat(64)}`) },
+    },
+    {
+      decode: decodePolicyBundleDefinition,
+      value: {
+        ...policyDefinition,
+        transitionRules: ['workflow-runtime-only', 'workflow-runtime-only'],
       },
     },
   ];

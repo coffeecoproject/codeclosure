@@ -455,6 +455,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0007_causal_control_time.sql',
       '0008_authority_boundary_validation.sql',
       '0009_context_worker_dispatch.sql',
+      '0010_worker_authority_closure.sql',
     ],
   );
   store.close();
