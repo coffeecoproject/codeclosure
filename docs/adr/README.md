@@ -12,6 +12,7 @@ supersedes it.
 | [0004](0004-authoritative-state-and-audit-log.md) | Store authoritative state and its audit trail transactionally | Accepted |
 | [0005](0005-isolated-candidate-generations.md) | Execute workers in isolated candidate generations | Accepted |
 | [0006](0006-canonical-serialization-and-digest-profiles.md) | Use versioned canonical projections for authority-bearing digests | Accepted |
+| [0007](0007-workflow-owned-attempt-lifecycle.md) | Own the M1 Attempt lifecycle inside the versioned Workflow aggregate | Accepted |
 
 ## ADR lifecycle
 

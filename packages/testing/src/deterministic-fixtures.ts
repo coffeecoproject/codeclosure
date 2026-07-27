@@ -1,5 +1,6 @@
 import {
   attemptId,
+  auditEventId,
   candidateGenerationId,
   candidateId,
   commandId,
@@ -7,6 +8,7 @@ import {
   isoTimestamp,
   workflowId,
   type AttemptId,
+  type AuditEventId,
   type CandidateGenerationId,
   type CandidateId,
   type CommandId,
@@ -57,6 +59,10 @@ export class DeterministicIds {
 
   public nextAttemptId(): AttemptId {
     return attemptId(`attempt_${this.nextSuffix()}`);
+  }
+
+  public nextAuditEventId(): AuditEventId {
+    return auditEventId(`audit_${this.nextSuffix()}`);
   }
 
   public nextCandidateId(): CandidateId {

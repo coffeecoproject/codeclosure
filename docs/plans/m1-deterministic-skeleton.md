@@ -164,6 +164,11 @@ Every mutating command carries a `CommandId`; aggregate commands also carry an
 `expectedVersion`. Duplicate `CommandId` delivery returns the previously
 recorded outcome without replaying side effects.
 
+M1 treats Attempt as a child of the Workflow aggregate. Attempt lifecycle
+commands therefore carry `expectedWorkflowVersion` and advance the Workflow
+version; they do not introduce an independent Attempt version. See
+[ADR 0007](../adr/0007-workflow-owned-attempt-lifecycle.md).
+
 ### Ports
 
 ```text

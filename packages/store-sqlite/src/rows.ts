@@ -1,21 +1,33 @@
 import { z } from 'zod';
 
 import {
+  AcceptanceAccess,
+  AttemptFailureClass,
+  AttemptStatus,
+  CandidateAccess,
+  ControlSubmission,
   GoalStatus,
+  PhaseAction,
   RunStatus,
+  RunOutputScope,
   WorkflowPhase,
   attemptId,
   auditEventId,
   candidateGenerationId,
   commandId,
+  contextManifestId,
   goalId,
   goalRevision,
+  isCanonicalCapabilityGrant,
   isoTimestamp,
   sha256Digest,
   successCriterionId,
+  workerSessionId,
   workflowId,
   workflowVersion,
+  type Attempt,
   type AuditEventId,
+  type CapabilityGrant,
   type CommandId,
   type Goal,
   type IsoTimestamp,
@@ -51,6 +63,70 @@ const runStatusSchema = z.enum([
   RunStatus.CANCELLED,
   RunStatus.CLOSED,
 ]);
+const attemptStatusSchema = z.enum([
+  AttemptStatus.RUNNING,
+  AttemptStatus.RESULT_RECORDED,
+  AttemptStatus.FAILED,
+  AttemptStatus.INTERRUPTED,
+]);
+const attemptFailureClassSchema = z.enum([
+  AttemptFailureClass.TRANSIENT_BACKEND,
+  AttemptFailureClass.TIMEOUT,
+  AttemptFailureClass.ABRUPT_TERMINATION,
+  AttemptFailureClass.PROTOCOL_ERROR,
+  AttemptFailureClass.INTEGRITY_VIOLATION,
+  AttemptFailureClass.PERMANENT_BACKEND,
+  AttemptFailureClass.UNKNOWN,
+]);
+const capabilityGrantSchema = z
+  .object({
+    phase: workflowPhaseSchema,
+    projectRead: z.literal(true),
+    candidateAccess: z.enum([
+      CandidateAccess.NONE,
+      CandidateAccess.MUTABLE_WRITE,
+      CandidateAccess.FREEZE_READ,
+      CandidateAccess.FROZEN_READ,
+      CandidateAccess.ACCEPTED_READ,
+    ]),
+    runOutputScope: z.enum([
+      RunOutputScope.BOUNDED_DISCOVERY,
+      RunOutputScope.PLAN_OBSERVATION,
+      RunOutputScope.BOUNDED_IMPLEMENTATION,
+      RunOutputScope.FREEZE_METADATA,
+      RunOutputScope.RUN_OWNED_VERIFICATION,
+      RunOutputScope.DECISION_TRACE,
+      RunOutputScope.CLOSEOUT_EXPORT,
+    ]),
+    controlSubmission: z.enum([
+      ControlSubmission.PROPOSALS,
+      ControlSubmission.COMPLETION_REQUEST,
+      ControlSubmission.RUNTIME_ONLY,
+      ControlSubmission.EVIDENCE_SUBMISSION,
+      ControlSubmission.DECISION_SUBMISSION,
+      ControlSubmission.CONSUME_EXISTING,
+    ]),
+    acceptanceAccess: z.enum([
+      AcceptanceAccess.NONE,
+      AcceptanceAccess.EVALUATE_READ_ONLY,
+      AcceptanceAccess.CONSUME_EXISTING,
+    ]),
+    allowedActions: z.array(
+      z.enum([
+        PhaseAction.READ_PROJECT,
+        PhaseAction.READ_CANDIDATE,
+        PhaseAction.WRITE_CANDIDATE_SOURCE,
+        PhaseAction.WRITE_RUN_OUTPUT,
+        PhaseAction.SUBMIT_PROPOSALS,
+        PhaseAction.SUBMIT_COMPLETION_REQUEST,
+        PhaseAction.SUBMIT_EVIDENCE,
+        PhaseAction.SUBMIT_DECISION,
+        PhaseAction.EVALUATE_ACCEPTANCE,
+        PhaseAction.CONSUME_ACCEPTANCE,
+      ]),
+    ),
+  })
+  .strict();
 
 const goalRowSchema = z.object({
   id: z.string(),
@@ -82,6 +158,21 @@ const workflowRowSchema = z.object({
   suspended_reason: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+});
+
+const attemptRowSchema = z.object({
+  id: z.string(),
+  workflow_id: z.string(),
+  phase: workflowPhaseSchema,
+  sequence: z.number().int().positive(),
+  context_manifest_id: z.string().nullable(),
+  capability_grant_json: z.string(),
+  worker_session_ref: z.string().nullable(),
+  status: attemptStatusSchema,
+  failure_class: attemptFailureClassSchema.nullable(),
+  termination_reason: z.string().nullable(),
+  started_at: z.string(),
+  ended_at: z.string().nullable(),
 });
 
 const processedCommandRowSchema = z.object({
@@ -163,6 +254,9 @@ export function decodeWorkflow(row: unknown): WorkflowInstance {
     if (isCloseout !== isClosed) {
       throw new TypeError('CLOSEOUT and CLOSED must occur together');
     }
+    if ((parsed.run_status === RunStatus.RUNNING) !== (parsed.active_attempt_id !== null)) {
+      throw new TypeError('RUNNING Workflow must bind exactly one active Attempt');
+    }
     const candidateRequired =
       parsed.phase === WorkflowPhase.IMPLEMENT ||
       parsed.phase === WorkflowPhase.SOURCE_FREEZE ||
@@ -195,6 +289,63 @@ export function decodeWorkflow(row: unknown): WorkflowInstance {
     });
   } catch (error) {
     throw new PersistenceDecodeError('WorkflowInstance', { cause: error });
+  }
+}
+
+export function decodeAttempt(row: unknown): Attempt {
+  try {
+    const parsed = attemptRowSchema.parse(row);
+    const capabilityData = capabilityGrantSchema.parse(
+      parseJson(parsed.capability_grant_json, 'Attempt.capabilityGrant'),
+    );
+    const capabilityGrant: CapabilityGrant = Object.freeze({
+      ...capabilityData,
+      allowedActions: Object.freeze([...capabilityData.allowedActions]),
+    });
+    if (
+      parsed.phase === WorkflowPhase.CLOSEOUT ||
+      capabilityGrant.phase !== parsed.phase ||
+      !isCanonicalCapabilityGrant(capabilityGrant)
+    ) {
+      throw new TypeError('Stored Attempt capability grant does not match its phase');
+    }
+
+    const terminal = parsed.status !== AttemptStatus.RUNNING;
+    if (
+      terminal !== (parsed.ended_at !== null) ||
+      terminal !== (parsed.termination_reason !== null) ||
+      (parsed.ended_at !== null && parsed.ended_at < parsed.started_at) ||
+      (parsed.termination_reason !== null && parsed.termination_reason.trim().length === 0) ||
+      (parsed.status === AttemptStatus.FAILED) !== (parsed.failure_class !== null)
+    ) {
+      throw new TypeError('Stored Attempt lifecycle fields are inconsistent');
+    }
+
+    return Object.freeze({
+      id: attemptId(parsed.id),
+      workflowId: workflowId(parsed.workflow_id),
+      phase: parsed.phase,
+      sequence: parsed.sequence,
+      ...(parsed.context_manifest_id === null
+        ? {}
+        : { contextManifestId: contextManifestId(parsed.context_manifest_id) }),
+      capabilityGrant,
+      ...(parsed.worker_session_ref === null
+        ? {}
+        : { workerSessionRef: workerSessionId(parsed.worker_session_ref) }),
+      status: parsed.status,
+      ...(parsed.failure_class === null ? {} : { failureClass: parsed.failure_class }),
+      ...(parsed.termination_reason === null
+        ? {}
+        : { terminationReason: parsed.termination_reason }),
+      startedAt: isoTimestamp(parsed.started_at),
+      ...(parsed.ended_at === null ? {} : { endedAt: isoTimestamp(parsed.ended_at) }),
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('Attempt', { cause: error });
   }
 }
 

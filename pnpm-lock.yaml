@@ -58,6 +58,9 @@ importers:
       '@codeclosure/domain':
         specifier: workspace:*
         version: link:../domain
+      '@codeclosure/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       better-sqlite3:
         specifier: 13.0.1
         version: 13.0.1

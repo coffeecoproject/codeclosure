@@ -1,6 +1,7 @@
 import {
   nextWorkflowVersion,
   workflowVersion,
+  type AttemptId,
   type CandidateGenerationId,
   type CommandId,
   type IsoTimestamp,
@@ -127,6 +128,7 @@ export interface WorkflowCancelled {
   readonly phase: WorkflowPhaseType;
   readonly fromVersion: WorkflowVersion;
   readonly toVersion: WorkflowVersion;
+  readonly interruptedAttemptId?: AttemptId;
   readonly reason: string;
   readonly occurredAt: IsoTimestamp;
 }
@@ -332,19 +334,24 @@ export function decideWorkflow(
 
   const toVersion = nextWorkflowVersion(workflow.version);
   if (command.type === 'CANCEL_WORKFLOW') {
+    const eventBase = {
+      type: 'WORKFLOW_CANCELLED' as const,
+      commandId: command.commandId,
+      workflowId: workflow.id,
+      phase: workflow.phase,
+      fromVersion: workflow.version,
+      toVersion,
+      reason: command.reason.trim(),
+      occurredAt: command.occurredAt,
+    };
     return {
       accepted: true,
       events: [
-        Object.freeze({
-          type: 'WORKFLOW_CANCELLED',
-          commandId: command.commandId,
-          workflowId: workflow.id,
-          phase: workflow.phase,
-          fromVersion: workflow.version,
-          toVersion,
-          reason: command.reason.trim(),
-          occurredAt: command.occurredAt,
-        }),
+        Object.freeze(
+          workflow.activeAttemptId === undefined
+            ? eventBase
+            : { ...eventBase, interruptedAttemptId: workflow.activeAttemptId },
+        ),
       ],
     };
   }
@@ -450,19 +457,32 @@ export function applyWorkflowEvent(
   }
 
   if (event.type === 'WORKFLOW_CANCELLED') {
-    if (event.phase !== workflow.phase) {
-      throw new DomainInvariantError('Cancellation event phase does not match current state');
+    if (event.phase !== workflow.phase || event.interruptedAttemptId !== workflow.activeAttemptId) {
+      throw new DomainInvariantError(
+        'Cancellation event phase or active Attempt does not match current state',
+      );
     }
     return Object.freeze({
-      ...workflow,
+      id: workflow.id,
+      goalId: workflow.goalId,
+      goalRevision: workflow.goalRevision,
+      phase: workflow.phase,
       runStatus: RunStatus.CANCELLED,
       version: event.toVersion,
+      ...(workflow.activeCandidateGenerationId === undefined
+        ? {}
+        : { activeCandidateGenerationId: workflow.activeCandidateGenerationId }),
+      suspendedReason: event.reason,
+      createdAt: workflow.createdAt,
       updatedAt: event.occurredAt,
     });
   }
 
   if (event.fromPhase !== workflow.phase) {
     throw new DomainInvariantError('Transition event fromPhase does not match current state');
+  }
+  if (workflow.runStatus !== RunStatus.READY || workflow.activeAttemptId !== undefined) {
+    throw new DomainInvariantError('Phase transition event requires a READY Workflow');
   }
 
   const requiredGuards = requiredGuardsForTransition(event.fromPhase, event.toPhase);

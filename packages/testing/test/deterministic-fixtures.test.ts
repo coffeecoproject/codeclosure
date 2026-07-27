@@ -14,4 +14,5 @@ void test('[I-006] deterministic fixtures emit explicit reproducible values', ()
   assert.equal(ids.nextGoalId(), 'goal_reducer-0001');
   assert.equal(ids.nextWorkflowId(), 'workflow_reducer-0002');
   assert.equal(ids.nextCommandId(), 'command_reducer-0003');
+  assert.equal(ids.nextAuditEventId(), 'audit_reducer-0004');
 });

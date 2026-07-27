@@ -313,11 +313,19 @@ The user may cancel a Goal. Cancellation:
 - records `CANCELLED` rather than `CLOSED`;
 - never issues an `ACCEPT` decision.
 
+In M1, cancellation uses the expected Workflow version and transactionally
+marks any active `RUNNING` Attempt `INTERRUPTED` while changing the Workflow to
+`CANCELLED`. A racing worker result cannot update either record after that
+version advances.
+
 ## Retry and Repair
 
 Retries repeat an operation against the same valid inputs after a transient
 failure. Repairs create a new candidate generation after a semantic or
 implementation rejection. They are not interchangeable.
+
+A retry creates a new child Attempt under the same Workflow aggregate. It does
+not reopen or mutate the terminal Attempt it replaces.
 
 Each automatic retry records:
 
@@ -341,6 +349,9 @@ For a non-terminal workflow, startup recovery must:
 7. persist the recovery decision before dispatching more work.
 
 The last model response is never the recovery algorithm.
+
+Attempt lifecycle ownership and its single-version concurrency rule are defined
+by [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md).
 
 ## M1 Required State-Machine Proof
 

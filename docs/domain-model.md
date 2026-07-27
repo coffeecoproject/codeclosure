@@ -128,6 +128,9 @@ Separating phase from run status avoids inventing phases such as
 ## Attempt
 
 An Attempt records one bounded effort to advance the workflow.
+It is a child entity owned by the Workflow aggregate in M1, not an independently
+versioned aggregate. `WorkflowInstance.version` serializes phase, run-status,
+active-Attempt, and Attempt-lifecycle mutations.
 
 ```text
 Attempt
@@ -140,6 +143,7 @@ Attempt
   workerSessionRef?
   status
   failureClass?
+  terminationReason?
   startedAt
   endedAt?
 ```
@@ -164,9 +168,18 @@ persisted `RUNNING` Attempt with external reality before dispatching more work.
 Goal cancellation records the Workflow as `CANCELLED` and any active Attempt as
 `INTERRUPTED`.
 
+Commands that begin, finish, fail, or interrupt an Attempt MUST carry the
+expected Workflow version. A successful command updates the Attempt, Workflow
+version/current state, audit events, and idempotent command outcome in one
+transaction. Only the active `RUNNING` Attempt may change lifecycle state, and
+it may enter a terminal Attempt status only once.
+
 `RESULT_RECORDED` is deliberately not named `SUCCEEDED`: a worker operation
 ending normally or returning a Completion Request grants no acceptance or
 closeout authority.
+
+See [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md) for the aggregate
+boundary and concurrency rationale.
 
 ## Transition Request and Transition Record
 

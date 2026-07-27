@@ -145,6 +145,7 @@ The sole authoritative workflow-state writer. It:
 - validates commands against the current state version;
 - enforces the transition matrix;
 - derives phase capabilities;
+- owns Attempt lifecycle as part of the versioned Workflow aggregate in M1;
 - persists state plus audit event atomically;
 - suspends for typed blockers and decisions;
 - reconciles after interruption.

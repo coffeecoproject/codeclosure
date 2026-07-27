@@ -4,13 +4,20 @@ import { dirname, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 
 import {
+  AttemptStatus,
   GoalStatus,
   RunStatus,
   WorkflowPhase,
+  applyAttemptEvent,
+  applyWorkflowCancellationToAttempt,
   applyWorkflowEvent,
   goalRevision,
   isoTimestamp,
   workflowVersion,
+  type AppliedAttemptEvent,
+  type Attempt,
+  type AttemptEvent,
+  type AttemptId,
   type AuditEventId,
   type CommandId,
   type Goal,
@@ -21,6 +28,7 @@ import {
   type WorkflowId,
   type WorkflowInstance,
 } from '@codeclosure/domain';
+import type { WorkflowControlStore } from '@codeclosure/runtime';
 
 import {
   CommandIdConflictError,
@@ -34,6 +42,7 @@ import {
   type AppliedMigration,
 } from './migrations.js';
 import {
+  decodeAttempt,
   decodeAuditEvent,
   decodeGoal,
   decodeProcessedCommand,
@@ -44,6 +53,7 @@ import {
 
 export const TransactionStep = {
   AFTER_COMMAND_CHECK: 'AFTER_COMMAND_CHECK',
+  AFTER_ATTEMPT_STATE_WRITE: 'AFTER_ATTEMPT_STATE_WRITE',
   AFTER_STATE_WRITE: 'AFTER_STATE_WRITE',
   AFTER_AUDIT_APPEND: 'AFTER_AUDIT_APPEND',
   AFTER_COMMAND_RECORD: 'AFTER_COMMAND_RECORD',
@@ -78,6 +88,14 @@ export interface CreateGoalWithWorkflowInput extends AuditWriteIdentity {
 export interface CommitWorkflowEventInput extends AuditWriteIdentity {
   readonly inputDigest: Sha256Digest;
   readonly event: WorkflowEvent;
+  readonly outcome: JsonValue;
+  readonly attemptAuditEventId?: AuditEventId;
+}
+
+export interface CommitAttemptEventInput extends AuditWriteIdentity {
+  readonly inputDigest: Sha256Digest;
+  readonly event: AttemptEvent;
+  readonly workflowAuditEventId: AuditEventId;
   readonly outcome: JsonValue;
 }
 
@@ -127,7 +145,20 @@ function validateBusyTimeout(value: number): number {
   return value;
 }
 
-export class SqliteControlStore {
+function serializeAttemptCapabilityGrant(attempt: Attempt): string {
+  const grant = attempt.capabilityGrant;
+  return serializeJson({
+    phase: grant.phase,
+    projectRead: grant.projectRead,
+    candidateAccess: grant.candidateAccess,
+    runOutputScope: grant.runOutputScope,
+    controlSubmission: grant.controlSubmission,
+    acceptanceAccess: grant.acceptanceAccess,
+    allowedActions: [...grant.allowedActions],
+  });
+}
+
+export class SqliteControlStore implements WorkflowControlStore {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
   readonly #transactionProbe: ((step: TransactionStep) => void) | undefined;
@@ -212,6 +243,19 @@ export class SqliteControlStore {
       .prepare('SELECT * FROM workflows WHERE goal_id = ?')
       .get(goalIdentifier);
     return row === undefined ? undefined : decodeWorkflow(row);
+  }
+
+  public getAttempt(attemptIdentifier: AttemptId): Attempt | undefined {
+    this.assertOpen();
+    const row = this.#database
+      .prepare('SELECT * FROM attempts WHERE id = ?')
+      .get(attemptIdentifier);
+    return row === undefined ? undefined : decodeAttempt(row);
+  }
+
+  public nextAttemptSequence(workflowIdentifier: WorkflowId): number {
+    this.assertOpen();
+    return this.nextAttemptSequenceInsideTransaction(workflowIdentifier);
   }
 
   public getProcessedCommand(commandIdentifier: CommandId): ProcessedCommandRecord | undefined {
@@ -353,6 +397,138 @@ export class SqliteControlStore {
     });
   }
 
+  public commitAttemptEvent(
+    input: CommitAttemptEventInput,
+  ): StoreCommandResult<AppliedAttemptEvent> {
+    this.assertOpen();
+    const serializedOutcome = serializeJson(input.outcome);
+    const attemptIdentifier =
+      input.event.type === 'ATTEMPT_STARTED' ? input.event.attempt.id : input.event.attemptId;
+
+    return this.runImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        'WORKFLOW',
+        input.event.workflowId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const currentWorkflow = this.getWorkflowInsideTransaction(input.event.workflowId);
+      if (currentWorkflow.version !== input.event.fromWorkflowVersion) {
+        throw new OptimisticConcurrencyError('Workflow', input.event.workflowId);
+      }
+      const currentAttempt =
+        input.event.type === 'ATTEMPT_STARTED'
+          ? currentWorkflow.activeAttemptId === undefined
+            ? undefined
+            : this.getAttemptInsideTransaction(currentWorkflow.activeAttemptId)
+          : this.getAttemptInsideTransaction(input.event.attemptId);
+      const applied = applyAttemptEvent(currentWorkflow, currentAttempt, input.event);
+
+      if (input.event.type === 'ATTEMPT_STARTED') {
+        const expectedSequence = this.nextAttemptSequenceInsideTransaction(input.event.workflowId);
+        if (input.event.attempt.sequence !== expectedSequence) {
+          throw new StoreInvariantError(
+            `Attempt sequence must be ${expectedSequence} for ${input.event.workflowId}`,
+          );
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO attempts(
+               id, workflow_id, phase, sequence, context_manifest_id,
+               capability_grant_json, worker_session_ref, status, failure_class,
+               termination_reason, started_at, ended_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            applied.attempt.id,
+            applied.attempt.workflowId,
+            applied.attempt.phase,
+            applied.attempt.sequence,
+            applied.attempt.contextManifestId ?? null,
+            serializeAttemptCapabilityGrant(applied.attempt),
+            applied.attempt.workerSessionRef ?? null,
+            applied.attempt.status,
+            null,
+            null,
+            applied.attempt.startedAt,
+            null,
+          );
+      } else {
+        const updateAttempt = this.#database
+          .prepare(
+            `UPDATE attempts
+                SET status = ?, failure_class = ?, termination_reason = ?, ended_at = ?
+              WHERE id = ? AND workflow_id = ? AND status = ?`,
+          )
+          .run(
+            applied.attempt.status,
+            applied.attempt.failureClass ?? null,
+            applied.attempt.terminationReason ?? null,
+            applied.attempt.endedAt ?? null,
+            applied.attempt.id,
+            applied.attempt.workflowId,
+            AttemptStatus.RUNNING,
+          );
+        if (updateAttempt.changes !== 1) {
+          throw new OptimisticConcurrencyError('Attempt', applied.attempt.id);
+        }
+      }
+
+      this.probe(TransactionStep.AFTER_ATTEMPT_STATE_WRITE);
+      this.updateWorkflow(currentWorkflow, applied.workflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'ATTEMPT',
+        aggregateId: attemptIdentifier,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromWorkflowVersion,
+        afterVersion: input.event.toWorkflowVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.insertAuditEvent({
+        id: input.workflowAuditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: input.event.workflowId,
+        eventType:
+          input.event.type === 'ATTEMPT_STARTED'
+            ? 'WORKFLOW_ATTEMPT_STARTED'
+            : 'WORKFLOW_ATTEMPT_FINISHED',
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromWorkflowVersion,
+        afterVersion: input.event.toWorkflowVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        'WORKFLOW',
+        input.event.workflowId,
+        serializedOutcome,
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      return { status: 'APPLIED', outcome: input.outcome, value: applied };
+    });
+  }
+
   public commitWorkflowEvent(
     input: CommitWorkflowEventInput,
   ): StoreCommandResult<WorkflowInstance> {
@@ -375,30 +551,74 @@ export class SqliteControlStore {
       if (current.version !== input.event.fromVersion) {
         throw new OptimisticConcurrencyError('Workflow', input.event.workflowId);
       }
-      const next = applyWorkflowEvent(current, input.event);
-      const update = this.#database
-        .prepare(
-          `UPDATE workflows
-              SET phase = ?, run_status = ?, version = ?, active_attempt_id = ?,
-                  active_candidate_generation_id = ?, suspended_reason = ?, updated_at = ?
-            WHERE id = ? AND version = ?`,
-        )
-        .run(
-          next.phase,
-          next.runStatus,
-          next.version,
-          next.activeAttemptId ?? null,
-          next.activeCandidateGenerationId ?? null,
-          next.suspendedReason ?? null,
-          next.updatedAt,
-          next.id,
-          current.version,
-        );
-      if (update.changes !== 1) {
-        throw new OptimisticConcurrencyError('Workflow', input.event.workflowId);
+      let next: WorkflowInstance;
+      let interruptedAttempt: Attempt | undefined;
+      if (input.event.type === 'WORKFLOW_CANCELLED') {
+        if (input.event.interruptedAttemptId === undefined) {
+          if (input.attemptAuditEventId !== undefined) {
+            throw new StoreInvariantError(
+              'Cancellation without an active Attempt cannot write an Attempt audit event',
+            );
+          }
+          next = applyWorkflowCancellationToAttempt(current, undefined, input.event).workflow;
+        } else {
+          if (input.attemptAuditEventId === undefined) {
+            throw new StoreInvariantError(
+              'Cancellation with an active Attempt requires an Attempt audit event ID',
+            );
+          }
+          const currentAttempt = this.getAttemptInsideTransaction(input.event.interruptedAttemptId);
+          const applied = applyWorkflowCancellationToAttempt(current, currentAttempt, input.event);
+          if (applied.attempt === undefined) {
+            throw new StoreInvariantError('Cancellation failed to interrupt its active Attempt');
+          }
+          interruptedAttempt = applied.attempt;
+          next = applied.workflow;
+          const updateAttempt = this.#database
+            .prepare(
+              `UPDATE attempts
+                  SET status = ?, failure_class = NULL, termination_reason = ?, ended_at = ?
+                WHERE id = ? AND workflow_id = ? AND status = ?`,
+            )
+            .run(
+              interruptedAttempt.status,
+              interruptedAttempt.terminationReason ?? null,
+              interruptedAttempt.endedAt ?? null,
+              interruptedAttempt.id,
+              interruptedAttempt.workflowId,
+              AttemptStatus.RUNNING,
+            );
+          if (updateAttempt.changes !== 1) {
+            throw new OptimisticConcurrencyError('Attempt', interruptedAttempt.id);
+          }
+          this.probe(TransactionStep.AFTER_ATTEMPT_STATE_WRITE);
+        }
+      } else {
+        if (input.attemptAuditEventId !== undefined) {
+          throw new StoreInvariantError(
+            'Only Workflow cancellation may include an Attempt audit event ID',
+          );
+        }
+        next = applyWorkflowEvent(current, input.event);
       }
+      this.updateWorkflow(current, next);
       this.probe(TransactionStep.AFTER_STATE_WRITE);
 
+      if (interruptedAttempt !== undefined && input.attemptAuditEventId !== undefined) {
+        this.insertAuditEvent({
+          id: input.attemptAuditEventId,
+          aggregateType: 'ATTEMPT',
+          aggregateId: interruptedAttempt.id,
+          eventType: 'ATTEMPT_INTERRUPTED_BY_WORKFLOW_CANCELLATION',
+          commandId: input.event.commandId,
+          beforeVersion: input.event.fromVersion,
+          afterVersion: input.event.toVersion,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.payloadDigest,
+          occurredAt: input.event.occurredAt,
+        });
+      }
       this.insertAuditEvent({
         id: input.auditEventId,
         aggregateType: 'WORKFLOW',
@@ -468,6 +688,63 @@ export class SqliteControlStore {
       throw new StoreInvariantError(`Workflow ${workflowIdentifier} does not exist`);
     }
     return decodeWorkflow(row);
+  }
+
+  private getAttemptInsideTransaction(attemptIdentifier: AttemptId): Attempt {
+    const row = this.#database
+      .prepare('SELECT * FROM attempts WHERE id = ?')
+      .get(attemptIdentifier);
+    if (row === undefined) {
+      throw new StoreInvariantError(`Attempt ${attemptIdentifier} does not exist`);
+    }
+    return decodeAttempt(row);
+  }
+
+  private nextAttemptSequenceInsideTransaction(workflowIdentifier: WorkflowId): number {
+    const row = this.#database
+      .prepare(
+        `SELECT COALESCE(MAX(attempts.sequence), 0) + 1 AS next_sequence
+           FROM workflows
+           LEFT JOIN attempts ON attempts.workflow_id = workflows.id
+          WHERE workflows.id = ?
+          GROUP BY workflows.id`,
+      )
+      .get(workflowIdentifier);
+    if (
+      typeof row !== 'object' ||
+      row === null ||
+      !('next_sequence' in row) ||
+      typeof row.next_sequence !== 'number' ||
+      !Number.isSafeInteger(row.next_sequence) ||
+      row.next_sequence < 1
+    ) {
+      throw new StoreInvariantError(`Workflow ${workflowIdentifier} does not exist`);
+    }
+    return row.next_sequence;
+  }
+
+  private updateWorkflow(current: WorkflowInstance, next: WorkflowInstance): void {
+    const update = this.#database
+      .prepare(
+        `UPDATE workflows
+            SET phase = ?, run_status = ?, version = ?, active_attempt_id = ?,
+                active_candidate_generation_id = ?, suspended_reason = ?, updated_at = ?
+          WHERE id = ? AND version = ?`,
+      )
+      .run(
+        next.phase,
+        next.runStatus,
+        next.version,
+        next.activeAttemptId ?? null,
+        next.activeCandidateGenerationId ?? null,
+        next.suspendedReason ?? null,
+        next.updatedAt,
+        next.id,
+        current.version,
+      );
+    if (update.changes !== 1) {
+      throw new OptimisticConcurrencyError('Workflow', current.id);
+    }
   }
 
   private checkCommand(
