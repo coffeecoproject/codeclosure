@@ -11,17 +11,16 @@ complete.
 
 ## Status
 
-CodeClosure is in the **M0 architecture-baseline stage**. This repository
-currently defines the product contract, authority boundaries, workflow,
-evidence model,
-and implementation milestones. It does not yet contain a working runtime, and
-the presence of these documents is not an implementation-completion claim.
+The M0 architecture baseline is complete and tracked. **M1 implementation is in
+progress.** The repository currently contains the strict TypeScript workspace,
+pure Workflow and Candidate reducers, and the transactional SQLite control-store
+foundation with migration, restart, optimistic-concurrency, idempotency, and
+atomic state-plus-audit tests.
 
-M1 may begin only after the reviewed M0 document set is tracked in a
-version-control baseline.
-
-The first executable milestone, M1, will prove the control boundary with a
-`FakeWorker` before Codex is connected.
+This is not yet an end-to-end working runtime. Runtime command orchestration,
+the Context compiler, `FakeWorker`, Evidence, Acceptance, CLI proof scenarios,
+and the final M1 audit remain incomplete. Implemented slices must not be read as
+an M1 or product-completion claim.
 
 ## Development
 
@@ -33,7 +32,7 @@ corepack pnpm install
 corepack pnpm gate:quality
 ```
 
-Current Slice 0 repository commands are:
+Current repository commands are:
 
 - `pnpm format` / `pnpm format:check` — write or verify code/config formatting;
 - `pnpm lint` — run ESLint with type-aware TypeScript rules;
@@ -42,8 +41,10 @@ Current Slice 0 repository commands are:
 - `pnpm build` — force a clean production compilation pass;
 - `pnpm gate:quality` — run the current checks in required order.
 
-Later M1 slices extend `gate:quality` with migration, restart, adversarial demo,
-and invariant-coverage checks before any M1 completion claim.
+The current test step includes reducer, migration, reopen, stale-write,
+idempotency, persistence-decoding, and transaction rollback checks. Later M1
+slices add adversarial demos, canonical replay vectors, CLI integration, and an
+invariant-coverage check before any M1 completion claim.
 
 ## Why CodeClosure Exists
 

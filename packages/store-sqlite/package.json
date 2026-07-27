@@ -12,11 +12,13 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "migrations"
   ],
   "scripts": {
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
+    "test": "node --test test/*.test.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

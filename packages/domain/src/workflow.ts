@@ -519,6 +519,7 @@ export function createWorkflow(
     | 'updatedAt'
     | 'activeAttemptId'
     | 'activeCandidateGenerationId'
+    | 'suspendedReason'
   >,
 ): WorkflowInstance {
   return Object.freeze({
