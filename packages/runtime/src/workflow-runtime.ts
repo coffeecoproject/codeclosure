@@ -10,11 +10,16 @@ import {
   WorkflowPhase,
   WorkflowRejectionCode,
   attemptId,
+  applyAttemptEvent,
   auditEventId,
   candidateGenerationId,
   commandId,
+  contextManifestId,
+  decodeContextManifest,
+  decodeContextPackage,
   decodeAttemptSnapshot,
   decodeGoalSnapshot,
+  decodePolicyBundle,
   decodeWorkflowSnapshot,
   decideAttempt,
   decideWorkflow,
@@ -23,24 +28,33 @@ import {
   goalRevision,
   isoTimestamp,
   latestIsoTimestamp,
+  policyBundleId,
   sha256Digest,
   workflowId,
   workflowVersion,
+  workerSessionId,
   type AttemptDecision,
   type AttemptId,
+  type AttemptStarted,
   type AttemptRejection,
   type CandidateGenerationId,
   type CommandId,
+  type ContextCompilation,
+  type ContextManifestId,
   type Goal,
   type GoalId,
   type GoalRevision,
   type GuardResult,
   type IsoTimestamp,
+  type PolicyBundle,
+  type PolicyBundleId,
+  type Sha256Digest,
   type WorkflowId,
   type WorkflowInstance,
   type WorkflowPhase as WorkflowPhaseType,
   type WorkflowRejection,
   type WorkflowVersion,
+  type WorkerSessionId,
 } from '@codeclosure/domain';
 
 import {
@@ -63,8 +77,30 @@ import type {
   DigestProvider,
   IdGenerator,
   StoreCommandResult,
+  WorkerControlStore,
+  WorkerIdentityGenerator,
   WorkflowControlStore,
 } from './ports.js';
+import {
+  WorkerEventDisposition,
+  assertWorkerEventBindsRequest,
+  createWorkerRequest,
+  decodeWorkerDispatchClaim,
+  decodeWorkerEvent,
+  decodeWorkerEventReceipt,
+  decodeWorkerRequest,
+  type WorkerDispatchResult,
+  type WorkerEvent,
+  type WorkerEventAdmissionResult,
+  type WorkerEventReceipt,
+  type WorkerRequest,
+} from './worker-contracts.js';
+import {
+  contextManifestDigestProjection,
+  deriveContextManifestEntries,
+  m1PhaseObjective,
+  m1WorkerResponseContract,
+} from './context-compiler.js';
 
 interface WorkflowCommandRequest {
   readonly commandId: CommandId;
@@ -95,6 +131,29 @@ export interface WorkflowRuntimeDependencies {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly digests: DigestProvider;
+}
+
+export interface AttemptContextCompilationRequest {
+  readonly manifestId: ContextManifestId;
+  readonly createdAt: IsoTimestamp;
+  readonly goal: Goal;
+  readonly workflow: WorkflowInstance;
+  readonly attempt: Extract<
+    ReturnType<typeof decodeAttemptSnapshot>,
+    { readonly status: 'RUNNING' }
+  >;
+  readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleDigest: Sha256Digest;
+}
+
+export interface AttemptContextFactory {
+  compile(input: AttemptContextCompilationRequest): unknown;
+}
+
+export interface WorkerContextRuntimeDependencies {
+  readonly identities: WorkerIdentityGenerator;
+  readonly factory: AttemptContextFactory;
+  readonly policyBundleId: PolicyBundleId;
 }
 
 export type BeginAttemptRequest = WorkflowCommandRequest;
@@ -139,6 +198,7 @@ export interface PhaseGuardEvaluator {
 
 export interface WorkflowRuntimeKernelDependencies extends WorkflowRuntimeDependencies {
   readonly phaseGuards?: PhaseGuardEvaluator;
+  readonly workerContext?: WorkerContextRuntimeDependencies;
 }
 
 type FinishAttemptRequest =
@@ -159,6 +219,7 @@ type AuthorityResolution =
 interface ApplyCommandPlan {
   readonly kind: 'APPLY';
   commit(): StoreCommandResult<unknown>;
+  readonly afterApplied?: () => void;
 }
 
 interface RejectCommandPlan {
@@ -171,6 +232,21 @@ type CommandPlan = ApplyCommandPlan | RejectCommandPlan;
 interface OutcomeAuthority {
   readonly goalId: GoalId;
   readonly workflowId: WorkflowId;
+}
+
+interface WorkerAttemptIdentity {
+  readonly contextManifestId: ContextManifestId;
+  readonly workerSessionRef: WorkerSessionId;
+}
+
+interface PreparedAttemptContext {
+  readonly compilation: ContextCompilation;
+  readonly request: WorkerRequest;
+}
+
+interface ActiveWorkerPolicy {
+  readonly bundle: PolicyBundle;
+  readonly installedAt: IsoTimestamp;
 }
 
 interface ExecuteCommandInput {
@@ -200,6 +276,20 @@ class CommandExecutionFailure extends Error {
 const unavailablePhaseGuards: PhaseGuardEvaluator = Object.freeze({
   evaluate: () => Object.freeze([]),
 });
+
+function isWorkerControlStore(store: WorkflowControlStore): store is WorkerControlStore {
+  return [
+    'commitContextBoundAttemptStart',
+    'getContextManifest',
+    'getPolicyBundle',
+    'getWorkerDispatchClaim',
+    'claimWorkerDispatch',
+    'getWorkerEventReceipt',
+    'commitWorkerAttemptEvent',
+    'recordIgnoredWorkerEvent',
+    'installPolicyBundle',
+  ].every((method) => typeof Reflect.get(store, method) === 'function');
+}
 
 const phaseGuardResultSchema = z
   .object({
@@ -274,6 +364,22 @@ const storeCommandResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('VERSION_CONFLICT'), message: z.string().min(1) }).strict(),
   z.object({ status: z.literal('COMMAND_CONFLICT'), message: z.string().min(1) }).strict(),
 ]);
+const workerDispatchStoreResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('CLAIMED'), value: z.unknown() }).strict(),
+  z.object({ status: z.literal('EXISTING'), value: z.unknown() }).strict(),
+  z.object({ status: z.literal('VERSION_CONFLICT'), message: z.string().min(1) }).strict(),
+  z.object({ status: z.literal('NOT_ELIGIBLE'), message: z.string().min(1) }).strict(),
+  z.object({ status: z.literal('DISPATCH_CONFLICT'), message: z.string().min(1) }).strict(),
+]);
+const workerEventStoreResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('APPLIED'), receipt: z.unknown(), value: z.unknown() }).strict(),
+  z.object({ status: z.literal('REPLAYED'), receipt: z.unknown() }).strict(),
+  z.object({ status: z.literal('VERSION_CONFLICT'), message: z.string().min(1) }).strict(),
+  z.object({ status: z.literal('WORKER_EVENT_CONFLICT'), message: z.string().min(1) }).strict(),
+]);
+const installedPolicyBundleSchema = z
+  .object({ bundle: z.unknown(), installedAt: z.string() })
+  .strict();
 
 function decodeStartGoalRequest(value: unknown): StartGoalRequest {
   const parsed = goalCommandRequestSchema.parse(value);
@@ -470,6 +576,7 @@ const domainRejectionIsStale: Readonly<Record<RuntimeDomainRejectionCode, boolea
     [AttemptRejectionCode.ATTEMPT_PHASE_MISMATCH]: false,
     [AttemptRejectionCode.INVALID_SEQUENCE]: false,
     [AttemptRejectionCode.INVALID_TIMESTAMP_ORDER]: false,
+    [AttemptRejectionCode.INVALID_CONTEXT_BINDING]: false,
     [AttemptRejectionCode.EMPTY_REASON]: false,
     [WorkflowRejectionCode.STALE_VERSION]: true,
     [WorkflowRejectionCode.RUN_STATUS_NOT_READY]: false,
@@ -497,6 +604,9 @@ export class WorkflowRuntimeKernel {
   readonly #ids: IdGenerator;
   readonly #digests: DigestProvider;
   readonly #phaseGuards: PhaseGuardEvaluator;
+  readonly #workerContext: WorkerContextRuntimeDependencies | undefined;
+  readonly #workerStore: WorkerControlStore | undefined;
+  readonly #preparedWorkerRequests = new Map<AttemptId, WorkerRequest>();
 
   public constructor(dependencies: WorkflowRuntimeKernelDependencies) {
     this.#store = dependencies.store;
@@ -504,6 +614,583 @@ export class WorkflowRuntimeKernel {
     this.#ids = dependencies.ids;
     this.#digests = dependencies.digests;
     this.#phaseGuards = dependencies.phaseGuards ?? unavailablePhaseGuards;
+    if (dependencies.workerContext !== undefined) {
+      if (!isWorkerControlStore(dependencies.store)) {
+        throw new TypeError('Worker Context requires the complete WorkerControlStore port');
+      }
+      this.#workerStore = dependencies.store;
+      this.#workerContext = Object.freeze({
+        identities: dependencies.workerContext.identities,
+        factory: dependencies.workerContext.factory,
+        policyBundleId: policyBundleId(dependencies.workerContext.policyBundleId),
+      });
+    } else {
+      this.#workerContext = undefined;
+    }
+  }
+
+  public takePreparedWorkerRequest(attemptIdentifier: AttemptId): WorkerRequest | undefined {
+    const validatedAttemptId = attemptId(attemptIdentifier);
+    const request = this.#preparedWorkerRequests.get(validatedAttemptId);
+    if (request !== undefined) {
+      this.#preparedWorkerRequests.delete(validatedAttemptId);
+    }
+    return request;
+  }
+
+  public claimWorkerDispatch(rawRequest: WorkerRequest): WorkerDispatchResult {
+    let request: WorkerRequest;
+    let operationId: CommandId;
+    try {
+      request = decodeWorkerRequest(rawRequest);
+      operationId = this.nextWorkerCommandId();
+    } catch (error) {
+      return Object.freeze({
+        status: 'FAILED',
+        reasonCode: 'INVALID_WORKER_REQUEST',
+        message: error instanceof Error ? error.message : 'Worker Request is malformed',
+      });
+    }
+
+    try {
+      const authority = this.resolveAuthority(
+        operationId,
+        workflowTarget(request.contextPackage.workflowId),
+      );
+      if (authority.status !== 'FOUND') {
+        return Object.freeze({
+          status: 'NOT_ELIGIBLE',
+          reasonCode: 'WORKER_AUTHORITY_UNAVAILABLE',
+        });
+      }
+      const { goal, workflow } = authority.context;
+      const rawAttempt = this.storeOperation(operationId, 'WORKER_ATTEMPT_READ_FAILURE', () =>
+        this.#store.getAttempt(request.attemptId),
+      );
+      const rawManifest = this.storeOperation(operationId, 'CONTEXT_MANIFEST_READ_FAILURE', () =>
+        this.requireWorkerStore().getContextManifest(request.contextManifestId),
+      );
+      if (rawAttempt === undefined || rawManifest === undefined) {
+        return Object.freeze({
+          status: 'NOT_ELIGIBLE',
+          reasonCode: 'WORKER_DISPATCH_BINDING_MISSING',
+        });
+      }
+      const attempt = this.decodeStoreSnapshot(operationId, 'WORKER_ATTEMPT_INVALID', () =>
+        decodeAttemptSnapshot(rawAttempt),
+      );
+      const manifest = this.decodeStoreSnapshot(operationId, 'CONTEXT_MANIFEST_INVALID', () =>
+        decodeContextManifest(rawManifest),
+      );
+      const packageDigest = this.digest(
+        operationId,
+        request.contextPackage,
+        'WORKER_REQUEST_PACKAGE_DIGEST_FAILURE',
+      );
+      const manifestDigest = this.digest(
+        operationId,
+        contextManifestDigestProjection(manifest),
+        'WORKER_REQUEST_MANIFEST_DIGEST_FAILURE',
+      );
+      if (
+        workflow.version !== request.contextPackage.workflowVersion ||
+        workflow.runStatus !== RunStatus.RUNNING ||
+        workflow.activeAttemptId !== attempt.id ||
+        attempt.status !== 'RUNNING' ||
+        attempt.workflowId !== workflow.id ||
+        attempt.contextManifestId !== manifest.id ||
+        attempt.workerSessionRef !== request.workerSessionId ||
+        manifest.goalId !== goal.id ||
+        manifest.goalRevision !== goal.revision ||
+        manifest.workflowId !== workflow.id ||
+        manifest.workflowVersion !== workflow.version ||
+        manifest.attemptId !== attempt.id ||
+        manifest.id !== request.contextManifestId ||
+        manifest.manifestDigest !== request.contextManifestDigest ||
+        manifest.manifestDigest !== manifestDigest ||
+        manifest.packageDigest !== request.packageDigest ||
+        manifest.packageDigest !== packageDigest
+      ) {
+        return Object.freeze({
+          status: 'NOT_ELIGIBLE',
+          reasonCode: 'WORKER_DISPATCH_BINDING_STALE',
+        });
+      }
+
+      const claimedAt = this.causalNow(operationId, workflow.updatedAt, attempt.startedAt);
+      const claim = decodeWorkerDispatchClaim({
+        schemaVersion: 1,
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        attemptId: attempt.id,
+        workerSessionId: request.workerSessionId,
+        contextManifestId: manifest.id,
+        contextManifestDigest: manifest.manifestDigest,
+        packageDigest: manifest.packageDigest,
+        claimedAt,
+      });
+      const rawResult = this.storeOperation(operationId, 'WORKER_DISPATCH_CLAIM_FAILURE', () =>
+        this.requireWorkerStore().claimWorkerDispatch({
+          claim,
+          auditEventId: this.nextAuditEventId(operationId),
+          payloadDigest: this.digest(operationId, claim, 'WORKER_DISPATCH_CLAIM_DIGEST_FAILURE'),
+        }),
+      );
+      const parsed = this.decodeStoreSnapshot(
+        operationId,
+        'WORKER_DISPATCH_CLAIM_RESULT_INVALID',
+        () => workerDispatchStoreResultSchema.parse(rawResult),
+      );
+      switch (parsed.status) {
+        case 'CLAIMED':
+          return Object.freeze({
+            status: 'CLAIMED',
+            claim: decodeWorkerDispatchClaim(parsed.value),
+          });
+        case 'EXISTING':
+          return Object.freeze({
+            status: 'ALREADY_CLAIMED',
+            claim: decodeWorkerDispatchClaim(parsed.value),
+          });
+        case 'VERSION_CONFLICT':
+        case 'NOT_ELIGIBLE':
+          return Object.freeze({
+            status: 'NOT_ELIGIBLE',
+            reasonCode:
+              parsed.status === 'VERSION_CONFLICT'
+                ? 'WORKER_DISPATCH_VERSION_CHANGED'
+                : 'WORKER_DISPATCH_NOT_ELIGIBLE',
+          });
+        case 'DISPATCH_CONFLICT':
+          return Object.freeze({
+            status: 'FAILED',
+            reasonCode: 'WORKER_DISPATCH_CONFLICT',
+            message: parsed.message,
+          });
+      }
+    } catch (error) {
+      const failure =
+        error instanceof CommandExecutionFailure
+          ? error.commandError
+          : commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              error instanceof Error ? error.message : 'Worker dispatch failed internally',
+              'WORKER_DISPATCH_INTERNAL_FAILURE',
+            );
+      return Object.freeze({
+        status: 'FAILED',
+        reasonCode: failure.detailCode,
+        message: failure.message,
+      });
+    }
+  }
+
+  public admitWorkerEvent(
+    rawEvent: unknown,
+    rawRequest: WorkerRequest,
+  ): WorkerEventAdmissionResult {
+    let request: WorkerRequest;
+    let event: WorkerEvent;
+    try {
+      request = decodeWorkerRequest(rawRequest);
+      event = decodeWorkerEvent(rawEvent);
+    } catch (error) {
+      return Object.freeze({
+        status: 'REJECTED',
+        reasonCode: 'MALFORMED_WORKER_EVENT',
+        message: error instanceof Error ? error.message : 'Worker Event is malformed',
+      });
+    }
+
+    let operationId: CommandId;
+    try {
+      operationId = this.nextWorkerCommandId();
+    } catch (error) {
+      return Object.freeze({
+        status: 'REJECTED',
+        eventId: event.id,
+        reasonCode: 'WORKER_COMMAND_ID_FAILURE',
+        message: error instanceof Error ? error.message : 'Worker command ID generation failed',
+      });
+    }
+
+    try {
+      const payloadDigest = this.digest(operationId, event, 'WORKER_EVENT_PAYLOAD_DIGEST_FAILURE');
+      for (let attemptNumber = 0; attemptNumber < 2; attemptNumber += 1) {
+        const workerStore = this.requireWorkerStore();
+        const rawExisting = this.storeOperation(
+          operationId,
+          'WORKER_EVENT_RECEIPT_READ_FAILURE',
+          () => workerStore.getWorkerEventReceipt(event.id),
+        );
+        if (rawExisting !== undefined) {
+          const existing = this.decodeStoreSnapshot(
+            operationId,
+            'WORKER_EVENT_RECEIPT_INVALID',
+            () => decodeWorkerEventReceipt(rawExisting),
+          );
+          return this.workerEventMatchesReceipt(event, payloadDigest, existing)
+            ? Object.freeze({
+                status: 'DUPLICATE',
+                eventId: event.id,
+                originalDisposition: existing.disposition,
+              })
+            : Object.freeze({
+                status: 'REJECTED',
+                eventId: event.id,
+                reasonCode: 'WORKER_EVENT_ID_CONFLICT',
+                message: `Worker Event ${event.id} was reused with different payload`,
+              });
+        }
+
+        const authority = this.resolveAuthority(
+          operationId,
+          workflowTarget(request.contextPackage.workflowId),
+        );
+        if (authority.status !== 'FOUND') {
+          return Object.freeze({
+            status: 'IGNORED',
+            eventId: event.id,
+            reasonCode: 'WORKER_AUTHORITY_UNAVAILABLE',
+            receiptRecorded: false,
+          });
+        }
+        const { workflow } = authority.context;
+        const rawAttempt = this.storeOperation(operationId, 'WORKER_ATTEMPT_READ_FAILURE', () =>
+          workerStore.getAttempt(event.attemptId),
+        );
+        const rawManifest = this.storeOperation(
+          operationId,
+          'WORKER_CONTEXT_MANIFEST_READ_FAILURE',
+          () => workerStore.getContextManifest(event.contextManifestId),
+        );
+        if (rawAttempt === undefined || rawManifest === undefined) {
+          return Object.freeze({
+            status: 'IGNORED',
+            eventId: event.id,
+            reasonCode: 'WORKER_BINDING_NOT_FOUND',
+            receiptRecorded: false,
+          });
+        }
+        const currentAttempt = this.decodeStoreSnapshot(operationId, 'WORKER_ATTEMPT_INVALID', () =>
+          decodeAttemptSnapshot(rawAttempt),
+        );
+        const manifest = this.decodeStoreSnapshot(
+          operationId,
+          'WORKER_CONTEXT_MANIFEST_INVALID',
+          () => decodeContextManifest(rawManifest),
+        );
+        const receivedAt = this.causalNow(
+          operationId,
+          workflow.updatedAt,
+          currentAttempt.startedAt,
+        );
+
+        let ignoredReason: string | undefined;
+        try {
+          assertWorkerEventBindsRequest(event, request);
+        } catch {
+          ignoredReason = 'WORKER_REQUEST_BINDING_MISMATCH';
+        }
+        const currentPackageDigest = this.digest(
+          operationId,
+          request.contextPackage,
+          'WORKER_CONTEXT_PACKAGE_DIGEST_FAILURE',
+        );
+        const currentManifestDigest = this.digest(
+          operationId,
+          contextManifestDigestProjection(manifest),
+          'WORKER_CONTEXT_MANIFEST_DIGEST_FAILURE',
+        );
+        if (
+          ignoredReason === undefined &&
+          (workflow.version !== request.contextPackage.workflowVersion ||
+            workflow.runStatus !== RunStatus.RUNNING ||
+            workflow.activeAttemptId !== currentAttempt.id ||
+            currentAttempt.status !== 'RUNNING' ||
+            currentAttempt.workflowId !== workflow.id ||
+            currentAttempt.contextManifestId !== manifest.id ||
+            currentAttempt.workerSessionRef !== request.workerSessionId ||
+            manifest.workflowId !== workflow.id ||
+            manifest.workflowVersion !== workflow.version ||
+            manifest.attemptId !== currentAttempt.id ||
+            manifest.id !== request.contextManifestId ||
+            manifest.manifestDigest !== request.contextManifestDigest ||
+            manifest.manifestDigest !== currentManifestDigest ||
+            manifest.packageDigest !== request.packageDigest ||
+            manifest.packageDigest !== currentPackageDigest)
+        ) {
+          ignoredReason = 'STALE_WORKER_CONTEXT';
+        }
+
+        if (ignoredReason !== undefined) {
+          const ignored = decodeWorkerEventReceipt({
+            schemaVersion: 1,
+            eventId: event.id,
+            payloadDigest,
+            workerSessionId: event.workerSessionId,
+            workflowId: workflow.id,
+            observedWorkflowVersion: workflow.version,
+            attemptId: event.attemptId,
+            contextManifestId: event.contextManifestId,
+            contextManifestDigest: event.contextManifestDigest,
+            packageDigest: event.packageDigest,
+            receivedAt,
+            disposition: WorkerEventDisposition.IGNORED,
+            reasonCode: ignoredReason,
+          });
+          if (ignored.disposition !== WorkerEventDisposition.IGNORED) {
+            throw new TypeError('Ignored Worker Event receipt changed disposition');
+          }
+          if (
+            currentAttempt.workflowId !== workflow.id ||
+            manifest.id !== event.contextManifestId
+          ) {
+            return Object.freeze({
+              status: 'IGNORED',
+              eventId: event.id,
+              reasonCode: ignoredReason,
+              receiptRecorded: false,
+            });
+          }
+          const ignoredStoreResult = this.decodeStoreSnapshot(
+            operationId,
+            'IGNORED_WORKER_EVENT_STORE_RESULT_INVALID',
+            () =>
+              workerEventStoreResultSchema.parse(
+                this.storeOperation(operationId, 'IGNORED_WORKER_EVENT_RECORD_FAILURE', () =>
+                  workerStore.recordIgnoredWorkerEvent({
+                    receipt: ignored,
+                  }),
+                ),
+              ),
+          );
+          if (ignoredStoreResult.status === 'VERSION_CONFLICT' && attemptNumber === 0) {
+            continue;
+          }
+          if (ignoredStoreResult.status === 'WORKER_EVENT_CONFLICT') {
+            return Object.freeze({
+              status: 'REJECTED',
+              eventId: event.id,
+              reasonCode: 'WORKER_EVENT_ID_CONFLICT',
+              message: ignoredStoreResult.message,
+            });
+          }
+          if (ignoredStoreResult.status === 'REPLAYED') {
+            const receipt = decodeWorkerEventReceipt(ignoredStoreResult.receipt);
+            return Object.freeze({
+              status: 'DUPLICATE',
+              eventId: event.id,
+              originalDisposition: receipt.disposition,
+            });
+          }
+          if (ignoredStoreResult.status === 'APPLIED') {
+            const receipt = decodeWorkerEventReceipt(ignoredStoreResult.receipt);
+            if (receipt.disposition !== WorkerEventDisposition.IGNORED) {
+              throw new TypeError('Store returned a non-ignored receipt for ignored delivery');
+            }
+            return Object.freeze({
+              status: 'IGNORED',
+              eventId: event.id,
+              reasonCode: receipt.reasonCode,
+              receiptRecorded: true,
+            });
+          }
+          continue;
+        }
+
+        const decision =
+          event.type === 'WORKER_RESULT'
+            ? decideAttempt(workflow, currentAttempt, {
+                type: 'RECORD_ATTEMPT_RESULT',
+                commandId: operationId,
+                workflowId: workflow.id,
+                expectedWorkflowVersion: workflow.version,
+                attemptId: currentAttempt.id,
+                reason: `WORKER_RESULT:${event.result.kind}`,
+                occurredAt: receivedAt,
+              })
+            : decideAttempt(workflow, currentAttempt, {
+                type: 'RECORD_ATTEMPT_FAILURE',
+                commandId: operationId,
+                workflowId: workflow.id,
+                expectedWorkflowVersion: workflow.version,
+                attemptId: currentAttempt.id,
+                failureClass: event.failureClass,
+                reason: `WORKER_FAILURE:${event.reason}`,
+                occurredAt: receivedAt,
+              });
+        if (!decision.accepted || decision.events[0].type !== 'ATTEMPT_FINISHED') {
+          return Object.freeze({
+            status: 'IGNORED',
+            eventId: event.id,
+            reasonCode: decision.accepted ? 'WORKER_EVENT_NOT_TERMINAL' : decision.rejection.code,
+            receiptRecorded: false,
+          });
+        }
+        const attemptEvent = decision.events[0];
+        const receipt = decodeWorkerEventReceipt({
+          schemaVersion: 1,
+          eventId: event.id,
+          payloadDigest,
+          workerSessionId: event.workerSessionId,
+          workflowId: workflow.id,
+          observedWorkflowVersion: workflow.version,
+          attemptId: event.attemptId,
+          contextManifestId: event.contextManifestId,
+          contextManifestDigest: event.contextManifestDigest,
+          packageDigest: event.packageDigest,
+          receivedAt,
+          disposition: WorkerEventDisposition.ADMITTED,
+          internalCommandId: operationId,
+        });
+        if (receipt.disposition !== WorkerEventDisposition.ADMITTED) {
+          throw new TypeError('Admitted Worker Event receipt changed disposition');
+        }
+        const rawStoreResult = this.storeOperation(operationId, 'WORKER_EVENT_COMMIT_FAILURE', () =>
+          workerStore.commitWorkerAttemptEvent({
+            inputDigest: this.digest(
+              operationId,
+              {
+                schemaVersion: 1,
+                type: 'ADMIT_WORKER_EVENT',
+                commandId: operationId,
+                workerEventId: event.id,
+                payloadDigest,
+              },
+              'WORKER_EVENT_COMMAND_DIGEST_FAILURE',
+            ),
+            target: workflowTarget(workflow.id),
+            event: attemptEvent,
+            auditEventId: this.nextAuditEventId(operationId),
+            workflowAuditEventId: this.nextAuditEventId(operationId),
+            payloadDigest: this.digest(
+              operationId,
+              attemptEvent,
+              'WORKER_ATTEMPT_EVENT_DIGEST_FAILURE',
+            ),
+            receipt,
+            causationId: event.id,
+          }),
+        );
+        const storeResult = this.decodeStoreSnapshot(
+          operationId,
+          'WORKER_EVENT_STORE_RESULT_INVALID',
+          () => workerEventStoreResultSchema.parse(rawStoreResult),
+        );
+        if (storeResult.status === 'VERSION_CONFLICT' && attemptNumber === 0) {
+          continue;
+        }
+        if (storeResult.status === 'WORKER_EVENT_CONFLICT') {
+          return Object.freeze({
+            status: 'REJECTED',
+            eventId: event.id,
+            reasonCode: 'WORKER_EVENT_ID_CONFLICT',
+            message: storeResult.message,
+          });
+        }
+        if (storeResult.status === 'REPLAYED') {
+          const replayedReceipt = decodeWorkerEventReceipt(storeResult.receipt);
+          return Object.freeze({
+            status: 'DUPLICATE',
+            eventId: event.id,
+            originalDisposition: replayedReceipt.disposition,
+          });
+        }
+        if (storeResult.status === 'APPLIED') {
+          const admittedReceipt = decodeWorkerEventReceipt(storeResult.receipt);
+          if (
+            admittedReceipt.disposition !== WorkerEventDisposition.ADMITTED ||
+            typeof storeResult.value !== 'object' ||
+            storeResult.value === null
+          ) {
+            throw new TypeError('Store returned malformed admitted Worker Event authority');
+          }
+          const resultingWorkflow = decodeWorkflowSnapshot(
+            Reflect.get(storeResult.value, 'workflow'),
+          );
+          const resultingAttempt = decodeAttemptSnapshot(Reflect.get(storeResult.value, 'attempt'));
+          if (
+            resultingWorkflow.version !== attemptEvent.toWorkflowVersion ||
+            resultingAttempt.id !== attemptEvent.attemptId ||
+            resultingAttempt.status === 'RUNNING'
+          ) {
+            throw new TypeError('Store Worker Event result disagrees with the committed event');
+          }
+          return Object.freeze({
+            status: 'ADMITTED',
+            eventId: event.id,
+            internalCommandId: admittedReceipt.internalCommandId,
+            workflowVersion: resultingWorkflow.version,
+          });
+        }
+      }
+      return Object.freeze({
+        status: 'REJECTED',
+        eventId: event.id,
+        reasonCode: 'WORKER_EVENT_RETRY_EXHAUSTED',
+        message: 'Worker Event admission raced with Workflow mutation twice',
+      });
+    } catch (error) {
+      const failure =
+        error instanceof CommandExecutionFailure
+          ? error.commandError
+          : commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              error instanceof Error ? error.message : 'Worker Event admission failed internally',
+              'WORKER_EVENT_INTERNAL_FAILURE',
+            );
+      return Object.freeze({
+        status: 'REJECTED',
+        eventId: event.id,
+        reasonCode: failure.detailCode,
+        message: failure.message,
+      });
+    }
+  }
+
+  public recordWorkerPortFailure(
+    rawRequest: WorkerRequest,
+    reason: string,
+  ): RuntimeCommandResult | undefined {
+    const request = decodeWorkerRequest(rawRequest);
+    const operationId = this.nextWorkerCommandId();
+    const rawWorkflow = this.storeOperation(operationId, 'WORKER_FAILURE_WORKFLOW_READ', () =>
+      this.#store.getWorkflow(request.contextPackage.workflowId),
+    );
+    const rawAttempt = this.storeOperation(operationId, 'WORKER_FAILURE_ATTEMPT_READ', () =>
+      this.#store.getAttempt(request.attemptId),
+    );
+    if (rawWorkflow === undefined || rawAttempt === undefined) {
+      return undefined;
+    }
+    const workflow = this.decodeStoreSnapshot(operationId, 'WORKER_FAILURE_WORKFLOW_INVALID', () =>
+      decodeWorkflowSnapshot(rawWorkflow),
+    );
+    const attempt = this.decodeStoreSnapshot(operationId, 'WORKER_FAILURE_ATTEMPT_INVALID', () =>
+      decodeAttemptSnapshot(rawAttempt),
+    );
+    if (
+      workflow.runStatus !== RunStatus.RUNNING ||
+      workflow.activeAttemptId !== attempt.id ||
+      attempt.status !== 'RUNNING' ||
+      attempt.contextManifestId !== request.contextManifestId ||
+      attempt.workerSessionRef !== request.workerSessionId
+    ) {
+      return undefined;
+    }
+    const normalizedReason = reason.trim();
+    return this.recordAttemptFailure({
+      commandId: operationId,
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      attemptId: attempt.id,
+      failureClass: AttemptFailureClass.ABRUPT_TERMINATION,
+      reason:
+        normalizedReason.length === 0
+          ? 'Worker port terminated without a valid result'
+          : normalizedReason,
+    });
   }
 
   public startGoal(rawInput: StartGoalRequest): RuntimeCommandResult {
@@ -524,7 +1211,7 @@ export class WorkflowRuntimeKernel {
       },
       missingResource: 'Goal',
       missingIdentifier: input.goalId,
-      plan: ({ workflow }, inputDigest) => {
+      plan: ({ goal, workflow }, inputDigest) => {
         const sequence = this.nextAttemptSequence(input.commandId, workflow.id);
         if (workflow.phase !== WorkflowPhase.DISCOVERY || sequence !== 1) {
           return rejectPlan(
@@ -536,34 +1223,72 @@ export class WorkflowRuntimeKernel {
           );
         }
 
-        const decision = decideAttempt(workflow, undefined, {
+        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId);
+        const attemptIdentifier = this.nextAttemptId(input.commandId);
+        const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId);
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          ...(activePolicy === undefined ? [] : [activePolicy.installedAt]),
+        );
+        const command = {
           type: 'BEGIN_ATTEMPT',
           commandId: input.commandId,
           workflowId: workflow.id,
           expectedWorkflowVersion: input.expectedWorkflowVersion,
-          attemptId: this.nextAttemptId(input.commandId),
+          attemptId: attemptIdentifier,
           sequence,
-          occurredAt: this.causalNow(input.commandId, workflow.updatedAt),
-        });
+          occurredAt,
+          ...(workerIdentity ?? {}),
+        } as const;
+        const decision = decideAttempt(workflow, undefined, command);
         if (!decision.accepted) {
           return this.domainRejectPlan(decision.rejection);
         }
         const event = decision.events[0];
+        if (event.type !== 'ATTEMPT_STARTED') {
+          throw new TypeError('Begin Attempt decision returned another event type');
+        }
+        const prepared = this.prepareAttemptContext(
+          input.commandId,
+          goal,
+          workflow,
+          event,
+          activePolicy,
+        );
         const auditEventId = this.nextAuditEventId(input.commandId);
         const workflowAuditEventId = this.nextAuditEventId(input.commandId);
         const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
-        return {
+        const plan: ApplyCommandPlan = {
           kind: 'APPLY',
           commit: () =>
-            this.#store.commitAttemptEvent({
-              inputDigest,
-              target,
-              event,
-              auditEventId,
-              workflowAuditEventId,
-              payloadDigest,
-            }),
+            prepared === undefined
+              ? this.#store.commitAttemptEvent({
+                  inputDigest,
+                  target,
+                  event,
+                  auditEventId,
+                  workflowAuditEventId,
+                  payloadDigest,
+                })
+              : this.requireWorkerStore().commitContextBoundAttemptStart({
+                  inputDigest,
+                  target,
+                  event,
+                  auditEventId,
+                  workflowAuditEventId,
+                  payloadDigest,
+                  contextManifest: prepared.compilation.manifest,
+                }),
+          ...(prepared === undefined
+            ? {}
+            : {
+                afterApplied: () => {
+                  this.#preparedWorkerRequests.set(attemptIdentifier, prepared.request);
+                },
+              }),
         };
+        return plan;
       },
     });
   }
@@ -584,36 +1309,73 @@ export class WorkflowRuntimeKernel {
       },
       missingResource: 'Workflow',
       missingIdentifier: input.workflowId,
-      plan: ({ workflow }, inputDigest) => {
+      plan: ({ goal, workflow }, inputDigest) => {
         const sequence = this.nextAttemptSequence(input.commandId, input.workflowId);
+        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId);
+        const attemptIdentifier = this.nextAttemptId(input.commandId);
+        const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId);
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          ...(activePolicy === undefined ? [] : [activePolicy.installedAt]),
+        );
         const decision = decideAttempt(workflow, undefined, {
           type: 'BEGIN_ATTEMPT',
           commandId: input.commandId,
           workflowId: input.workflowId,
           expectedWorkflowVersion: input.expectedWorkflowVersion,
-          attemptId: this.nextAttemptId(input.commandId),
+          attemptId: attemptIdentifier,
           sequence,
-          occurredAt: this.causalNow(input.commandId, workflow.updatedAt),
+          occurredAt,
+          ...(workerIdentity ?? {}),
         });
         if (!decision.accepted) {
           return this.domainRejectPlan(decision.rejection);
         }
         const event = decision.events[0];
+        if (event.type !== 'ATTEMPT_STARTED') {
+          throw new TypeError('Begin Attempt decision returned another event type');
+        }
+        const prepared = this.prepareAttemptContext(
+          input.commandId,
+          goal,
+          workflow,
+          event,
+          activePolicy,
+        );
         const auditEventId = this.nextAuditEventId(input.commandId);
         const workflowAuditEventId = this.nextAuditEventId(input.commandId);
         const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
-        return {
+        const plan: ApplyCommandPlan = {
           kind: 'APPLY',
           commit: () =>
-            this.#store.commitAttemptEvent({
-              inputDigest,
-              target,
-              event,
-              auditEventId,
-              workflowAuditEventId,
-              payloadDigest,
-            }),
+            prepared === undefined
+              ? this.#store.commitAttemptEvent({
+                  inputDigest,
+                  target,
+                  event,
+                  auditEventId,
+                  workflowAuditEventId,
+                  payloadDigest,
+                })
+              : this.requireWorkerStore().commitContextBoundAttemptStart({
+                  inputDigest,
+                  target,
+                  event,
+                  auditEventId,
+                  workflowAuditEventId,
+                  payloadDigest,
+                  contextManifest: prepared.compilation.manifest,
+                }),
+          ...(prepared === undefined
+            ? {}
+            : {
+                afterApplied: () => {
+                  this.#preparedWorkerRequests.set(attemptIdentifier, prepared.request);
+                },
+              }),
         };
+        return plan;
       },
     });
   }
@@ -963,6 +1725,236 @@ export class WorkflowRuntimeKernel {
     );
   }
 
+  private nextWorkerAttemptIdentity(
+    commandIdentifier: CommandId,
+  ): WorkerAttemptIdentity | undefined {
+    if (this.#workerContext === undefined) {
+      return undefined;
+    }
+    const workerContext = this.#workerContext;
+    return this.internalOperation(commandIdentifier, 'WORKER_ID_GENERATION_FAILURE', () =>
+      Object.freeze({
+        contextManifestId: contextManifestId(workerContext.identities.nextContextManifestId()),
+        workerSessionRef: workerSessionId(workerContext.identities.nextWorkerSessionId()),
+      }),
+    );
+  }
+
+  private nextWorkerCommandId(): CommandId {
+    if (this.#workerContext === undefined) {
+      throw new TypeError('Worker command identity requires Worker Context dependencies');
+    }
+    return commandId(this.#workerContext.identities.nextCommandId());
+  }
+
+  private requireWorkerStore(): WorkerControlStore {
+    if (this.#workerStore === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Worker Context was prepared without a Worker control Store',
+          'WORKER_STORE_UNAVAILABLE',
+        ),
+      );
+    }
+    return this.#workerStore;
+  }
+
+  private workerEventMatchesReceipt(
+    event: WorkerEvent,
+    payloadDigest: ReturnType<typeof sha256Digest>,
+    receipt: WorkerEventReceipt,
+  ): boolean {
+    return (
+      receipt.eventId === event.id &&
+      receipt.payloadDigest === payloadDigest &&
+      receipt.workerSessionId === event.workerSessionId &&
+      receipt.attemptId === event.attemptId &&
+      receipt.contextManifestId === event.contextManifestId &&
+      receipt.contextManifestDigest === event.contextManifestDigest &&
+      receipt.packageDigest === event.packageDigest
+    );
+  }
+
+  private resolveActiveWorkerPolicy(commandIdentifier: CommandId): ActiveWorkerPolicy | undefined {
+    const workerContext = this.#workerContext;
+    if (workerContext === undefined) {
+      return undefined;
+    }
+    const rawInstalledPolicy = this.storeOperation(
+      commandIdentifier,
+      'CONTEXT_POLICY_READ_FAILURE',
+      () => this.requireWorkerStore().getPolicyBundle(workerContext.policyBundleId),
+    );
+    if (rawInstalledPolicy === undefined) {
+      throw new TypeError(`Active Policy ${workerContext.policyBundleId} is not installed`);
+    }
+    const parsedInstalledPolicy = installedPolicyBundleSchema.parse(rawInstalledPolicy);
+    const bundle = decodePolicyBundle(parsedInstalledPolicy.bundle);
+    const installedAt = isoTimestamp(parsedInstalledPolicy.installedAt);
+    if (bundle.id !== workerContext.policyBundleId) {
+      throw new TypeError('Installed Policy does not match the active Worker policy authority');
+    }
+    return Object.freeze({ bundle, installedAt });
+  }
+
+  private prepareAttemptContext(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    currentWorkflow: WorkflowInstance,
+    event: AttemptStarted,
+    activePolicy: ActiveWorkerPolicy | undefined,
+  ): PreparedAttemptContext | undefined {
+    const workerContext = this.#workerContext;
+    if (workerContext === undefined) {
+      if (activePolicy !== undefined) {
+        throw new TypeError('Active Worker Policy exists without Worker Context dependencies');
+      }
+      return undefined;
+    }
+    if (activePolicy === undefined) {
+      throw new TypeError('Worker Context compilation requires an active installed Policy');
+    }
+    const applied = applyAttemptEvent(currentWorkflow, undefined, event);
+    if (applied.attempt.status !== 'RUNNING' || applied.attempt.contextManifestId === undefined) {
+      throw new TypeError('Worker Attempt start did not produce a context-bound RUNNING Attempt');
+    }
+    const installedPolicy = activePolicy.bundle;
+    if (activePolicy.installedAt > event.occurredAt) {
+      throw new TypeError('Context Attempt predates its active installed Policy');
+    }
+    const raw = workerContext.factory.compile({
+      manifestId: applied.attempt.contextManifestId,
+      createdAt: event.occurredAt,
+      goal,
+      workflow: applied.workflow,
+      attempt: applied.attempt,
+      policyBundleId: installedPolicy.id,
+      policyBundleDigest: installedPolicy.digest,
+    });
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Context factory returned a malformed compilation');
+    }
+    const contextPackage = decodeContextPackage(Reflect.get(raw, 'package'));
+    const manifest = decodeContextManifest(Reflect.get(raw, 'manifest'));
+    const packageDigest = this.digest(
+      commandIdentifier,
+      contextPackage,
+      'CONTEXT_PACKAGE_DIGEST_FAILURE',
+    );
+    const manifestDigest = this.digest(
+      commandIdentifier,
+      contextManifestDigestProjection(manifest),
+      'CONTEXT_MANIFEST_DIGEST_FAILURE',
+    );
+    const capabilityGrantDigest = this.digest(
+      commandIdentifier,
+      { schemaVersion: 1, capabilityGrant: contextPackage.capabilityGrant },
+      'CONTEXT_CAPABILITY_DIGEST_FAILURE',
+    );
+    const responseContractDigest = this.digest(
+      commandIdentifier,
+      { schemaVersion: 1, responseContract: contextPackage.responseContract },
+      'CONTEXT_RESPONSE_CONTRACT_DIGEST_FAILURE',
+    );
+    const authoritativeGoalDigest = this.digest(
+      commandIdentifier,
+      {
+        objective: goal.objective,
+        successCriteria: goal.successCriteria,
+        scope: goal.scope,
+        nonGoals: goal.nonGoals,
+      },
+      'CONTEXT_AUTHORITATIVE_GOAL_DIGEST_FAILURE',
+    );
+    const packagedGoalDigest = this.digest(
+      commandIdentifier,
+      contextPackage.goal,
+      'CONTEXT_PACKAGED_GOAL_DIGEST_FAILURE',
+    );
+    const expectedCapabilityGrantDigest = this.digest(
+      commandIdentifier,
+      { schemaVersion: 1, capabilityGrant: applied.attempt.capabilityGrant },
+      'CONTEXT_EXPECTED_CAPABILITY_DIGEST_FAILURE',
+    );
+    const expectedResponseContractDigest = this.digest(
+      commandIdentifier,
+      {
+        schemaVersion: 1,
+        responseContract: m1WorkerResponseContract(applied.workflow.phase),
+      },
+      'CONTEXT_EXPECTED_RESPONSE_CONTRACT_DIGEST_FAILURE',
+    );
+    const entryDigests: DigestProvider = Object.freeze({
+      digest: (value: unknown) =>
+        this.digest(commandIdentifier, value, 'CONTEXT_ENTRY_DIGEST_FAILURE'),
+    });
+    const expectedEntries = deriveContextManifestEntries(contextPackage, entryDigests);
+    const expectedEntriesDigest = this.digest(
+      commandIdentifier,
+      expectedEntries,
+      'CONTEXT_EXPECTED_ENTRIES_DIGEST_FAILURE',
+    );
+    const manifestedEntriesDigest = this.digest(
+      commandIdentifier,
+      manifest.entries,
+      'CONTEXT_MANIFEST_ENTRIES_DIGEST_FAILURE',
+    );
+    const manifestedSourceRefs = new Set(manifest.entries.map((entry) => entry.sourceRef));
+    const contradictsOmission = manifest.omissionDecisions.some((decision) =>
+      manifestedSourceRefs.has(decision.sourceRef),
+    );
+    if (
+      manifest.id !== applied.attempt.contextManifestId ||
+      manifest.createdAt !== event.occurredAt ||
+      manifest.goalId !== goal.id ||
+      manifest.goalRevision !== goal.revision ||
+      manifest.workflowId !== applied.workflow.id ||
+      manifest.workflowVersion !== applied.workflow.version ||
+      manifest.phase !== applied.workflow.phase ||
+      manifest.attemptId !== applied.attempt.id ||
+      contextPackage.goalId !== goal.id ||
+      contextPackage.goalRevision !== goal.revision ||
+      contextPackage.workflowId !== applied.workflow.id ||
+      contextPackage.workflowVersion !== applied.workflow.version ||
+      contextPackage.phase !== applied.workflow.phase ||
+      contextPackage.attemptId !== applied.attempt.id ||
+      contextPackage.candidateGenerationId !== applied.workflow.activeCandidateGenerationId ||
+      contextPackage.candidateGenerationId !== manifest.candidateGenerationId ||
+      contextPackage.candidateDigest !== manifest.candidateDigest ||
+      contextPackage.policyBundleId !== manifest.policyBundleId ||
+      contextPackage.policyBundleDigest !== manifest.policyBundleDigest ||
+      contextPackage.policyBundleId !== installedPolicy.id ||
+      contextPackage.policyBundleDigest !== installedPolicy.digest ||
+      contextPackage.phaseObjective !== m1PhaseObjective(applied.workflow.phase) ||
+      authoritativeGoalDigest !== packagedGoalDigest ||
+      manifest.packageDigest !== packageDigest ||
+      manifest.manifestDigest !== manifestDigest ||
+      manifest.capabilityGrantDigest !== capabilityGrantDigest ||
+      manifest.capabilityGrantDigest !== expectedCapabilityGrantDigest ||
+      manifest.responseContractDigest !== responseContractDigest ||
+      manifest.responseContractDigest !== expectedResponseContractDigest ||
+      expectedEntriesDigest !== manifestedEntriesDigest ||
+      contradictsOmission
+    ) {
+      throw new TypeError('Context compilation does not bind the resulting Worker Attempt');
+    }
+    if (applied.attempt.workerSessionRef === undefined) {
+      throw new TypeError('Context-bound Attempt has no Worker session identity');
+    }
+    const request = createWorkerRequest(
+      applied.attempt.workerSessionRef,
+      manifest.id,
+      manifest.manifestDigest,
+      manifest.packageDigest,
+      contextPackage,
+    );
+    return Object.freeze({
+      compilation: Object.freeze({ package: contextPackage, manifest }),
+      request: decodeWorkerRequest(request),
+    });
+  }
+
   private nextAuditEventId(commandIdentifier: CommandId): ReturnType<typeof auditEventId> {
     return this.internalOperation(commandIdentifier, 'AUDIT_ID_GENERATION_FAILURE', () =>
       auditEventId(this.#ids.nextAuditEventId()),
@@ -1113,8 +2105,8 @@ export class WorkflowRuntimeKernel {
         );
 
         switch (stored.status) {
-          case 'APPLIED':
-            return this.recorded(
+          case 'APPLIED': {
+            const result = this.recorded(
               input.commandId,
               input.target,
               stored.outcome,
@@ -1126,6 +2118,11 @@ export class WorkflowRuntimeKernel {
                 ? StoredCommandDisposition.APPLIED
                 : StoredCommandDisposition.REJECTED,
             );
+            if (result.status === 'APPLIED' && plan.kind === 'APPLY') {
+              plan.afterApplied?.();
+            }
+            return result;
+          }
           case 'REPLAYED':
             return this.replayed(
               input.commandId,

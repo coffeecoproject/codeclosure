@@ -28,6 +28,20 @@ import {
   type UnvalidatedCandidateGeneration,
 } from './candidate.js';
 import {
+  ContextAuthorityClass,
+  ContextEntryKind,
+  WorkerResultKind,
+  assertContextManifestInvariant,
+  assertContextPackageInvariant,
+  assertWorkerResponseContractInvariant,
+  type ContextManifest,
+  type ContextManifestEntry,
+  type ContextOmissionDecision,
+  type ContextPackage,
+  type ContextPackageEntry,
+  type WorkerResponseContract,
+} from './context.js';
+import {
   aggregateVersion,
   attemptId,
   candidateGenerationId,
@@ -37,6 +51,7 @@ import {
   goalId,
   goalRevision,
   isoTimestamp,
+  policyBundleId,
   sha256Digest,
   successCriterionId,
   workerSessionId,
@@ -53,6 +68,11 @@ import {
   type Goal,
   type WorkflowInstance,
 } from './model.js';
+import {
+  assertPolicyBundleInvariant,
+  type PolicyBundle,
+  type PolicyCheckerIdentity,
+} from './policy.js';
 import {
   GuardOutcome,
   WorkflowGuard,
@@ -73,6 +93,9 @@ const candidateStateSchema = z.enum(Object.values(CandidateGenerationState));
 const attemptFailureClassSchema = z.enum(Object.values(AttemptFailureClass));
 const workflowGuardSchema = z.enum(Object.values(WorkflowGuard));
 const guardOutcomeSchema = z.enum(Object.values(GuardOutcome));
+const contextAuthorityClassSchema = z.enum(Object.values(ContextAuthorityClass));
+const contextEntryKindSchema = z.enum(Object.values(ContextEntryKind));
+const workerResultKindSchema = z.enum(Object.values(WorkerResultKind));
 
 function assertNoExplicitUndefined(value: unknown, optionalKeys: readonly string[]): void {
   if (typeof value !== 'object' || value === null) {
@@ -326,6 +349,287 @@ export function decodeCandidateGeneration(value: unknown): CandidateGeneration {
   };
   assertCandidateInvariant(generation);
   return Object.freeze(generation);
+}
+
+const workerResponseContractSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    workerEventSchemaVersion: z.literal(1),
+    allowedResultKinds: z.array(workerResultKindSchema).min(1),
+    unknownFields: z.literal('REJECT'),
+  })
+  .strict();
+
+export function decodeWorkerResponseContract(value: unknown): WorkerResponseContract {
+  const parsed = workerResponseContractSchema.parse(value);
+  const contract: WorkerResponseContract = Object.freeze({
+    ...parsed,
+    allowedResultKinds: Object.freeze([...parsed.allowedResultKinds]),
+  });
+  assertWorkerResponseContractInvariant(contract);
+  return contract;
+}
+
+const contextPackageEntrySchema = z
+  .object({
+    kind: contextEntryKindSchema,
+    sourceRef: nonBlankStringSchema,
+    sourceRevision: nonBlankStringSchema,
+    sourceDigest: z.string().optional(),
+    authorityClass: contextAuthorityClassSchema,
+    renderedContent: nonBlankStringSchema,
+  })
+  .strict();
+
+function materializeContextPackageEntry(
+  parsed: z.infer<typeof contextPackageEntrySchema>,
+): ContextPackageEntry {
+  return Object.freeze({
+    kind: parsed.kind,
+    sourceRef: parsed.sourceRef,
+    sourceRevision: parsed.sourceRevision,
+    ...(parsed.sourceDigest === undefined
+      ? {}
+      : { sourceDigest: sha256Digest(parsed.sourceDigest) }),
+    authorityClass: parsed.authorityClass,
+    renderedContent: parsed.renderedContent,
+  });
+}
+
+const contextPackageSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    goalId: z.string(),
+    goalRevision: z.number().int().positive(),
+    workflowId: z.string(),
+    workflowVersion: z.number().int().positive(),
+    phase: workflowPhaseSchema,
+    attemptId: z.string(),
+    candidateGenerationId: z.string().optional(),
+    candidateDigest: z.string().optional(),
+    phaseObjective: nonBlankStringSchema,
+    capabilityGrant: z.unknown(),
+    goal: z
+      .object({
+        objective: nonBlankStringSchema,
+        successCriteria: z.array(successCriterionSchema).min(1),
+        scope: z
+          .object({
+            projectPath: nonBlankStringSchema,
+            allowedPaths: z.array(nonBlankStringSchema),
+          })
+          .strict(),
+        nonGoals: z.array(nonBlankStringSchema),
+      })
+      .strict(),
+    selectedEntries: z.array(contextPackageEntrySchema),
+    policyBundleId: z.string(),
+    policyBundleDigest: z.string(),
+    responseContract: z.unknown(),
+  })
+  .strict();
+
+export function decodeContextPackage(value: unknown): ContextPackage {
+  assertNoExplicitUndefined(value, ['candidateGenerationId', 'candidateDigest']);
+  const parsed = contextPackageSchema.parse(value);
+  for (const entry of parsed.selectedEntries) {
+    assertNoExplicitUndefined(entry, ['sourceDigest']);
+  }
+  const contextPackage: ContextPackage = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    goalId: goalId(parsed.goalId),
+    goalRevision: goalRevision(parsed.goalRevision),
+    workflowId: workflowId(parsed.workflowId),
+    workflowVersion: workflowVersion(parsed.workflowVersion),
+    phase: parsed.phase,
+    attemptId: attemptId(parsed.attemptId),
+    ...(parsed.candidateGenerationId === undefined
+      ? {}
+      : { candidateGenerationId: candidateGenerationId(parsed.candidateGenerationId) }),
+    ...(parsed.candidateDigest === undefined
+      ? {}
+      : { candidateDigest: sha256Digest(parsed.candidateDigest) }),
+    phaseObjective: parsed.phaseObjective,
+    capabilityGrant: decodeCapabilityGrant(parsed.capabilityGrant),
+    goal: Object.freeze({
+      objective: parsed.goal.objective,
+      successCriteria: Object.freeze(
+        parsed.goal.successCriteria.map((criterion) =>
+          Object.freeze({
+            id: successCriterionId(criterion.id),
+            description: criterion.description,
+            required: criterion.required,
+          }),
+        ),
+      ),
+      scope: Object.freeze({
+        projectPath: parsed.goal.scope.projectPath,
+        allowedPaths: Object.freeze([...parsed.goal.scope.allowedPaths]),
+      }),
+      nonGoals: Object.freeze([...parsed.goal.nonGoals]),
+    }),
+    selectedEntries: Object.freeze(
+      parsed.selectedEntries.map((entry) => materializeContextPackageEntry(entry)),
+    ),
+    policyBundleId: policyBundleId(parsed.policyBundleId),
+    policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
+    responseContract: decodeWorkerResponseContract(parsed.responseContract),
+  });
+  assertContextPackageInvariant(contextPackage);
+  return contextPackage;
+}
+
+const contextManifestEntrySchema = z
+  .object({
+    kind: contextEntryKindSchema,
+    sourceRef: nonBlankStringSchema,
+    sourceRevision: nonBlankStringSchema,
+    sourceDigest: z.string().optional(),
+    authorityClass: contextAuthorityClassSchema,
+    renderedDigest: z.string(),
+  })
+  .strict();
+
+function materializeContextManifestEntry(
+  parsed: z.infer<typeof contextManifestEntrySchema>,
+): ContextManifestEntry {
+  return Object.freeze({
+    kind: parsed.kind,
+    sourceRef: parsed.sourceRef,
+    sourceRevision: parsed.sourceRevision,
+    ...(parsed.sourceDigest === undefined
+      ? {}
+      : { sourceDigest: sha256Digest(parsed.sourceDigest) }),
+    authorityClass: parsed.authorityClass,
+    renderedDigest: sha256Digest(parsed.renderedDigest),
+  });
+}
+
+const contextOmissionDecisionSchema = z
+  .object({
+    sourceRef: nonBlankStringSchema,
+    selectionRule: nonBlankStringSchema,
+    reason: nonBlankStringSchema,
+  })
+  .strict();
+
+const contextManifestSchema = z
+  .object({
+    id: z.string(),
+    schemaVersion: z.literal(1),
+    compilerVersion: nonBlankStringSchema,
+    createdAt: z.string(),
+    goalId: z.string(),
+    goalRevision: z.number().int().positive(),
+    workflowId: z.string(),
+    workflowVersion: z.number().int().positive(),
+    phase: workflowPhaseSchema,
+    attemptId: z.string(),
+    candidateGenerationId: z.string().optional(),
+    candidateDigest: z.string().optional(),
+    policyBundleId: z.string(),
+    policyBundleDigest: z.string(),
+    capabilityGrantDigest: z.string(),
+    responseContractDigest: z.string(),
+    entries: z.array(contextManifestEntrySchema),
+    omissionDecisions: z.array(contextOmissionDecisionSchema),
+    packageDigest: z.string(),
+    manifestDigest: z.string(),
+  })
+  .strict();
+
+export function decodeContextManifest(value: unknown): ContextManifest {
+  assertNoExplicitUndefined(value, ['candidateGenerationId', 'candidateDigest']);
+  const parsed = contextManifestSchema.parse(value);
+  for (const entry of parsed.entries) {
+    assertNoExplicitUndefined(entry, ['sourceDigest']);
+  }
+  const entries = Object.freeze(
+    parsed.entries.map((entry) => materializeContextManifestEntry(entry)),
+  );
+  const omissionDecisions: readonly ContextOmissionDecision[] = Object.freeze(
+    parsed.omissionDecisions.map((decision) => Object.freeze({ ...decision })),
+  );
+  const manifest: ContextManifest = Object.freeze({
+    id: contextManifestId(parsed.id),
+    schemaVersion: parsed.schemaVersion,
+    compilerVersion: parsed.compilerVersion,
+    createdAt: isoTimestamp(parsed.createdAt),
+    goalId: goalId(parsed.goalId),
+    goalRevision: goalRevision(parsed.goalRevision),
+    workflowId: workflowId(parsed.workflowId),
+    workflowVersion: workflowVersion(parsed.workflowVersion),
+    phase: parsed.phase,
+    attemptId: attemptId(parsed.attemptId),
+    ...(parsed.candidateGenerationId === undefined
+      ? {}
+      : { candidateGenerationId: candidateGenerationId(parsed.candidateGenerationId) }),
+    ...(parsed.candidateDigest === undefined
+      ? {}
+      : { candidateDigest: sha256Digest(parsed.candidateDigest) }),
+    policyBundleId: policyBundleId(parsed.policyBundleId),
+    policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
+    capabilityGrantDigest: sha256Digest(parsed.capabilityGrantDigest),
+    responseContractDigest: sha256Digest(parsed.responseContractDigest),
+    entries,
+    omissionDecisions,
+    packageDigest: sha256Digest(parsed.packageDigest),
+    manifestDigest: sha256Digest(parsed.manifestDigest),
+  });
+  assertContextManifestInvariant(manifest);
+  return manifest;
+}
+
+const policyCheckerIdentitySchema = z
+  .object({
+    checkerId: nonBlankStringSchema,
+    checkerVersion: nonBlankStringSchema,
+    checkerDigest: z.string(),
+  })
+  .strict();
+
+const policyBundleSchema = z
+  .object({
+    id: z.string(),
+    schemaVersion: z.literal(1),
+    version: nonBlankStringSchema,
+    transitionRules: z.array(nonBlankStringSchema),
+    capabilityRules: z.array(nonBlankStringSchema),
+    contextRules: z.array(nonBlankStringSchema),
+    checkSpecifications: z.array(nonBlankStringSchema),
+    applicabilityRules: z.array(nonBlankStringSchema),
+    acceptanceRules: z.array(nonBlankStringSchema),
+    checkerVersions: z.array(policyCheckerIdentitySchema),
+    digest: z.string(),
+  })
+  .strict();
+
+export function decodePolicyBundle(value: unknown): PolicyBundle {
+  const parsed = policyBundleSchema.parse(value);
+  const checkerVersions: readonly PolicyCheckerIdentity[] = Object.freeze(
+    parsed.checkerVersions.map((checker) =>
+      Object.freeze({
+        checkerId: checker.checkerId,
+        checkerVersion: checker.checkerVersion,
+        checkerDigest: sha256Digest(checker.checkerDigest),
+      }),
+    ),
+  );
+  const bundle: PolicyBundle = Object.freeze({
+    id: policyBundleId(parsed.id),
+    schemaVersion: parsed.schemaVersion,
+    version: parsed.version,
+    transitionRules: Object.freeze([...parsed.transitionRules]),
+    capabilityRules: Object.freeze([...parsed.capabilityRules]),
+    contextRules: Object.freeze([...parsed.contextRules]),
+    checkSpecifications: Object.freeze([...parsed.checkSpecifications]),
+    applicabilityRules: Object.freeze([...parsed.applicabilityRules]),
+    acceptanceRules: Object.freeze([...parsed.acceptanceRules]),
+    checkerVersions,
+    digest: sha256Digest(parsed.digest),
+  });
+  assertPolicyBundleInvariant(bundle);
+  return bundle;
 }
 
 const guardResultSchema = z

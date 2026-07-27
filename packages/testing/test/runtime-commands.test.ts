@@ -1458,6 +1458,7 @@ void test('[I-003][I-023] package root exposes only the public Goal mutation cap
   const { application } = fixture();
 
   assert.equal('WorkflowRuntimeKernel' in publicRuntimeApi, false);
+  assert.equal('WorkerExecutionCoordinator' in publicRuntimeApi, false);
   assert.deepEqual(Object.keys(application).sort(), ['cancelGoal', 'startGoal']);
   for (const internalOperation of [
     'beginAttempt',

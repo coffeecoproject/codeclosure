@@ -9,25 +9,40 @@ import {
   auditEventId,
   commandId,
   decodeAttemptSnapshot,
+  decodeContextManifest,
   decodeGoalSnapshot,
+  decodePolicyBundle,
   decodeWorkflowSnapshot,
   goalId,
   isoTimestamp,
   sha256Digest,
   workflowId,
+  type ContextManifest,
   type Attempt,
   type AuditEventId,
   type CommandId,
   type Goal,
   type GoalId,
   type IsoTimestamp,
+  type PolicyBundle,
   type Sha256Digest,
   type WorkflowInstance,
   type WorkflowId,
 } from '@codeclosure/domain';
+import {
+  decodeWorkerDispatchClaim,
+  decodeWorkerEventReceipt,
+  type InstalledPolicyBundle,
+  type WorkerDispatchClaim,
+  type WorkerEventReceipt,
+} from '@codeclosure/runtime';
 
 import { PersistenceDecodeError } from './errors.js';
 import { parseJson, type JsonValue } from './json.js';
+
+function isJsonObject(value: JsonValue): value is Readonly<Record<string, JsonValue>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 0, {
   error: 'String must not be blank',
@@ -144,6 +159,68 @@ const auditEventRowSchema = z.object({
   occurred_at: z.string(),
 });
 
+const contextManifestRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int().positive(),
+  compiler_version: z.string(),
+  created_at: z.string(),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version: z.number().int().positive(),
+  phase: workflowPhaseSchema,
+  attempt_id: z.string(),
+  candidate_generation_id: z.string().nullable(),
+  candidate_digest: z.string().nullable(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  capability_grant_digest: z.string(),
+  response_contract_digest: z.string(),
+  entries_json: z.string(),
+  omission_decisions_json: z.string(),
+  package_digest: z.string(),
+  manifest_digest: z.string(),
+});
+
+const policyBundleRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int().positive(),
+  policy_version: z.string(),
+  checker_identities_json: z.string(),
+  canonical_content_json: z.string(),
+  bundle_digest: z.string(),
+  installed_at: z.string(),
+});
+
+const workerDispatchClaimRowSchema = z.object({
+  attempt_id: z.string(),
+  schema_version: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version: z.number().int().positive(),
+  worker_session_id: z.string(),
+  context_manifest_id: z.string(),
+  context_manifest_digest: z.string(),
+  package_digest: z.string(),
+  claimed_at: z.string(),
+});
+
+const workerEventReceiptRowSchema = z.object({
+  event_id: z.string(),
+  schema_version: z.number().int().positive(),
+  payload_digest: z.string(),
+  worker_session_id: z.string(),
+  workflow_id: z.string(),
+  observed_workflow_version: z.number().int().positive(),
+  attempt_id: z.string(),
+  context_manifest_id: z.string(),
+  context_manifest_digest: z.string(),
+  package_digest: z.string(),
+  disposition: z.enum(['ADMITTED', 'IGNORED']),
+  internal_command_id: z.string().nullable(),
+  reason_code: z.string().nullable(),
+  received_at: z.string(),
+});
+
 function parseStringArray(value: string, recordType: string): readonly string[] {
   const parsed = parseJson(value, recordType);
   const result = z.array(z.string()).safeParse(parsed);
@@ -243,6 +320,141 @@ export function decodeAttempt(row: unknown): Attempt {
       throw error;
     }
     throw new PersistenceDecodeError('Attempt', { cause: error });
+  }
+}
+
+export function decodeContextManifestRow(row: unknown): ContextManifest {
+  try {
+    const parsed = contextManifestRowSchema.parse(row);
+    return decodeContextManifest({
+      id: parsed.id,
+      schemaVersion: parsed.schema_version,
+      compilerVersion: parsed.compiler_version,
+      createdAt: parsed.created_at,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      workflowId: parsed.workflow_id,
+      workflowVersion: parsed.workflow_version,
+      phase: parsed.phase,
+      attemptId: parsed.attempt_id,
+      ...(parsed.candidate_generation_id === null
+        ? {}
+        : { candidateGenerationId: parsed.candidate_generation_id }),
+      ...(parsed.candidate_digest === null ? {} : { candidateDigest: parsed.candidate_digest }),
+      policyBundleId: parsed.policy_bundle_id,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      capabilityGrantDigest: parsed.capability_grant_digest,
+      responseContractDigest: parsed.response_contract_digest,
+      entries: parseJson(parsed.entries_json, 'ContextManifest.entries'),
+      omissionDecisions: parseJson(
+        parsed.omission_decisions_json,
+        'ContextManifest.omissionDecisions',
+      ),
+      packageDigest: parsed.package_digest,
+      manifestDigest: parsed.manifest_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ContextManifest', { cause: error });
+  }
+}
+
+function samePolicyCheckers(left: PolicyBundle, right: readonly unknown[]): boolean {
+  if (left.checkerVersions.length !== right.length) {
+    return false;
+  }
+  return left.checkerVersions.every((checker, index) => {
+    const candidate = right[index];
+    return (
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      Reflect.get(candidate, 'checkerId') === checker.checkerId &&
+      Reflect.get(candidate, 'checkerVersion') === checker.checkerVersion &&
+      Reflect.get(candidate, 'checkerDigest') === checker.checkerDigest
+    );
+  });
+}
+
+export function decodePolicyBundleRow(row: unknown): InstalledPolicyBundle {
+  try {
+    const parsed = policyBundleRowSchema.parse(row);
+    const canonicalContent = parseJson(
+      parsed.canonical_content_json,
+      'PolicyBundle.canonicalContent',
+    );
+    if (!isJsonObject(canonicalContent)) {
+      throw new TypeError('Policy Bundle canonical content must be an object');
+    }
+    const bundle = decodePolicyBundle({
+      ...canonicalContent,
+      digest: parsed.bundle_digest,
+    });
+    const checkerIdentities = parseJson(
+      parsed.checker_identities_json,
+      'PolicyBundle.checkerIdentities',
+    );
+    if (
+      !Array.isArray(checkerIdentities) ||
+      bundle.id !== parsed.id ||
+      bundle.schemaVersion !== parsed.schema_version ||
+      bundle.version !== parsed.policy_version ||
+      !samePolicyCheckers(bundle, checkerIdentities)
+    ) {
+      throw new TypeError('Policy Bundle storage columns disagree with canonical content');
+    }
+    return Object.freeze({ bundle, installedAt: isoTimestamp(parsed.installed_at) });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('PolicyBundle', { cause: error });
+  }
+}
+
+export function decodeWorkerDispatchClaimRow(row: unknown): WorkerDispatchClaim {
+  try {
+    const parsed = workerDispatchClaimRowSchema.parse(row);
+    return decodeWorkerDispatchClaim({
+      schemaVersion: parsed.schema_version,
+      workflowId: parsed.workflow_id,
+      workflowVersion: parsed.workflow_version,
+      attemptId: parsed.attempt_id,
+      workerSessionId: parsed.worker_session_id,
+      contextManifestId: parsed.context_manifest_id,
+      contextManifestDigest: parsed.context_manifest_digest,
+      packageDigest: parsed.package_digest,
+      claimedAt: parsed.claimed_at,
+    });
+  } catch (error) {
+    throw new PersistenceDecodeError('WorkerDispatchClaim', { cause: error });
+  }
+}
+
+export function decodeWorkerEventReceiptRow(row: unknown): WorkerEventReceipt {
+  try {
+    const parsed = workerEventReceiptRowSchema.parse(row);
+    return decodeWorkerEventReceipt({
+      schemaVersion: parsed.schema_version,
+      eventId: parsed.event_id,
+      payloadDigest: parsed.payload_digest,
+      workerSessionId: parsed.worker_session_id,
+      workflowId: parsed.workflow_id,
+      observedWorkflowVersion: parsed.observed_workflow_version,
+      attemptId: parsed.attempt_id,
+      contextManifestId: parsed.context_manifest_id,
+      contextManifestDigest: parsed.context_manifest_digest,
+      packageDigest: parsed.package_digest,
+      receivedAt: parsed.received_at,
+      disposition: parsed.disposition,
+      ...(parsed.internal_command_id === null
+        ? {}
+        : { internalCommandId: parsed.internal_command_id }),
+      ...(parsed.reason_code === null ? {} : { reasonCode: parsed.reason_code }),
+    });
+  } catch (error) {
+    throw new PersistenceDecodeError('WorkerEventReceipt', { cause: error });
   }
 }
 

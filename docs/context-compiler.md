@@ -2,10 +2,12 @@
 
 ## Status
 
-This document defines the target Context Compiler contract. No Context Compiler
-is implemented at M0. M1 implements the deterministic subset described under
-[M1 Boundary](#m1-boundary); retrieval, packing, and Codex Thread policy remain
-planned for later milestones.
+This document defines the target Context Compiler contract. The current M1
+Slice 4 implementation provides the deterministic subset described under
+[M1 Boundary](#m1-boundary): canonical Context Packages and Manifests,
+source-authority cross-validation, exact digest binding, atomic Attempt binding,
+and `FakeWorker` dispatch. Retrieval, relevance packing, a full Fact Graph, and
+Codex Thread policy remain planned for later milestones.
 
 ## Purpose
 
@@ -157,6 +159,25 @@ record-envelope fields defined by
 [ADR 0006](adr/0006-canonical-serialization-and-digest-profiles.md).
 Worker results bind both the manifest identity and digest.
 
+For the current M1 path, the Runtime first applies the proposed Attempt start in
+memory and compiles against that resulting Workflow version. Runtime
+configuration selects the active Policy ID; the Runtime loads that installed
+bundle and supplies its exact ID and digest to the compiler, so the compiler
+cannot choose or downgrade Policy authority. Before persistence the Runtime
+independently cross-checks the exact Goal content, phase objective, capability
+grant, response contract, Candidate and Policy bindings, authority labels, and
+the complete Manifest entry projection. The Store then commits the Attempt,
+Workflow, audit events, processed Start command, and Manifest in one
+transaction. A digest-valid package that disagrees with source authority is
+invalid; a digest proves identity, not correctness or authorization.
+
+After commit, an immutable dispatch claim revalidates the active Workflow
+version and all request digests before `WorkerPort` is invoked. Cancellation
+and dispatch serialize on that version. Worker events are deduplicated by an
+independent `WorkerEventId`; a current event is admitted transactionally, while
+a stale or mismatched event can create only an ignored delivery receipt. See
+[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+
 ## Compilation Pipeline
 
 ### 1. Bind identity
@@ -269,7 +290,8 @@ Attempt and manifest. Stale results cannot advance the workflow.
 
 ## M1 Boundary
 
-M1 implements a minimal deterministic compiler sufficient for `FakeWorker`:
+The current M1 implementation includes a minimal deterministic compiler
+sufficient for `FakeWorker`:
 
 - Goal identity and criteria;
 - Workflow, phase, Attempt, and capability-grant identity;
@@ -278,6 +300,12 @@ M1 implements a minimal deterministic compiler sufficient for `FakeWorker`:
 - response contract;
 - Context Manifest, package digest, and manifest digest;
 - invalidation on Goal or phase revision.
+
+Explicit selected entries are supplied by a trusted M1 composition boundary
+and remain labelled by source reference, revision, optional source digest, and
+authority class. Durable relationship lookup and relevance selection over the
+Fact/Decision stores remain M3 work; worker-authored content cannot enter as a
+confirmed source merely by changing its prose.
 
 Code relevance retrieval, full Fact Graph traversal, token-aware packing, and
 Codex Thread policy belong to later milestones.

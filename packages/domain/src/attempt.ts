@@ -121,6 +121,8 @@ export interface BeginAttempt extends AttemptCommandBase {
   readonly type: 'BEGIN_ATTEMPT';
   readonly attemptId: AttemptId;
   readonly sequence: number;
+  readonly contextManifestId?: ContextManifestId;
+  readonly workerSessionRef?: WorkerSessionId;
 }
 
 export interface RecordAttemptResult extends AttemptCommandBase {
@@ -207,6 +209,7 @@ export const AttemptRejectionCode = {
   ATTEMPT_PHASE_MISMATCH: 'ATTEMPT_PHASE_MISMATCH',
   INVALID_SEQUENCE: 'INVALID_SEQUENCE',
   INVALID_TIMESTAMP_ORDER: 'INVALID_TIMESTAMP_ORDER',
+  INVALID_CONTEXT_BINDING: 'INVALID_CONTEXT_BINDING',
   EMPTY_REASON: 'EMPTY_REASON',
 } as const;
 export type AttemptRejectionCode = (typeof AttemptRejectionCode)[keyof typeof AttemptRejectionCode];
@@ -265,6 +268,9 @@ export function assertAttemptInvariant(attempt: UnvalidatedAttempt): asserts att
   }
   if (attempt.workerSessionRef !== undefined) {
     workerSessionId(attempt.workerSessionRef);
+    if (attempt.contextManifestId === undefined) {
+      throw new DomainInvariantError('Worker-bound Attempt requires a Context Manifest');
+    }
   }
   if (attempt.endedAt !== undefined) {
     isoTimestamp(attempt.endedAt);
@@ -414,13 +420,31 @@ export function decideAttempt(
     if (!Number.isSafeInteger(command.sequence) || command.sequence < 1) {
       return reject(AttemptRejectionCode.INVALID_SEQUENCE, 'Attempt sequence must be positive');
     }
+    if (command.workerSessionRef !== undefined && command.contextManifestId === undefined) {
+      return reject(
+        AttemptRejectionCode.INVALID_CONTEXT_BINDING,
+        'Worker-bound Attempt requires a Context Manifest',
+      );
+    }
+    if (command.contextManifestId !== undefined) {
+      contextManifestId(command.contextManifestId);
+    }
+    if (command.workerSessionRef !== undefined) {
+      workerSessionId(command.workerSessionRef);
+    }
 
     const attempt: RunningAttempt = Object.freeze({
       id: command.attemptId,
       workflowId: workflow.id,
       phase: workflow.phase,
       sequence: command.sequence,
+      ...(command.contextManifestId === undefined
+        ? {}
+        : { contextManifestId: command.contextManifestId }),
       capabilityGrant: deriveCapabilityGrant(workflow.phase),
+      ...(command.workerSessionRef === undefined
+        ? {}
+        : { workerSessionRef: command.workerSessionRef }),
       status: AttemptStatus.RUNNING,
       startedAt: command.occurredAt,
     });

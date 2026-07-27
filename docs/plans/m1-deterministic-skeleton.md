@@ -443,6 +443,10 @@ before Slice 4 or a closeout path before Slice 6.
 
 ### Slice 4 — Context and FakeWorker
 
+Implementation status (2026-07-27): implemented and verified at the Runtime,
+domain, `FakeWorker`, and SQLite boundaries. This closes Slice 4 only; it is not
+an M1 completion claim.
+
 - minimal compiler and Context Manifest;
 - Worker Request/Event contract;
 - adversarial FakeWorker fixtures;
@@ -452,6 +456,13 @@ before Slice 4 or a closeout path before Slice 6.
 
 Exit: worker text, result shape tricks, stale context, and duplicates cannot
 advance authority.
+
+The proof includes Context/source-authority cross-validation, Runtime-owned
+selection of an installed Policy, atomic Attempt-plus-Manifest start, durable
+dispatch claims serialized against cancellation, independent Worker receipts,
+restart reads, SQLite relationship backstops, and injected rollback failures
+after each new authority write. See
+[ADR 0014](../adr/0014-context-bound-worker-dispatch-and-event-admission.md).
 
 ### Slice 5 — Candidate and evidence
 

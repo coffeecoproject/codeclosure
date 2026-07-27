@@ -4,16 +4,22 @@ import {
   candidateGenerationId,
   candidateId,
   commandId,
+  contextManifestId,
   goalId,
   isoTimestamp,
+  workerEventId,
+  workerSessionId,
   workflowId,
   type AttemptId,
   type AuditEventId,
   type CandidateGenerationId,
   type CandidateId,
   type CommandId,
+  type ContextManifestId,
   type GoalId,
   type IsoTimestamp,
+  type WorkerEventId,
+  type WorkerSessionId,
   type WorkflowId,
 } from '@codeclosure/domain';
 
@@ -75,6 +81,18 @@ export class DeterministicIds {
 
   public nextCommandId(): CommandId {
     return commandId(`command_${this.nextSuffix()}`);
+  }
+
+  public nextContextManifestId(): ContextManifestId {
+    return contextManifestId(`context_${this.nextSuffix()}`);
+  }
+
+  public nextWorkerSessionId(): WorkerSessionId {
+    return workerSessionId(`worker_${this.nextSuffix()}`);
+  }
+
+  public nextWorkerEventId(): WorkerEventId {
+    return workerEventId(`worker-event_${this.nextSuffix()}`);
   }
 
   private nextSuffix(): string {

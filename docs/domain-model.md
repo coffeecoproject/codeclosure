@@ -309,6 +309,15 @@ WorkerResult
 `WorkerResult` is never written directly into authoritative aggregate tables.
 The runtime validates and routes each contained proposal.
 
+The current M1 Slice 4 wire contract is deliberately smaller than the target
+shape above. It admits either `PROPOSALS` during `DISCOVERY`/`PLAN`, a
+`COMPLETION_REQUEST` during `IMPLEMENT`, or a typed Worker failure. Every event
+binds an independent `WorkerEventId`, Worker Session, Attempt, Context Manifest,
+and exact Manifest/package digests. A valid result records only an Attempt
+result and returns the Workflow to `READY`; it does not advance phase or issue
+Acceptance. See
+[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+
 ## Completion Request
 
 ```text

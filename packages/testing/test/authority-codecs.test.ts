@@ -22,6 +22,7 @@ import {
   isoTimestamp,
   sha256Digest,
   successCriterionId,
+  workerSessionId,
   workflowId,
 } from '@codeclosure/domain';
 
@@ -114,6 +115,13 @@ void test('[I-006][I-023] closed codecs reject poisoned scalar, enum, field, and
       },
     },
     { decode: decodeAttemptSnapshot, value: { ...attempt, endedAt: createdAt } },
+    {
+      decode: decodeAttemptSnapshot,
+      value: {
+        ...attempt,
+        workerSessionRef: workerSessionId('worker_codec-without-context'),
+      },
+    },
     {
       decode: decodeCandidateGeneration,
       value: { ...candidate, state: CandidateGenerationState.FROZEN },

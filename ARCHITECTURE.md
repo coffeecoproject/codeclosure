@@ -2,10 +2,13 @@
 
 ## Status
 
-This document defines the M0 target architecture. M1 implements only the
-deterministic domain, workflow, persistence, audit, CLI, and `FakeWorker`
-vertical slice. Components marked for M2 or later are architectural boundaries,
-not current implementation claims.
+This document defines the target architecture. The current M1 implementation
+has reached the Context-bound `FakeWorker` runtime slice: deterministic domain
+and Workflow control, SQLite persistence and audit, minimal Context compilation,
+typed Worker dispatch, and event admission exist. Candidate/Evidence,
+Acceptance, CLI proof scenarios, and complete startup orchestration remain M1
+work. Components marked for M2 or later are architectural boundaries, not
+current implementation claims.
 
 ## Architectural Goal
 
@@ -155,6 +158,12 @@ The sole authoritative workflow-state writer. It:
 - suspends for typed blockers and decisions;
 - reconciles after interruption.
 
+In the current Worker path it also commits a Context-bound Attempt atomically,
+claims dispatch against the exact active Workflow version, owns cancellation
+and `AbortSignal` ordering, and converts a validated Worker event into a
+runtime-authored internal command. The Worker cannot choose that command or
+mutate state through its delivery identity.
+
 The M1 package root exposes a narrow Goal application capability for public
 adapters. That capability contains only public Goal commands; the internal
 Workflow control kernel and its Attempt/phase commands are not package-root
@@ -171,6 +180,16 @@ which revisions and facts were presented.
 The compiler is not a conversation summarizer. It may include a bounded
 transcript excerpt as non-authoritative working context, but it never depends
 on that excerpt for goal identity or acceptance.
+
+The M1 compiler emits a disposable canonical Context Package and a durable
+Manifest. Runtime configuration selects an installed active Policy before
+compilation; the compiler cannot substitute that authority. The Runtime then
+cross-checks package and Manifest against the exact Goal, resulting
+Workflow/Attempt, phase policy, Candidate/Policy bindings, authority labels,
+and entry projection before the Store commits them with Attempt start. Dispatch
+consumes an immutable version-fenced claim; Worker event receipts use an
+identity domain separate from application commands. See
+[ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md).
 
 ### Candidate Manager
 
@@ -333,6 +352,9 @@ Application `CommandId` values and worker-delivery `WorkerEventId` values are
 also separate authority domains. The Codex adapter may report a worker event;
 it cannot choose or impersonate the runtime command that admits that event.
 See [ADR 0009](docs/adr/0009-command-idempotency-and-worker-boundary.md).
+The concrete M1 Context binding, durable dispatch claim, cancellation ordering,
+and Worker receipt transaction are specified by
+[ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md).
 
 ## Dependency Direction
 

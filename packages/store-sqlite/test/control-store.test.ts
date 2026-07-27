@@ -454,6 +454,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0006_store_authored_command_outcomes.sql',
       '0007_causal_control_time.sql',
       '0008_authority_boundary_validation.sql',
+      '0009_context_worker_dispatch.sql',
     ],
   );
   store.close();
@@ -490,6 +491,8 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
     'acceptance_decisions',
     'processed_commands',
     'audit_events',
+    'worker_dispatch_claims',
+    'worker_event_receipts',
   ]) {
     assert.equal(tableNames.has(requiredTable), true, `${requiredTable} must exist`);
   }
@@ -1787,7 +1790,7 @@ void test('[I-003][I-006] database rejects an independently forged Goal lifecycl
   );
 });
 
-void test('[I-006][I-008][I-012] SQLite rejects malformed scalars and Candidate ownership bypasses', (t) => {
+void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malformed scalars, and Candidate ownership bypasses', (t) => {
   const filename = temporaryDatabase(t, 'authority-boundary-triggers.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   const first = seed(store, 'authority-boundary-first');
@@ -1807,7 +1810,7 @@ void test('[I-006][I-008][I-012] SQLite rejects malformed scalars and Candidate 
       database
         .prepare('UPDATE attempts SET worker_session_ref = ? WHERE id = ?')
         .run('WORKER_not-canonical', began.value.attempt.id),
-    /Attempt authority representation is invalid/,
+    /Attempt Context and Worker bindings are immutable/,
   );
   assert.throws(
     () =>

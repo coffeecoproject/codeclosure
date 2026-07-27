@@ -320,8 +320,8 @@ function decodeJsonValueInternal(value: unknown, ancestors: Set<object>): JsonVa
     return value;
   }
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new TypeError('JSON numbers must be finite');
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+      throw new TypeError('JSON numbers must be finite and integer values must be safe');
     }
     return value;
   }

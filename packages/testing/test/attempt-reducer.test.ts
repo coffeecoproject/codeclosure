@@ -27,6 +27,7 @@ import {
   goalRevision,
   isCanonicalCapabilityGrant,
   isoTimestamp,
+  workerSessionId,
   workflowId,
   workflowVersion,
   type Attempt,
@@ -114,6 +115,23 @@ void test('[I-008][I-023] beginning an Attempt advances the owning Workflow vers
   assert.equal(running.workflow.version, 2);
   assert.equal(running.attempt.phase, initial.phase);
   assert.equal(isCanonicalCapabilityGrant(running.attempt.capabilityGrant), true);
+});
+
+void test('[I-004][I-019] a Worker Session cannot exist without Context authority', () => {
+  const workflow = readyWorkflow();
+  const decision = decideAttempt(workflow, undefined, {
+    type: 'BEGIN_ATTEMPT',
+    commandId: commandId('command_worker-without-context'),
+    workflowId: workflow.id,
+    expectedWorkflowVersion: workflow.version,
+    attemptId: attemptId('attempt_worker-without-context'),
+    sequence: 1,
+    workerSessionRef: workerSessionId('worker_without-context'),
+    occurredAt: startedAt,
+  });
+
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.rejection.code, AttemptRejectionCode.INVALID_CONTEXT_BINDING);
 });
 
 void test('[I-002] recording a worker result does not advance phase or imply success', () => {

@@ -19,6 +19,7 @@ supersedes it.
 | [0011](0011-store-authored-command-outcome-semantics.md) | Author command outcomes in the Store and bind them to their transaction semantics | Accepted |
 | [0012](0012-causal-control-timestamps.md) | Preserve causal ordering across Runtime, domain, Store, audit, and SQLite timestamps | Accepted |
 | [0013](0013-authority-boundary-validation-closure.md) | Close authority validation across Runtime, Store, replay, and persistence | Accepted |
+| [0014](0014-context-bound-worker-dispatch-and-event-admission.md) | Bind Worker dispatch and event admission to durable Context authority | Accepted |
 
 ## ADR lifecycle
 

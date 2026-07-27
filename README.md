@@ -12,28 +12,37 @@ complete.
 ## Status
 
 The M0 architecture baseline is complete and tracked. **M1 implementation is in
-progress.** The repository currently contains the strict TypeScript workspace,
-pure Workflow and Candidate reducers, and the transactional SQLite control-store
-foundation with migration, restart, optimistic-concurrency, idempotency, and
-atomic state-plus-audit tests. Slice 3 runtime handlers now expose Goal-based
-start/cancel commands, own Attempt lifecycle changes, persist deterministic
-command rejections for replay, and keep the Goal lifecycle projection
-transactionally synchronized with its Workflow. The package root now returns a
-narrow Goal application capability rather than exporting the internal control
-kernel. Command admission checks Goal/Workflow freshness before child lookup,
-guard evaluation, or domain planning. Persisted command outcomes bind the exact
-target, owning Goal and Workflow, disposition, and observed Workflow snapshot;
-replay revalidates those bindings. Internal phase guards are runtime-derived,
+progress through Slice 4.** The repository currently contains the strict
+TypeScript workspace, pure Workflow and Candidate reducers, and the
+transactional SQLite control-store foundation with migration, restart,
+optimistic-concurrency, idempotency, and atomic state-plus-audit tests. Runtime
+handlers expose narrow Goal-based start/cancel commands, own Attempt lifecycle
+changes, persist deterministic command rejections for replay, and keep the Goal
+lifecycle projection transactionally synchronized with its Workflow. Command
+admission checks Goal/Workflow freshness before child lookup, guard evaluation,
+or domain planning. Persisted command outcomes bind the exact target, owning
+Goal and Workflow, disposition, and observed Workflow snapshot; replay
+revalidates those bindings. Internal phase guards are runtime-derived,
 evaluator, persistence, and internal failures remain distinct, `CLOSEOUT`
 remains unavailable until Slice 6 supplies a current Acceptance Decision, and
-store conflicts are typed. Runtime-owned timestamps now preserve causal order
-across clock rollback, while reducers, the Store, and SQLite reject older
-bypassed events and repeated terminal Workflow mutations.
+store conflicts are typed.
 
-This is not yet an end-to-end working runtime. The Context compiler, typed
-`WorkerPort`, `FakeWorker`, Evidence, Acceptance, CLI proof scenarios, startup
-recovery inspector, and the final M1 audit remain incomplete. Implemented
-slices must not be read as an M1 or product-completion claim.
+The Slice 4 path now compiles a deterministic minimal Context package, verifies
+its authoritative Goal and source bindings, binds a Runtime-selected installed
+Policy, and atomically persists its Manifest with the Attempt. A typed
+`WorkerPort` is reached only after a durable dispatch claim wins its transaction
+against cancellation. Independently identified Worker events are
+schema-checked, digest-bound, replay-safe, and stored with their resulting
+Attempt mutation in one transaction. Adversarial `FakeWorker` fixtures exercise
+malformed, stale, duplicate, fabricated, and abrupt-failure behavior.
+Runtime-owned timestamps preserve causal order across clock rollback, while
+reducers, the Store, and SQLite reject older bypassed events, relationship
+forgery, immutable-record rewrites, and repeated terminal Workflow mutations.
+
+This is not yet an end-to-end working runtime. Candidate/evidence generation,
+Acceptance, CLI proof scenarios, startup recovery orchestration and inspection,
+and the final M1 audit remain incomplete. Implemented slices must not be read as
+an M1 or product-completion claim.
 
 ## Development
 
@@ -54,14 +63,16 @@ Current repository commands are:
 - `pnpm build` — force a clean production compilation pass;
 - `pnpm gate:quality` — run the current checks in required order.
 
-The current test step includes reducer, migration upgrade, Runtime-plus-SQLite
-integration, Goal projection, reopen, stale-write, rejection replay,
-persistence-decoding, stale-command admission precedence, replay target
-binding, evaluator-failure classification, API-capability boundaries,
-forged-closeout rejection, Attempt lifecycle shape, causal clock rollback,
-terminal event bypass, and transaction rollback checks. Later M1 slices add
-worker-event adversarial demos, canonical replay vectors, CLI integration, and
-an invariant-coverage check before any M1 completion claim.
+The current test step includes reducer, migration upgrade and poison-preflight,
+Runtime-plus-SQLite integration, Goal projection, reopen, stale-write,
+rejection replay, persistence decoding, stale-command admission precedence,
+replay target binding, evaluator-failure classification, API-capability
+boundaries, forged-closeout rejection, Context source cross-validation,
+canonical digest vectors, dispatch/cancellation ordering, adversarial Worker
+events, causal clock rollback, terminal event bypass, and injected transaction
+rollback checks. Later M1 slices add Candidate/evidence and Acceptance proof,
+CLI integration, recovery orchestration, and an invariant-coverage check before
+any M1 completion claim.
 
 ## Why CodeClosure Exists
 

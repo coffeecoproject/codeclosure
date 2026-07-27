@@ -2,9 +2,11 @@
 
 ## Status
 
-This document defines the target workflow contract. No Workflow Runtime is
-implemented at M0. M1 implements the deterministic state model, guards, and
-FakeWorker proof path without real source editing or Codex integration.
+This document defines the target workflow contract. The current M1
+implementation includes the deterministic state model, transactional Workflow
+and Attempt Runtime, and the Context-bound `FakeWorker` proof path. Candidate
+editing, Evidence, Acceptance, CLI proof scenarios, and Codex integration are
+not yet implemented.
 
 ## Purpose
 
@@ -37,6 +39,22 @@ and phase transitions are internal runtime commands. Their
 `expectedWorkflowVersion` serializes operational changes under ADR 0007. A
 Codex thread-scoped goal, plan, or turn is worker execution state, not this
 CodeClosure Goal and not a command authority.
+
+For a Worker-backed Attempt, start commits the Context Manifest with the
+Attempt and Workflow rather than attaching Context afterward. Dispatch requires
+an immutable Store claim for the exact active Workflow version, Worker Session,
+Manifest digest, and package digest. A cancellation that commits first prevents
+the claim; after a claim, cancellation commits the Workflow interruption before
+the Runtime aborts the active Worker signal.
+
+Worker delivery uses `WorkerEventId`, not caller- or Worker-selected
+`CommandId`. Only a current, schema-valid, request-bound event lets the Runtime
+create an internal command. That command commits the Attempt result or failure,
+Workflow state, audits, processed outcome, and admitted receipt atomically.
+Stale or mismatched delivery creates no state change, success audit, or
+processed command; an independent ignored receipt may record that delivery for
+deduplication. See
+[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
 
 For a new command, the Runtime first resolves the top-level Goal/Workflow
 snapshot and applies one freshness gate. Goal commands check the expected Goal
