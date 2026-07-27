@@ -23,6 +23,28 @@ version-control baseline.
 The first executable milestone, M1, will prove the control boundary with a
 `FakeWorker` before Codex is connected.
 
+## Development
+
+The M1 workspace requires Node.js `>=22.22.0 <23` and pnpm `11.1.3` through
+Corepack.
+
+```sh
+corepack pnpm install
+corepack pnpm gate:quality
+```
+
+Current Slice 0 repository commands are:
+
+- `pnpm format` / `pnpm format:check` — write or verify code/config formatting;
+- `pnpm lint` — run ESLint with type-aware TypeScript rules;
+- `pnpm typecheck` — build project references and type-check test sources;
+- `pnpm test` — run workspace tests with Node's test runner;
+- `pnpm build` — force a clean production compilation pass;
+- `pnpm gate:quality` — run the current checks in required order.
+
+Later M1 slices extend `gate:quality` with migration, restart, adversarial demo,
+and invariant-coverage checks before any M1 completion claim.
+
 ## Why CodeClosure Exists
 
 Prompt instructions can improve agent behavior, but they cannot make a

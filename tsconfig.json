@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/domain" },
+    { "path": "./packages/runtime" },
+    { "path": "./packages/store-sqlite" },
+    { "path": "./packages/testing" },
+    { "path": "./apps/cli" }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "codeclosure",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "engines": {
+    "node": ">=22.22.0 <23",
+    "pnpm": "11.1.3"
+  },
+  "scripts": {
+    "build": "tsc -b --force --pretty false",
+    "clean": "tsc -b --clean",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "gate:quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "lint": "eslint .",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.1",
+    "eslint": "10.8.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.65.0"
+  }
+}
