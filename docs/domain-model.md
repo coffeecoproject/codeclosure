@@ -147,6 +147,27 @@ Attempt
 Worker sessions are references on attempts. Losing or compacting a worker
 session does not lose the Attempt or Workflow.
 
+`AttemptStatus`:
+
+- `RUNNING` — the bounded operation has been durably started and is executing
+  or awaiting a result;
+- `RESULT_RECORDED` — the runtime has admitted and routed the operation result;
+  this does **not** mean that the Candidate, Goal, or Workflow succeeded;
+- `FAILED` — the bounded operation failed, with the specific failure category
+  recorded separately;
+- `INTERRUPTED` — the runtime ended the operation because of cancellation,
+  reconciliation, or another controlled interruption.
+
+M1 creates an Attempt as `RUNNING` in authoritative storage before worker
+dispatch. It does not use a separate `PENDING` state. Recovery reconciles a
+persisted `RUNNING` Attempt with external reality before dispatching more work.
+Goal cancellation records the Workflow as `CANCELLED` and any active Attempt as
+`INTERRUPTED`.
+
+`RESULT_RECORDED` is deliberately not named `SUCCEEDED`: a worker operation
+ending normally or returning a Completion Request grants no acceptance or
+closeout authority.
+
 ## Transition Request and Transition Record
 
 ```text
