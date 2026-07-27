@@ -8,6 +8,7 @@ import {
   CandidateRejectionCode,
   aggregateVersion,
   applyCandidateEvent,
+  assertCandidateInvariant,
   candidateGenerationId,
   candidateId,
   commandId,
@@ -19,27 +20,39 @@ import {
   type CandidateGeneration,
   type CandidateGenerationState as CandidateGenerationStateType,
   type CandidateStateChanged,
+  type UnvalidatedCandidateGeneration,
 } from '@codeclosure/domain';
 
 const occurredAt = isoTimestamp('2026-07-27T00:00:00.000Z');
+const laterAt = isoTimestamp('2026-07-27T00:00:00.001Z');
+const beforeCreation = isoTimestamp('2026-07-26T23:59:59.999Z');
 const baseDigest = sha256Digest(`sha256:${'a'.repeat(64)}`);
 const frozenDigest = sha256Digest(`sha256:${'b'.repeat(64)}`);
 
 function candidateAt(
   state: CandidateGenerationStateType = CandidateGenerationState.MUTABLE,
 ): CandidateGeneration {
-  return {
+  const base = {
     id: candidateGenerationId('generation_reducer'),
     candidateId: candidateId('candidate_reducer'),
     sequence: 1,
     workspaceIdentity: 'fixture://candidate/reducer',
-    state,
     baseDigest,
     version: aggregateVersion(1),
     createdAt: occurredAt,
     updatedAt: occurredAt,
-    ...(state === CandidateGenerationState.FROZEN ? { frozenDigest, frozenAt: occurredAt } : {}),
   };
+  switch (state) {
+    case CandidateGenerationState.MUTABLE:
+    case CandidateGenerationState.FREEZING:
+      return { ...base, state };
+    case CandidateGenerationState.FROZEN:
+    case CandidateGenerationState.REJECTED:
+    case CandidateGenerationState.ACCEPTED:
+      return { ...base, state, frozenDigest, frozenAt: occurredAt };
+    case CandidateGenerationState.INVALIDATED:
+      return { ...base, state, invalidationReason: 'fixture invalidation' };
+  }
 }
 
 function command(candidate: CandidateGeneration, type: CandidateCommand['type']): CandidateCommand {
@@ -165,4 +178,57 @@ void test('[I-008] Candidate event application rejects replay against a new vers
     () => applyCandidateEvent(candidate, { ...event, toVersion: aggregateVersion(3) }),
     /version exactly once/,
   );
+});
+
+void test('[I-008] Candidate snapshots, commands, and events cannot move time backward', () => {
+  const candidate = candidateAt();
+  assert.throws(
+    () => assertCandidateInvariant({ ...candidate, updatedAt: beforeCreation }),
+    /updatedAt cannot precede createdAt/,
+  );
+
+  const current = Object.freeze({ ...candidate, updatedAt: laterAt });
+  const decision = decideCandidate(current, command(current, 'BEGIN_CANDIDATE_FREEZE'));
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.rejection.code, CandidateRejectionCode.INVALID_TIMESTAMP_ORDER);
+
+  const olderEvent = acceptedEvent(
+    decideCandidate(candidate, command(candidate, 'BEGIN_CANDIDATE_FREEZE')),
+  );
+  assert.throws(
+    () => applyCandidateEvent(current, olderEvent),
+    /event time cannot precede current state/,
+  );
+});
+
+void test('[I-006][I-012] every Candidate state requires exactly its own authority fields', () => {
+  const mutable = candidateAt(CandidateGenerationState.MUTABLE);
+  const poisoned: readonly UnvalidatedCandidateGeneration[] = [
+    { ...mutable, state: CandidateGenerationState.FROZEN },
+    { ...mutable, frozenDigest: undefined } as unknown as UnvalidatedCandidateGeneration,
+    {
+      ...mutable,
+      state: CandidateGenerationState.MUTABLE,
+      frozenDigest,
+      frozenAt: occurredAt,
+    },
+    { ...mutable, state: CandidateGenerationState.INVALIDATED },
+    {
+      ...mutable,
+      state: CandidateGenerationState.INVALIDATED,
+      invalidationReason: 'source changed',
+      frozenDigest,
+    },
+    {
+      ...mutable,
+      state: CandidateGenerationState.ACCEPTED,
+      frozenDigest,
+      frozenAt: occurredAt,
+      invalidationReason: 'cannot coexist with acceptance',
+    },
+  ];
+
+  for (const candidate of poisoned) {
+    assert.throws(() => assertCandidateInvariant(candidate));
+  }
 });

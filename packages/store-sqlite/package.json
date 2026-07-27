@@ -28,6 +28,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@codeclosure/testing": "workspace:*",
     "@types/better-sqlite3": "7.6.13"
   }
 }

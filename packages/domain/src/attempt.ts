@@ -4,7 +4,12 @@ import {
   type CapabilityGrant,
 } from './capabilities.js';
 import {
+  attemptId,
+  contextManifestId,
+  isoTimestamp,
   nextWorkflowVersion,
+  workerSessionId,
+  workflowId,
   type AttemptId,
   type CommandId,
   type ContextManifestId,
@@ -22,7 +27,13 @@ import {
   type WorkflowInstance,
   type WorkflowPhase as WorkflowPhaseType,
 } from './model.js';
-import { DomainInvariantError, applyWorkflowEvent, type WorkflowCancelled } from './workflow.js';
+import {
+  DomainInvariantError,
+  applyWorkflowEvent,
+  assertWorkflowInvariant,
+  isTerminalWorkflow,
+  type WorkflowCancelled,
+} from './workflow.js';
 
 export const AttemptFailureClass = {
   TRANSIENT_BACKEND: 'TRANSIENT_BACKEND',
@@ -51,7 +62,7 @@ export const AttemptInterruptionReason = {
 export type AttemptInterruptionReason =
   (typeof AttemptInterruptionReason)[keyof typeof AttemptInterruptionReason];
 
-export interface Attempt {
+interface AttemptBase {
   readonly id: AttemptId;
   readonly workflowId: WorkflowId;
   readonly phase: WorkflowPhaseType;
@@ -59,10 +70,43 @@ export interface Attempt {
   readonly contextManifestId?: ContextManifestId;
   readonly capabilityGrant: CapabilityGrant;
   readonly workerSessionRef?: WorkerSessionId;
+  readonly startedAt: IsoTimestamp;
+}
+
+export interface RunningAttempt extends AttemptBase {
+  readonly status: typeof AttemptStatus.RUNNING;
+  readonly failureClass?: never;
+  readonly terminationReason?: never;
+  readonly endedAt?: never;
+}
+
+interface TerminalAttemptBase extends AttemptBase {
+  readonly terminationReason: string;
+  readonly endedAt: IsoTimestamp;
+}
+
+export interface ResultRecordedAttempt extends TerminalAttemptBase {
+  readonly status: typeof AttemptStatus.RESULT_RECORDED;
+  readonly failureClass?: never;
+}
+
+export interface FailedAttempt extends TerminalAttemptBase {
+  readonly status: typeof AttemptStatus.FAILED;
+  readonly failureClass: AttemptFailureClass;
+}
+
+export interface InterruptedAttempt extends TerminalAttemptBase {
+  readonly status: typeof AttemptStatus.INTERRUPTED;
+  readonly failureClass?: never;
+}
+
+export type TerminalAttempt = ResultRecordedAttempt | FailedAttempt | InterruptedAttempt;
+export type Attempt = RunningAttempt | TerminalAttempt;
+
+export interface UnvalidatedAttempt extends AttemptBase {
   readonly status: AttemptStatusType;
   readonly failureClass?: AttemptFailureClass;
   readonly terminationReason?: string;
-  readonly startedAt: IsoTimestamp;
   readonly endedAt?: IsoTimestamp;
 }
 
@@ -109,11 +153,11 @@ export interface AttemptStarted {
   readonly workflowId: WorkflowId;
   readonly fromWorkflowVersion: WorkflowVersion;
   readonly toWorkflowVersion: WorkflowVersion;
-  readonly attempt: Attempt;
+  readonly attempt: RunningAttempt;
   readonly occurredAt: IsoTimestamp;
 }
 
-export interface AttemptFinished {
+interface AttemptFinishedBase {
   readonly type: 'ATTEMPT_FINISHED';
   readonly commandId: CommandId;
   readonly workflowId: WorkflowId;
@@ -122,16 +166,30 @@ export interface AttemptFinished {
   readonly fromWorkflowVersion: WorkflowVersion;
   readonly toWorkflowVersion: WorkflowVersion;
   readonly fromStatus: typeof AttemptStatus.RUNNING;
-  readonly toStatus:
-    | typeof AttemptStatus.RESULT_RECORDED
-    | typeof AttemptStatus.FAILED
-    | typeof AttemptStatus.INTERRUPTED;
-  readonly resultingRunStatus:
-    typeof RunStatus.READY | typeof RunStatus.BLOCKED | typeof RunStatus.FAILED;
-  readonly failureClass?: AttemptFailureClass;
   readonly terminationReason: string;
   readonly occurredAt: IsoTimestamp;
 }
+
+export interface AttemptResultRecorded extends AttemptFinishedBase {
+  readonly toStatus: typeof AttemptStatus.RESULT_RECORDED;
+  readonly resultingRunStatus: typeof RunStatus.READY;
+  readonly failureClass?: never;
+}
+
+export interface AttemptFailed extends AttemptFinishedBase {
+  readonly toStatus: typeof AttemptStatus.FAILED;
+  readonly resultingRunStatus:
+    typeof RunStatus.READY | typeof RunStatus.BLOCKED | typeof RunStatus.FAILED;
+  readonly failureClass: AttemptFailureClass;
+}
+
+export interface AttemptInterrupted extends AttemptFinishedBase {
+  readonly toStatus: typeof AttemptStatus.INTERRUPTED;
+  readonly resultingRunStatus: typeof RunStatus.READY | typeof RunStatus.BLOCKED;
+  readonly failureClass?: never;
+}
+
+export type AttemptFinished = AttemptResultRecorded | AttemptFailed | AttemptInterrupted;
 
 export type AttemptEvent = AttemptStarted | AttemptFinished;
 
@@ -166,10 +224,6 @@ function reject(code: AttemptRejectionCode, message: string): AttemptDecision {
   return { accepted: false, rejection: { code, message } };
 }
 
-function isTerminalWorkflow(workflow: WorkflowInstance): boolean {
-  return workflow.runStatus === RunStatus.CANCELLED || workflow.runStatus === RunStatus.CLOSED;
-}
-
 export function classifyAttemptFailure(failureClass: AttemptFailureClass): RetryClassification {
   switch (failureClass) {
     case AttemptFailureClass.TRANSIENT_BACKEND:
@@ -198,6 +252,112 @@ function resultingStatusForFailure(
   return RunStatus.FAILED;
 }
 
+function isAttemptFailureClass(value: unknown): value is AttemptFailureClass {
+  return Object.values(AttemptFailureClass).some((failureClass) => failureClass === value);
+}
+
+export function assertAttemptInvariant(attempt: UnvalidatedAttempt): asserts attempt is Attempt {
+  attemptId(attempt.id);
+  workflowId(attempt.workflowId);
+  isoTimestamp(attempt.startedAt);
+  if (attempt.contextManifestId !== undefined) {
+    contextManifestId(attempt.contextManifestId);
+  }
+  if (attempt.workerSessionRef !== undefined) {
+    workerSessionId(attempt.workerSessionRef);
+  }
+  if (attempt.endedAt !== undefined) {
+    isoTimestamp(attempt.endedAt);
+  }
+  if (!Object.values(WorkflowPhase).some((phase) => phase === attempt.phase)) {
+    throw new DomainInvariantError('Attempt phase is unknown');
+  }
+  if (!Object.values(AttemptStatus).some((status) => status === attempt.status)) {
+    throw new DomainInvariantError('Attempt status is unknown');
+  }
+  if (
+    !Number.isSafeInteger(attempt.sequence) ||
+    attempt.sequence < 1 ||
+    attempt.phase === WorkflowPhase.CLOSEOUT ||
+    attempt.capabilityGrant.phase !== attempt.phase ||
+    !isCanonicalCapabilityGrant(attempt.capabilityGrant)
+  ) {
+    throw new DomainInvariantError('Attempt identity or capability invariant is invalid');
+  }
+
+  switch (attempt.status) {
+    case AttemptStatus.RUNNING:
+      if (
+        Object.hasOwn(attempt, 'failureClass') ||
+        Object.hasOwn(attempt, 'terminationReason') ||
+        Object.hasOwn(attempt, 'endedAt')
+      ) {
+        throw new DomainInvariantError('RUNNING Attempt contains terminal lifecycle fields');
+      }
+      return;
+    case AttemptStatus.RESULT_RECORDED:
+    case AttemptStatus.INTERRUPTED:
+      if (
+        Object.hasOwn(attempt, 'failureClass') ||
+        !Object.hasOwn(attempt, 'terminationReason') ||
+        attempt.terminationReason === undefined ||
+        attempt.terminationReason.trim().length === 0 ||
+        !Object.hasOwn(attempt, 'endedAt') ||
+        attempt.endedAt === undefined ||
+        attempt.endedAt < attempt.startedAt
+      ) {
+        throw new DomainInvariantError('Terminal Attempt lifecycle fields are inconsistent');
+      }
+      return;
+    case AttemptStatus.FAILED:
+      if (
+        !Object.hasOwn(attempt, 'failureClass') ||
+        !isAttemptFailureClass(attempt.failureClass) ||
+        !Object.hasOwn(attempt, 'terminationReason') ||
+        attempt.terminationReason === undefined ||
+        attempt.terminationReason.trim().length === 0 ||
+        !Object.hasOwn(attempt, 'endedAt') ||
+        attempt.endedAt === undefined ||
+        attempt.endedAt < attempt.startedAt
+      ) {
+        throw new DomainInvariantError('FAILED Attempt lifecycle fields are inconsistent');
+      }
+      return;
+    default:
+      throw new DomainInvariantError('Attempt status is unknown');
+  }
+}
+
+interface AttemptFinishedPayloadView {
+  readonly toStatus: AttemptStatusType;
+  readonly resultingRunStatus: RunStatusType;
+  readonly failureClass?: AttemptFailureClass;
+  readonly terminationReason: string;
+}
+
+function hasInvalidAttemptFinishedPayload(event: AttemptFinishedPayloadView): boolean {
+  if (event.terminationReason.trim().length === 0) {
+    return true;
+  }
+  switch (event.toStatus) {
+    case AttemptStatus.RESULT_RECORDED:
+      return event.resultingRunStatus !== RunStatus.READY || Object.hasOwn(event, 'failureClass');
+    case AttemptStatus.FAILED:
+      return (
+        event.failureClass === undefined ||
+        event.resultingRunStatus !== resultingStatusForFailure(event.failureClass)
+      );
+    case AttemptStatus.INTERRUPTED:
+      return (
+        Object.hasOwn(event, 'failureClass') ||
+        (event.resultingRunStatus !== RunStatus.READY &&
+          event.resultingRunStatus !== RunStatus.BLOCKED)
+      );
+    case AttemptStatus.RUNNING:
+      return true;
+  }
+}
+
 function validateIdentityAndVersion(
   workflow: WorkflowInstance,
   command: AttemptCommand,
@@ -222,9 +382,19 @@ export function decideAttempt(
   currentAttempt: Attempt | undefined,
   command: AttemptCommand,
 ): AttemptDecision {
+  assertWorkflowInvariant(workflow);
+  if (currentAttempt !== undefined) {
+    assertAttemptInvariant(currentAttempt);
+  }
   const identityRejection = validateIdentityAndVersion(workflow, command);
   if (identityRejection !== undefined) {
     return identityRejection;
+  }
+  if (command.occurredAt < workflow.updatedAt) {
+    return reject(
+      AttemptRejectionCode.INVALID_TIMESTAMP_ORDER,
+      'Attempt command time cannot precede current Workflow state',
+    );
   }
 
   const toWorkflowVersion = nextWorkflowVersion(workflow.version);
@@ -245,7 +415,7 @@ export function decideAttempt(
       return reject(AttemptRejectionCode.INVALID_SEQUENCE, 'Attempt sequence must be positive');
     }
 
-    const attempt: Attempt = Object.freeze({
+    const attempt: RunningAttempt = Object.freeze({
       id: command.attemptId,
       workflowId: workflow.id,
       phase: workflow.phase,
@@ -315,30 +485,6 @@ export function decideAttempt(
     return reject(AttemptRejectionCode.EMPTY_REASON, 'Attempt terminal reason must not be empty');
   }
 
-  let toStatus: AttemptFinished['toStatus'];
-  let resultingRunStatus: AttemptFinished['resultingRunStatus'];
-  let failureClass: AttemptFailureClass | undefined;
-  let terminationReason: string;
-
-  switch (command.type) {
-    case 'RECORD_ATTEMPT_RESULT':
-      toStatus = AttemptStatus.RESULT_RECORDED;
-      resultingRunStatus = RunStatus.READY;
-      terminationReason = reason;
-      break;
-    case 'RECORD_ATTEMPT_FAILURE':
-      toStatus = AttemptStatus.FAILED;
-      resultingRunStatus = resultingStatusForFailure(command.failureClass);
-      failureClass = command.failureClass;
-      terminationReason = reason;
-      break;
-    case 'INTERRUPT_ATTEMPT':
-      toStatus = AttemptStatus.INTERRUPTED;
-      resultingRunStatus = command.resultingRunStatus;
-      terminationReason = `${command.interruptionReason}:${reason}`;
-      break;
-  }
-
   const eventBase = {
     type: 'ATTEMPT_FINISHED' as const,
     commandId: command.commandId,
@@ -348,14 +494,35 @@ export function decideAttempt(
     fromWorkflowVersion: workflow.version,
     toWorkflowVersion,
     fromStatus: AttemptStatus.RUNNING,
-    toStatus,
-    resultingRunStatus,
-    terminationReason,
+    terminationReason: reason,
     occurredAt: command.occurredAt,
   };
-  const event: AttemptFinished = Object.freeze(
-    failureClass === undefined ? eventBase : { ...eventBase, failureClass },
-  );
+  let event: AttemptFinished;
+  switch (command.type) {
+    case 'RECORD_ATTEMPT_RESULT':
+      event = Object.freeze({
+        ...eventBase,
+        toStatus: AttemptStatus.RESULT_RECORDED,
+        resultingRunStatus: RunStatus.READY,
+      });
+      break;
+    case 'RECORD_ATTEMPT_FAILURE':
+      event = Object.freeze({
+        ...eventBase,
+        toStatus: AttemptStatus.FAILED,
+        resultingRunStatus: resultingStatusForFailure(command.failureClass),
+        failureClass: command.failureClass,
+      });
+      break;
+    case 'INTERRUPT_ATTEMPT':
+      event = Object.freeze({
+        ...eventBase,
+        toStatus: AttemptStatus.INTERRUPTED,
+        resultingRunStatus: command.resultingRunStatus,
+        terminationReason: `${command.interruptionReason}:${reason}`,
+      });
+      break;
+  }
   return { accepted: true, events: [event] };
 }
 
@@ -367,7 +534,7 @@ function evolveWorkflowForAttempt(
   activeAttemptId: AttemptId | undefined,
   suspendedReason: string | undefined,
 ): WorkflowInstance {
-  return Object.freeze({
+  const next = Object.freeze({
     id: workflow.id,
     goalId: workflow.goalId,
     goalRevision: workflow.goalRevision,
@@ -382,6 +549,8 @@ function evolveWorkflowForAttempt(
     createdAt: workflow.createdAt,
     updatedAt,
   });
+  assertWorkflowInvariant(next);
+  return next;
 }
 
 export interface AppliedAttemptEvent {
@@ -394,6 +563,7 @@ export function applyAttemptEvent(
   currentAttempt: Attempt | undefined,
   event: AttemptEvent,
 ): AppliedAttemptEvent {
+  assertWorkflowInvariant(workflow);
   if (
     event.workflowId !== workflow.id ||
     event.fromWorkflowVersion !== workflow.version ||
@@ -401,15 +571,18 @@ export function applyAttemptEvent(
   ) {
     throw new DomainInvariantError('Attempt event does not match Workflow identity or version');
   }
+  if (event.occurredAt < workflow.updatedAt) {
+    throw new DomainInvariantError('Attempt event time cannot precede current Workflow state');
+  }
 
   if (event.type === 'ATTEMPT_STARTED') {
+    assertAttemptInvariant(event.attempt);
     if (
       currentAttempt !== undefined ||
       workflow.activeAttemptId !== undefined ||
       workflow.runStatus !== RunStatus.READY ||
       event.attempt.workflowId !== workflow.id ||
       event.attempt.phase !== workflow.phase ||
-      event.attempt.status !== AttemptStatus.RUNNING ||
       event.attempt.startedAt !== event.occurredAt ||
       !Number.isSafeInteger(event.attempt.sequence) ||
       event.attempt.sequence < 1 ||
@@ -436,6 +609,7 @@ export function applyAttemptEvent(
   if (currentAttempt === undefined) {
     throw new DomainInvariantError('Attempt finish event has no current Attempt');
   }
+  assertAttemptInvariant(currentAttempt);
   if (
     currentAttempt.id !== event.attemptId ||
     currentAttempt.workflowId !== workflow.id ||
@@ -447,28 +621,39 @@ export function applyAttemptEvent(
   ) {
     throw new DomainInvariantError('Attempt finish event does not match active RUNNING Attempt');
   }
-  if (
-    (event.toStatus === AttemptStatus.RESULT_RECORDED &&
-      (event.resultingRunStatus !== RunStatus.READY || event.failureClass !== undefined)) ||
-    (event.toStatus === AttemptStatus.FAILED &&
-      (event.failureClass === undefined ||
-        event.resultingRunStatus !== resultingStatusForFailure(event.failureClass))) ||
-    (event.toStatus === AttemptStatus.INTERRUPTED &&
-      (event.failureClass !== undefined ||
-        (event.resultingRunStatus !== RunStatus.READY &&
-          event.resultingRunStatus !== RunStatus.BLOCKED))) ||
-    event.terminationReason.trim().length === 0
-  ) {
+  if (hasInvalidAttemptFinishedPayload(event)) {
     throw new DomainInvariantError('Attempt finish event contains an invalid terminal payload');
   }
 
-  const attempt: Attempt = Object.freeze({
-    ...currentAttempt,
-    status: event.toStatus,
-    ...(event.failureClass === undefined ? {} : { failureClass: event.failureClass }),
-    terminationReason: event.terminationReason,
-    endedAt: event.occurredAt,
-  });
+  let attempt: TerminalAttempt;
+  switch (event.toStatus) {
+    case AttemptStatus.RESULT_RECORDED:
+      attempt = Object.freeze({
+        ...currentAttempt,
+        status: event.toStatus,
+        terminationReason: event.terminationReason,
+        endedAt: event.occurredAt,
+      });
+      break;
+    case AttemptStatus.FAILED:
+      attempt = Object.freeze({
+        ...currentAttempt,
+        status: event.toStatus,
+        failureClass: event.failureClass,
+        terminationReason: event.terminationReason,
+        endedAt: event.occurredAt,
+      });
+      break;
+    case AttemptStatus.INTERRUPTED:
+      attempt = Object.freeze({
+        ...currentAttempt,
+        status: event.toStatus,
+        terminationReason: event.terminationReason,
+        endedAt: event.occurredAt,
+      });
+      break;
+  }
+  assertAttemptInvariant(attempt);
   const suspendedReason =
     event.resultingRunStatus === RunStatus.BLOCKED || event.resultingRunStatus === RunStatus.FAILED
       ? event.terminationReason
@@ -501,6 +686,7 @@ export function applyWorkflowCancellationToAttempt(
   if (currentAttempt === undefined) {
     throw new DomainInvariantError('Cancellation has no active Attempt to interrupt');
   }
+  assertAttemptInvariant(currentAttempt);
   if (
     currentAttempt.id !== event.interruptedAttemptId ||
     currentAttempt.workflowId !== workflow.id ||
@@ -511,13 +697,16 @@ export function applyWorkflowCancellationToAttempt(
     throw new DomainInvariantError('Cancellation does not match the active RUNNING Attempt');
   }
 
+  const interruptedAttempt: InterruptedAttempt = Object.freeze({
+    ...currentAttempt,
+    status: AttemptStatus.INTERRUPTED,
+    terminationReason: `${AttemptInterruptionReason.WORKFLOW_CANCELLED}:${event.reason}`,
+    endedAt: event.occurredAt,
+  });
+  assertAttemptInvariant(interruptedAttempt);
+
   return Object.freeze({
     workflow: nextWorkflow,
-    attempt: Object.freeze({
-      ...currentAttempt,
-      status: AttemptStatus.INTERRUPTED,
-      terminationReason: `${AttemptInterruptionReason.WORKFLOW_CANCELLED}:${event.reason}`,
-      endedAt: event.occurredAt,
-    }),
+    attempt: interruptedAttempt,
   });
 }

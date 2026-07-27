@@ -1,12 +1,16 @@
-import type {
-  AttemptId,
-  CandidateGenerationId,
-  GoalId,
-  GoalRevision,
-  IsoTimestamp,
-  SuccessCriterionId,
-  WorkflowId,
-  WorkflowVersion,
+import {
+  goalId,
+  goalRevision,
+  isoTimestamp,
+  successCriterionId,
+  type AttemptId,
+  type CandidateGenerationId,
+  type GoalId,
+  type GoalRevision,
+  type IsoTimestamp,
+  type SuccessCriterionId,
+  type WorkflowId,
+  type WorkflowVersion,
 } from './identifiers.js';
 
 export const GoalStatus = {
@@ -41,6 +45,23 @@ export const RunStatus = {
   CLOSED: 'CLOSED',
 } as const;
 export type RunStatus = (typeof RunStatus)[keyof typeof RunStatus];
+
+export function deriveGoalStatus(runStatus: RunStatus): GoalStatus {
+  switch (runStatus) {
+    case RunStatus.READY:
+    case RunStatus.RUNNING:
+      return GoalStatus.ACTIVE;
+    case RunStatus.WAITING_FOR_INPUT:
+      return GoalStatus.WAITING_FOR_INPUT;
+    case RunStatus.BLOCKED:
+    case RunStatus.FAILED:
+      return GoalStatus.BLOCKED;
+    case RunStatus.CANCELLED:
+      return GoalStatus.CANCELLED;
+    case RunStatus.CLOSED:
+      return GoalStatus.CLOSED;
+  }
+}
 
 export const AttemptStatus = {
   RUNNING: 'RUNNING',
@@ -108,6 +129,50 @@ export interface CreateGoalInput {
   readonly createdAt: IsoTimestamp;
 }
 
+export function assertGoalInvariant(goal: Goal): void {
+  goalId(goal.id);
+  goalRevision(goal.revision);
+  isoTimestamp(goal.createdAt);
+  isoTimestamp(goal.updatedAt);
+
+  if (!Object.values(GoalStatus).some((status) => status === goal.status)) {
+    throw new TypeError('Goal status is unknown');
+  }
+  if (goal.objective.trim().length === 0) {
+    throw new TypeError('Goal objective must not be empty');
+  }
+  if (goal.scope.projectPath.trim().length === 0) {
+    throw new TypeError('Goal projectPath must not be empty');
+  }
+  if (goal.successCriteria.length === 0) {
+    throw new TypeError('Goal must contain at least one success criterion');
+  }
+
+  const criterionIds = new Set<string>();
+  for (const criterion of goal.successCriteria) {
+    successCriterionId(criterion.id);
+    if (criterionIds.has(criterion.id)) {
+      throw new TypeError('Goal success criterion IDs must be unique');
+    }
+    criterionIds.add(criterion.id);
+    if (criterion.description.trim().length === 0) {
+      throw new TypeError('Success criterion description must not be empty');
+    }
+    if (typeof criterion.required !== 'boolean') {
+      throw new TypeError('Success criterion required flag must be boolean');
+    }
+  }
+  if (
+    goal.scope.allowedPaths.some((path) => path.trim().length === 0) ||
+    goal.nonGoals.some((nonGoal) => nonGoal.trim().length === 0)
+  ) {
+    throw new TypeError('Goal path and non-goal entries must not be empty');
+  }
+  if (goal.updatedAt < goal.createdAt) {
+    throw new TypeError('Goal updatedAt cannot precede createdAt');
+  }
+}
+
 export function createGoal(input: CreateGoalInput): Goal {
   const objective = input.objective.trim();
   const projectPath = input.scope.projectPath.trim();
@@ -125,11 +190,19 @@ export function createGoal(input: CreateGoalInput): Goal {
     throw new TypeError('Success criterion description must not be empty');
   }
 
-  return Object.freeze({
+  const goal = Object.freeze({
     id: input.id,
     revision: input.revision,
     objective,
-    successCriteria: Object.freeze([...input.successCriteria]),
+    successCriteria: Object.freeze(
+      input.successCriteria.map((criterion) =>
+        Object.freeze({
+          id: criterion.id,
+          description: criterion.description,
+          required: criterion.required,
+        }),
+      ),
+    ),
     scope: Object.freeze({
       projectPath,
       allowedPaths: Object.freeze([...input.scope.allowedPaths]),
@@ -139,4 +212,6 @@ export function createGoal(input: CreateGoalInput): Goal {
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
   });
+  assertGoalInvariant(goal);
+  return goal;
 }

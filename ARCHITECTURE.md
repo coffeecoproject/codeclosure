@@ -130,7 +130,11 @@ requires a separate gateway and policy.
 ### Goal Manager
 
 Owns Goal creation, revision, activation, cancellation, and successful closure
-identity. It never stores the only copy of Goal state in a worker prompt.
+identity. Goal intent and revision are authoritative here. In M1 the lifecycle
+status exposed on Goal is a denormalized projection of its unique Workflow run
+status, synchronized inside the Workflow transaction rather than changed by a
+second lifecycle writer. It never stores the only copy of Goal state in a
+worker prompt.
 
 ### Fact and Decision Store
 
@@ -142,13 +146,21 @@ full Fact Graph discovery and traversal is a later milestone.
 
 The sole authoritative workflow-state writer. It:
 
-- validates commands against the current state version;
+- resolves the owning Goal/Workflow and validates expected freshness before
+  child lookup, guard evaluation, identifier allocation, or domain planning;
 - enforces the transition matrix;
 - derives phase capabilities;
 - owns Attempt lifecycle as part of the versioned Workflow aggregate in M1;
 - persists state plus audit event atomically;
 - suspends for typed blockers and decisions;
 - reconciles after interruption.
+
+The M1 package root exposes a narrow Goal application capability for public
+adapters. That capability contains only public Goal commands; the internal
+Workflow control kernel and its Attempt/phase commands are not package-root
+exports. The trusted composition root may construct the store and kernel, but
+CLI handlers, worker adapters, and other callers receive neither the control
+store mutation port nor the internal kernel object.
 
 ### Context Compiler
 
@@ -237,11 +249,51 @@ of truth; the event log provides traceability, replay checks, and recovery
 diagnostics. Every aggregate carries a monotonically increasing version for
 optimistic concurrency control.
 
+Versions provide strict mutation order. Control timestamps preserve causal
+order but are not a concurrency mechanism: the Runtime validates its injected
+clock and clamps a valid rollback to the current aggregate timestamp, while
+domain event application, the Store, and SQLite reject a bypassed older event.
+Equal timestamps are valid because versions and audit sequence numbers remain
+strict. See [ADR 0012](docs/adr/0012-causal-control-timestamps.md).
+
+Expected version and command-identity conflicts are explicit store-port result
+variants. Adapter-specific exception class names are not part of the Runtime
+contract. On a version conflict, the Runtime reloads and reevaluates an admitted
+command before deciding whether to persist a rejection.
+
+Every processed-command row stores a schema-versioned outcome envelope authored
+by the Store inside the command transaction. Envelope version 3 distinguishes
+`APPLIED` from `REJECTED` and binds the `CommandId`, exact aggregate target,
+owning `GoalId`, owning `WorkflowId`, observed Workflow version/phase/run
+status, and public command output. An applied output is derived from and must
+exactly match the resulting Workflow; a rejected output is derived from a typed
+deterministic-command error and the observed Workflow. Infrastructure and
+replay-integrity errors cannot enter this rejection history. Commit ports do
+not accept caller-authored outcome envelopes.
+
+Replay validates the canonical input digest and all authority bindings before
+returning the output. Both Goal- and Workflow-targeted replay reload the real
+owning records; target-string equality is not existence proof. Migration 0005
+fails closed for outcomes without identity binding. Migration 0006 likewise
+fails closed for existing version 2 outcomes because their historical
+transaction semantics cannot be reconstructed safely.
+
 Authority-bearing JSON identities use the named, schema-versioned canonical
 projections in
 [ADR 0006](docs/adr/0006-canonical-serialization-and-digest-profiles.md).
 Generated record IDs and timestamps are not silently mixed into semantic replay
 identity.
+
+Authority validation is closed across Runtime and persistence. TypeScript
+brands and port annotations are not runtime proof. Each authority-bearing
+record passes one owning codec when it enters a control boundary, before a
+Store writes it, and when persistence materializes it again. A Store may return
+`APPLIED` only for records that remain decodable immediately and after reopen.
+Normal command admission and replay share one Goal/Workflow authority resolver;
+they do not maintain different relationship rules. SQLite mirrors critical
+codec rules as defense in depth, and strengthening migrations fail closed for
+retained rows that cannot prove the new contract. See
+[ADR 0013](docs/adr/0013-authority-boundary-validation-closure.md).
 
 ## Capability Enforcement
 
@@ -264,6 +316,7 @@ execution details:
 
 | Codex concept | CodeClosure interpretation |
 | --- | --- |
+| thread-scoped goal or plan | Disposable execution guidance; never a CodeClosure Goal or transition authority |
 | Thread | Disposable worker session linked to a Goal/phase attempt |
 | Turn | One bounded worker invocation |
 | Item | Streamed observation or proposed side effect |
@@ -275,6 +328,11 @@ execution details:
 Codex compaction replaces model history with a compacted representation and
 re-injects selected initial context. Therefore no CodeClosure authority may
 exist only inside Codex history.
+
+Application `CommandId` values and worker-delivery `WorkerEventId` values are
+also separate authority domains. The Codex adapter may report a worker event;
+it cannot choose or impersonate the runtime command that admits that event.
+See [ADR 0009](docs/adr/0009-command-idempotency-and-worker-boundary.md).
 
 ## Dependency Direction
 
@@ -326,6 +384,8 @@ Failures are classified rather than collapsed into a generic retry:
 
 - validation failure;
 - illegal or stale transition;
+- guard or policy evaluation failure;
+- control-store persistence failure;
 - worker protocol failure;
 - worker process failure;
 - candidate integrity failure;
@@ -335,6 +395,13 @@ Failures are classified rather than collapsed into a generic retry:
 - missing business or external decision;
 - retry exhaustion;
 - runtime internal error.
+
+Only failures raised while invoking the control-store port are persistence
+failures. Evaluator exceptions and malformed evaluator returns are validated
+inside one strict runtime boundary and remain evaluation failures. Runtime
+computation/invariant failures retain their own error category, and none of
+these infrastructure failures is recorded as a deterministic domain-command
+outcome.
 
 On restart, the runtime:
 

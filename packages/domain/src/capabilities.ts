@@ -61,6 +61,10 @@ export interface CapabilityGrant {
   readonly allowedActions: readonly PhaseAction[];
 }
 
+export type UnvalidatedCapabilityGrant = Omit<CapabilityGrant, 'projectRead'> & {
+  readonly projectRead: unknown;
+};
+
 function grant(
   phase: WorkflowPhaseType,
   candidateAccess: CandidateAccess,
@@ -178,7 +182,14 @@ function sameActions(left: readonly PhaseAction[], right: readonly PhaseAction[]
   return left.length === right.length && left.every((action, index) => action === right[index]);
 }
 
-export function isCanonicalCapabilityGrant(grantToCheck: CapabilityGrant): boolean {
+export function isCanonicalCapabilityGrant(grantToCheck: UnvalidatedCapabilityGrant): boolean {
+  if (
+    grantToCheck.projectRead !== true ||
+    !Object.values(WorkflowPhase).some((phase) => phase === grantToCheck.phase) ||
+    !Array.isArray(grantToCheck.allowedActions)
+  ) {
+    return false;
+  }
   const expected = deriveCapabilityGrant(grantToCheck.phase);
   return (
     grantToCheck.candidateAccess === expected.candidateAccess &&

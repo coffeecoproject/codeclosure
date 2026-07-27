@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 
-import type { IsoTimestamp } from '@codeclosure/domain';
+import { isoTimestamp, type IsoTimestamp } from '@codeclosure/domain';
 
 import { MigrationIntegrityError } from './errors.js';
 
@@ -29,7 +29,7 @@ export interface AppliedMigration {
   readonly version: number;
   readonly name: string;
   readonly checksum: string;
-  readonly appliedAt: string;
+  readonly appliedAt: IsoTimestamp;
 }
 
 export function defaultMigrationsDirectory(): string {
@@ -103,7 +103,11 @@ export function applyMigrations(
     const storedRows = database
       .prepare('SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version')
       .all()
-      .map((row) => migrationRowSchema.parse(row));
+      .map((row) => {
+        const parsed = migrationRowSchema.parse(row);
+        isoTimestamp(parsed.applied_at);
+        return parsed;
+      });
     const filesByVersion = new Map(files.map((file) => [file.version, file]));
 
     for (const stored of storedRows) {
@@ -127,7 +131,14 @@ export function applyMigrations(
         continue;
       }
       database.exec(file.sql);
-      insert.run(file.version, file.name, file.checksum, now());
+      insert.run(file.version, file.name, file.checksum, isoTimestamp(now()));
+    }
+
+    const foreignKeyViolations = database.prepare('PRAGMA foreign_key_check').all();
+    if (foreignKeyViolations.length > 0) {
+      throw new MigrationIntegrityError(
+        `SQLite foreign-key integrity check found ${foreignKeyViolations.length} violation(s)`,
+      );
     }
 
     return database
@@ -139,7 +150,7 @@ export function applyMigrations(
           version: parsed.version,
           name: parsed.name,
           checksum: parsed.checksum,
-          appliedAt: parsed.applied_at,
+          appliedAt: isoTimestamp(parsed.applied_at),
         });
       });
   });

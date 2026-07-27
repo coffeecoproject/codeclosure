@@ -13,6 +13,12 @@ supersedes it.
 | [0005](0005-isolated-candidate-generations.md) | Execute workers in isolated candidate generations | Accepted |
 | [0006](0006-canonical-serialization-and-digest-profiles.md) | Use versioned canonical projections for authority-bearing digests | Accepted |
 | [0007](0007-workflow-owned-attempt-lifecycle.md) | Own the M1 Attempt lifecycle inside the versioned Workflow aggregate | Accepted |
+| [0008](0008-goal-command-and-lifecycle-boundary.md) | Expose Goal commands while deriving Goal lifecycle from the authoritative Workflow | Accepted |
+| [0009](0009-command-idempotency-and-worker-boundary.md) | Separate application-command idempotency from untrusted worker delivery and dispatch | Accepted |
+| [0010](0010-command-admission-and-outcome-binding.md) | Centralize command freshness and bind persisted outcomes to their authority target | Accepted |
+| [0011](0011-store-authored-command-outcome-semantics.md) | Author command outcomes in the Store and bind them to their transaction semantics | Accepted |
+| [0012](0012-causal-control-timestamps.md) | Preserve causal ordering across Runtime, domain, Store, audit, and SQLite timestamps | Accepted |
+| [0013](0013-authority-boundary-validation-closure.md) | Close authority validation across Runtime, Store, replay, and persistence | Accepted |
 
 ## ADR lifecycle
 

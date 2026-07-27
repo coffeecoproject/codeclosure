@@ -21,6 +21,20 @@ an implemented runtime. M1 implements only the subset named in
 
 The structures below define semantic contracts, not a frozen SQL schema.
 
+## Authority Boundary Validation
+
+TypeScript types and brands express domain intent but do not validate runtime
+values. Every authority-bearing record has one owning codec that materializes
+branded scalars, rejects closed-record shape drift, checks state-specific
+fields, and invokes the semantic invariant. Runtime ports, Store writes, and
+persistence reads use that same record contract. Adapter row schemas translate
+storage columns; they do not define a second domain model.
+
+A Store result of `APPLIED` guarantees that resulting state, audit records, and
+the processed-command outcome decode immediately and after reopen. Normal
+command admission and replay use the same Goal/Workflow relationship rules.
+See [ADR 0013](adr/0013-authority-boundary-validation-closure.md).
+
 ## Typed Identifiers
 
 At minimum, M1 uses distinct opaque identifiers for:
@@ -36,6 +50,8 @@ At minimum, M1 uses distinct opaque identifiers for:
 - `AcceptanceDecisionId`
 - `PolicyBundleId`
 - `AuditEventId`
+- `CommandId`
+- `WorkerEventId`
 - `WorkerSessionId`
 
 Implementations must not interchange these as untyped strings inside the
@@ -69,6 +85,15 @@ Goal
 Changing objective, success criteria, or scope creates a new Goal revision and
 invalidates dependent plans, contexts, candidates, evidence, and acceptance as
 required by policy.
+
+In M1, `Goal.status` is a user-facing projection of the Goal's unique Workflow
+run status. Goal intent and revision remain owned by the Goal Manager; only the
+Workflow Runtime changes operational lifecycle state, and persistence
+synchronizes the Goal projection in that same transaction. Direct independent
+status changes are invalid. `READY` and `RUNNING` map to `ACTIVE`,
+`WAITING_FOR_INPUT` maps directly, `BLOCKED` and `FAILED` map to `BLOCKED`, and
+the two terminal statuses map directly. Projection changes do not increment
+the Goal revision. See [ADR 0008](adr/0008-goal-command-and-lifecycle-boundary.md).
 
 ## Success Criterion
 
@@ -125,6 +150,13 @@ WorkflowInstance
 Separating phase from run status avoids inventing phases such as
 `DISCOVERY_BLOCKED` and keeps resumption explicit.
 
+One domain invariant validator owns the complete Workflow snapshot rule. It is
+used for current and resulting state and by persistence decoding. `CANCELLED`
+and `CLOSED` Workflows are immutable at event application as well as command
+decision. `updatedAt` never precedes `createdAt`, and a Workflow event never
+precedes the current `updatedAt`. Runtime clock rollback and lower-boundary
+event handling follow [ADR 0012](adr/0012-causal-control-timestamps.md).
+
 ## Attempt
 
 An Attempt records one bounded effort to advance the workflow.
@@ -133,7 +165,7 @@ versioned aggregate. `WorkflowInstance.version` serializes phase, run-status,
 active-Attempt, and Attempt-lifecycle mutations.
 
 ```text
-Attempt
+AttemptBase
   id
   workflowId
   phase
@@ -142,10 +174,26 @@ Attempt
   capabilityGrant
   workerSessionRef?
   status
-  failureClass?
-  terminationReason?
   startedAt
-  endedAt?
+
+RunningAttempt extends AttemptBase
+  status = RUNNING
+
+ResultRecordedAttempt extends AttemptBase
+  status = RESULT_RECORDED
+  terminationReason
+  endedAt
+
+FailedAttempt extends AttemptBase
+  status = FAILED
+  failureClass
+  terminationReason
+  endedAt
+
+InterruptedAttempt extends AttemptBase
+  status = INTERRUPTED
+  terminationReason
+  endedAt
 ```
 
 Worker sessions are references on attempts. Losing or compacting a worker
@@ -172,7 +220,18 @@ Commands that begin, finish, fail, or interrupt an Attempt MUST carry the
 expected Workflow version. A successful command updates the Attempt, Workflow
 version/current state, audit events, and idempotent command outcome in one
 transaction. Only the active `RUNNING` Attempt may change lifecycle state, and
-it may enter a terminal Attempt status only once.
+it may enter a terminal Attempt status only once. Its mutation timestamp cannot
+precede the owning Workflow state, and a terminal timestamp cannot precede the
+Attempt start.
+
+The Attempt shape is a discriminated state union. A `RUNNING` Attempt cannot
+carry terminal fields, every terminal Attempt has `terminationReason` and
+`endedAt`, and only a `FAILED` Attempt has `failureClass`. Public constructors,
+reducers, and persistence decoders MUST preserve those state-specific shapes.
+One domain invariant validator owns the complete snapshot rule and is called
+for both current and resulting Attempt state. Persistence decoding delegates to
+that validator; SQLite mirrors the same lifecycle matrix so an invalid row
+cannot be written and discovered only on a later read.
 
 `RESULT_RECORDED` is deliberately not named `SUCCEEDED`: a worker operation
 ending normally or returning a Completion Request grants no acceptance or
@@ -180,6 +239,34 @@ closeout authority.
 
 See [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md) for the aggregate
 boundary and concurrency rationale.
+
+## Command and Worker Event Identity
+
+`CommandId` identifies a schema-validated application operation submitted to
+the control runtime. Its canonical input digest and outcome, including a
+deterministic domain rejection, are persisted for replay.
+
+Persistence authors the public command output inside the command transaction
+and wraps it in a schema-versioned outcome envelope. Envelope version 3 is a
+discriminated `APPLIED`/`REJECTED` union containing the exact aggregate target,
+owning `GoalId`, owning `WorkflowId`, and observed Workflow snapshot. An
+applied output must equal the resulting Workflow state; a rejected output must
+be failed, use a deterministic admitted-command rejection code, and bind the
+version against which it was decided. Infrastructure errors are not replayable
+domain outcomes. A
+processed-command row and a shape-valid output are insufficient unless all
+command, target, entity-existence, relationship, disposition, and snapshot
+bindings agree. Legacy outcomes without enough proof fail closed rather than
+acquiring inferred semantics.
+
+`WorkerEventId` identifies delivery of untrusted output from a worker adapter.
+It is validated and deduplicated separately and cannot be converted into, or
+chosen as, an application `CommandId`. A stale or mismatched worker event
+creates no authoritative transition or application-command outcome. See
+[ADR 0009](adr/0009-command-idempotency-and-worker-boundary.md).
+Admission ordering and stored-outcome binding are specified by
+[ADR 0010](adr/0010-command-admission-and-outcome-binding.md) and
+[ADR 0011](adr/0011-store-authored-command-outcome-semantics.md).
 
 ## Transition Request and Transition Record
 
@@ -189,7 +276,6 @@ TransitionRequest
   expectedVersion
   requestedPhase
   reason
-  supportingRefs[]
   actorType
 
 TransitionRecord
@@ -203,6 +289,9 @@ TransitionRecord
 ```
 
 A request may be rejected. Only a persisted `TransitionRecord` changes state.
+Supporting references and guard outcomes are produced by Runtime-owned
+evaluators and appear on the record; they are not assertions supplied by the
+transition requester.
 
 ## Worker Result
 
@@ -382,9 +471,17 @@ CandidateGeneration
   baseDigest
   frozenDigest?
   invalidationReason?
+  version
   createdAt
+  updatedAt
   frozenAt?
 ```
+
+The generation snapshot is a discriminated state union. `MUTABLE` and
+`FREEZING` do not carry frozen identity. `FROZEN`, `REJECTED`, and `ACCEPTED`
+carry both `frozenDigest` and `frozenAt`. `INVALIDATED` always carries a
+non-empty invalidation reason and retains a previously established frozen
+identity only as a complete digest/time pair.
 
 `CandidateGenerationState`:
 
@@ -396,7 +493,9 @@ CandidateGeneration
 - `ACCEPTED`
 
 Only one generation for a workflow may be current. A repair creates a new
-generation.
+generation. Candidate commands and events cannot precede the generation's
+current `updatedAt`; `updatedAt` cannot precede `createdAt`, and `frozenAt`,
+when present, remains inside that lifecycle interval.
 
 ## Verification Obligation
 
@@ -525,7 +624,8 @@ describes.
 
 | Record | Proposal source | Validation owner | Mutation owner |
 | --- | --- | --- | --- |
-| Goal | user / CLI | Goal Manager | Goal Manager through runtime transaction |
+| Goal intent and revision | user / CLI | Goal Manager | Goal Manager through runtime transaction |
+| Goal lifecycle projection | Workflow run status | Workflow Runtime | Persistence synchronization inside the Workflow transaction |
 | Fact | user, project, runner, worker | Fact policy | Fact Store service |
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |

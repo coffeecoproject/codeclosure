@@ -17,6 +17,7 @@ export type AuditEventId = Brand<string, 'AuditEventId'>;
 export type WorkerSessionId = Brand<string, 'WorkerSessionId'>;
 export type ContextManifestId = Brand<string, 'ContextManifestId'>;
 export type CommandId = Brand<string, 'CommandId'>;
+export type WorkerEventId = Brand<string, 'WorkerEventId'>;
 
 export type GoalRevision = Brand<number, 'GoalRevision'>;
 export type WorkflowVersion = Brand<number, 'WorkflowVersion'>;
@@ -79,6 +80,8 @@ export const contextManifestId = (value: string): ContextManifestId =>
   parseIdentifier('context', value, 'ContextManifestId');
 export const commandId = (value: string): CommandId =>
   parseIdentifier('command', value, 'CommandId');
+export const workerEventId = (value: string): WorkerEventId =>
+  parseIdentifier('worker-event', value, 'WorkerEventId');
 
 export const goalRevision = (value: number): GoalRevision =>
   parsePositiveInteger(value, 'GoalRevision');
@@ -98,6 +101,13 @@ export function isoTimestamp(value: string): IsoTimestamp {
   }
 
   return value as IsoTimestamp;
+}
+
+export function latestIsoTimestamp(
+  first: IsoTimestamp,
+  ...remaining: readonly IsoTimestamp[]
+): IsoTimestamp {
+  return remaining.reduce((latest, timestamp) => (timestamp > latest ? timestamp : latest), first);
 }
 
 export function sha256Digest(value: string): Sha256Digest {

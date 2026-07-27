@@ -11,6 +11,7 @@ import {
   WorkflowPhase,
   WorkflowRejectionCode,
   applyWorkflowEvent,
+  assertWorkflowInvariant,
   candidateGenerationId,
   commandId,
   createWorkflow,
@@ -31,6 +32,8 @@ import {
 } from '@codeclosure/domain';
 
 const occurredAt = isoTimestamp('2026-07-27T00:00:00.000Z');
+const laterAt = isoTimestamp('2026-07-27T00:00:00.001Z');
+const beforeCreation = isoTimestamp('2026-07-26T23:59:59.999Z');
 const firstGenerationId = candidateGenerationId('generation_first');
 const secondGenerationId = candidateGenerationId('generation_second');
 
@@ -296,6 +299,59 @@ void test('[I-010] cancellation remains distinct from successful closeout', () =
   });
   assert.equal(followUp.accepted, false);
   assert.equal(followUp.rejection.code, WorkflowRejectionCode.TERMINAL_WORKFLOW);
+});
+
+void test('[I-008] terminal Workflow immutability is enforced during event application', () => {
+  const workflow = newWorkflow();
+  const firstEvent = acceptedEvent(
+    decideWorkflow(workflow, {
+      type: 'CANCEL_WORKFLOW',
+      commandId: commandId('command_cancel-first'),
+      workflowId: workflow.id,
+      expectedVersion: workflow.version,
+      occurredAt,
+      reason: 'first cancellation',
+    }),
+  );
+  if (firstEvent.type !== 'WORKFLOW_CANCELLED') {
+    assert.fail('Cancellation command must emit WORKFLOW_CANCELLED');
+  }
+  const cancelled = applyWorkflowEvent(workflow, firstEvent);
+  const forgedFreshEvent = {
+    ...firstEvent,
+    commandId: commandId('command_cancel-forged-fresh'),
+    fromVersion: cancelled.version,
+    toVersion: workflowVersion(cancelled.version + 1),
+    occurredAt: laterAt,
+  };
+
+  assert.throws(
+    () => applyWorkflowEvent(cancelled, forgedFreshEvent),
+    /Terminal Workflow cannot apply another event/,
+  );
+  assert.equal(cancelled.version, workflowVersion(2));
+  assert.equal(cancelled.runStatus, RunStatus.CANCELLED);
+});
+
+void test('[I-008] Workflow snapshots, commands, and events cannot move time backward', () => {
+  const workflow = newWorkflow();
+  assert.throws(
+    () => assertWorkflowInvariant({ ...workflow, updatedAt: beforeCreation }),
+    /updatedAt cannot precede createdAt/,
+  );
+
+  const current = Object.freeze({ ...workflow, updatedAt: laterAt });
+  const decision = decideWorkflow(current, transitionCommand(current, WorkflowPhase.PLAN));
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.rejection.code, WorkflowRejectionCode.INVALID_TIMESTAMP_ORDER);
+
+  const olderEvent = acceptedEvent(
+    decideWorkflow(workflow, transitionCommand(workflow, WorkflowPhase.PLAN)),
+  );
+  assert.throws(
+    () => applyWorkflowEvent(current, olderEvent),
+    /event time cannot precede current state/,
+  );
 });
 
 void test('[I-008] event application rejects state or version mismatches', () => {

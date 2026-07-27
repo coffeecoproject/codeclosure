@@ -1,43 +1,37 @@
 import { z } from 'zod';
 
 import {
-  AcceptanceAccess,
   AttemptFailureClass,
   AttemptStatus,
-  CandidateAccess,
-  ControlSubmission,
   GoalStatus,
-  PhaseAction,
   RunStatus,
-  RunOutputScope,
   WorkflowPhase,
-  attemptId,
   auditEventId,
-  candidateGenerationId,
   commandId,
-  contextManifestId,
+  decodeAttemptSnapshot,
+  decodeGoalSnapshot,
+  decodeWorkflowSnapshot,
   goalId,
-  goalRevision,
-  isCanonicalCapabilityGrant,
   isoTimestamp,
   sha256Digest,
-  successCriterionId,
-  workerSessionId,
   workflowId,
-  workflowVersion,
   type Attempt,
   type AuditEventId,
-  type CapabilityGrant,
   type CommandId,
   type Goal,
+  type GoalId,
   type IsoTimestamp,
   type Sha256Digest,
   type WorkflowInstance,
+  type WorkflowId,
 } from '@codeclosure/domain';
 
 import { PersistenceDecodeError } from './errors.js';
 import { parseJson, type JsonValue } from './json.js';
 
+const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 0, {
+  error: 'String must not be blank',
+});
 const goalStatusSchema = z.enum([
   GoalStatus.ACTIVE,
   GoalStatus.WAITING_FOR_INPUT,
@@ -78,56 +72,6 @@ const attemptFailureClassSchema = z.enum([
   AttemptFailureClass.PERMANENT_BACKEND,
   AttemptFailureClass.UNKNOWN,
 ]);
-const capabilityGrantSchema = z
-  .object({
-    phase: workflowPhaseSchema,
-    projectRead: z.literal(true),
-    candidateAccess: z.enum([
-      CandidateAccess.NONE,
-      CandidateAccess.MUTABLE_WRITE,
-      CandidateAccess.FREEZE_READ,
-      CandidateAccess.FROZEN_READ,
-      CandidateAccess.ACCEPTED_READ,
-    ]),
-    runOutputScope: z.enum([
-      RunOutputScope.BOUNDED_DISCOVERY,
-      RunOutputScope.PLAN_OBSERVATION,
-      RunOutputScope.BOUNDED_IMPLEMENTATION,
-      RunOutputScope.FREEZE_METADATA,
-      RunOutputScope.RUN_OWNED_VERIFICATION,
-      RunOutputScope.DECISION_TRACE,
-      RunOutputScope.CLOSEOUT_EXPORT,
-    ]),
-    controlSubmission: z.enum([
-      ControlSubmission.PROPOSALS,
-      ControlSubmission.COMPLETION_REQUEST,
-      ControlSubmission.RUNTIME_ONLY,
-      ControlSubmission.EVIDENCE_SUBMISSION,
-      ControlSubmission.DECISION_SUBMISSION,
-      ControlSubmission.CONSUME_EXISTING,
-    ]),
-    acceptanceAccess: z.enum([
-      AcceptanceAccess.NONE,
-      AcceptanceAccess.EVALUATE_READ_ONLY,
-      AcceptanceAccess.CONSUME_EXISTING,
-    ]),
-    allowedActions: z.array(
-      z.enum([
-        PhaseAction.READ_PROJECT,
-        PhaseAction.READ_CANDIDATE,
-        PhaseAction.WRITE_CANDIDATE_SOURCE,
-        PhaseAction.WRITE_RUN_OUTPUT,
-        PhaseAction.SUBMIT_PROPOSALS,
-        PhaseAction.SUBMIT_COMPLETION_REQUEST,
-        PhaseAction.SUBMIT_EVIDENCE,
-        PhaseAction.SUBMIT_DECISION,
-        PhaseAction.EVALUATE_ACCEPTANCE,
-        PhaseAction.CONSUME_ACCEPTANCE,
-      ]),
-    ),
-  })
-  .strict();
-
 const goalRowSchema = z.object({
   id: z.string(),
   revision: z.number().int().positive(),
@@ -178,7 +122,7 @@ const attemptRowSchema = z.object({
 const processedCommandRowSchema = z.object({
   command_id: z.string(),
   input_digest: z.string(),
-  aggregate_type: z.string().min(1),
+  aggregate_type: z.enum(['GOAL', 'WORKFLOW']),
   aggregate_id: z.string().min(1),
   outcome_json: z.string(),
   completed_at: z.string(),
@@ -187,15 +131,15 @@ const processedCommandRowSchema = z.object({
 const auditEventRowSchema = z.object({
   id: z.string(),
   sequence: z.number().int().positive(),
-  aggregate_type: z.string().min(1),
-  aggregate_id: z.string().min(1),
-  event_type: z.string().min(1),
-  actor_type: z.string().min(1),
+  aggregate_type: nonBlankStringSchema,
+  aggregate_id: nonBlankStringSchema,
+  event_type: nonBlankStringSchema,
+  actor_type: nonBlankStringSchema,
   command_id: z.string().nullable(),
   before_version: z.number().int().positive().nullable(),
   after_version: z.number().int().positive().nullable(),
-  correlation_id: z.string().nullable(),
-  causation_id: z.string().nullable(),
+  correlation_id: nonBlankStringSchema.nullable(),
+  causation_id: nonBlankStringSchema.nullable(),
   payload_digest: z.string(),
   occurred_at: z.string(),
 });
@@ -215,7 +159,7 @@ export function decodeGoal(row: unknown, criterionRows: readonly unknown[]): Goa
     const criteria = criterionRows.map((criterionRow) => {
       const criterion = criterionRowSchema.parse(criterionRow);
       return Object.freeze({
-        id: successCriterionId(criterion.id),
+        id: criterion.id,
         description: criterion.description,
         required: criterion.required === 1,
       });
@@ -224,9 +168,9 @@ export function decodeGoal(row: unknown, criterionRows: readonly unknown[]): Goa
       throw new TypeError('Stored Goal has no success criteria');
     }
 
-    return Object.freeze({
-      id: goalId(parsed.id),
-      revision: goalRevision(parsed.revision),
+    return decodeGoalSnapshot({
+      id: parsed.id,
+      revision: parsed.revision,
       objective: parsed.objective,
       successCriteria: Object.freeze(criteria),
       scope: Object.freeze({
@@ -235,8 +179,8 @@ export function decodeGoal(row: unknown, criterionRows: readonly unknown[]): Goa
       }),
       nonGoals: parseStringArray(parsed.non_goals_json, 'Goal.nonGoals'),
       status: parsed.status,
-      createdAt: isoTimestamp(parsed.created_at),
-      updatedAt: isoTimestamp(parsed.updated_at),
+      createdAt: parsed.created_at,
+      updatedAt: parsed.updated_at,
     });
   } catch (error) {
     if (error instanceof PersistenceDecodeError) {
@@ -249,43 +193,22 @@ export function decodeGoal(row: unknown, criterionRows: readonly unknown[]): Goa
 export function decodeWorkflow(row: unknown): WorkflowInstance {
   try {
     const parsed = workflowRowSchema.parse(row);
-    const isCloseout = parsed.phase === WorkflowPhase.CLOSEOUT;
-    const isClosed = parsed.run_status === RunStatus.CLOSED;
-    if (isCloseout !== isClosed) {
-      throw new TypeError('CLOSEOUT and CLOSED must occur together');
-    }
-    if ((parsed.run_status === RunStatus.RUNNING) !== (parsed.active_attempt_id !== null)) {
-      throw new TypeError('RUNNING Workflow must bind exactly one active Attempt');
-    }
-    const candidateRequired =
-      parsed.phase === WorkflowPhase.IMPLEMENT ||
-      parsed.phase === WorkflowPhase.SOURCE_FREEZE ||
-      parsed.phase === WorkflowPhase.EVIDENCE_BUILD ||
-      parsed.phase === WorkflowPhase.FINAL_VERIFY ||
-      parsed.phase === WorkflowPhase.CLOSEOUT;
-    if (candidateRequired && parsed.active_candidate_generation_id === null) {
-      throw new TypeError(`Stored ${parsed.phase} Workflow has no active Candidate generation`);
-    }
-    return Object.freeze({
-      id: workflowId(parsed.id),
-      goalId: goalId(parsed.goal_id),
-      goalRevision: goalRevision(parsed.goal_revision),
+    return decodeWorkflowSnapshot({
+      id: parsed.id,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
       phase: parsed.phase,
       runStatus: parsed.run_status,
-      version: workflowVersion(parsed.version),
-      ...(parsed.active_attempt_id === null
-        ? {}
-        : { activeAttemptId: attemptId(parsed.active_attempt_id) }),
+      version: parsed.version,
+      ...(parsed.active_attempt_id === null ? {} : { activeAttemptId: parsed.active_attempt_id }),
       ...(parsed.active_candidate_generation_id === null
         ? {}
         : {
-            activeCandidateGenerationId: candidateGenerationId(
-              parsed.active_candidate_generation_id,
-            ),
+            activeCandidateGenerationId: parsed.active_candidate_generation_id,
           }),
       ...(parsed.suspended_reason === null ? {} : { suspendedReason: parsed.suspended_reason }),
-      createdAt: isoTimestamp(parsed.created_at),
-      updatedAt: isoTimestamp(parsed.updated_at),
+      createdAt: parsed.created_at,
+      updatedAt: parsed.updated_at,
     });
   } catch (error) {
     throw new PersistenceDecodeError('WorkflowInstance', { cause: error });
@@ -295,51 +218,25 @@ export function decodeWorkflow(row: unknown): WorkflowInstance {
 export function decodeAttempt(row: unknown): Attempt {
   try {
     const parsed = attemptRowSchema.parse(row);
-    const capabilityData = capabilityGrantSchema.parse(
-      parseJson(parsed.capability_grant_json, 'Attempt.capabilityGrant'),
-    );
-    const capabilityGrant: CapabilityGrant = Object.freeze({
-      ...capabilityData,
-      allowedActions: Object.freeze([...capabilityData.allowedActions]),
-    });
-    if (
-      parsed.phase === WorkflowPhase.CLOSEOUT ||
-      capabilityGrant.phase !== parsed.phase ||
-      !isCanonicalCapabilityGrant(capabilityGrant)
-    ) {
-      throw new TypeError('Stored Attempt capability grant does not match its phase');
-    }
-
-    const terminal = parsed.status !== AttemptStatus.RUNNING;
-    if (
-      terminal !== (parsed.ended_at !== null) ||
-      terminal !== (parsed.termination_reason !== null) ||
-      (parsed.ended_at !== null && parsed.ended_at < parsed.started_at) ||
-      (parsed.termination_reason !== null && parsed.termination_reason.trim().length === 0) ||
-      (parsed.status === AttemptStatus.FAILED) !== (parsed.failure_class !== null)
-    ) {
-      throw new TypeError('Stored Attempt lifecycle fields are inconsistent');
-    }
-
-    return Object.freeze({
-      id: attemptId(parsed.id),
-      workflowId: workflowId(parsed.workflow_id),
+    return decodeAttemptSnapshot({
+      id: parsed.id,
+      workflowId: parsed.workflow_id,
       phase: parsed.phase,
       sequence: parsed.sequence,
       ...(parsed.context_manifest_id === null
         ? {}
-        : { contextManifestId: contextManifestId(parsed.context_manifest_id) }),
-      capabilityGrant,
+        : { contextManifestId: parsed.context_manifest_id }),
+      capabilityGrant: parseJson(parsed.capability_grant_json, 'Attempt.capabilityGrant'),
       ...(parsed.worker_session_ref === null
         ? {}
-        : { workerSessionRef: workerSessionId(parsed.worker_session_ref) }),
+        : { workerSessionRef: parsed.worker_session_ref }),
       status: parsed.status,
       ...(parsed.failure_class === null ? {} : { failureClass: parsed.failure_class }),
       ...(parsed.termination_reason === null
         ? {}
         : { terminationReason: parsed.termination_reason }),
-      startedAt: isoTimestamp(parsed.started_at),
-      ...(parsed.ended_at === null ? {} : { endedAt: isoTimestamp(parsed.ended_at) }),
+      startedAt: parsed.started_at,
+      ...(parsed.ended_at === null ? {} : { endedAt: parsed.ended_at }),
     });
   } catch (error) {
     if (error instanceof PersistenceDecodeError) {
@@ -349,26 +246,39 @@ export function decodeAttempt(row: unknown): Attempt {
   }
 }
 
-export interface ProcessedCommandRecord {
+interface ProcessedCommandRecordBase {
   readonly commandId: CommandId;
   readonly inputDigest: Sha256Digest;
-  readonly aggregateType: string;
-  readonly aggregateId: string;
   readonly outcome: JsonValue;
   readonly completedAt: IsoTimestamp;
 }
 
+export type ProcessedCommandRecord = ProcessedCommandRecordBase &
+  (
+    | { readonly aggregateType: 'GOAL'; readonly aggregateId: GoalId }
+    | { readonly aggregateType: 'WORKFLOW'; readonly aggregateId: WorkflowId }
+  );
+
 export function decodeProcessedCommand(row: unknown): ProcessedCommandRecord {
   try {
     const parsed = processedCommandRowSchema.parse(row);
-    return Object.freeze({
+    const common = {
       commandId: commandId(parsed.command_id),
       inputDigest: sha256Digest(parsed.input_digest),
-      aggregateType: parsed.aggregate_type,
-      aggregateId: parsed.aggregate_id,
       outcome: parseJson(parsed.outcome_json, 'ProcessedCommand.outcome'),
       completedAt: isoTimestamp(parsed.completed_at),
-    });
+    };
+    return parsed.aggregate_type === 'GOAL'
+      ? Object.freeze({
+          ...common,
+          aggregateType: parsed.aggregate_type,
+          aggregateId: goalId(parsed.aggregate_id),
+        })
+      : Object.freeze({
+          ...common,
+          aggregateType: parsed.aggregate_type,
+          aggregateId: workflowId(parsed.aggregate_id),
+        });
   } catch (error) {
     if (error instanceof PersistenceDecodeError) {
       throw error;

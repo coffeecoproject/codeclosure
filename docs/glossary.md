@@ -58,7 +58,8 @@ skeleton.
 
 The externalized unit of user intent. It contains an objective, success
 criteria, scope, revisions, and lifecycle status independent of any Codex
-thread.
+thread. A Codex thread-scoped goal or plan is disposable worker execution state
+and is not this authoritative product object.
 
 ## Human Decision
 

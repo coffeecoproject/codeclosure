@@ -90,6 +90,13 @@ The CLI composition root may construct `FakeWorker` from `packages/testing` for
 M1 `demo run` and `--fixture` commands. Neither `domain` nor `runtime` imports
 `packages/testing`; M2 replaces this composition edge with a real adapter.
 
+During Slice 3 the still-empty CLI package depends only on the public Runtime
+surface, so it cannot import the SQLite mutation adapter or internal test
+fixtures. Slice 7 may add those dependencies only through a named trusted
+composition module that constructs the application and hands CLI handlers the
+narrow Goal capability and read views; handler modules MUST NOT receive or
+import the raw store.
+
 ## 4. M1 command surface
 
 The CLI is intentionally small:
@@ -121,7 +128,20 @@ application commands and render persisted results; they never write tables.
 `CreateGoal` atomically creates the Goal and its Workflow in
 `DISCOVERY`/`READY`; it does not dispatch a worker. `StartGoal` begins the first
 DISCOVERY Attempt and moves run status through the normal guarded command path.
-This keeps persisted phase initialization distinct from execution start.
+`StartGoal`, `ResumeGoal`, and `CancelGoal` are public Goal commands: they carry
+`GoalId`, expected Goal revision, and expected Workflow version. Internal
+Attempt and transition commands are not public CLI alternatives. This keeps
+persisted phase initialization distinct from execution start. Goal and owned
+Workflow resolution uses one consistent store snapshot; the write transaction
+then revalidates the Workflow version. See
+[ADR 0008](../adr/0008-goal-command-and-lifecycle-boundary.md).
+
+The Runtime package root returns a Goal application capability containing only
+those public Goal mutations. The internal control kernel is omitted from the
+package-root export surface. Internal phase requests do not accept
+caller-authored `GuardResult` values; ordinary guard evaluators are injected
+only into the internal kernel, and closeout remains unavailable until the Slice
+6 Acceptance path owns it.
 
 Machine output uses a versioned envelope:
 
@@ -138,6 +158,14 @@ CommandOutput
   dominantBlocker?
   error?
 ```
+
+That public `CommandOutput` is stored inside a separate
+`StoredCommandOutcomeEnvelope` v3 authored by the Store in the command
+transaction. Its `APPLIED` and `REJECTED` variants bind the exact target,
+owning Goal and Workflow, and observed Workflow snapshot. The storage envelope
+is an authority record, not an additional user-facing completion surface. See
+[ADR 0010](../adr/0010-command-admission-and-outcome-binding.md) and
+[ADR 0011](../adr/0011-store-authored-command-outcome-semantics.md).
 
 Human output is a view over the same response.
 
@@ -160,9 +188,17 @@ M1 application commands include:
 - `ResumeGoal`;
 - `CancelGoal`.
 
-Every mutating command carries a `CommandId`; aggregate commands also carry an
-`expectedVersion`. Duplicate `CommandId` delivery returns the previously
-recorded outcome without replaying side effects.
+Every admitted mutating application command carries a `CommandId`; aggregate
+commands also carry an `expectedVersion`. Duplicate `CommandId` delivery with
+the same canonical input returns the previously recorded outcome, including a
+deterministic rejection, without replaying side effects. Reusing it for a
+different input fails closed.
+
+Untrusted worker delivery instead carries a `WorkerEventId`. The adapter
+validates and deduplicates it before constructing an internal command; a worker
+cannot supply a `CommandId`, and stale worker delivery creates no application
+command outcome. See
+[ADR 0009](../adr/0009-command-idempotency-and-worker-boundary.md).
 
 M1 treats Attempt as a child of the Workflow aggregate. Attempt lifecycle
 commands therefore carry `expectedWorkflowVersion` and advance the Workflow
@@ -187,8 +223,11 @@ WorkerPort
 RecoveryInspector
 ```
 
-`WorkerPort` emits typed worker events and accepts an `AbortSignal`. It cannot
-receive a store transaction or repository implementation.
+Slice 4 introduces `WorkerPort` together with the Context Manifest and Worker
+Request/Event schemas. The port receives a runtime-created, digest-bound
+request and an `AbortSignal`, emits typed worker events, and cannot receive a
+store transaction or repository implementation. Slice 3 MUST NOT expose a
+generic authorized-effect callback while that typed contract is absent.
 
 ## 6. Persistence contract
 
@@ -213,15 +252,59 @@ The first schema contains normalized tables for:
 Mutating application services execute this shape:
 
 ```text
+derive canonical input digest
+if command exists: validate digest plus stored target/Goal/Workflow/output bindings
+resolve the top-level Goal/Workflow snapshot
+verify expected Goal revision and Workflow version
+only then resolve child state, evaluate guards, allocate IDs, and plan
 BEGIN IMMEDIATE
-  verify command is new
-  read aggregate at expected version
+  revalidate command identity and Workflow version
   evaluate pure domain command
-  update current state with version predicate
-  append audit event(s)
-  record command outcome
+  if accepted: update current state with version predicate
+               append audit event(s)
+               Store authors APPLIED outcome from resulting Workflow
+  if rejected: Store authors REJECTED outcome from observed Workflow and
+               deterministic command error
+  record the semantically bound command outcome envelope
 COMMIT
 ```
+
+A deterministic rejection is recorded only if the aggregate remains at the
+version against which it was evaluated. A concurrent change causes reload and
+reevaluation. Malformed input, unknown aggregate identity, and infrastructure
+failure are not admitted command outcomes.
+
+The same centralized freshness gate runs before Attempt lookup, phase/closeout
+evaluation, and other command-specific planning. Processed outcomes bind their
+row target, `CommandId`, owning Goal and Workflow, disposition, Workflow
+snapshot, and nested output. Migration 0005 rejects legacy outcome rows that
+lack identity binding. Migration 0006 rejects existing version 2 outcomes that
+lack enough information to prove transaction semantics; M1 does not invent a
+historical owner, disposition, or snapshot during upgrade.
+
+Runtime-owned control timestamps use the causal policy in
+[ADR 0012](../adr/0012-causal-control-timestamps.md). A valid clock rollback is
+clamped to the current aggregate floor; malformed clock output is an internal
+failure. Reducers and the Store reject bypassed older events, and migration
+0007 adds SQLite backstops for nondecreasing current state, Attempt start/end
+causal floors, terminal Workflow immutability, control audit time, and
+processed-command completion time.
+
+Authority-bearing records follow the validation closure in
+[ADR 0013](../adr/0013-authority-boundary-validation-closure.md). Runtime port
+returns, Store mutation inputs, resulting state, and persistence reads pass the
+owning codecs. Normal command admission and replay share one Goal/Workflow
+authority resolver. Migration 0008 preflights retained control records and adds
+SQLite scalar and relationship backstops. A Store `APPLIED` result is tested as
+an immediate-read and close/reopen guarantee, not only as a returned tag.
+
+The store port returns version and command-identity conflicts as discriminated
+results. Runtime code MUST NOT inspect adapter exception names to recover those
+protocol outcomes. Only calls through the store port map to persistence
+failures; guard/policy evaluators are schema-validated inside their evaluation
+boundary, and malformed returns remain evaluation failures. Runtime internal
+computation has a separate failure category. None of these infrastructure
+failures is recorded as a deterministic command outcome.
 
 Any failure rolls back the whole unit. The database enables foreign keys and a
 bounded busy timeout. Migration application is itself transactional where
@@ -253,6 +336,11 @@ It verifies:
 Persistence applies returned events only after all guards pass. No adapter may
 construct a `TransitionRecord`, `AcceptanceDecision`, or `CLOSED` Goal through
 a public bypass constructor.
+
+The pure reducer receives already evaluated guard results because it validates
+transition policy, not producer authority. The application layer is
+responsible for obtaining those results from the owning evaluator and MUST NOT
+copy them from a public request.
 
 ## 8. FakeWorker contract
 
@@ -343,14 +431,24 @@ orphan audit success.
 - Attempt lifecycle, cancellation, retry classification;
 - typed error/result envelope.
 
-Exit: disallowed actions are rejected before worker dispatch or persistence.
+Exit: disallowed application commands are rejected before state mutation;
+accepted and deterministically rejected command outcomes replay consistently.
+The public package surface contains only Goal mutations, missing child-entity
+rejections replay consistently, and store conflicts are handled through the
+typed port. Stale expectations are rejected before child/guard-specific work,
+stored outcomes cannot replay across Goal/Workflow identities, and evaluator,
+persistence, and internal failures remain distinguishable. Capability tests
+prove policy derivation only. They do not claim an external dispatch boundary
+before Slice 4 or a closeout path before Slice 6.
 
 ### Slice 4 — Context and FakeWorker
 
 - minimal compiler and Context Manifest;
 - Worker Request/Event contract;
 - adversarial FakeWorker fixtures;
-- stale-result filtering and interruption.
+- independently identified worker-event admission, stale-result filtering, and
+  interruption;
+- typed, manifest-bound dispatch serialized against cancellation.
 
 Exit: worker text, result shape tricks, stale context, and duplicates cannot
 advance authority.
@@ -406,7 +504,7 @@ visible and block the corresponding claim.
 | I-015–I-018 | evidence binding, privilege, invalidation, digest, and redaction-schema tests |
 | I-019–I-021 | canonical minimal Context Manifest, stale result, and transcript-independence tests |
 | I-022 | explicit scenario-reference contract test; graph traversal remains M3 |
-| I-023–I-026 | capability matrix, frozen verification, promotion non-command, and decision-type tests |
+| I-023–I-026 | capability-policy tests in Slice 3; typed dispatch/frozen verification, promotion non-command, and decision-type tests in later owning slices |
 | I-027–I-030 | unknown/error fail-closed, retry budget, recovery reconcile, and proof-label tests |
 
 Test names carry invariant metadata such as `[I-003]`. Slice 8 checks that every
@@ -424,10 +522,11 @@ The root quality command must run, in order:
 4. unit and property tests;
 5. canonical digest golden-vector and replay tests;
 6. SQLite migration/reopen tests;
-7. CLI integration and restart tests;
-8. adversarial demo tests;
-9. invariant-coverage check;
-10. production build.
+7. authority-codec, Store-contract, and write/read/reopen closure tests;
+8. CLI integration and restart tests;
+9. adversarial demo tests;
+10. invariant-coverage check;
+11. production build.
 
 The exact script names are established in Slice 0 and documented in the root
 README. A green command is evidence for M1 only when its source revision and

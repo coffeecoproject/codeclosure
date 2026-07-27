@@ -25,6 +25,56 @@ CodeClosure separates:
 This prevents an operational failure or user wait from being confused with a
 new engineering phase.
 
+## Public and Internal Command Boundary
+
+The public product boundary operates by `GoalId`. `StartGoal`, `ResumeGoal`,
+and `CancelGoal` resolve the Goal's M1 Workflow and carry both the expected Goal
+revision and expected Workflow version. Users and CLI adapters do not start,
+interrupt, or mutate Attempts directly.
+
+`BeginAttempt`, worker-result admission, interruption, recovery reconciliation,
+and phase transitions are internal runtime commands. Their
+`expectedWorkflowVersion` serializes operational changes under ADR 0007. A
+Codex thread-scoped goal, plan, or turn is worker execution state, not this
+CodeClosure Goal and not a command authority.
+
+For a new command, the Runtime first resolves the top-level Goal/Workflow
+snapshot and applies one freshness gate. Goal commands check the expected Goal
+revision and then the expected Workflow version; Workflow commands check the
+expected Workflow version. Only a fresh request may look up a child Attempt,
+evaluate phase guards or closeout eligibility, allocate identifiers, or run
+domain planning. Consequently, a stale request has one stable answer and cannot
+leak a later child-state or guard-specific result.
+
+The persisted command outcome is not the public response by itself. The Store
+authors a schema-versioned, disposition-tagged envelope inside the same
+transaction as the command effect. It binds the response to its exact command
+target, owning `GoalId`, owning `WorkflowId`, and observed Workflow snapshot.
+`APPLIED` must contain a success matching the resulting Workflow; `REJECTED`
+must contain a deterministic admitted-command failure bound to the revalidated
+observed Workflow. Infrastructure failures are never stored for replay. Replay
+reloads real Goal/Workflow authority and validates every binding before
+returning the nested public output. A valid-looking response produced for
+another or nonexistent aggregate fails closed. See
+[ADR 0010](adr/0010-command-admission-and-outcome-binding.md) and
+[ADR 0011](adr/0011-store-authored-command-outcome-semantics.md).
+
+Normal Goal commands, normal Workflow commands, and replay use one authority
+resolver. It validates the complete Goal and Workflow snapshots, their owner
+and revision relationship, the Goal lifecycle projection, and the exact target.
+Store or adapter type annotations are not proof of those facts. See
+[ADR 0013](adr/0013-authority-boundary-validation-closure.md).
+
+An internal phase-transition request names the desired phase but does not carry
+caller-authored guard outcomes. The Runtime obtains ordinary guard results from
+the owning internal evaluators, strictly validates their complete runtime
+shape, and records valid results on the transition event. A thrown evaluator or
+malformed evaluator return is an evaluation failure and creates no command
+outcome. `CURRENT_ACCEPTANCE` is reserved for the dedicated closeout path,
+which must reload an Acceptance Engine decision and its exact bindings. Until
+Slice 6 implements that path, the application Runtime rejects `FINAL_VERIFY ->
+CLOSEOUT` as unavailable.
+
 ## Main Phase Graph
 
 ```text
@@ -315,8 +365,17 @@ The user may cancel a Goal. Cancellation:
 
 In M1, cancellation uses the expected Workflow version and transactionally
 marks any active `RUNNING` Attempt `INTERRUPTED` while changing the Workflow to
-`CANCELLED`. A racing worker result cannot update either record after that
-version advances.
+`CANCELLED`. The same transaction synchronizes the public Goal lifecycle
+projection to `CANCELLED`, appends audit evidence, and records the application
+command outcome. A racing worker result cannot update either record after that
+version advances. A terminal Workflow cannot accept another event even if a
+caller bypasses command decision logic and supplies a fresh version number.
+
+Runtime-owned event time is causal rather than raw wall-clock order. A valid
+clock rollback is clamped to the current Workflow timestamp; reducers and
+persistence reject an event that predates current state. Equal timestamps are
+allowed because the Workflow version and audit sequence still establish exact
+order. See [ADR 0012](adr/0012-causal-control-timestamps.md).
 
 ## Retry and Repair
 
@@ -351,7 +410,9 @@ For a non-terminal workflow, startup recovery must:
 The last model response is never the recovery algorithm.
 
 Attempt lifecycle ownership and its single-version concurrency rule are defined
-by [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md).
+by [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md). The public Goal
+boundary and lifecycle projection are defined by
+[ADR 0008](adr/0008-goal-command-and-lifecycle-boundary.md).
 
 ## M1 Required State-Machine Proof
 

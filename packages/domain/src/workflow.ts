@@ -1,5 +1,11 @@
 import {
+  attemptId,
+  candidateGenerationId,
+  goalId,
+  goalRevision,
+  isoTimestamp,
   nextWorkflowVersion,
+  workflowId,
   workflowVersion,
   type AttemptId,
   type CandidateGenerationId,
@@ -11,6 +17,7 @@ import {
 import {
   RunStatus,
   WorkflowPhase,
+  type RunStatus as RunStatusType,
   type WorkflowInstance,
   type WorkflowPhase as WorkflowPhaseType,
 } from './model.js';
@@ -75,6 +82,7 @@ export const WorkflowRejectionCode = {
   MISSING_NEXT_CANDIDATE: 'MISSING_NEXT_CANDIDATE',
   CANDIDATE_GENERATION_REUSE: 'CANDIDATE_GENERATION_REUSE',
   UNEXPECTED_NEXT_CANDIDATE: 'UNEXPECTED_NEXT_CANDIDATE',
+  INVALID_TIMESTAMP_ORDER: 'INVALID_TIMESTAMP_ORDER',
   EMPTY_REASON: 'EMPTY_REASON',
 } as const;
 export type WorkflowRejectionCode =
@@ -252,6 +260,19 @@ function validateGuardResults(
   const byGuard = new Map<WorkflowGuard, GuardResult>();
 
   for (const result of actual) {
+    if (
+      result.reasonCode.trim().length === 0 ||
+      result.supportingRefs.some((reference) => reference.trim().length === 0)
+    ) {
+      return {
+        valid: false,
+        rejection: {
+          code: WorkflowRejectionCode.GUARD_MISSING_SUPPORT,
+          message: `Guard ${result.guard} contains blank supporting metadata`,
+          failedGuard: result.guard,
+        },
+      };
+    }
     if (byGuard.has(result.guard)) {
       return {
         valid: false,
@@ -323,13 +344,72 @@ function requiresActiveCandidate(phase: WorkflowPhaseType): boolean {
   );
 }
 
+function snapshotRequiresActiveCandidate(phase: WorkflowPhaseType): boolean {
+  return requiresActiveCandidate(phase) || phase === WorkflowPhase.CLOSEOUT;
+}
+
+export function isTerminalWorkflow(workflow: WorkflowInstance): boolean {
+  return workflow.runStatus === RunStatus.CANCELLED || workflow.runStatus === RunStatus.CLOSED;
+}
+
+export function assertWorkflowInvariant(workflow: WorkflowInstance): void {
+  workflowId(workflow.id);
+  goalId(workflow.goalId);
+  goalRevision(workflow.goalRevision);
+  workflowVersion(workflow.version);
+  isoTimestamp(workflow.createdAt);
+  isoTimestamp(workflow.updatedAt);
+  if (workflow.activeAttemptId !== undefined) {
+    attemptId(workflow.activeAttemptId);
+  }
+  if (workflow.activeCandidateGenerationId !== undefined) {
+    candidateGenerationId(workflow.activeCandidateGenerationId);
+  }
+  if (!Object.values(WorkflowPhase).some((phase) => phase === workflow.phase)) {
+    throw new DomainInvariantError('Workflow phase is unknown');
+  }
+  if (!Object.values(RunStatus).some((status: RunStatusType) => status === workflow.runStatus)) {
+    throw new DomainInvariantError('Workflow run status is unknown');
+  }
+  if (!Number.isSafeInteger(workflow.version) || workflow.version < 1) {
+    throw new DomainInvariantError('Workflow version must be a positive safe integer');
+  }
+  if (workflow.updatedAt < workflow.createdAt) {
+    throw new DomainInvariantError('Workflow updatedAt cannot precede createdAt');
+  }
+  if ((workflow.phase === WorkflowPhase.CLOSEOUT) !== (workflow.runStatus === RunStatus.CLOSED)) {
+    throw new DomainInvariantError('CLOSEOUT and CLOSED must occur together');
+  }
+  if ((workflow.runStatus === RunStatus.RUNNING) !== (workflow.activeAttemptId !== undefined)) {
+    throw new DomainInvariantError('RUNNING Workflow must bind exactly one active Attempt');
+  }
+  if (
+    snapshotRequiresActiveCandidate(workflow.phase) &&
+    workflow.activeCandidateGenerationId === undefined
+  ) {
+    throw new DomainInvariantError(
+      `${workflow.phase} Workflow must bind an active Candidate generation`,
+    );
+  }
+  if (workflow.suspendedReason?.trim().length === 0) {
+    throw new DomainInvariantError('Workflow suspendedReason must not be empty when present');
+  }
+}
+
 export function decideWorkflow(
   workflow: WorkflowInstance,
   command: WorkflowCommand,
 ): WorkflowDecision {
+  assertWorkflowInvariant(workflow);
   const identityRejection = validateCommandIdentity(workflow, command);
   if (identityRejection !== undefined) {
     return identityRejection;
+  }
+  if (command.occurredAt < workflow.updatedAt) {
+    return reject(
+      WorkflowRejectionCode.INVALID_TIMESTAMP_ORDER,
+      'Workflow command time cannot precede current Workflow state',
+    );
   }
 
   const toVersion = nextWorkflowVersion(workflow.version);
@@ -444,6 +524,7 @@ export function applyWorkflowEvent(
   workflow: WorkflowInstance,
   event: WorkflowEvent,
 ): WorkflowInstance {
+  assertWorkflowInvariant(workflow);
   if (event.workflowId !== workflow.id || event.fromVersion !== workflow.version) {
     throw new DomainInvariantError(
       'Workflow event identity or version does not match current state',
@@ -455,6 +536,12 @@ export function applyWorkflowEvent(
   if (event.reason.trim().length === 0) {
     throw new DomainInvariantError('Workflow event reason must not be empty');
   }
+  if (event.occurredAt < workflow.updatedAt) {
+    throw new DomainInvariantError('Workflow event time cannot precede current state');
+  }
+  if (isTerminalWorkflow(workflow)) {
+    throw new DomainInvariantError('Terminal Workflow cannot apply another event');
+  }
 
   if (event.type === 'WORKFLOW_CANCELLED') {
     if (event.phase !== workflow.phase || event.interruptedAttemptId !== workflow.activeAttemptId) {
@@ -462,7 +549,7 @@ export function applyWorkflowEvent(
         'Cancellation event phase or active Attempt does not match current state',
       );
     }
-    return Object.freeze({
+    const next = Object.freeze({
       id: workflow.id,
       goalId: workflow.goalId,
       goalRevision: workflow.goalRevision,
@@ -476,6 +563,8 @@ export function applyWorkflowEvent(
       createdAt: workflow.createdAt,
       updatedAt: event.occurredAt,
     });
+    assertWorkflowInvariant(next);
+    return next;
   }
 
   if (event.fromPhase !== workflow.phase) {
@@ -522,12 +611,15 @@ export function applyWorkflowEvent(
     version: event.toVersion,
     updatedAt: event.occurredAt,
   };
-  return event.nextCandidateGenerationId === undefined
-    ? Object.freeze(nextBase)
-    : Object.freeze({
-        ...nextBase,
-        activeCandidateGenerationId: event.nextCandidateGenerationId,
-      });
+  const next =
+    event.nextCandidateGenerationId === undefined
+      ? Object.freeze(nextBase)
+      : Object.freeze({
+          ...nextBase,
+          activeCandidateGenerationId: event.nextCandidateGenerationId,
+        });
+  assertWorkflowInvariant(next);
+  return next;
 }
 
 export function createWorkflow(
@@ -542,11 +634,13 @@ export function createWorkflow(
     | 'suspendedReason'
   >,
 ): WorkflowInstance {
-  return Object.freeze({
+  const workflow = Object.freeze({
     ...input,
     phase: WorkflowPhase.DISCOVERY,
     runStatus: RunStatus.READY,
     version: workflowVersion(1),
     updatedAt: input.createdAt,
   });
+  assertWorkflowInvariant(workflow);
+  return workflow;
 }

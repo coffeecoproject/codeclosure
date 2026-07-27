@@ -40,6 +40,7 @@ import {
 
 const startedAt = isoTimestamp('2026-07-27T01:00:00.000Z');
 const finishedAt = isoTimestamp('2026-07-27T01:00:01.000Z');
+const laterWorkflowAt = isoTimestamp('2026-07-27T01:00:02.000Z');
 const activeAttemptId = attemptId('attempt_reducer-1');
 
 function readyWorkflow(phase: WorkflowPhaseType = WorkflowPhase.DISCOVERY): WorkflowInstance {
@@ -201,7 +202,7 @@ void test('[I-008] interruption closes one Attempt and releases the Workflow exp
 
   assert.equal(interrupted.attempt.status, AttemptStatus.INTERRUPTED);
   assert.equal(interrupted.workflow.runStatus, RunStatus.BLOCKED);
-  assert.match(interrupted.attempt.terminationReason ?? '', /^RECOVERY_RECONCILIATION:/);
+  assert.match(interrupted.attempt.terminationReason, /^RECOVERY_RECONCILIATION:/);
 });
 
 void test('[I-008] stale, non-active, and terminal Attempt commands fail closed', () => {
@@ -255,6 +256,41 @@ void test('[I-008] stale, non-active, and terminal Attempt commands fail closed'
   assert.equal(terminal.rejection.code, AttemptRejectionCode.ACTIVE_ATTEMPT_MISMATCH);
 });
 
+void test('[I-008] Attempt commands and events cannot predate owning Workflow state', () => {
+  const running = begin();
+  const currentWorkflow = Object.freeze({
+    ...running.workflow,
+    updatedAt: laterWorkflowAt,
+  });
+  const decision = decideAttempt(currentWorkflow, running.attempt, {
+    type: 'RECORD_ATTEMPT_RESULT',
+    commandId: commandId('command_attempt-time-regression'),
+    workflowId: currentWorkflow.id,
+    expectedWorkflowVersion: currentWorkflow.version,
+    attemptId: running.attempt.id,
+    occurredAt: finishedAt,
+    reason: 'older result must fail closed',
+  });
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.rejection.code, AttemptRejectionCode.INVALID_TIMESTAMP_ORDER);
+
+  const olderEvent = acceptedAttemptEvent(
+    decideAttempt(running.workflow, running.attempt, {
+      type: 'RECORD_ATTEMPT_RESULT',
+      commandId: commandId('command_attempt-time-event'),
+      workflowId: running.workflow.id,
+      expectedWorkflowVersion: running.workflow.version,
+      attemptId: running.attempt.id,
+      occurredAt: finishedAt,
+      reason: 'prepare an event before advancing the causal floor',
+    }),
+  );
+  assert.throws(
+    () => applyAttemptEvent(currentWorkflow, running.attempt, olderEvent),
+    /event time cannot precede current Workflow state/,
+  );
+});
+
 void test('[I-023][I-024] capability grants are canonical and phase actions fail closed', () => {
   for (const phase of WORKFLOW_PHASES) {
     const grant = deriveCapabilityGrant(phase);
@@ -268,6 +304,10 @@ void test('[I-023][I-024] capability grants are canonical and phase actions fail
   const discovery = deriveCapabilityGrant(WorkflowPhase.DISCOVERY);
   const implementation = deriveCapabilityGrant(WorkflowPhase.IMPLEMENT);
   const evidence = deriveCapabilityGrant(WorkflowPhase.EVIDENCE_BUILD);
+  assert.equal(
+    isCanonicalCapabilityGrant({ ...discovery, projectRead: 'truthy-but-not-boolean' }),
+    false,
+  );
   assert.equal(capabilityAllows(discovery, PhaseAction.WRITE_CANDIDATE_SOURCE), false);
   assert.equal(capabilityAllows(implementation, PhaseAction.WRITE_CANDIDATE_SOURCE), true);
   assert.equal(capabilityAllows(evidence, PhaseAction.WRITE_CANDIDATE_SOURCE), false);
@@ -289,8 +329,83 @@ void test('[I-023] event application rejects a fabricated phase capability grant
 
   assert.throws(
     () => applyAttemptEvent(workflow, undefined, forged),
-    /invalid state or capability/,
+    /Attempt identity or capability invariant/,
   );
+});
+
+void test('[I-006][I-008] event application rejects terminal fields on a forged RUNNING Attempt', () => {
+  const workflow = readyWorkflow();
+  const started = begin(workflow).event;
+  const forged = {
+    ...started,
+    attempt: {
+      ...started.attempt,
+      terminationReason: 'fabricated terminal state',
+      endedAt: finishedAt,
+    },
+  } as unknown as AttemptEvent;
+
+  assert.throws(
+    () => applyAttemptEvent(workflow, undefined, forged),
+    /RUNNING Attempt contains terminal lifecycle fields/,
+  );
+});
+
+void test('[I-006][I-008] reducers reject every poisoned current RUNNING Attempt shape', () => {
+  const running = begin();
+  const resultEvent = acceptedAttemptEvent(
+    decideAttempt(running.workflow, running.attempt, {
+      type: 'RECORD_ATTEMPT_RESULT',
+      commandId: commandId('command_poisoned-current-result'),
+      workflowId: running.workflow.id,
+      expectedWorkflowVersion: running.workflow.version,
+      attemptId: running.attempt.id,
+      occurredAt: finishedAt,
+      reason: 'valid event prepared before poisoning current state',
+    }),
+  );
+  const cancellationEvent = acceptedWorkflowEvent(
+    decideWorkflow(running.workflow, {
+      type: 'CANCEL_WORKFLOW',
+      commandId: commandId('command_poisoned-current-cancel'),
+      workflowId: running.workflow.id,
+      expectedVersion: running.workflow.version,
+      occurredAt: finishedAt,
+      reason: 'validate cancellation against poisoned current state',
+    }),
+  );
+  if (cancellationEvent.type !== 'WORKFLOW_CANCELLED') {
+    assert.fail('Cancellation command must emit WORKFLOW_CANCELLED');
+  }
+
+  for (const terminalFields of [
+    { failureClass: AttemptFailureClass.UNKNOWN },
+    { terminationReason: 'fabricated terminal reason' },
+    { endedAt: finishedAt },
+  ]) {
+    const poisoned = { ...running.attempt, ...terminalFields } as unknown as Attempt;
+    assert.throws(
+      () =>
+        decideAttempt(running.workflow, poisoned, {
+          type: 'RECORD_ATTEMPT_RESULT',
+          commandId: commandId('command_poisoned-current-decision'),
+          workflowId: running.workflow.id,
+          expectedWorkflowVersion: running.workflow.version,
+          attemptId: running.attempt.id,
+          occurredAt: finishedAt,
+          reason: 'poisoned state must fail closed',
+        }),
+      /RUNNING Attempt contains terminal lifecycle fields/,
+    );
+    assert.throws(
+      () => applyAttemptEvent(running.workflow, poisoned, resultEvent),
+      /RUNNING Attempt contains terminal lifecycle fields/,
+    );
+    assert.throws(
+      () => applyWorkflowCancellationToAttempt(running.workflow, poisoned, cancellationEvent),
+      /RUNNING Attempt contains terminal lifecycle fields/,
+    );
+  }
 });
 
 void test('[I-008] result and cancellation share one Workflow version so only one can win', () => {

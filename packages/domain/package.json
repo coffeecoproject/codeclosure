@@ -18,5 +18,8 @@
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
     "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   }
 }

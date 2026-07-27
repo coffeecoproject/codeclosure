@@ -5,6 +5,8 @@ import type {
   AttemptId,
   AuditEventId,
   CommandId,
+  Goal,
+  GoalId,
   IsoTimestamp,
   Sha256Digest,
   WorkflowEvent,
@@ -12,7 +14,9 @@ import type {
   WorkflowInstance,
 } from '@codeclosure/domain';
 
-import type { JsonValue } from './contracts.js';
+import type { CommandTarget, DeterministicCommandError, JsonValue } from './contracts.js';
+
+export type { CommandTarget } from './contracts.js';
 
 export interface Clock {
   now(): IsoTimestamp;
@@ -27,12 +31,18 @@ export interface DigestProvider {
   digest(value: unknown): Sha256Digest;
 }
 
-export interface ProcessedCommandView {
+interface ProcessedCommandBase {
   readonly commandId: CommandId;
   readonly inputDigest: Sha256Digest;
-  readonly aggregateType: string;
-  readonly aggregateId: string;
   readonly outcome: JsonValue;
+  readonly completedAt: IsoTimestamp;
+}
+
+export type ProcessedCommandView = ProcessedCommandBase & CommandTarget;
+
+export interface GoalWorkflowView {
+  readonly goal: Goal;
+  readonly workflow: WorkflowInstance;
 }
 
 interface AuditWriteIdentity {
@@ -44,27 +54,43 @@ interface AuditWriteIdentity {
 
 export interface CommitAttemptEvent extends AuditWriteIdentity {
   readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
   readonly event: AttemptEvent;
   readonly workflowAuditEventId: AuditEventId;
-  readonly outcome: JsonValue;
 }
 
 export interface CommitWorkflowEvent extends AuditWriteIdentity {
   readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
   readonly event: WorkflowEvent;
-  readonly outcome: JsonValue;
   readonly attemptAuditEventId?: AuditEventId;
+}
+
+export interface RecordCommandRejection {
+  readonly commandId: CommandId;
+  readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
+  readonly workflowId: WorkflowId;
+  readonly observedWorkflowVersion: WorkflowInstance['version'];
+  readonly error: DeterministicCommandError;
+  readonly completedAt: IsoTimestamp;
 }
 
 export type StoreCommandResult<Value> =
   | { readonly status: 'APPLIED'; readonly outcome: JsonValue; readonly value: Value }
-  | { readonly status: 'REPLAYED'; readonly outcome: JsonValue };
+  | { readonly status: 'REPLAYED'; readonly outcome: JsonValue }
+  | { readonly status: 'VERSION_CONFLICT'; readonly message: string }
+  | { readonly status: 'COMMAND_CONFLICT'; readonly message: string };
 
 export interface WorkflowControlStore {
+  getGoal(goalId: GoalId): Goal | undefined;
+  getGoalWithWorkflow(goalId: GoalId): GoalWorkflowView | undefined;
   getWorkflow(workflowId: WorkflowId): WorkflowInstance | undefined;
+  getWorkflowForGoal(goalId: GoalId): WorkflowInstance | undefined;
   getAttempt(attemptId: AttemptId): Attempt | undefined;
   getProcessedCommand(commandId: CommandId): ProcessedCommandView | undefined;
   nextAttemptSequence(workflowId: WorkflowId): number;
   commitAttemptEvent(input: CommitAttemptEvent): StoreCommandResult<AppliedAttemptEvent>;
   commitWorkflowEvent(input: CommitWorkflowEvent): StoreCommandResult<WorkflowInstance>;
+  recordCommandRejection(input: RecordCommandRejection): StoreCommandResult<undefined>;
 }
