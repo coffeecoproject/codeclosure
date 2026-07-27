@@ -1,0 +1,24 @@
+# Architecture Decision Records
+
+Architecture Decision Records (ADRs) capture decisions that constrain the
+CodeClosure runtime. An accepted ADR is normative unless a later ADR explicitly
+supersedes it.
+
+| ADR | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-standalone-product-repository.md) | Build CodeClosure as a standalone product and repository | Accepted |
+| [0002](0002-host-runtime-and-codex-adapter.md) | Keep deterministic control in the host runtime and use Codex through an adapter | Accepted |
+| [0003](0003-initial-technology-stack.md) | Use a TypeScript, Node.js, pnpm, and SQLite baseline for M1 | Accepted |
+| [0004](0004-authoritative-state-and-audit-log.md) | Store authoritative state and its audit trail transactionally | Accepted |
+| [0005](0005-isolated-candidate-generations.md) | Execute workers in isolated candidate generations | Accepted |
+| [0006](0006-canonical-serialization-and-digest-profiles.md) | Use versioned canonical projections for authority-bearing digests | Accepted |
+
+## ADR lifecycle
+
+- `Proposed`: under discussion and not yet binding.
+- `Accepted`: binding for implementation and review.
+- `Superseded`: replaced by a named later ADR.
+- `Rejected`: considered but not selected.
+
+Editing an accepted ADR to conceal a changed decision is prohibited. Record a
+new ADR and mark the earlier record as superseded instead.
