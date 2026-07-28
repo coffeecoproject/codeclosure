@@ -11,9 +11,10 @@
   "scripts": {
     "build": "tsc -b --force --pretty false",
     "clean": "tsc -b --clean",
+    "docs:check": "node --test scripts/check-docs.test.mjs && node scripts/check-docs.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "gate:quality": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "gate:quality": "pnpm format:check && pnpm docs:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "lint": "eslint .",
     "test": "pnpm -r --if-present test",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false"
@@ -22,6 +23,10 @@
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.1",
     "eslint": "10.8.0",
+    "github-slugger": "2.0.0",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "micromark-extension-gfm": "3.0.0",
     "prettier": "3.9.6",
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0"

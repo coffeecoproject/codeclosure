@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./testing/workflow-runtime": {
+      "types": "./src/workflow-runtime.ts",
+      "import": "./dist/workflow-runtime.js"
     }
   },
   "files": [

@@ -61,7 +61,7 @@ import { DeterministicIds, FakeWorker, FakeWorkerFixture } from '@codeclosure/te
 import {
   WorkflowRuntimeKernel,
   type AttemptContextCompilationRequest,
-} from '../../runtime/dist/workflow-runtime.js';
+} from '@codeclosure/runtime/testing/workflow-runtime';
 
 const createdAt = isoTimestamp('2026-07-27T00:00:00.000Z');
 const digests = new CanonicalJsonSha256DigestProvider();

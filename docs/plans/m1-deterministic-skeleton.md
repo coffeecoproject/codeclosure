@@ -550,19 +550,74 @@ the stronger operational proof as deferred to M2.
 
 ## 12. Quality gate
 
+Detailed per-slice implementation status is recorded in this plan. Before a
+slice is marked implemented, its change set MUST review the root README,
+`ARCHITECTURE.md` status section, relevant domain-document status sections, ADR
+index, and milestone boundary. The README MUST point to this plan rather than
+maintain a second rolling slice, feature, or test inventory. The mechanical
+check enforces one prose-only `Status` section, its canonical authority links,
+and the absence of numbered-slice status elsewhere in the README. The review
+remains responsible for detecting semantically duplicated feature or test
+inventories that a syntax check cannot prove.
+
+The mechanical check MUST parse the same GitHub Flavored Markdown block and
+inline structures that repository readers see and MUST fail closed on Status
+inline nodes outside its prose-and-canonical-link grammar, including footnote
+references. It MUST discover every repository Markdown file in the working tree,
+including repository-owned dot directories and case variants of the `.md`
+extension. The complete discovery exclusion set MUST be the exact,
+case-sensitive directory-segment names `.git`, `node_modules`, `coverage`, and
+`dist`, applied at any depth; prefix, suffix, case-fold, or category inference
+MUST NOT broaden that set. Every discovered Markdown source MUST be a regular
+file whose complete repository-relative Git path uses portable segments. A
+Markdown-named symbolic link MUST fail as an unsupported source rather than be
+followed or silently omitted; symbolic links used only while resolving a link
+destination remain governed by the containment rules below.
+
+Repository-local link identity MUST use forward-slash Git paths before it is
+mapped to the host filesystem. Only a literal `/` may separate URL path
+segments; encoded or repeated separators and encoded dot segments MUST fail
+closed. A trailing separator MUST resolve to a directory. Backslashes are not
+portable path separators. A portable repository path segment MUST contain none
+of U+0000 through U+001F or `<`, `>`, `:`, `"`, `\`, `|`, `?`, and `*`; MUST
+NOT end in a period or space; and MUST NOT use the case-insensitive
+pre-extension device names `AUX`, `CON`, `CONIN$`, `CONOUT$`, `NUL`, `PRN`,
+`COM1` through `COM9`, `COM¹` through `COM³`, `LPT1` through `LPT9`, or `LPT¹`
+through `LPT³`. These rules apply to every source and local-link destination
+segment, including the final destination, before dot-segment normalization can
+remove it or the path is mapped to the filesystem. Before general URI-scheme
+classification, a leading one-letter ASCII designator followed by `:` MUST
+fail as an ambiguous Windows drive path. Protocol-relative destinations and
+destinations with a multi-character ASCII URI scheme are external. Unicode
+normalization or case-fold path collisions, platform-configured path-length
+limits, external reachability, and scheme-specific validity are outside this
+mechanical check. A symbolic link on a checked path MUST have a relative,
+forward-slash target, apply the same validate-before-normalize ordering,
+preserve exact path casing at every hop, remain inside the repository, and
+terminate without a cycle or an unbounded traversal.
+
+README Status link visibility and numbered-slice detection MUST operate on one
+reader-visible text projection. That projection MUST ignore Unicode
+control characters and default-ignorable code points so non-visible content
+cannot satisfy a visible-link requirement or split text that the reader still
+perceives as `Slice N`.
+
 The root quality command must run, in order:
 
 1. formatting check;
-2. lint;
-3. TypeScript typecheck;
-4. unit and property tests;
-5. canonical digest golden-vector and replay tests;
-6. SQLite migration/reopen tests;
-7. authority-codec, Store-contract, and write/read/reopen closure tests;
-8. CLI integration and restart tests;
-9. adversarial demo tests;
-10. invariant-coverage check;
-11. production build.
+2. GitHub Flavored Markdown structure, exact portable repository-local link,
+   GitHub-style Markdown heading-anchor, and structural README status-source
+   check;
+3. lint;
+4. TypeScript typecheck;
+5. unit and property tests;
+6. canonical digest golden-vector and replay tests;
+7. SQLite migration/reopen tests;
+8. authority-codec, Store-contract, and write/read/reopen closure tests;
+9. CLI integration and restart tests;
+10. adversarial demo tests;
+11. invariant-coverage check;
+12. production build.
 
 The exact script names are established in Slice 0 and documented in the root
 README. A green command is evidence for M1 only when its source revision and

@@ -69,7 +69,7 @@ import * as publicRuntimeApi from '@codeclosure/runtime';
 import {
   WorkflowRuntimeKernel,
   type PhaseGuardEvaluator,
-} from '../../runtime/dist/workflow-runtime.js';
+} from '@codeclosure/runtime/testing/workflow-runtime';
 
 import { DeterministicClock, DeterministicIds } from '../src/deterministic-fixtures.ts';
 import { assertWorkflowControlStoreContract } from '../src/control-store-contract.ts';

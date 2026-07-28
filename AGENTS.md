@@ -81,6 +81,27 @@ Once M1 scaffolding exists:
 - Separate current behavior, planned behavior, and reference inspiration.
 - Do not describe an unimplemented milestone in the present tense.
 - Do not create a second completion authority in a new report, UI, or adapter.
+- Documentation MUST use GitHub Flavored Markdown structure and MUST NOT use raw HTML. A
+  fragment targeting a Markdown file MUST resolve to that file's GitHub-style
+  generated heading anchor. Local paths MUST use exact repository casing and
+  MUST resolve inside the repository even when symbolic links are present.
+  A checked Markdown source MUST be a regular file with a portable
+  repository-relative Git path; a Markdown-named symbolic link MUST fail rather
+  than be followed or silently skipped. `pnpm docs:check` is the executable
+  check for these rules.
+- Treat `docs/plans/m1-deterministic-skeleton.md` as the detailed per-slice
+  implementation-status record and `docs/milestones.md` as the milestone
+  boundary. The root README MUST contain exactly one level-two `Status` section,
+  that section MUST contain prose paragraphs only, and its only links MUST point
+  to those two records. The README MUST NOT contain a numbered rolling-slice
+  status anywhere.
+- The root README MUST NOT duplicate a rolling feature or test inventory.
+  Because semantic equivalence is not mechanically decidable from prose, the
+  slice-close documentation review owns this check; `pnpm docs:check` enforces
+  only the structural status contract above.
+- When a slice is marked implemented, the same change MUST review the root
+  README, the `ARCHITECTURE.md` status section, relevant domain-document status
+  sections, the ADR index, and the milestone boundary for consistency.
 - Update links and the M0/M1 review matrix when canonical documents move.
 
 ## Completion Claims

@@ -11,43 +11,18 @@ complete.
 
 ## Status
 
-The M0 architecture baseline is complete and tracked. **M1 implementation is in
-progress through Slice 4.** The repository currently contains the strict
-TypeScript workspace, pure Workflow and Candidate reducers, and the
-transactional SQLite control-store foundation with migration, restart,
-optimistic-concurrency, idempotency, and atomic state-plus-audit tests. Runtime
-handlers expose narrow Goal-based start/cancel commands, own Attempt lifecycle
-changes, persist deterministic command rejections for replay, and keep the Goal
-lifecycle projection transactionally synchronized with its Workflow. Command
-admission checks Goal/Workflow freshness before child lookup, guard evaluation,
-or domain planning. Persisted command outcomes bind the exact target, owning
-Goal and Workflow, disposition, and observed Workflow snapshot; replay
-revalidates those bindings. Internal phase guards are runtime-derived,
-evaluator, persistence, and internal failures remain distinct, `CLOSEOUT`
-remains unavailable until Slice 6 supplies a current Acceptance Decision, and
-store conflicts are typed.
+The M0 architecture baseline is complete and tracked. M1 implementation is in
+progress with `FakeWorker` only. The
+[M1 implementation plan](docs/plans/m1-deterministic-skeleton.md) is the
+detailed record of which implementation slices have been verified; the
+[milestone document](docs/milestones.md) defines the complete M1 scope and exit
+criteria.
 
-The Slice 4 path now compiles a deterministic minimal Context package, verifies
-its authoritative Goal bindings, rejects external source entries until M1 has
-a durable source resolver, binds a Runtime-selected installed Policy, and
-atomically persists its Manifest with the Attempt. Policy identity is computed
-by Runtime, independently rechecked by the Store, and committed with its audit.
-A typed `WorkerPort` is reached only after a durable dispatch claim wins its
-transaction against cancellation. Every Worker receipt retains that causal
-claim; admitted events match it exactly. Request-bound Worker event IDs are
-schema-checked, digest-bound, replay-safe, and stored with their resulting
-Attempt mutation in one transaction. Empty or invalid-only streams become
-protocol failures, while abrupt termination and control-plane failures remain
-distinct. Adversarial `FakeWorker` fixtures exercise malformed, stale,
-duplicate, fabricated, empty-stream, and abrupt-failure behavior.
-Runtime-owned timestamps preserve causal order across clock rollback, while
-reducers, the Store, and SQLite reject older bypassed events, relationship
-forgery, immutable-record rewrites, and repeated terminal Workflow mutations.
-
-This is not yet an end-to-end working runtime. Candidate/evidence generation,
-Acceptance, CLI proof scenarios, startup recovery orchestration and inspection,
-and the final M1 audit remain incomplete. Implemented slices must not be read as
-an M1 or product-completion claim.
+This README intentionally does not duplicate the rolling slice, feature, or
+test inventory. A slice marked implemented in the M1 plan is evidence for that
+bounded slice only. It is not an M1-completion or product-completion claim. M1
+does not integrate Codex, edit a real project, or perform real project
+verification.
 
 ## Development
 
@@ -62,23 +37,18 @@ corepack pnpm gate:quality
 Current repository commands are:
 
 - `pnpm format` / `pnpm format:check` — write or verify code/config formatting;
+- `pnpm docs:check` — verify repository GitHub Flavored Markdown structure,
+  portable Markdown sources, exact portable local links, heading anchors, and
+  the structural README status-source contract;
 - `pnpm lint` — run ESLint with type-aware TypeScript rules;
 - `pnpm typecheck` — build project references and type-check test sources;
 - `pnpm test` — run workspace tests with Node's test runner;
 - `pnpm build` — force a clean production compilation pass;
 - `pnpm gate:quality` — run the current checks in required order.
 
-The current test step includes reducer, migration upgrade and poison-preflight,
-Runtime-plus-SQLite integration, Goal projection, reopen, stale-write,
-rejection replay, persistence decoding, stale-command admission precedence,
-replay target binding, evaluator-failure classification, API-capability
-boundaries, forged-closeout rejection, Context source cross-validation,
-canonical digest vectors, dispatch/cancellation ordering, adversarial Worker
-events, Policy installation audit/digest closure, dispatch-claim causality,
-causal clock rollback, terminal event bypass, poisoned migration preflights,
-and injected transaction rollback checks. Later M1 slices add
-Candidate/evidence and Acceptance proof, CLI integration, recovery
-orchestration, and an invariant-coverage check before any M1 completion claim.
+The exact implemented proof coverage is recorded with each slice in the M1
+implementation plan. A green quality command proves only the checks present at
+that source revision; it does not by itself establish M1 completion.
 
 ## Why CodeClosure Exists
 
