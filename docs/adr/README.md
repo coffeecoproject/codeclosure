@@ -24,6 +24,7 @@ supersedes it.
 | [0016](0016-candidate-and-evidence-authority-boundary.md) | Coordinate Candidate and Evidence authority through source-bound Workflow transactions | Accepted |
 | [0017](0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md) | Derive external-boundary authority and replay Evidence Sets at their audit sequence | Accepted |
 | [0018](0018-deterministic-acceptance-and-closeout-authority.md) | Close deterministic Acceptance, replay, closeout, and repair authority | Accepted |
+| [0019](0019-exact-acceptance-repair-authority.md) | Retain exact Acceptance repair authority across commit and restart | Accepted |
 
 ## ADR lifecycle
 

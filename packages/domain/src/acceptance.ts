@@ -1,22 +1,28 @@
 import {
+  aggregateVersion,
   acceptanceDecisionId,
   candidateGenerationId,
+  checkSpecificationId,
   goalId,
   goalRevision,
   isoTimestamp,
   pendingIssueId,
   policyBundleId,
   sha256Digest,
+  verificationObligationId,
   workflowId,
   workflowVersion,
+  type AggregateVersion,
   type AcceptanceDecisionId,
   type CandidateGenerationId,
+  type CheckSpecificationId,
   type GoalId,
   type GoalRevision,
   type IsoTimestamp,
   type PendingIssueId,
   type PolicyBundleId,
   type Sha256Digest,
+  type VerificationObligationId,
   type WorkflowId,
   type WorkflowVersion,
 } from './identifiers.js';
@@ -160,6 +166,33 @@ export interface CloseoutRecord {
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly closedAt: IsoTimestamp;
+}
+
+export interface AcceptanceRepairRecord {
+  readonly schemaVersion: 1;
+  readonly goalId: GoalId;
+  readonly goalRevision: GoalRevision;
+  readonly workflowId: WorkflowId;
+  readonly workflowVersion: WorkflowVersion;
+  readonly acceptanceDecisionId: AcceptanceDecisionId;
+  readonly acceptanceDecisionDigest: Sha256Digest;
+  readonly inputManifestDigest: Sha256Digest;
+  readonly rejectedCandidateGenerationId: CandidateGenerationId;
+  readonly rejectedCandidateVersion: AggregateVersion;
+  readonly rejectedCandidateDigest: Sha256Digest;
+  readonly repairCandidateGenerationId: CandidateGenerationId;
+  readonly repairCandidateSequence: number;
+  readonly repairCandidateBaseDigest: Sha256Digest;
+  readonly freezeCheckId: CheckSpecificationId;
+  readonly freezeCheckVersion: string;
+  readonly verificationCheckId: CheckSpecificationId;
+  readonly verificationCheckVersion: string;
+  readonly verificationObligationIds: readonly VerificationObligationId[];
+  readonly evidenceSetDigest: Sha256Digest;
+  readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleDigest: Sha256Digest;
+  readonly repairedAt: IsoTimestamp;
+  readonly repairDigest: Sha256Digest;
 }
 
 function assertKnown<Value extends string>(
@@ -396,6 +429,92 @@ export function assertCloseoutRecordInvariant(record: CloseoutRecord): void {
   policyBundleId(record.policyBundleId);
   sha256Digest(record.policyBundleDigest);
   isoTimestamp(record.closedAt);
+}
+
+export function assertAcceptanceRepairRecordInvariant(record: AcceptanceRepairRecord): void {
+  if (!hasExactValue(record.schemaVersion, 1)) {
+    throw new DomainInvariantError('Acceptance Repair Record schema version is unsupported');
+  }
+  goalId(record.goalId);
+  goalRevision(record.goalRevision);
+  workflowId(record.workflowId);
+  workflowVersion(record.workflowVersion);
+  acceptanceDecisionId(record.acceptanceDecisionId);
+  sha256Digest(record.acceptanceDecisionDigest);
+  sha256Digest(record.inputManifestDigest);
+  candidateGenerationId(record.rejectedCandidateGenerationId);
+  aggregateVersion(record.rejectedCandidateVersion);
+  sha256Digest(record.rejectedCandidateDigest);
+  candidateGenerationId(record.repairCandidateGenerationId);
+  if (record.rejectedCandidateGenerationId === record.repairCandidateGenerationId) {
+    throw new DomainInvariantError('Acceptance repair must create a distinct Candidate generation');
+  }
+  if (!Number.isSafeInteger(record.repairCandidateSequence) || record.repairCandidateSequence < 2) {
+    throw new DomainInvariantError('Acceptance repair Candidate sequence must be at least two');
+  }
+  sha256Digest(record.repairCandidateBaseDigest);
+  if (record.repairCandidateBaseDigest !== record.rejectedCandidateDigest) {
+    throw new DomainInvariantError(
+      'Acceptance repair base must equal the rejected Candidate digest',
+    );
+  }
+  checkSpecificationId(record.freezeCheckId);
+  assertNonBlank(record.freezeCheckVersion, 'Acceptance repair freeze Check version');
+  checkSpecificationId(record.verificationCheckId);
+  assertNonBlank(record.verificationCheckVersion, 'Acceptance repair verification Check version');
+  if (record.freezeCheckId === record.verificationCheckId) {
+    throw new DomainInvariantError('Acceptance repair Checks must have distinct identities');
+  }
+  if (record.verificationObligationIds.length === 0) {
+    throw new DomainInvariantError('Acceptance repair requires Verification Obligations');
+  }
+  const obligationIds = new Set<string>();
+  for (const obligationId of record.verificationObligationIds) {
+    verificationObligationId(obligationId);
+    if (obligationIds.has(obligationId)) {
+      throw new DomainInvariantError(
+        'Acceptance repair Verification Obligation identities must be unique',
+      );
+    }
+    obligationIds.add(obligationId);
+  }
+  sha256Digest(record.evidenceSetDigest);
+  policyBundleId(record.policyBundleId);
+  sha256Digest(record.policyBundleDigest);
+  isoTimestamp(record.repairedAt);
+  sha256Digest(record.repairDigest);
+}
+
+export type AcceptanceRepairRecordDigestFields = Omit<AcceptanceRepairRecord, 'repairDigest'>;
+
+export function acceptanceRepairRecordProjection(
+  record: AcceptanceRepairRecordDigestFields,
+): unknown {
+  return {
+    schemaVersion: record.schemaVersion,
+    goalId: record.goalId,
+    goalRevision: record.goalRevision,
+    workflowId: record.workflowId,
+    workflowVersion: record.workflowVersion,
+    acceptanceDecisionId: record.acceptanceDecisionId,
+    acceptanceDecisionDigest: record.acceptanceDecisionDigest,
+    inputManifestDigest: record.inputManifestDigest,
+    rejectedCandidateGenerationId: record.rejectedCandidateGenerationId,
+    rejectedCandidateVersion: record.rejectedCandidateVersion,
+    rejectedCandidateDigest: record.rejectedCandidateDigest,
+    repairCandidateGenerationId: record.repairCandidateGenerationId,
+    repairCandidateSequence: record.repairCandidateSequence,
+    repairCandidateBaseDigest: record.repairCandidateBaseDigest,
+    freezeCheckId: record.freezeCheckId,
+    freezeCheckVersion: record.freezeCheckVersion,
+    verificationCheckId: record.verificationCheckId,
+    verificationCheckVersion: record.verificationCheckVersion,
+    verificationObligationIds: record.verificationObligationIds,
+    evidenceSetDigest: record.evidenceSetDigest,
+    policyBundleId: record.policyBundleId,
+    policyBundleDigest: record.policyBundleDigest,
+    repairedAt: record.repairedAt,
+  };
 }
 
 export type AcceptanceInputManifestSemanticFields = Omit<

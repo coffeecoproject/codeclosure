@@ -25,6 +25,7 @@ import {
   applyWorkflowEvent,
   acceptanceDecisionProjection,
   acceptanceInputManifestProjection,
+  acceptanceRepairRecordProjection,
   acceptanceDecisionId,
   attemptId,
   auditEventId,
@@ -36,6 +37,7 @@ import {
   decodeContextPackage,
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
+  decodeAcceptanceRepairRecord,
   decodeCandidate,
   decodeCandidateEvent,
   decodeCandidateGeneration,
@@ -71,6 +73,7 @@ import {
   type AcceptanceDecision,
   type AcceptanceDecisionId,
   type AcceptanceInputManifest,
+  type AcceptanceRepairRecord,
   type Attempt,
   type AttemptEvent,
   type AttemptId,
@@ -182,6 +185,7 @@ import {
   decodeAttempt,
   decodeAcceptanceDecisionRow,
   decodeAcceptanceInputManifestRow,
+  decodeAcceptanceRepairRow,
   decodeAuditEvent,
   decodeCandidateGenerationRow,
   decodeCandidateRow,
@@ -240,6 +244,7 @@ export const AcceptanceTransactionStep = {
   AFTER_REPAIR_GENERATION_WRITE: 'AFTER_REPAIR_GENERATION_WRITE',
   AFTER_REPAIR_CHECK_SPECIFICATION_WRITE: 'AFTER_REPAIR_CHECK_SPECIFICATION_WRITE',
   AFTER_REPAIR_OBLIGATION_WRITE: 'AFTER_REPAIR_OBLIGATION_WRITE',
+  AFTER_REPAIR_RECORD_WRITE: 'AFTER_REPAIR_RECORD_WRITE',
 } as const;
 export type AcceptanceTransactionStep =
   (typeof AcceptanceTransactionStep)[keyof typeof AcceptanceTransactionStep];
@@ -809,6 +814,7 @@ function validateCommitAcceptedCloseout(rawInput: CommitAcceptedCloseout): Commi
 
 function validateCommitAcceptanceRepair(rawInput: CommitAcceptanceRepair): CommitAcceptanceRepair {
   const base = validateCommitWorkflowEventInput(rawInput);
+  const repair = decodeAcceptanceRepairRecord(rawInput.repair);
   const candidate = decodeCandidate(rawInput.candidate);
   const rejectedCandidateEvent = decodeCandidateEvent(rawInput.rejectedCandidateEvent);
   const generation = decodeCandidateGeneration(rawInput.generation);
@@ -828,6 +834,22 @@ function validateCommitAcceptanceRepair(rawInput: CommitAcceptanceRepair): Commi
     obligations.length,
     'Repair Verification Obligation',
   );
+  const rejectedCandidateAuditEventId = auditEventId(rawInput.rejectedCandidateAuditEventId);
+  const generationAuditEventId = auditEventId(rawInput.generationAuditEventId);
+  const repairAuditEventId = auditEventId(rawInput.repairAuditEventId);
+  const allAuditEventIds = [
+    base.auditEventId,
+    rejectedCandidateAuditEventId,
+    generationAuditEventId,
+    ...checkSpecificationAuditEventIds,
+    ...obligationAuditEventIds,
+    repairAuditEventId,
+  ];
+  if (new Set(allAuditEventIds).size !== allAuditEventIds.length) {
+    throw new StoreInvariantError('Acceptance repair Audit identities must be distinct');
+  }
+  const freeze = checkSpecifications[0];
+  const verification = checkSpecifications[1];
   if (
     base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
     base.event.fromPhase !== WorkflowPhase.FINAL_VERIFY ||
@@ -840,7 +862,24 @@ function validateCommitAcceptanceRepair(rawInput: CommitAcceptanceRepair): Commi
     generation.state !== CandidateGenerationState.MUTABLE ||
     generation.version !== 1 ||
     generation.parentGenerationId !== rejectedCandidateEvent.candidateGenerationId ||
-    generation.candidateId !== candidate.id
+    generation.candidateId !== candidate.id ||
+    repair.workflowId !== base.event.workflowId ||
+    repair.workflowVersion !== base.event.toVersion ||
+    repair.rejectedCandidateGenerationId !== rejectedCandidateEvent.candidateGenerationId ||
+    repair.rejectedCandidateVersion !== rejectedCandidateEvent.toVersion ||
+    repair.repairCandidateGenerationId !== generation.id ||
+    repair.repairCandidateSequence !== generation.sequence ||
+    repair.repairCandidateBaseDigest !== generation.baseDigest ||
+    repair.repairedAt !== base.event.occurredAt ||
+    checkSpecifications.length !== 2 ||
+    freeze === undefined ||
+    verification === undefined ||
+    repair.freezeCheckId !== freeze.id ||
+    repair.freezeCheckVersion !== freeze.version ||
+    repair.verificationCheckId !== verification.id ||
+    repair.verificationCheckVersion !== verification.version ||
+    canonicalizeJson(repair.verificationObligationIds) !==
+      canonicalizeJson(obligations.map((obligation) => obligation.id))
   ) {
     throw new StoreInvariantError(
       'Acceptance repair does not bind one child-generation transition',
@@ -848,18 +887,17 @@ function validateCommitAcceptanceRepair(rawInput: CommitAcceptanceRepair): Commi
   }
   return Object.freeze({
     ...base,
-    acceptanceDecisionId: acceptanceDecisionId(rawInput.acceptanceDecisionId),
-    acceptanceDecisionDigest: sha256Digest(rawInput.acceptanceDecisionDigest),
-    inputManifestDigest: sha256Digest(rawInput.inputManifestDigest),
+    repair,
     candidate,
     rejectedCandidateEvent,
     generation,
     checkSpecifications,
     obligations,
-    rejectedCandidateAuditEventId: auditEventId(rawInput.rejectedCandidateAuditEventId),
-    generationAuditEventId: auditEventId(rawInput.generationAuditEventId),
+    rejectedCandidateAuditEventId,
+    generationAuditEventId,
     checkSpecificationAuditEventIds,
     obligationAuditEventIds,
+    repairAuditEventId,
   });
 }
 
@@ -1386,6 +1424,17 @@ export class SqliteControlStore implements AcceptanceControlStore {
       .prepare('SELECT * FROM workflow_closeouts WHERE workflow_id = ?')
       .get(workflowIdentifier);
     return row === undefined ? undefined : decodeCloseoutRow(row);
+  }
+
+  public getAcceptanceRepairForRejectedGeneration(
+    rawCandidateGenerationIdentifier: CandidateGenerationId,
+  ): AcceptanceRepairRecord | undefined {
+    this.assertOpen();
+    const generationIdentifier = candidateGenerationId(rawCandidateGenerationIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM acceptance_repairs WHERE rejected_candidate_generation_id = ?')
+      .get(generationIdentifier);
+    return row === undefined ? undefined : decodeAcceptanceRepairRow(row);
   }
 
   public getWorkerDispatchClaim(rawAttemptIdentifier: AttemptId): WorkerDispatchClaim | undefined {
@@ -3555,8 +3604,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
       if (current.version !== input.event.fromVersion) {
         throw new OptimisticConcurrencyError('Workflow', current.id);
       }
-      const manifest = this.requireAcceptanceManifest(input.inputManifestDigest);
-      const decision = this.requireAcceptanceDecision(input.acceptanceDecisionId);
+      const manifest = this.requireAcceptanceManifest(input.repair.inputManifestDigest);
+      const decision = this.requireAcceptanceDecision(input.repair.acceptanceDecisionId);
       const compiled = this.assertCurrentAcceptanceDecision(manifest, decision);
       const oldGeneration = compiled.authority.generation;
       const currentCandidate = this.getCandidateForGoal(compiled.authority.goal.id);
@@ -3566,7 +3615,6 @@ export class SqliteControlStore implements AcceptanceControlStore {
       if (
         decision.outcome !== AcceptanceOutcome.REJECT_REPAIRABLE ||
         input.event.occurredAt < decision.issuedAt ||
-        decision.decisionDigest !== input.acceptanceDecisionDigest ||
         currentCandidate === undefined ||
         canonicalizeJson(currentCandidate) !== canonicalizeJson(input.candidate) ||
         oldGeneration.id !== input.rejectedCandidateEvent.candidateGenerationId ||
@@ -3606,7 +3654,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
       if (freeze === undefined || verification === undefined) {
         throw new StoreInvariantError('Acceptance repair lacks its fresh Check authority');
       }
-      validateM1CandidateEvidencePolicy(
+      const candidatePolicy = validateM1CandidateEvidencePolicy(
         compiled.authority.goal,
         input.generation,
         { freeze, verification, obligations: input.obligations },
@@ -3614,20 +3662,44 @@ export class SqliteControlStore implements AcceptanceControlStore {
       );
       const nextWorkflow = applyWorkflowEvent(current, input.event);
       const rejectedGeneration = applyCandidateEvent(oldGeneration, input.rejectedCandidateEvent);
-      const expectedPayloadDigest = sha256Digest(
-        canonicalAuthorityDigests.digest({
-          event: input.event,
-          acceptanceDecisionId: decision.id,
-          acceptanceDecisionDigest: decision.decisionDigest,
-          inputManifestDigest: manifest.manifestDigest,
-          rejectedCandidateEvent: input.rejectedCandidateEvent,
-          generation: input.generation,
-          checkSpecifications: input.checkSpecifications,
-          obligations: input.obligations,
-        }),
-      );
-      if (input.payloadDigest !== expectedPayloadDigest) {
-        throw new StoreInvariantError('Repair audit digest does not bind the compound authority');
+      const expectedRepairFields = Object.freeze({
+        schemaVersion: 1 as const,
+        goalId: compiled.authority.goal.id,
+        goalRevision: compiled.authority.goal.revision,
+        workflowId: current.id,
+        workflowVersion: nextWorkflow.version,
+        acceptanceDecisionId: decision.id,
+        acceptanceDecisionDigest: decision.decisionDigest,
+        inputManifestDigest: manifest.manifestDigest,
+        rejectedCandidateGenerationId: oldGeneration.id,
+        rejectedCandidateVersion: rejectedGeneration.version,
+        rejectedCandidateDigest: oldGeneration.frozenDigest,
+        repairCandidateGenerationId: input.generation.id,
+        repairCandidateSequence: input.generation.sequence,
+        repairCandidateBaseDigest: input.generation.baseDigest,
+        freezeCheckId: candidatePolicy.freeze.id,
+        freezeCheckVersion: candidatePolicy.freeze.version,
+        verificationCheckId: candidatePolicy.verification.id,
+        verificationCheckVersion: candidatePolicy.verification.version,
+        verificationObligationIds: Object.freeze(
+          candidatePolicy.obligations.map((obligation) => obligation.id),
+        ),
+        evidenceSetDigest: manifest.evidenceSetDigest,
+        policyBundleId: manifest.policyBundleId,
+        policyBundleDigest: manifest.policyBundleDigest,
+        repairedAt: input.event.occurredAt,
+      });
+      const expectedRepair = decodeAcceptanceRepairRecord({
+        ...expectedRepairFields,
+        repairDigest: sha256Digest(
+          canonicalAuthorityDigests.digest(acceptanceRepairRecordProjection(expectedRepairFields)),
+        ),
+      });
+      if (
+        canonicalizeJson(input.repair) !== canonicalizeJson(expectedRepair) ||
+        input.payloadDigest !== expectedRepair.repairDigest
+      ) {
+        throw new StoreInvariantError('Repair record does not bind the exact current authority');
       }
       const auditTrace = {
         ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
@@ -3721,6 +3793,18 @@ export class SqliteControlStore implements AcceptanceControlStore {
         occurredAt: input.event.occurredAt,
         ...auditTrace,
       });
+      this.insertAuditEvent({
+        id: input.repairAuditEventId,
+        aggregateType: 'ACCEPTANCE_REPAIR',
+        aggregateId: input.repair.rejectedCandidateGenerationId,
+        eventType: 'ACCEPTANCE_REPAIR_RECORDED',
+        commandId: input.event.commandId,
+        payloadDigest: input.repair.repairDigest,
+        occurredAt: input.repair.repairedAt,
+        ...auditTrace,
+      });
+      this.insertAcceptanceRepair(input.repair);
+      this.probe(AcceptanceTransactionStep.AFTER_REPAIR_RECORD_WRITE);
       this.probe(TransactionStep.AFTER_AUDIT_APPEND);
 
       const outcome = storedCommandOutcomeToJson(
@@ -3738,8 +3822,9 @@ export class SqliteControlStore implements AcceptanceControlStore {
       this.probe(TransactionStep.BEFORE_COMMIT);
 
       const authority = this.getCandidateAuthorityForWorkflow(current.id);
-      if (authority?.generation.id !== input.generation.id) {
-        throw new StoreInvariantError('Repair Candidate authority did not round-trip');
+      const repair = this.getAcceptanceRepairForRejectedGeneration(oldGeneration.id);
+      if (authority?.generation.id !== input.generation.id || repair === undefined) {
+        throw new StoreInvariantError('Acceptance repair authority did not round-trip');
       }
       const persistedCommand = this.assertProcessedCommandReadable(
         input.event.commandId,
@@ -3755,6 +3840,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
         ...input.checkSpecificationAuditEventIds,
         ...input.obligationAuditEventIds,
         input.auditEventId,
+        input.repairAuditEventId,
       ]);
       return {
         status: 'APPLIED',
@@ -3765,6 +3851,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
           rejectedGeneration,
           checkSpecifications: input.checkSpecifications,
           obligations: input.obligations,
+          repair,
         }),
       };
     });
@@ -4217,6 +4304,48 @@ export class SqliteControlStore implements AcceptanceControlStore {
         closeout.policyBundleId,
         closeout.policyBundleDigest,
         closeout.closedAt,
+      );
+  }
+
+  private insertAcceptanceRepair(repair: AcceptanceRepairRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO acceptance_repairs(
+           rejected_candidate_generation_id, schema_version, goal_id, goal_revision,
+           workflow_id, workflow_version, acceptance_decision_id,
+           acceptance_decision_digest, input_manifest_digest, rejected_candidate_version,
+           rejected_candidate_digest, repair_candidate_generation_id,
+           repair_candidate_sequence, repair_candidate_base_digest, freeze_check_id,
+           freeze_check_version, verification_check_id, verification_check_version,
+           verification_obligation_ids_json, evidence_set_digest, policy_bundle_id,
+           policy_bundle_digest, repaired_at, repair_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        repair.rejectedCandidateGenerationId,
+        repair.schemaVersion,
+        repair.goalId,
+        repair.goalRevision,
+        repair.workflowId,
+        repair.workflowVersion,
+        repair.acceptanceDecisionId,
+        repair.acceptanceDecisionDigest,
+        repair.inputManifestDigest,
+        repair.rejectedCandidateVersion,
+        repair.rejectedCandidateDigest,
+        repair.repairCandidateGenerationId,
+        repair.repairCandidateSequence,
+        repair.repairCandidateBaseDigest,
+        repair.freezeCheckId,
+        repair.freezeCheckVersion,
+        repair.verificationCheckId,
+        repair.verificationCheckVersion,
+        serializeJson(decodeJsonValue(repair.verificationObligationIds)),
+        repair.evidenceSetDigest,
+        repair.policyBundleId,
+        repair.policyBundleDigest,
+        repair.repairedAt,
+        repair.repairDigest,
       );
   }
 
@@ -4743,7 +4872,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
       invalidationAudits.length !== history.length - 1 ||
       audits.length !== history.length
     ) {
-      reject();
+      return reject();
     }
 
     const invalidated = history[1];
@@ -5586,6 +5715,220 @@ export class SqliteControlStore implements AcceptanceControlStore {
     return compiled;
   }
 
+  private assertRetainedAcceptanceRepairAuthority(repair: AcceptanceRepairRecord): void {
+    const reject = (): never => {
+      throw new StoreInvariantError(
+        `Acceptance repair ${repair.rejectedCandidateGenerationId} lacks exact retained authority`,
+      );
+    };
+    const workflow = this.getWorkflow(repair.workflowId);
+    const goal = this.getGoal(repair.goalId);
+    const rejected = this.getCandidateGeneration(repair.rejectedCandidateGenerationId);
+    const child = this.getCandidateGeneration(repair.repairCandidateGenerationId);
+    const manifest = this.getAcceptanceInputManifest(repair.inputManifestDigest);
+    const decision = this.getAcceptanceDecision(repair.acceptanceDecisionId);
+    const freezeCheck = this.getCheckSpecification(repair.freezeCheckId);
+    const verificationCheck = this.getCheckSpecification(repair.verificationCheckId);
+    const candidateRow =
+      rejected === undefined
+        ? undefined
+        : this.#database.prepare('SELECT * FROM candidates WHERE id = ?').get(rejected.candidateId);
+    const candidate = candidateRow === undefined ? undefined : decodeCandidateRow(candidateRow);
+    const retainedObligations: VerificationObligation[] = [];
+    for (const identifier of repair.verificationObligationIds) {
+      const obligation = this.getVerificationObligation(identifier);
+      if (obligation === undefined) {
+        return reject();
+      }
+      retainedObligations.push(obligation);
+    }
+    const obligations = Object.freeze(retainedObligations);
+    const childObligations =
+      goal === undefined
+        ? []
+        : this.listVerificationObligations(goal.id).filter(
+            (obligation) => obligation.candidateGenerationId === child?.id,
+          );
+    if (
+      workflow === undefined ||
+      goal === undefined ||
+      rejected === undefined ||
+      child === undefined ||
+      manifest === undefined ||
+      decision === undefined ||
+      freezeCheck === undefined ||
+      verificationCheck === undefined ||
+      candidate === undefined
+    ) {
+      return reject();
+    }
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(acceptanceRepairRecordProjection(repair)),
+    );
+    if (
+      workflow.goalId !== repair.goalId ||
+      workflow.goalRevision !== repair.goalRevision ||
+      workflow.version < repair.workflowVersion ||
+      goal.revision !== repair.goalRevision ||
+      candidate.goalId !== repair.goalId ||
+      rejected.candidateId !== candidate.id ||
+      rejected.state !== CandidateGenerationState.REJECTED ||
+      rejected.version !== repair.rejectedCandidateVersion ||
+      rejected.frozenDigest !== repair.rejectedCandidateDigest ||
+      rejected.updatedAt !== repair.repairedAt ||
+      child.candidateId !== rejected.candidateId ||
+      child.parentGenerationId !== rejected.id ||
+      child.sequence !== rejected.sequence + 1 ||
+      child.sequence !== repair.repairCandidateSequence ||
+      child.baseDigest !== repair.repairCandidateBaseDigest ||
+      child.createdAt !== repair.repairedAt ||
+      manifest.goalId !== repair.goalId ||
+      manifest.goalRevision !== repair.goalRevision ||
+      manifest.workflowId !== repair.workflowId ||
+      manifest.workflowVersion + 1 !== repair.workflowVersion ||
+      manifest.candidateGenerationId !== repair.rejectedCandidateGenerationId ||
+      manifest.candidateDigest !== repair.rejectedCandidateDigest ||
+      manifest.evidenceSetDigest !== repair.evidenceSetDigest ||
+      manifest.policyBundleId !== repair.policyBundleId ||
+      manifest.policyBundleDigest !== repair.policyBundleDigest ||
+      decision.outcome !== AcceptanceOutcome.REJECT_REPAIRABLE ||
+      decision.inputManifestDigest !== repair.inputManifestDigest ||
+      decision.decisionDigest !== repair.acceptanceDecisionDigest ||
+      decision.policyBundleDigest !== repair.policyBundleDigest ||
+      decision.issuedAt > repair.repairedAt ||
+      freezeCheck.version !== repair.freezeCheckVersion ||
+      verificationCheck.version !== repair.verificationCheckVersion ||
+      childObligations.length !== obligations.length ||
+      canonicalizeJson(childObligations.map((obligation) => obligation.id).sort()) !==
+        canonicalizeJson([...repair.verificationObligationIds].sort()) ||
+      repair.repairDigest !== expectedDigest
+    ) {
+      reject();
+    }
+
+    try {
+      validateM1CandidateEvidencePolicy(
+        goal,
+        child,
+        {
+          freeze: freezeCheck,
+          verification: verificationCheck,
+          obligations,
+        },
+        repair.repairedAt,
+      );
+    } catch {
+      reject();
+    }
+
+    const repairAudits = this.listAuditEvents(
+      'ACCEPTANCE_REPAIR',
+      repair.rejectedCandidateGenerationId,
+    ).filter((audit) => audit.eventType === 'ACCEPTANCE_REPAIR_RECORDED');
+    const repairAudit = repairAudits[0];
+    if (repairAudit === undefined) {
+      return reject();
+    }
+    if (
+      repairAudits.length !== 1 ||
+      repairAudit.actorType !== 'RUNTIME' ||
+      repairAudit.beforeVersion !== undefined ||
+      repairAudit.afterVersion !== undefined ||
+      repairAudit.payloadDigest !== repair.repairDigest ||
+      repairAudit.occurredAt !== repair.repairedAt
+    ) {
+      return reject();
+    }
+    if (repairAudit.commandId === undefined) {
+      return reject();
+    }
+    const repairCommandId = repairAudit.commandId;
+
+    const rejectedAudits = this.listAuditEvents(
+      'CANDIDATE_GENERATION',
+      repair.rejectedCandidateGenerationId,
+    ).filter(
+      (audit) =>
+        audit.eventType === 'CANDIDATE_STATE_CHANGED' &&
+        audit.beforeVersion === repair.rejectedCandidateVersion - 1 &&
+        audit.afterVersion === repair.rejectedCandidateVersion,
+    );
+    const childAudits = this.listAuditEvents(
+      'CANDIDATE_GENERATION',
+      repair.repairCandidateGenerationId,
+    ).filter((audit) => audit.eventType === 'CANDIDATE_GENERATION_CREATED');
+    const workflowAudits = this.listAuditEvents('WORKFLOW', repair.workflowId).filter(
+      (audit) =>
+        audit.eventType === 'WORKFLOW_PHASE_TRANSITIONED' &&
+        audit.beforeVersion === repair.workflowVersion - 1 &&
+        audit.afterVersion === repair.workflowVersion,
+    );
+    const checkAudits = [repair.freezeCheckId, repair.verificationCheckId].map((identifier) =>
+      this.listAuditEvents('CHECK_SPECIFICATION', identifier).filter(
+        (audit) => audit.eventType === 'CHECK_SPECIFICATION_RECORDED',
+      ),
+    );
+    const obligationAudits = repair.verificationObligationIds.map((identifier) =>
+      this.listAuditEvents('VERIFICATION_OBLIGATION', identifier).filter(
+        (audit) => audit.eventType === 'VERIFICATION_OBLIGATION_RECORDED',
+      ),
+    );
+    if (
+      rejectedAudits.length !== 1 ||
+      childAudits.length !== 1 ||
+      workflowAudits.length !== 1 ||
+      checkAudits.some((audits) => audits.length !== 1) ||
+      obligationAudits.some((audits) => audits.length !== 1)
+    ) {
+      reject();
+    }
+    const authorityAudits = [
+      rejectedAudits[0],
+      childAudits[0],
+      workflowAudits[0],
+      ...checkAudits.map((audits) => audits[0]),
+      ...obligationAudits.map((audits) => audits[0]),
+    ];
+    if (
+      authorityAudits.some(
+        (audit) =>
+          audit?.actorType !== 'RUNTIME' ||
+          audit.commandId !== repairCommandId ||
+          audit.payloadDigest !== repair.repairDigest ||
+          audit.occurredAt !== repair.repairedAt ||
+          audit.correlationId !== repairAudit.correlationId ||
+          audit.causationId !== repairAudit.causationId,
+      ) ||
+      childAudits[0]?.beforeVersion !== undefined ||
+      childAudits[0]?.afterVersion !== 1 ||
+      checkAudits.some(
+        (audits) => audits[0]?.beforeVersion !== undefined || audits[0]?.afterVersion !== undefined,
+      ) ||
+      obligationAudits.some(
+        (audits) => audits[0]?.beforeVersion !== undefined || audits[0]?.afterVersion !== undefined,
+      )
+    ) {
+      reject();
+    }
+
+    const processed = this.getProcessedCommand(repairCommandId);
+    const outcome =
+      processed === undefined ? undefined : decodeStoredCommandOutcome(processed.outcome);
+    if (
+      processed?.aggregateType !== 'GOAL' ||
+      processed.aggregateId !== repair.goalId ||
+      processed.completedAt !== repair.repairedAt ||
+      outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+      outcome.goalId !== repair.goalId ||
+      outcome.workflow.id !== repair.workflowId ||
+      outcome.workflow.version !== repair.workflowVersion ||
+      outcome.workflow.phase !== WorkflowPhase.IMPLEMENT ||
+      outcome.workflow.runStatus !== RunStatus.READY
+    ) {
+      reject();
+    }
+  }
+
   private assertRetainedAcceptanceAuthorityClosure(): void {
     if (!this.hasTable('workflow_closeouts')) {
       return;
@@ -5786,42 +6129,38 @@ export class SqliteControlStore implements AcceptanceControlStore {
         'An accepted Candidate generation has no immutable closeout authority',
       );
     }
-    const rejectedWithoutExactRepairChild = this.readCount(
+    if (!this.hasTable('acceptance_repairs')) {
+      if (
+        this.readCount(
+          `SELECT COUNT(*) AS count
+             FROM candidate_generations
+            WHERE state = 'REJECTED'`,
+        ) !== 0
+      ) {
+        throw new StoreInvariantError(
+          'A rejected Candidate generation predates exact Acceptance repair authority',
+        );
+      }
+      return;
+    }
+    const repairRows = this.#database
+      .prepare('SELECT * FROM acceptance_repairs ORDER BY rejected_candidate_generation_id')
+      .all();
+    for (const row of repairRows) {
+      this.assertRetainedAcceptanceRepairAuthority(decodeAcceptanceRepairRow(row));
+    }
+    const rejectedWithoutRepairRecord = this.readCount(
       `SELECT COUNT(*) AS count
          FROM candidate_generations AS rejected
         WHERE rejected.state = 'REJECTED'
-          AND (
-            (
-              SELECT COUNT(*)
-                FROM candidate_generations AS child
-               WHERE child.parent_generation_id = rejected.id
-            ) <> 1
-            OR NOT EXISTS (
-              SELECT 1
-                FROM candidate_generations AS child
-               WHERE child.parent_generation_id = rejected.id
-                 AND child.candidate_id = rejected.candidate_id
-                 AND child.workflow_id = rejected.workflow_id
-                 AND child.sequence = rejected.sequence + 1
-                 AND child.base_digest = rejected.frozen_digest
-                 AND child.created_at = rejected.updated_at
-            )
-            OR NOT EXISTS (
-              SELECT 1
-                FROM acceptance_decisions AS decision
-                JOIN acceptance_input_manifests AS manifest
-                  ON manifest.manifest_digest = decision.input_manifest_digest
-               WHERE decision.outcome = 'REJECT_REPAIRABLE'
-                 AND decision.issued_at <= rejected.updated_at
-                 AND manifest.workflow_id = rejected.workflow_id
-                 AND manifest.candidate_generation_id = rejected.id
-                 AND manifest.candidate_digest = rejected.frozen_digest
-            )
+          AND NOT EXISTS (
+            SELECT 1 FROM acceptance_repairs AS repair
+            WHERE repair.rejected_candidate_generation_id = rejected.id
           )`,
     );
-    if (rejectedWithoutExactRepairChild !== 0) {
+    if (rejectedWithoutRepairRecord !== 0) {
       throw new StoreInvariantError(
-        'A rejected Candidate generation has no exact repair child authority',
+        'A rejected Candidate generation has no immutable Acceptance repair authority',
       );
     }
   }

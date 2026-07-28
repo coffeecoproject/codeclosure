@@ -8,10 +8,11 @@ control, SQLite persistence and audit, minimal Context compilation, typed
 `FakeWorker` dispatch and event admission, logical Candidate generations,
 stable freeze observation, independent fake verification, immutable Evidence,
 canonical Evidence Sets, deterministic Acceptance Decisions, transactional
-closeout, and repair-generation coordination exist. CLI proof scenarios and
-complete startup orchestration remain M1 work. Real candidate isolation and
-real project verification remain M2 work. Components marked for later slices
-or milestones are architectural boundaries, not current implementation claims.
+closeout, and immutable exact repair-generation authority exist. CLI proof
+scenarios and complete startup orchestration remain M1 work. Real candidate
+isolation and real project verification remain M2 work. Components marked for
+later slices or milestones are architectural boundaries, not current
+implementation claims.
 
 ## Architectural Goal
 
@@ -179,6 +180,15 @@ self-attest Candidate, Evidence, or Acceptance facts. Candidate Source output
 cannot author project/workspace identity; Check Specifications bind the M1
 producer, and specialized Runtime builders derive Evidence producer,
 environment, payload, and result fields.
+
+In the current Acceptance path, closeout and repair are dedicated compound
+transactions rather than generic phase requests. Closeout retains the exact
+accepted authority. Repair retains a canonical immutable record that binds the
+consumed repairable decision and manifest, rejected generation, fresh child,
+Checks, and Verification Obligations. SQLite and startup validation reconstruct
+that relationship; nearby rows or an opaque audit label cannot substitute for
+it. See
+[ADR 0019](docs/adr/0019-exact-acceptance-repair-authority.md).
 
 The M1 package root exposes a narrow Goal application capability for public
 adapters. That capability contains only public Goal commands; the internal

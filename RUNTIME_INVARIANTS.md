@@ -92,6 +92,12 @@ An acceptance failure that can be repaired returns the workflow to
 `IMPLEMENT`, invalidates or rejects the frozen candidate, and creates a new
 mutable candidate generation. A frozen generation is never thawed in place.
 
+The repair transition MUST retain one immutable binding from the exact
+repairable Acceptance Decision and input manifest to the rejected generation,
+new child generation, and fresh Check and Verification Obligation authority.
+A plausible child relationship or terminal `REJECTED` label is not recovery
+authority.
+
 ### I-014 — Actual change must match allowed change
 
 The runtime compares the candidate's actual change set with the current goal,

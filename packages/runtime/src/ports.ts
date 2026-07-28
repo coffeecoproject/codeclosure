@@ -2,6 +2,7 @@ import type {
   AcceptanceDecision,
   AcceptanceDecisionId,
   AcceptanceInputManifest,
+  AcceptanceRepairRecord,
   AppliedAttemptEvent,
   Attempt,
   AttemptEvent,
@@ -9,6 +10,7 @@ import type {
   AuditEventId,
   Candidate,
   CandidateGeneration,
+  CandidateGenerationId,
   CandidateStateChanged,
   CheckSpecification,
   CommandId,
@@ -199,9 +201,7 @@ export interface CommittedAcceptedCloseout extends CommittedWorkflowCandidateEve
 }
 
 export interface CommitAcceptanceRepair extends CommitWorkflowEvent {
-  readonly acceptanceDecisionId: AcceptanceDecisionId;
-  readonly acceptanceDecisionDigest: Sha256Digest;
-  readonly inputManifestDigest: Sha256Digest;
+  readonly repair: AcceptanceRepairRecord;
   readonly candidate: Candidate;
   readonly rejectedCandidateEvent: CandidateStateChanged;
   readonly generation: CandidateGeneration;
@@ -211,6 +211,7 @@ export interface CommitAcceptanceRepair extends CommitWorkflowEvent {
   readonly generationAuditEventId: AuditEventId;
   readonly checkSpecificationAuditEventIds: readonly AuditEventId[];
   readonly obligationAuditEventIds: readonly AuditEventId[];
+  readonly repairAuditEventId: AuditEventId;
 }
 
 export interface CommittedAcceptanceRepair {
@@ -219,6 +220,7 @@ export interface CommittedAcceptanceRepair {
   readonly rejectedGeneration: CandidateGeneration;
   readonly checkSpecifications: readonly CheckSpecification[];
   readonly obligations: readonly VerificationObligation[];
+  readonly repair: AcceptanceRepairRecord;
 }
 
 export interface CommitCandidateIntegrityFailure extends CommitWorkflowEvent {
@@ -413,6 +415,9 @@ export interface AcceptanceControlStore extends CandidateEvidenceControlStore {
   getAcceptanceInputManifest(manifestDigest: Sha256Digest): AcceptanceInputManifest | undefined;
   getAcceptanceDecision(acceptanceDecisionId: AcceptanceDecisionId): AcceptanceDecision | undefined;
   getCloseoutForWorkflow(workflowId: WorkflowId): CloseoutRecord | undefined;
+  getAcceptanceRepairForRejectedGeneration(
+    candidateGenerationId: CandidateGenerationId,
+  ): AcceptanceRepairRecord | undefined;
   commitAcceptanceEvaluation(
     input: CommitAcceptanceEvaluation,
   ): StoreCommandResult<CommittedAcceptanceEvaluation>;

@@ -4,15 +4,18 @@ import test from 'node:test';
 import {
   CandidateGenerationState,
   WorkflowPhase,
+  acceptanceDecisionId,
   aggregateVersion,
   assertGoalInvariant,
   attemptId,
   candidateGenerationId,
   candidateId,
+  checkSpecificationId,
   commandId,
   createGoal,
   createWorkflow,
   decodeAttemptSnapshot,
+  decodeAcceptanceRepairRecord,
   decodeCandidateGeneration,
   decodeGoalSnapshot,
   decodePolicyBundleDefinition,
@@ -24,8 +27,10 @@ import {
   policyBundleId,
   sha256Digest,
   successCriterionId,
+  verificationObligationId,
   workerSessionId,
   workflowId,
+  workflowVersion,
 } from '@codeclosure/domain';
 
 const createdAt = isoTimestamp('2026-07-27T03:00:00.000Z');
@@ -137,6 +142,49 @@ void test('[I-006] authority codecs materialize immutable canonical snapshots', 
   assert.equal(Object.isFrozen(decodedCandidate), true);
   assert.equal(Object.isFrozen(decodedPolicyDefinition), true);
   assert.equal(Object.isFrozen(decodedPolicyDefinition.transitionRules), true);
+});
+
+void test('[I-006][I-013] Acceptance repair authority has one strict immutable shape', () => {
+  const repair = decodeAcceptanceRepairRecord({
+    schemaVersion: 1,
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    workflowId: workflow.id,
+    workflowVersion: workflowVersion(2),
+    acceptanceDecisionId: acceptanceDecisionId('acceptance_codec-repair'),
+    acceptanceDecisionDigest: sha256Digest(`sha256:${'b'.repeat(64)}`),
+    inputManifestDigest: sha256Digest(`sha256:${'c'.repeat(64)}`),
+    rejectedCandidateGenerationId: candidateGenerationId('generation_codec-rejected'),
+    rejectedCandidateVersion: aggregateVersion(4),
+    rejectedCandidateDigest: sha256Digest(`sha256:${'d'.repeat(64)}`),
+    repairCandidateGenerationId: candidateGenerationId('generation_codec-repair'),
+    repairCandidateSequence: 2,
+    repairCandidateBaseDigest: sha256Digest(`sha256:${'d'.repeat(64)}`),
+    freezeCheckId: checkSpecificationId('check_codec-repair-freeze'),
+    freezeCheckVersion: 'm1.2',
+    verificationCheckId: checkSpecificationId('check_codec-repair-verification'),
+    verificationCheckVersion: 'm1.2',
+    verificationObligationIds: [verificationObligationId('obligation_codec-repair')],
+    evidenceSetDigest: sha256Digest(`sha256:${'e'.repeat(64)}`),
+    policyBundleId: policyBundleId('policy_codec-repair'),
+    policyBundleDigest: sha256Digest(`sha256:${'f'.repeat(64)}`),
+    repairedAt: createdAt,
+    repairDigest: sha256Digest(`sha256:${'1'.repeat(64)}`),
+  });
+  assert.equal(Object.isFrozen(repair), true);
+  assert.equal(Object.isFrozen(repair.verificationObligationIds), true);
+  assert.throws(
+    () => decodeAcceptanceRepairRecord({ ...repair, unownedAuthority: true }),
+    /unrecognized key/i,
+  );
+  assert.throws(
+    () =>
+      decodeAcceptanceRepairRecord({
+        ...repair,
+        repairCandidateBaseDigest: sha256Digest(`sha256:${'2'.repeat(64)}`),
+      }),
+    /base must equal the rejected Candidate digest/,
+  );
 });
 
 void test('[I-006][I-023] closed codecs reject poisoned scalar, enum, field, and capability data', () => {

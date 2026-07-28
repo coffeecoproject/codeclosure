@@ -6,8 +6,8 @@ This document defines the target Acceptance Engine contract. The current M1
 Slice 6 implementation provides the deterministic rule set under
 [M1 Rule Set](#m1-rule-set), strict manifest and decision codecs, immutable
 SQLite persistence, current-input replay validation, transactional closeout,
-and repair-generation coordination. It still uses only logical Candidate and
-fake Evidence inputs; real project verification remains M2 work.
+and immutable exact repair-generation authority. It still uses only logical
+Candidate and fake Evidence inputs; real project verification remains M2 work.
 
 ## Purpose
 
@@ -244,6 +244,31 @@ ordered `ruleResults`, and `engineVersion`. It excludes `id`, `issuedAt`, and
 `decisionDigest` itself. Therefore a replay may create a new record identity and
 timestamp while still producing the same semantic decision digest.
 
+Every successful repair also retains one immutable causality record:
+
+```text
+AcceptanceRepairRecord
+  schemaVersion
+  goalId / goalRevision
+  workflowId / workflowVersion
+  acceptanceDecisionId / acceptanceDecisionDigest
+  inputManifestDigest
+  rejectedCandidateGenerationId / version / digest
+  repairCandidateGenerationId / sequence / baseDigest
+  freezeCheckId / version
+  verificationCheckId / version
+  verificationObligationIds[]
+  evidenceSetDigest
+  policyBundleId / policyBundleDigest
+  repairedAt
+  repairDigest
+```
+
+`repairDigest` covers the canonical record fields except itself. It is the
+common payload identity for every audit event in that compound repair. The
+record does not issue an Acceptance Decision or mutate state; it preserves the
+exact causality that authorized fresh implementation capability.
+
 ## Closeout Race Protection
 
 Between evaluation and workflow transition, relevant state may change. The
@@ -265,10 +290,13 @@ timestamp for Workflow, Goal, Candidate, and immutable closeout authority, and
 repair uses one timestamp for rejection and child creation.
 
 On restart, `ACCEPTED` is valid only with the exact immutable closeout binding.
-`REJECTED` is valid only with exactly one next-sequence child whose parent and
-base digest identify that rejected frozen generation. The Slice 6 migration
-likewise refuses terminal lifecycle claims written before Slice 6 authority
-existed; migration never upgrades a terminal label into proof.
+`REJECTED` is valid only with one exact immutable repair record that resolves
+the consumed decision and manifest, base-bound next-sequence child, fresh
+Checks and Obligations, common audit command/digest, and processed-command
+outcome. Migration 0014 refuses older rejected history because those exact
+bindings cannot be inferred; migration never upgrades a terminal label or a
+plausible child into proof. See
+[ADR 0019](adr/0019-exact-acceptance-repair-authority.md).
 
 ## Replay and Explainability
 

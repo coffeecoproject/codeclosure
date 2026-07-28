@@ -11,6 +11,7 @@ import {
   auditEventId,
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
+  decodeAcceptanceRepairRecord,
   decodeCandidate,
   decodeCandidateGeneration,
   decodeCheckSpecification,
@@ -34,6 +35,7 @@ import {
   type Attempt,
   type AcceptanceDecision,
   type AcceptanceInputManifest,
+  type AcceptanceRepairRecord,
   type AuditEventId,
   type CommandId,
   type Candidate,
@@ -406,6 +408,33 @@ const closeoutRowSchema = z.object({
   policy_bundle_id: z.string(),
   policy_bundle_digest: z.string(),
   closed_at: z.string(),
+});
+
+const acceptanceRepairRowSchema = z.object({
+  rejected_candidate_generation_id: z.string(),
+  schema_version: z.number().int().positive(),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version: z.number().int().positive(),
+  acceptance_decision_id: z.string(),
+  acceptance_decision_digest: z.string(),
+  input_manifest_digest: z.string(),
+  rejected_candidate_version: z.number().int().positive(),
+  rejected_candidate_digest: z.string(),
+  repair_candidate_generation_id: z.string(),
+  repair_candidate_sequence: z.number().int().positive(),
+  repair_candidate_base_digest: z.string(),
+  freeze_check_id: z.string(),
+  freeze_check_version: nonBlankStringSchema,
+  verification_check_id: z.string(),
+  verification_check_version: nonBlankStringSchema,
+  verification_obligation_ids_json: z.string(),
+  evidence_set_digest: z.string(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  repaired_at: z.string(),
+  repair_digest: z.string(),
 });
 
 function parseStringArray(value: string, recordType: string): readonly string[] {
@@ -928,6 +957,46 @@ export function decodeCloseoutRow(row: unknown): CloseoutRecord {
     });
   } catch (error) {
     throw new PersistenceDecodeError('CloseoutRecord', { cause: error });
+  }
+}
+
+export function decodeAcceptanceRepairRow(row: unknown): AcceptanceRepairRecord {
+  try {
+    const parsed = acceptanceRepairRowSchema.parse(row);
+    return decodeAcceptanceRepairRecord({
+      schemaVersion: parsed.schema_version,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      workflowId: parsed.workflow_id,
+      workflowVersion: parsed.workflow_version,
+      acceptanceDecisionId: parsed.acceptance_decision_id,
+      acceptanceDecisionDigest: parsed.acceptance_decision_digest,
+      inputManifestDigest: parsed.input_manifest_digest,
+      rejectedCandidateGenerationId: parsed.rejected_candidate_generation_id,
+      rejectedCandidateVersion: parsed.rejected_candidate_version,
+      rejectedCandidateDigest: parsed.rejected_candidate_digest,
+      repairCandidateGenerationId: parsed.repair_candidate_generation_id,
+      repairCandidateSequence: parsed.repair_candidate_sequence,
+      repairCandidateBaseDigest: parsed.repair_candidate_base_digest,
+      freezeCheckId: parsed.freeze_check_id,
+      freezeCheckVersion: parsed.freeze_check_version,
+      verificationCheckId: parsed.verification_check_id,
+      verificationCheckVersion: parsed.verification_check_version,
+      verificationObligationIds: parseStringArray(
+        parsed.verification_obligation_ids_json,
+        'AcceptanceRepairRecord.verificationObligationIds',
+      ),
+      evidenceSetDigest: parsed.evidence_set_digest,
+      policyBundleId: parsed.policy_bundle_id,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      repairedAt: parsed.repaired_at,
+      repairDigest: parsed.repair_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('AcceptanceRepairRecord', { cause: error });
   }
 }
 

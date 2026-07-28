@@ -114,8 +114,12 @@ which reloads an Acceptance Engine decision and its exact bindings. The Slice 6
 `CloseAcceptedGoal` command alone constructs that guard and atomically accepts
 the Candidate, closes the Workflow/Goal, and records the closeout binding.
 `BeginAcceptanceRepair` similarly owns `REJECT_REPAIRABLE_RECORDED` and creates
-a fresh child generation. Generic phase requests remain unable to construct or
-consume either proof.
+a fresh child generation. The same transaction retains one immutable repair
+record binding the exact decision/manifest, rejected generation, child,
+generation-scoped Checks, Verification Obligations, audit group, and command
+outcome. Generic phase requests remain unable to construct or consume either
+proof. See
+[ADR 0019](adr/0019-exact-acceptance-repair-authority.md).
 
 Slice 5 phase guards are not supplied by that generic evaluator. The Runtime
 constructs Candidate and Evidence guards only from decoded Candidate,

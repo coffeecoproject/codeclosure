@@ -564,9 +564,11 @@ when present, remains inside that lifecycle interval.
 
 Terminal state is not sufficient authority on its own. On reopen, an
 `ACCEPTED` generation must resolve to its exact immutable Workflow closeout. A
-`REJECTED` generation must have exactly one next-sequence child for the same
-Candidate and Workflow, with the rejected frozen digest as its base and the
-same atomic transition time.
+`REJECTED` generation must resolve through one immutable Acceptance repair
+record to the exact repairable decision and manifest, one next-sequence child
+for the same Candidate and Workflow, the rejected frozen digest as its base,
+and the fresh Check and Verification Obligation authority created at the same
+atomic transition time.
 
 In M1 the Candidate Source returns `baseDigest`, not either identity field. The
 Runtime derives `baseProjectIdentity` from the Goal's exact project path and
@@ -674,7 +676,7 @@ producer, environment, payload, and result fields that follow from the Check
 and typed observation. M1 rejects a `factSnapshotDigest` on either variant and
 does not expose a generic producer-authored Evidence constructor.
 
-## Acceptance Input Manifest and Decision
+## Acceptance Input, Decision, and Repair Authority
 
 ```text
 AcceptanceInputManifest
@@ -707,15 +709,45 @@ AcceptanceDecision
   engineVersion
   issuedAt
   decisionDigest
+
+AcceptanceRepairRecord
+  schemaVersion
+  goalId
+  goalRevision
+  workflowId
+  workflowVersion
+  acceptanceDecisionId
+  acceptanceDecisionDigest
+  inputManifestDigest
+  rejectedCandidateGenerationId
+  rejectedCandidateVersion
+  rejectedCandidateDigest
+  repairCandidateGenerationId
+  repairCandidateSequence
+  repairCandidateBaseDigest
+  freezeCheckId
+  freezeCheckVersion
+  verificationCheckId
+  verificationCheckVersion
+  verificationObligationIds[]
+  evidenceSetDigest
+  policyBundleId
+  policyBundleDigest
+  repairedAt
+  repairDigest
 ```
 
 An `ACCEPT` decision is usable only while every manifest binding remains
 current. The canonical field meanings and digest projections are defined in
 [`acceptance-engine.md`](acceptance-engine.md) and
 [ADR 0006](adr/0006-canonical-serialization-and-digest-profiles.md).
-The current M1 Slice 6 implementation strictly decodes both records, derives
-their digests from canonical semantic projections, and revalidates the exact
-decision before closeout or repair.
+The current M1 Slice 6 implementation strictly decodes the manifest and
+decision, derives their digests from canonical semantic projections, and
+revalidates the exact decision before closeout or repair.
+The repair record is not another decision or state writer. It is immutable
+causality retained by the same atomic repair transaction, and its canonical
+digest is independently recomputed on write and reopen. See
+[ADR 0019](adr/0019-exact-acceptance-repair-authority.md).
 
 ## Pending Issue
 
@@ -770,6 +802,7 @@ describes.
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence eligibility | integrity observation / runtime command | Evidence policy | Evidence Store through an audited monotonic transition |
 | Acceptance decision | Acceptance Engine | Acceptance policy plus Store backstop | Acceptance Engine issuance; Acceptance Store persistence, immutable |
+| Acceptance repair record | Workflow Runtime coordination | Store and SQLite exact-authority backstops | Workflow Runtime compound transaction, immutable |
 | Closeout state | accepted decision | transition guard | Workflow Runtime only |
 | Human decision | user | decision schema/scope policy | Human Decision Gateway |
 

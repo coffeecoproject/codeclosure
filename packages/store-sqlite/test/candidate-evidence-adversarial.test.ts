@@ -571,6 +571,108 @@ function advanceToFinalVerify(harness: Harness): {
   return Object.freeze({ workflow, generationId });
 }
 
+function advanceRepairChildToFinalVerify(
+  harness: Harness,
+  label: string,
+): {
+  readonly workflow: WorkflowInstance;
+  readonly generationId: CandidateGenerationId;
+} {
+  const commandLabel = (stage: string): string => `repair-${label}-${stage}`;
+  let workflow = currentWorkflow(harness);
+  assert.equal(workflow.phase, WorkflowPhase.IMPLEMENT);
+  assert.ok(workflow.activeCandidateGenerationId);
+  const generationId = workflow.activeCandidateGenerationId;
+
+  assertApplied(
+    harness.runtime.beginAttempt({
+      commandId: harnessCommand(harness, commandLabel('implement-start')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+    }),
+  );
+  finishActiveAttempt(harness, commandLabel('implement-result'));
+
+  workflow = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.requestPhaseTransition({
+      commandId: harnessCommand(harness, commandLabel('to-freeze')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      requestedPhase: WorkflowPhase.SOURCE_FREEZE,
+      reason: 'repaired implementation is quiescent',
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.beginAttempt({
+      commandId: harnessCommand(harness, commandLabel('freeze-start')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assert.ok(workflow.activeAttemptId);
+  assertApplied(
+    harness.runtime.completeSourceFreeze({
+      commandId: harnessCommand(harness, commandLabel('freeze-complete')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      attemptId: workflow.activeAttemptId,
+      reason: 'repaired Candidate source observations completed',
+    }),
+  );
+
+  workflow = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.requestPhaseTransition({
+      commandId: harnessCommand(harness, commandLabel('to-evidence')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      requestedPhase: WorkflowPhase.EVIDENCE_BUILD,
+      reason: 'repaired Candidate freeze authority is complete',
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.beginAttempt({
+      commandId: harnessCommand(harness, commandLabel('verification-start')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assert.ok(workflow.activeAttemptId);
+  const obligation = harness.store
+    .listVerificationObligations(harness.goalId)
+    .find((candidate) => candidate.candidateGenerationId === generationId);
+  assert.ok(obligation);
+  assertApplied(
+    harness.runtime.runVerification({
+      commandId: harnessCommand(harness, commandLabel('verification-complete')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      attemptId: workflow.activeAttemptId,
+      obligationId: obligation.id,
+      reason: 'repaired Candidate fake verification observation handled',
+    }),
+  );
+
+  workflow = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.requestPhaseTransition({
+      commandId: harnessCommand(harness, commandLabel('to-final-verify')),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      requestedPhase: WorkflowPhase.FINAL_VERIFY,
+      reason: 'repaired Candidate canonical Evidence Set is complete',
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assert.equal(workflow.phase, WorkflowPhase.FINAL_VERIFY);
+  return Object.freeze({ workflow, generationId });
+}
+
 void test('[I-008] Candidate preparation rolls back every authority record after its dedicated write probe', (t) => {
   let armed = false;
   const harness = createHarness(t, {
@@ -1560,6 +1662,82 @@ void test('[I-006][I-008] migration 0013 refuses pre-authority terminal state at
   inspected.close();
 });
 
+void test('[I-006][I-008] migration 0014 refuses pre-record repair history atomically', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'codeclosure-migration-0014-repair-'));
+  const migrationsDirectory = join(directory, 'migrations');
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  mkdirSync(migrationsDirectory);
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0014_',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+
+  const harness = createHarness(t, {
+    name: 'migration-0014-repair',
+    migrationsDirectory,
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-legacy-repair'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  harness.store.close();
+  appendOfflineFrozenTerminalTransition(
+    harness.filename,
+    final.generationId,
+    CandidateGenerationState.REJECTED,
+    'migration-0014-repair-history',
+  );
+  copyFileSync(
+    join(sourceDirectory, '0014_exact_acceptance_repair_authority.sql'),
+    join(migrationsDirectory, '0014_exact_acceptance_repair_authority.sql'),
+  );
+
+  assert.throws(
+    () =>
+      openSqliteControlStore({
+        filename: harness.filename,
+        migrationsDirectory,
+        now: () => createdAt,
+      }),
+    /acceptance_repair_migration_guard|CHECK constraint failed/,
+  );
+  const inspected = new Database(harness.filename, { readonly: true, fileMustExist: true });
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM schema_migrations WHERE name = '0014_exact_acceptance_repair_authority.sql'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare("SELECT COUNT(*) FROM candidate_generations WHERE state = 'REJECTED'")
+      .pluck()
+      .get(),
+    1,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'acceptance_repairs'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  inspected.close();
+});
+
 void test('[I-006][I-008][I-027] migration 0011 refuses a retained Goal with no required criterion atomically', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'codeclosure-migration-0011-required-goal-'));
   const migrationsDirectory = join(directory, 'migrations');
@@ -2293,6 +2471,7 @@ function latestAcceptanceReference(harness: Harness): AcceptanceReference {
 }
 
 interface AcceptanceAuthorityRowCounts {
+  readonly acceptanceRepairs: number;
   readonly acceptanceDecisions: number;
   readonly acceptanceInputManifests: number;
   readonly auditEvents: number;
@@ -2314,6 +2493,7 @@ function acceptanceAuthorityRowCounts(filename: string): AcceptanceAuthorityRowC
       return value;
     };
     return Object.freeze({
+      acceptanceRepairs: count('acceptance_repairs'),
       acceptanceDecisions: count('acceptance_decisions'),
       acceptanceInputManifests: count('acceptance_input_manifests'),
       auditEvents: count('audit_events'),
@@ -2326,6 +2506,39 @@ function acceptanceAuthorityRowCounts(filename: string): AcceptanceAuthorityRowC
   } finally {
     inspected.close();
   }
+}
+
+function createRetainedAcceptanceRepair(harness: Harness, label: string) {
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, `evaluate-${label}`),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  assert.equal(
+    harness.store.getAcceptanceDecision(reference.id)?.outcome,
+    AcceptanceOutcome.REJECT_REPAIRABLE,
+  );
+  assertApplied(
+    harness.runtime.beginAcceptanceRepair({
+      commandId: harnessCommand(harness, `repair-${label}`),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+      reason: `create retained repair authority for ${label}`,
+    }),
+  );
+  const repair = harness.store.getAcceptanceRepairForRejectedGeneration(final.generationId);
+  assert.ok(repair);
+  return Object.freeze({ final, reference, repair });
 }
 
 void test('[I-001][I-006][I-008][I-009] deterministic Acceptance closes exact authority and reopens', (t) => {
@@ -2670,6 +2883,21 @@ void test('[I-001][I-005][I-008][I-009] repairable rejection creates a fresh chi
       .filter((obligation) => obligation.candidateGenerationId === child.id).length,
     1,
   );
+  const repair = harness.store.getAcceptanceRepairForRejectedGeneration(final.generationId);
+  assert.ok(repair);
+  assert.equal(repair.acceptanceDecisionId, reference.id);
+  assert.equal(repair.acceptanceDecisionDigest, reference.decisionDigest);
+  assert.equal(repair.inputManifestDigest, reference.manifestDigest);
+  assert.equal(repair.rejectedCandidateDigest, reference.candidateDigest);
+  assert.equal(repair.repairCandidateGenerationId, child.id);
+  assert.equal(repair.repairCandidateBaseDigest, oldGeneration.frozenDigest);
+  assert.deepEqual(
+    repair.verificationObligationIds,
+    harness.store
+      .listVerificationObligations(harness.goalId)
+      .filter((obligation) => obligation.candidateGenerationId === child.id)
+      .map((obligation) => obligation.id),
+  );
 
   harness.store.close();
   const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
@@ -2680,6 +2908,248 @@ void test('[I-001][I-005][I-008][I-009] repairable rejection creates a fresh chi
     CandidateGenerationState.REJECTED,
   );
   assert.equal(reopened.getCandidateGeneration(child.id)?.parentGenerationId, final.generationId);
+  assert.deepEqual(reopened.getAcceptanceRepairForRejectedGeneration(final.generationId), repair);
+});
+
+void test('[I-006][I-009][I-013] retained repair authority survives child progress and another repair', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-repair-history',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const firstFinal = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-first-repair'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: firstFinal.workflow.version,
+    }),
+  );
+  const firstReference = latestAcceptanceReference(harness);
+  assertApplied(
+    harness.runtime.beginAcceptanceRepair({
+      commandId: harnessCommand(harness, 'begin-first-repair'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: firstFinal.workflow.version,
+      acceptanceDecisionId: firstReference.id,
+      acceptanceDecisionDigest: firstReference.decisionDigest,
+      inputManifestDigest: firstReference.manifestDigest,
+      candidateDigest: firstReference.candidateDigest,
+      reason: 'create the first exact repair authority',
+    }),
+  );
+  const firstRepair = harness.store.getAcceptanceRepairForRejectedGeneration(
+    firstFinal.generationId,
+  );
+  assert.ok(firstRepair);
+
+  const secondFinal = advanceRepairChildToFinalVerify(harness, 'second-generation');
+  assert.equal(secondFinal.generationId, firstRepair.repairCandidateGenerationId);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-second-repair'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: secondFinal.workflow.version,
+    }),
+  );
+  const secondReference = latestAcceptanceReference(harness);
+  assertApplied(
+    harness.runtime.beginAcceptanceRepair({
+      commandId: harnessCommand(harness, 'begin-second-repair'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: secondFinal.workflow.version,
+      acceptanceDecisionId: secondReference.id,
+      acceptanceDecisionDigest: secondReference.decisionDigest,
+      inputManifestDigest: secondReference.manifestDigest,
+      candidateDigest: secondReference.candidateDigest,
+      reason: 'create another exact repair without invalidating retained history',
+    }),
+  );
+  const secondRepair = harness.store.getAcceptanceRepairForRejectedGeneration(
+    secondFinal.generationId,
+  );
+  assert.ok(secondRepair);
+  const current = currentWorkflow(harness);
+  assert.equal(current.phase, WorkflowPhase.IMPLEMENT);
+  assert.equal(current.activeCandidateGenerationId, secondRepair.repairCandidateGenerationId);
+
+  harness.store.close();
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.deepEqual(
+    reopened.getAcceptanceRepairForRejectedGeneration(firstFinal.generationId),
+    firstRepair,
+  );
+  assert.deepEqual(
+    reopened.getAcceptanceRepairForRejectedGeneration(secondFinal.generationId),
+    secondRepair,
+  );
+  assert.equal(
+    reopened.getCandidateGeneration(firstFinal.generationId)?.state,
+    CandidateGenerationState.REJECTED,
+  );
+  assert.equal(
+    reopened.getCandidateGeneration(secondFinal.generationId)?.state,
+    CandidateGenerationState.REJECTED,
+  );
+  assert.equal(
+    reopened.getCandidateGeneration(secondRepair.repairCandidateGenerationId)?.state,
+    CandidateGenerationState.MUTABLE,
+  );
+});
+
+void test('[I-003][I-008][I-009] repair rejects every caller-supplied Acceptance binding mismatch', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-repair-binding-mismatch',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-repair-mismatch'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  const mismatches = Object.freeze([
+    {
+      label: 'decision-id',
+      acceptanceDecisionId: acceptanceDecisionId('acceptance_missing-repair-decision'),
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+    },
+    {
+      label: 'decision-digest',
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: digests.digest({ mismatch: 'repair-decision' }),
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+    },
+    {
+      label: 'manifest-digest',
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: digests.digest({ mismatch: 'repair-manifest' }),
+      candidateDigest: reference.candidateDigest,
+    },
+    {
+      label: 'candidate-digest',
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: digests.digest({ mismatch: 'repair-candidate' }),
+    },
+  ]);
+  for (const mismatch of mismatches) {
+    const result = harness.runtime.beginAcceptanceRepair({
+      commandId: harnessCommand(harness, `repair-mismatch-${mismatch.label}`),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: mismatch.acceptanceDecisionId,
+      acceptanceDecisionDigest: mismatch.acceptanceDecisionDigest,
+      inputManifestDigest: mismatch.inputManifestDigest,
+      candidateDigest: mismatch.candidateDigest,
+      reason: 'a mismatched binding must never grant fresh implementation authority',
+    });
+    assert.equal(result.status, 'REJECTED');
+    assert.deepEqual(currentWorkflow(harness), final.workflow);
+    assert.equal(
+      harness.store.getCandidateGeneration(final.generationId)?.state,
+      CandidateGenerationState.FROZEN,
+    );
+    assert.equal(
+      harness.store.getAcceptanceRepairForRejectedGeneration(final.generationId),
+      undefined,
+    );
+  }
+  const candidate = harness.store.getCandidateForGoal(harness.goalId);
+  assert.ok(candidate);
+  assert.equal(harness.store.nextCandidateGenerationSequence(candidate.id), 2);
+});
+
+void test('[I-006][I-008][I-009] reopen recomputes immutable Acceptance repair identity', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-repair-record-poison',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const { repair } = createRetainedAcceptanceRepair(harness, 'before-record-poison');
+  harness.store.close();
+
+  const raw = new Database(harness.filename);
+  assert.throws(
+    () =>
+      raw
+        .prepare(
+          `UPDATE acceptance_repairs
+              SET repair_digest = ?
+            WHERE rejected_candidate_generation_id = ?`,
+        )
+        .run(
+          digests.digest({ forbidden: 'immutable-repair-rewrite' }),
+          repair.rejectedCandidateGenerationId,
+        ),
+    /Acceptance repairs are immutable/,
+  );
+  raw.exec('DROP TRIGGER acceptance_repairs_no_update');
+  raw
+    .prepare(
+      `UPDATE acceptance_repairs
+          SET repair_digest = ?
+        WHERE rejected_candidate_generation_id = ?`,
+    )
+    .run(digests.digest({ poison: 'repair-record-digest' }), repair.rejectedCandidateGenerationId);
+  raw.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
+    /Acceptance repair .* lacks exact retained authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009] reopen rejects a repair record detached from its audit command', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-repair-audit-poison',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const { repair } = createRetainedAcceptanceRepair(harness, 'before-audit-poison');
+  harness.store.close();
+
+  const raw = new Database(harness.filename);
+  assert.throws(
+    () =>
+      raw
+        .prepare(
+          `UPDATE audit_events
+              SET payload_digest = ?
+            WHERE aggregate_type = 'ACCEPTANCE_REPAIR' AND aggregate_id = ?`,
+        )
+        .run(
+          digests.digest({ forbidden: 'immutable-repair-audit-rewrite' }),
+          repair.rejectedCandidateGenerationId,
+        ),
+    /audit events are immutable/,
+  );
+  raw.exec('DROP TRIGGER audit_events_no_update');
+  raw
+    .prepare(
+      `UPDATE audit_events
+          SET payload_digest = ?
+        WHERE aggregate_type = 'ACCEPTANCE_REPAIR' AND aggregate_id = ?`,
+    )
+    .run(digests.digest({ poison: 'repair-audit-digest' }), repair.rejectedCandidateGenerationId);
+  raw.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
+    /Acceptance repair .* lacks exact retained authority/,
+  );
 });
 
 void test('[I-006][I-009] reopen rejects REJECTED Candidate authority without a repair child', (t) => {
@@ -2710,7 +3180,7 @@ void test('[I-006][I-009] reopen rejects REJECTED Candidate authority without a 
 
   assert.throws(
     () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
-    /rejected Candidate generation has no exact repair child authority/,
+    /rejected Candidate generation has no immutable Acceptance repair authority/,
   );
 });
 
@@ -2862,6 +3332,7 @@ const acceptanceRepairRollbackSteps = Object.freeze([
   AcceptanceTransactionStep.AFTER_REPAIR_CHECK_SPECIFICATION_WRITE,
   AcceptanceTransactionStep.AFTER_REPAIR_OBLIGATION_WRITE,
   TransactionStep.AFTER_STATE_WRITE,
+  AcceptanceTransactionStep.AFTER_REPAIR_RECORD_WRITE,
   TransactionStep.AFTER_AUDIT_APPEND,
   TransactionStep.AFTER_COMMAND_RECORD,
   TransactionStep.BEFORE_COMMIT,

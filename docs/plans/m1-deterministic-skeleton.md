@@ -541,6 +541,8 @@ deterministic Acceptance Engine, Workflow Runtime, SQLite transaction,
 migration, replay, and reopen boundaries. This closes Slice 6 only; it is not
 an M1 or product completion claim. See
 [ADR 0018](../adr/0018-deterministic-acceptance-and-closeout-authority.md).
+Exact repair restart authority is refined by
+[ADR 0019](../adr/0019-exact-acceptance-repair-authority.md).
 
 - canonical Acceptance Input Manifest;
 - immutable minimal Policy Bundle and checker identities;
@@ -548,6 +550,8 @@ an M1 or product completion claim. See
 - immutable Acceptance Decision;
 - transactional closeout race guard;
 - atomic repair into a fresh child Candidate generation;
+- immutable repair binding for the exact rejection, child, fresh Checks,
+  Obligations, audit command, and processed outcome;
 - strict Pending Issue input and empty M1 Fact/Human Decision snapshots.
 
 Exit: only a current `ACCEPT` can produce `CLOSED`/`CLOSEOUT`. Evaluation does
@@ -555,8 +559,9 @@ not mutate lifecycle state; fail/error/timeout and stale-input paths fail
 closed; repair consumes only a current `REJECT_REPAIRABLE`; evaluation,
 closeout, and repair roll back at every authority-write fault point; semantic
 replay, pre-authority terminal-state migration refusal, source drift, exact
-closeout/repair-child restart closure, and retained-history reopen are covered
-by deterministic tests.
+closeout/repair-record restart closure, and retained-history reopen are covered
+by deterministic tests. Migration refuses pre-record rejected history rather
+than inferring its consumed decision or granted child authority.
 
 ### Slice 7 — CLI, recovery, and proof demos
 

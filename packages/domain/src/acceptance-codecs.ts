@@ -8,6 +8,7 @@ import {
   PendingIssueStatus,
   RuleApplicability,
   RuleOutcome,
+  assertAcceptanceRepairRecordInvariant,
   assertAcceptanceDecisionInvariant,
   assertAcceptanceInputManifestInvariant,
   assertCloseoutRecordInvariant,
@@ -16,20 +17,24 @@ import {
   assertRuleResultInvariant,
   type AcceptanceDecision,
   type AcceptanceInputManifest,
+  type AcceptanceRepairRecord,
   type CloseoutRecord,
   type PendingIssue,
   type PendingIssueSet,
   type RuleResult,
 } from './acceptance.js';
 import {
+  aggregateVersion,
   acceptanceDecisionId,
   candidateGenerationId,
+  checkSpecificationId,
   goalId,
   goalRevision,
   isoTimestamp,
   pendingIssueId,
   policyBundleId,
   sha256Digest,
+  verificationObligationId,
   workflowId,
   workflowVersion,
 } from './identifiers.js';
@@ -245,5 +250,68 @@ export function decodeCloseoutRecord(value: unknown): CloseoutRecord {
     closedAt: isoTimestamp(parsed.closedAt),
   });
   assertCloseoutRecordInvariant(record);
+  return record;
+}
+
+const acceptanceRepairRecordSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    goalId: z.string(),
+    goalRevision: z.number().int().positive(),
+    workflowId: z.string(),
+    workflowVersion: z.number().int().positive(),
+    acceptanceDecisionId: z.string(),
+    acceptanceDecisionDigest: z.string(),
+    inputManifestDigest: z.string(),
+    rejectedCandidateGenerationId: z.string(),
+    rejectedCandidateVersion: z.number().int().positive(),
+    rejectedCandidateDigest: z.string(),
+    repairCandidateGenerationId: z.string(),
+    repairCandidateSequence: z.number().int().positive(),
+    repairCandidateBaseDigest: z.string(),
+    freezeCheckId: z.string(),
+    freezeCheckVersion: nonBlankStringSchema,
+    verificationCheckId: z.string(),
+    verificationCheckVersion: nonBlankStringSchema,
+    verificationObligationIds: z.array(z.string()),
+    evidenceSetDigest: z.string(),
+    policyBundleId: z.string(),
+    policyBundleDigest: z.string(),
+    repairedAt: z.string(),
+    repairDigest: z.string(),
+  })
+  .strict();
+
+export function decodeAcceptanceRepairRecord(value: unknown): AcceptanceRepairRecord {
+  const parsed = acceptanceRepairRecordSchema.parse(value);
+  const record: AcceptanceRepairRecord = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    goalId: goalId(parsed.goalId),
+    goalRevision: goalRevision(parsed.goalRevision),
+    workflowId: workflowId(parsed.workflowId),
+    workflowVersion: workflowVersion(parsed.workflowVersion),
+    acceptanceDecisionId: acceptanceDecisionId(parsed.acceptanceDecisionId),
+    acceptanceDecisionDigest: sha256Digest(parsed.acceptanceDecisionDigest),
+    inputManifestDigest: sha256Digest(parsed.inputManifestDigest),
+    rejectedCandidateGenerationId: candidateGenerationId(parsed.rejectedCandidateGenerationId),
+    rejectedCandidateVersion: aggregateVersion(parsed.rejectedCandidateVersion),
+    rejectedCandidateDigest: sha256Digest(parsed.rejectedCandidateDigest),
+    repairCandidateGenerationId: candidateGenerationId(parsed.repairCandidateGenerationId),
+    repairCandidateSequence: parsed.repairCandidateSequence,
+    repairCandidateBaseDigest: sha256Digest(parsed.repairCandidateBaseDigest),
+    freezeCheckId: checkSpecificationId(parsed.freezeCheckId),
+    freezeCheckVersion: parsed.freezeCheckVersion,
+    verificationCheckId: checkSpecificationId(parsed.verificationCheckId),
+    verificationCheckVersion: parsed.verificationCheckVersion,
+    verificationObligationIds: Object.freeze(
+      parsed.verificationObligationIds.map((id) => verificationObligationId(id)),
+    ),
+    evidenceSetDigest: sha256Digest(parsed.evidenceSetDigest),
+    policyBundleId: policyBundleId(parsed.policyBundleId),
+    policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
+    repairedAt: isoTimestamp(parsed.repairedAt),
+    repairDigest: sha256Digest(parsed.repairDigest),
+  });
+  assertAcceptanceRepairRecordInvariant(record);
   return record;
 }

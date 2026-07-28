@@ -15,6 +15,7 @@ import {
   WorkflowGuard,
   WorkflowPhase,
   WorkflowRejectionCode,
+  acceptanceRepairRecordProjection,
   acceptanceDecisionId,
   attemptId,
   applyCandidateEvent,
@@ -32,6 +33,7 @@ import {
   decodeCheckSpecification,
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
+  decodeAcceptanceRepairRecord,
   decodeCloseoutRecord,
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
@@ -2592,20 +2594,41 @@ export class WorkflowRuntimeKernel {
         }
         const event = workflowDecision.events[0];
         const rejectedCandidateEvent = candidateDecision.events[0];
-        const payloadDigest = this.digest(
-          input.commandId,
-          {
-            event,
-            acceptanceDecisionId: consumed.decision.id,
-            acceptanceDecisionDigest: consumed.decision.decisionDigest,
-            inputManifestDigest: consumed.manifest.manifestDigest,
-            rejectedCandidateEvent,
-            generation,
-            checkSpecifications: [candidatePolicy.freeze, candidatePolicy.verification],
-            obligations: candidatePolicy.obligations,
-          },
-          'COMMAND_PAYLOAD_DIGEST_FAILURE',
-        );
+        const repairFields = Object.freeze({
+          schemaVersion: 1 as const,
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          workflowId: workflow.id,
+          workflowVersion: event.toVersion,
+          acceptanceDecisionId: consumed.decision.id,
+          acceptanceDecisionDigest: consumed.decision.decisionDigest,
+          inputManifestDigest: consumed.manifest.manifestDigest,
+          rejectedCandidateGenerationId: authority.generation.id,
+          rejectedCandidateVersion: rejectedCandidateEvent.toVersion,
+          rejectedCandidateDigest: authority.generation.frozenDigest,
+          repairCandidateGenerationId: generation.id,
+          repairCandidateSequence: generation.sequence,
+          repairCandidateBaseDigest: generation.baseDigest,
+          freezeCheckId: candidatePolicy.freeze.id,
+          freezeCheckVersion: candidatePolicy.freeze.version,
+          verificationCheckId: candidatePolicy.verification.id,
+          verificationCheckVersion: candidatePolicy.verification.version,
+          verificationObligationIds: Object.freeze(
+            candidatePolicy.obligations.map((obligation) => obligation.id),
+          ),
+          evidenceSetDigest: consumed.manifest.evidenceSetDigest,
+          policyBundleId: consumed.manifest.policyBundleId,
+          policyBundleDigest: consumed.manifest.policyBundleDigest,
+          repairedAt: occurredAt,
+        });
+        const repair = decodeAcceptanceRepairRecord({
+          ...repairFields,
+          repairDigest: this.digest(
+            input.commandId,
+            acceptanceRepairRecordProjection(repairFields),
+            'COMMAND_PAYLOAD_DIGEST_FAILURE',
+          ),
+        });
         return {
           kind: 'APPLY',
           commit: () =>
@@ -2614,10 +2637,8 @@ export class WorkflowRuntimeKernel {
               target,
               event,
               auditEventId: this.nextAuditEventId(input.commandId),
-              payloadDigest,
-              acceptanceDecisionId: consumed.decision.id,
-              acceptanceDecisionDigest: consumed.decision.decisionDigest,
-              inputManifestDigest: consumed.manifest.manifestDigest,
+              payloadDigest: repair.repairDigest,
+              repair,
               candidate: authority.candidate,
               rejectedCandidateEvent,
               generation,
@@ -2635,6 +2656,7 @@ export class WorkflowRuntimeKernel {
               obligationAuditEventIds: Object.freeze(
                 candidatePolicy.obligations.map(() => this.nextAuditEventId(input.commandId)),
               ),
+              repairAuditEventId: this.nextAuditEventId(input.commandId),
             }),
         };
       },
