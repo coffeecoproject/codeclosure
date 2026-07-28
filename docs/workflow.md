@@ -4,9 +4,11 @@
 
 This document defines the target workflow contract. The current M1
 implementation includes the deterministic state model, transactional Workflow
-and Attempt Runtime, and the Context-bound `FakeWorker` proof path. Candidate
-editing, Evidence, Acceptance, CLI proof scenarios, and Codex integration are
-not yet implemented.
+and Attempt Runtime, the Context-bound `FakeWorker` proof path, logical
+Candidate preparation and irreversible freeze, independent fake verification,
+Evidence persistence/invalidation, and canonical Evidence Set transition into
+`FINAL_VERIFY`. Acceptance, repair-generation closeout coordination, CLI proof
+scenarios, real project editing, and Codex integration are not yet implemented.
 
 ## Purpose
 
@@ -62,14 +64,16 @@ and [ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
 An M1 Worker stream must establish a terminal delivery outcome. An admitted
 result or admitted Worker failure is terminal. If the stream is empty or ends
 after only malformed, rejected, or ignored Worker deliveries, the Runtime
-records `PROTOCOL_ERROR` while the Attempt is still current. An uncancelled
-iterator/process throw records `ABRUPT_TERMINATION`; successful cancellation is
-an `INTERRUPTED` Attempt. A control-plane failure during admission is classified
-separately and must not be rewritten as a Worker protocol error merely because
-no receipt committed. Runtime-authored stream failure also reloads and exactly
-binds the durable dispatch claim before it can terminate the Attempt; missing
-dispatch authority leaves the Attempt available for explicit recovery. Once a
-claim exists, its `claimedAt` is the timestamp floor for Worker result,
+records `PROTOCOL_ERROR` with a closed stream reason code while the Attempt is
+still current. An uncancelled iterator/process throw records
+`ABRUPT_TERMINATION` with a closed invocation-failure reason code; its raw
+exception text is not persisted. Successful cancellation is an `INTERRUPTED`
+Attempt. A control-plane failure during admission is classified separately and
+must not be rewritten as a Worker protocol error merely because no receipt
+committed. Runtime-authored stream failure also reloads and exactly binds the
+durable dispatch claim before it can terminate the Attempt; missing dispatch
+authority leaves the Attempt available for explicit recovery. Once a claim
+exists, its `claimedAt` is the timestamp floor for Worker result,
 Runtime-authored failure, cancellation, and restart reconciliation.
 
 For a new command, the Runtime first resolves the top-level Goal/Workflow
@@ -108,6 +112,24 @@ outcome. `CURRENT_ACCEPTANCE` is reserved for the dedicated closeout path,
 which must reload an Acceptance Engine decision and its exact bindings. Until
 Slice 6 implements that path, the application Runtime rejects `FINAL_VERIFY ->
 CLOSEOUT` as unavailable.
+
+Slice 5 phase guards are not supplied by that generic evaluator. The Runtime
+constructs Candidate and Evidence guards only from decoded Candidate,
+Verification Obligation, Check Specification, Evidence, eligibility, and
+source-observation authority; the Store reconstructs the persisted portion of
+those proofs before committing. Runtime and Store both rebuild the canonical
+Evidence Set from current authority before transition or persistence. Retained
+sets are later replayed against the Evidence eligibility that existed at their
+unique recording audit sequence; latest eligibility remains a separate
+currency gate.
+`SOURCE_FREEZE` and `EVIDENCE_BUILD` Attempts use dedicated Candidate Source
+and Verification Runner ports and never dispatch the coding `FakeWorker`.
+Their malformed output and invocation failures are normalized to closed reason
+codes before any authority is persisted. A frozen-source mismatch fails the
+Workflow and invalidates all still-eligible Evidence for that generation
+atomically. See
+[ADR 0016](adr/0016-candidate-and-evidence-authority-boundary.md) and
+[ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 ## Main Phase Graph
 
@@ -285,6 +307,7 @@ Forbidden:
 
 Exit guard:
 
+- at least one required obligation exists;
 - every required obligation has current eligible evidence or an explicit
   blocking result;
 - evidence binds the frozen candidate and relevant fact/policy versions;
@@ -432,6 +455,8 @@ In the current classification, `PROTOCOL_ERROR` is non-retryable and moves the
 Workflow to `FAILED`. `ABRUPT_TERMINATION` requires reconciliation and moves it
 to `BLOCKED`. A persistence or Runtime admission failure retains its own
 control-plane category so recovery can inspect the still-running Attempt.
+Worker payloads report only closed reasons. The Runtime maps each known reason
+to exactly one class, and Store/SQLite reject a conflicting direct write.
 
 ## Crash Recovery
 

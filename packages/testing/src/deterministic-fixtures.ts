@@ -3,23 +3,29 @@ import {
   auditEventId,
   candidateGenerationId,
   candidateId,
+  checkSpecificationId,
   commandId,
   contextManifestId,
   goalId,
+  evidenceId,
   isoTimestamp,
   workerEventId,
   workerSessionId,
+  verificationObligationId,
   workflowId,
   type AttemptId,
   type AuditEventId,
   type CandidateGenerationId,
   type CandidateId,
+  type CheckSpecificationId,
   type CommandId,
   type ContextManifestId,
   type GoalId,
+  type EvidenceId,
   type IsoTimestamp,
   type WorkerEventId,
   type WorkerSessionId,
+  type VerificationObligationId,
   type WorkflowId,
 } from '@codeclosure/domain';
 
@@ -77,6 +83,18 @@ export class DeterministicIds {
 
   public nextCandidateGenerationId(): CandidateGenerationId {
     return candidateGenerationId(`generation_${this.nextSuffix()}`);
+  }
+
+  public nextCheckSpecificationId(): CheckSpecificationId {
+    return checkSpecificationId(`check_${this.nextSuffix()}`);
+  }
+
+  public nextEvidenceId(): EvidenceId {
+    return evidenceId(`evidence_${this.nextSuffix()}`);
+  }
+
+  public nextVerificationObligationId(): VerificationObligationId {
+    return verificationObligationId(`obligation_${this.nextSuffix()}`);
   }
 
   public nextCommandId(): CommandId {

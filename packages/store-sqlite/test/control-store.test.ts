@@ -456,6 +456,8 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0008_authority_boundary_validation.sql',
       '0009_context_worker_dispatch.sql',
       '0010_worker_authority_closure.sql',
+      '0011_candidate_evidence_authority.sql',
+      '0012_worker_failure_classification_closure.sql',
     ],
   );
   store.close();
@@ -1882,7 +1884,7 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
         '2026-07-26T23:59:59.999Z',
         null,
       ),
-    /Candidate generation authority representation is invalid/,
+    /Candidate generation authority representation is invalid|invalid or unaudited Candidate generation creation/,
   );
   assert.throws(
     () =>
@@ -1902,26 +1904,30 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
         createdAt,
         null,
       ),
-    /Candidate generation authority representation is invalid/,
+    /Candidate generation authority representation is invalid|invalid or unaudited Candidate generation creation/,
   );
 
   const candidateIdentifier = 'candidate_authority-boundary';
   const generationIdentifier = 'generation_authority-boundary-first';
-  insertCandidate.run(
-    generationIdentifier,
-    candidateIdentifier,
-    first.workflow.id,
-    1,
-    null,
-    'fixture://candidate/authority-boundary',
-    'MUTABLE',
-    digest('b'),
-    null,
-    null,
-    1,
-    createdAt,
-    createdAt,
-    null,
+  assert.throws(
+    () =>
+      insertCandidate.run(
+        generationIdentifier,
+        candidateIdentifier,
+        first.workflow.id,
+        1,
+        null,
+        'fixture://candidate/authority-boundary',
+        'MUTABLE',
+        digest('b'),
+        null,
+        null,
+        1,
+        createdAt,
+        createdAt,
+        null,
+      ),
+    /invalid or unaudited Candidate generation creation/,
   );
 
   assert.throws(
@@ -1942,14 +1948,14 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
         createdAt,
         null,
       ),
-    /Candidate generation authority representation is invalid/,
+    /Candidate generation authority representation is invalid|invalid or unaudited Candidate generation creation/,
   );
   assert.throws(
     () =>
       database
         .prepare('UPDATE workflows SET active_candidate_generation_id = ? WHERE id = ?')
         .run(generationIdentifier, second.workflow.id),
-    /Workflow authority representation is invalid/,
+    /Workflow authority representation is invalid|FOREIGN KEY constraint failed/,
   );
 
   assert.throws(

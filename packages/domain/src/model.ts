@@ -147,6 +147,9 @@ export function assertGoalInvariant(goal: Goal): void {
   if (goal.successCriteria.length === 0) {
     throw new TypeError('Goal must contain at least one success criterion');
   }
+  if (!goal.successCriteria.some((criterion) => criterion.required)) {
+    throw new TypeError('Goal must contain at least one required success criterion');
+  }
 
   const criterionIds = new Set<string>();
   for (const criterion of goal.successCriteria) {
@@ -185,6 +188,9 @@ export function createGoal(input: CreateGoalInput): Goal {
   }
   if (input.successCriteria.length === 0) {
     throw new TypeError('Goal must contain at least one success criterion');
+  }
+  if (!input.successCriteria.some((criterion) => criterion.required)) {
+    throw new TypeError('Goal must contain at least one required success criterion');
   }
   if (input.successCriteria.some((criterion) => criterion.description.trim().length === 0)) {
     throw new TypeError('Success criterion description must not be empty');

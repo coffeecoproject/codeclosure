@@ -106,6 +106,9 @@ Evidence records bind to the current project identity, goal revision,
 candidate digest, check specification, runner identity, relevant environment,
 and observed outputs. Narrative claims alone are not evidence.
 
+The Check Specification and Runtime, not an external producer response, MUST
+author the persisted producer, environment, payload, and Evidence identity.
+
 ### I-016 — Evidence cannot approve itself
 
 A check runner may report observations and a check-level result. It cannot
@@ -117,11 +120,19 @@ Evidence becomes ineligible when a required bound input changes. Missing,
 copied, stale, malformed, contradictory, or unverifiable required evidence
 cannot satisfy acceptance.
 
+An immutable historical Evidence Set MUST replay against the eligibility state
+at its recording audit sequence. Historical readability does not make it
+current: a new acceptance evaluation MUST still use latest eligibility.
+
 ### I-018 — Evidence content and secrets are separated
 
 Evidence stores redacted observations and content digests. Raw secrets,
 credentials, tokens, cookies, or full sensitive connection strings must not be
-persisted as evidence.
+persisted as evidence. External adapter exception text and unrecognized output
+fields MUST NOT enter authoritative state or audit payloads. M1 persists only
+schema-owned observations and closed failure reason codes at those boundaries.
+Worker and checker responses MUST be rejected when they exceed their
+Runtime-owned byte budgets.
 
 ## Context and Facts
 
@@ -179,10 +190,18 @@ Parser errors, checker crashes, timeouts, missing policies, unresolved identity,
 unsupported protocol events, and ambiguous required state must produce a
 blocking or retryable result, never implicit success.
 
+A Goal MUST contain at least one required success criterion. Without one, the
+Goal has no technical completion boundary and is invalid rather than
+vacuously satisfied.
+
 ### I-028 — Retry is bounded and classified
 
 Automatic retries have a reason, budget, and backoff policy. Exhausting a retry
 budget is not completion and is surfaced as a concrete blocker.
+
+An external Worker may report only a closed failure reason. The Runtime owns
+the exhaustive reason-to-failure-class mapping, and persistence MUST reject a
+known reason paired with another class.
 
 ### I-029 — Reconciliation precedes continuation
 

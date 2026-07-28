@@ -12,6 +12,7 @@ import {
   WorkflowRejectionCode,
   applyWorkflowEvent,
   assertWorkflowInvariant,
+  attemptId,
   candidateGenerationId,
   commandId,
   createWorkflow,
@@ -299,6 +300,71 @@ void test('[I-010] cancellation remains distinct from successful closeout', () =
   });
   assert.equal(followUp.accepted, false);
   assert.equal(followUp.rejection.code, WorkflowRejectionCode.TERMINAL_WORKFLOW);
+});
+
+void test('[I-005][I-008] an integrity failure preserves phase and Candidate while failing the Workflow', () => {
+  let workflow = newWorkflow();
+  workflow = advance(workflow, WorkflowPhase.PLAN);
+  workflow = advance(workflow, WorkflowPhase.IMPLEMENT, firstGenerationId);
+  workflow = advance(workflow, WorkflowPhase.SOURCE_FREEZE);
+  workflow = advance(workflow, WorkflowPhase.EVIDENCE_BUILD);
+
+  const decision = decideWorkflow(workflow, {
+    type: 'FAIL_WORKFLOW_INTEGRITY',
+    commandId: commandId('command_integrity-failure'),
+    workflowId: workflow.id,
+    expectedVersion: workflow.version,
+    occurredAt: laterAt,
+    reason: 'frozen Candidate digest changed',
+  });
+  const event = acceptedEvent(decision);
+  assert.equal(event.type, 'WORKFLOW_INTEGRITY_FAILED');
+
+  const failed = applyWorkflowEvent(workflow, event);
+  assert.equal(failed.phase, WorkflowPhase.EVIDENCE_BUILD);
+  assert.equal(failed.runStatus, RunStatus.FAILED);
+  assert.equal(failed.activeAttemptId, undefined);
+  assert.equal(failed.activeCandidateGenerationId, firstGenerationId);
+  assert.equal(failed.version, workflowVersion(workflow.version + 1));
+  assert.equal(failed.suspendedReason, 'frozen Candidate digest changed');
+});
+
+void test('[I-008] integrity failure rejects an active Attempt and forged state bindings', () => {
+  let workflow = newWorkflow();
+  workflow = advance(workflow, WorkflowPhase.PLAN);
+  workflow = advance(workflow, WorkflowPhase.IMPLEMENT, firstGenerationId);
+  const running = Object.freeze({
+    ...workflow,
+    runStatus: RunStatus.RUNNING,
+    activeAttemptId: attemptId('attempt_integrity-running'),
+  });
+  const rejected = decideWorkflow(running, {
+    type: 'FAIL_WORKFLOW_INTEGRITY',
+    commandId: commandId('command_integrity-running'),
+    workflowId: running.id,
+    expectedVersion: running.version,
+    occurredAt: laterAt,
+    reason: 'must use the owning compound failure transaction',
+  });
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.rejection.code, WorkflowRejectionCode.RUN_STATUS_NOT_READY);
+
+  const decision = decideWorkflow(workflow, {
+    type: 'FAIL_WORKFLOW_INTEGRITY',
+    commandId: commandId('command_integrity-forgery'),
+    workflowId: workflow.id,
+    expectedVersion: workflow.version,
+    occurredAt: laterAt,
+    reason: 'candidate integrity failed',
+  });
+  const event = acceptedEvent(decision);
+  if (event.type !== 'WORKFLOW_INTEGRITY_FAILED') {
+    assert.fail('Expected a Workflow integrity failure event');
+  }
+  assert.throws(
+    () => applyWorkflowEvent(workflow, { ...event, phase: WorkflowPhase.PLAN }),
+    /does not match a READY Workflow/,
+  );
 });
 
 void test('[I-008] terminal Workflow immutability is enforced during event application', () => {

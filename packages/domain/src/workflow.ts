@@ -113,7 +113,11 @@ export interface CancelWorkflow extends WorkflowCommandBase {
   readonly type: 'CANCEL_WORKFLOW';
 }
 
-export type WorkflowCommand = RequestPhaseTransition | CancelWorkflow;
+export interface FailWorkflowIntegrity extends WorkflowCommandBase {
+  readonly type: 'FAIL_WORKFLOW_INTEGRITY';
+}
+
+export type WorkflowCommand = RequestPhaseTransition | CancelWorkflow | FailWorkflowIntegrity;
 
 export interface WorkflowPhaseTransitioned {
   readonly type: 'WORKFLOW_PHASE_TRANSITIONED';
@@ -141,7 +145,18 @@ export interface WorkflowCancelled {
   readonly occurredAt: IsoTimestamp;
 }
 
-export type WorkflowEvent = WorkflowPhaseTransitioned | WorkflowCancelled;
+export interface WorkflowIntegrityFailed {
+  readonly type: 'WORKFLOW_INTEGRITY_FAILED';
+  readonly commandId: CommandId;
+  readonly workflowId: WorkflowId;
+  readonly phase: WorkflowPhaseType;
+  readonly fromVersion: WorkflowVersion;
+  readonly toVersion: WorkflowVersion;
+  readonly reason: string;
+  readonly occurredAt: IsoTimestamp;
+}
+
+export type WorkflowEvent = WorkflowPhaseTransitioned | WorkflowCancelled | WorkflowIntegrityFailed;
 
 export type WorkflowDecision =
   | { readonly accepted: true; readonly events: readonly [WorkflowEvent] }
@@ -436,6 +451,30 @@ export function decideWorkflow(
     };
   }
 
+  if (command.type === 'FAIL_WORKFLOW_INTEGRITY') {
+    if (workflow.runStatus !== RunStatus.READY || workflow.activeAttemptId !== undefined) {
+      return reject(
+        WorkflowRejectionCode.RUN_STATUS_NOT_READY,
+        'Workflow integrity failure requires a READY Workflow',
+      );
+    }
+    return {
+      accepted: true,
+      events: [
+        Object.freeze({
+          type: 'WORKFLOW_INTEGRITY_FAILED',
+          commandId: command.commandId,
+          workflowId: workflow.id,
+          phase: workflow.phase,
+          fromVersion: workflow.version,
+          toVersion,
+          reason: command.reason.trim(),
+          occurredAt: command.occurredAt,
+        }),
+      ],
+    };
+  }
+
   if (workflow.runStatus !== RunStatus.READY) {
     return reject(
       WorkflowRejectionCode.RUN_STATUS_NOT_READY,
@@ -555,6 +594,32 @@ export function applyWorkflowEvent(
       goalRevision: workflow.goalRevision,
       phase: workflow.phase,
       runStatus: RunStatus.CANCELLED,
+      version: event.toVersion,
+      ...(workflow.activeCandidateGenerationId === undefined
+        ? {}
+        : { activeCandidateGenerationId: workflow.activeCandidateGenerationId }),
+      suspendedReason: event.reason,
+      createdAt: workflow.createdAt,
+      updatedAt: event.occurredAt,
+    });
+    assertWorkflowInvariant(next);
+    return next;
+  }
+
+  if (event.type === 'WORKFLOW_INTEGRITY_FAILED') {
+    if (
+      event.phase !== workflow.phase ||
+      workflow.runStatus !== RunStatus.READY ||
+      workflow.activeAttemptId !== undefined
+    ) {
+      throw new DomainInvariantError('Workflow integrity failure does not match a READY Workflow');
+    }
+    const next = Object.freeze({
+      id: workflow.id,
+      goalId: workflow.goalId,
+      goalRevision: workflow.goalRevision,
+      phase: workflow.phase,
+      runStatus: RunStatus.FAILED,
       version: event.toVersion,
       ...(workflow.activeCandidateGenerationId === undefined
         ? {}

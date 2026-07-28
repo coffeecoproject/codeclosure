@@ -22,6 +22,7 @@ import {
 } from './capabilities.js';
 import {
   assertCandidateInvariant,
+  assertCandidateRootInvariant,
   type Candidate,
   type CandidateGeneration,
   type CandidateStateChanged,
@@ -42,18 +43,43 @@ import {
   type WorkerResponseContract,
 } from './context.js';
 import {
+  CheckSpecificationKind,
+  EvidenceEligibilityState,
+  EvidenceKind,
+  EvidenceProducerType,
+  EvidenceResultStatus,
+  FakeVerificationDetailCode,
+  assertCheckSpecificationInvariant,
+  assertEvidenceEligibilityInvariant,
+  assertEvidenceRecordInvariant,
+  assertEvidenceSetInvariant,
+  assertVerificationObligationInvariant,
+  type CheckSpecification,
+  type EvidenceEligibility,
+  type EvidenceEnvironmentIdentity,
+  type EvidenceObservation,
+  type EvidenceRecord,
+  type EvidenceSet,
+  type EvidenceSetEntry,
+  type EvidenceSetObligationMapping,
+  type VerificationObligation,
+} from './evidence.js';
+import {
   aggregateVersion,
   attemptId,
   candidateGenerationId,
   candidateId,
+  checkSpecificationId,
   commandId,
   contextManifestId,
+  evidenceId,
   goalId,
   goalRevision,
   isoTimestamp,
   policyBundleId,
   sha256Digest,
   successCriterionId,
+  verificationObligationId,
   workerSessionId,
   workflowId,
   workflowVersion,
@@ -98,6 +124,10 @@ const guardOutcomeSchema = z.enum(Object.values(GuardOutcome));
 const contextAuthorityClassSchema = z.enum(Object.values(ContextAuthorityClass));
 const contextEntryKindSchema = z.enum(Object.values(ContextEntryKind));
 const workerResultKindSchema = z.enum(Object.values(WorkerResultKind));
+const evidenceProducerTypeSchema = z.enum(Object.values(EvidenceProducerType));
+const evidenceKindSchema = z.enum(Object.values(EvidenceKind));
+const evidenceEligibilityStateSchema = z.enum(Object.values(EvidenceEligibilityState));
+const checkSpecificationKindSchema = z.enum(Object.values(CheckSpecificationKind));
 
 function assertNoExplicitUndefined(value: unknown, optionalKeys: readonly string[]): void {
   if (typeof value !== 'object' || value === null) {
@@ -295,11 +325,13 @@ const candidateSchema = z
 
 export function decodeCandidate(value: unknown): Candidate {
   const parsed = candidateSchema.parse(value);
-  return Object.freeze({
+  const candidate = Object.freeze({
     id: candidateId(parsed.id),
     goalId: goalId(parsed.goalId),
     baseProjectIdentity: parsed.baseProjectIdentity,
   });
+  assertCandidateRootInvariant(candidate);
+  return candidate;
 }
 
 const candidateGenerationSchema = z
@@ -359,6 +391,7 @@ const workerResponseContractSchema = z
     workerEventSchemaVersion: z.literal(1),
     allowedResultKinds: z.array(workerResultKindSchema).min(1),
     unknownFields: z.literal('REJECT'),
+    maxEventBytes: z.number().int().positive(),
   })
   .strict();
 
@@ -702,9 +735,23 @@ const workflowCancelledSchema = z
   })
   .strict();
 
+const workflowIntegrityFailedSchema = z
+  .object({
+    type: z.literal('WORKFLOW_INTEGRITY_FAILED'),
+    commandId: z.string(),
+    workflowId: z.string(),
+    phase: workflowPhaseSchema,
+    fromVersion: z.number().int().positive(),
+    toVersion: z.number().int().positive(),
+    reason: nonBlankStringSchema,
+    occurredAt: z.string(),
+  })
+  .strict();
+
 const workflowEventSchema = z.discriminatedUnion('type', [
   workflowPhaseTransitionedSchema,
   workflowCancelledSchema,
+  workflowIntegrityFailedSchema,
 ]);
 
 export function decodeWorkflowEvent(value: unknown): WorkflowEvent {
@@ -721,6 +768,18 @@ export function decodeWorkflowEvent(value: unknown): WorkflowEvent {
       ...(parsed.interruptedAttemptId === undefined
         ? {}
         : { interruptedAttemptId: attemptId(parsed.interruptedAttemptId) }),
+      reason: parsed.reason,
+      occurredAt: isoTimestamp(parsed.occurredAt),
+    });
+  }
+  if (parsed.type === 'WORKFLOW_INTEGRITY_FAILED') {
+    return Object.freeze({
+      type: parsed.type,
+      commandId: commandId(parsed.commandId),
+      workflowId: workflowId(parsed.workflowId),
+      phase: parsed.phase,
+      fromVersion: workflowVersion(parsed.fromVersion),
+      toVersion: workflowVersion(parsed.toVersion),
       reason: parsed.reason,
       occurredAt: isoTimestamp(parsed.occurredAt),
     });
@@ -904,4 +963,362 @@ export function decodeCandidateEvent(value: unknown): CandidateStateChanged {
       : { frozenDigest: sha256Digest(parsed.frozenDigest) }),
     ...(parsed.reason === undefined ? {} : { reason: parsed.reason }),
   });
+}
+
+const checkSpecificationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: z.string(),
+    version: nonBlankStringSchema,
+    kind: checkSpecificationKindSchema,
+    producerType: evidenceProducerTypeSchema,
+    producerIdentity: nonBlankStringSchema,
+    operation: nonBlankStringSchema,
+    cwdIdentity: nonBlankStringSchema,
+    inputRefs: z.array(nonBlankStringSchema),
+    environmentPolicy: nonBlankStringSchema,
+    timeoutMilliseconds: z.number().int().positive(),
+    outputLimitBytes: z.number().int().positive(),
+    expectedObservationSchema: nonBlankStringSchema,
+    cleanupPolicy: nonBlankStringSchema.optional(),
+  })
+  .strict();
+
+export function decodeCheckSpecification(value: unknown): CheckSpecification {
+  assertNoExplicitUndefined(value, ['cleanupPolicy']);
+  const parsed = checkSpecificationSchema.parse(value);
+  const checkSpec: CheckSpecification = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    id: checkSpecificationId(parsed.id),
+    version: parsed.version,
+    kind: parsed.kind,
+    producerType: parsed.producerType,
+    producerIdentity: parsed.producerIdentity,
+    operation: parsed.operation,
+    cwdIdentity: parsed.cwdIdentity,
+    inputRefs: Object.freeze([...parsed.inputRefs]),
+    environmentPolicy: parsed.environmentPolicy,
+    timeoutMilliseconds: parsed.timeoutMilliseconds,
+    outputLimitBytes: parsed.outputLimitBytes,
+    expectedObservationSchema: parsed.expectedObservationSchema,
+    ...(parsed.cleanupPolicy === undefined ? {} : { cleanupPolicy: parsed.cleanupPolicy }),
+  });
+  assertCheckSpecificationInvariant(checkSpec);
+  return checkSpec;
+}
+
+const verificationObligationSchema = z
+  .object({
+    id: z.string(),
+    goalId: z.string(),
+    goalRevision: z.number().int().positive(),
+    candidateGenerationId: z.string(),
+    sourceCriterionRefs: z.array(z.string()).min(1),
+    scenarioRefs: z.array(nonBlankStringSchema),
+    checkSpecRef: nonBlankStringSchema,
+    requiredEvidenceKind: evidenceKindSchema,
+    strength: nonBlankStringSchema,
+    createdAt: z.string(),
+  })
+  .strict();
+
+export function decodeVerificationObligation(value: unknown): VerificationObligation {
+  const parsed = verificationObligationSchema.parse(value);
+  const obligation: VerificationObligation = Object.freeze({
+    id: verificationObligationId(parsed.id),
+    goalId: goalId(parsed.goalId),
+    goalRevision: goalRevision(parsed.goalRevision),
+    candidateGenerationId: candidateGenerationId(parsed.candidateGenerationId),
+    sourceCriterionRefs: Object.freeze(
+      parsed.sourceCriterionRefs.map((reference) => successCriterionId(reference)),
+    ),
+    scenarioRefs: Object.freeze([...parsed.scenarioRefs]),
+    checkSpecRef: parsed.checkSpecRef,
+    requiredEvidenceKind: parsed.requiredEvidenceKind,
+    strength: parsed.strength,
+    createdAt: isoTimestamp(parsed.createdAt),
+  });
+  assertVerificationObligationInvariant(obligation);
+  return obligation;
+}
+
+const candidateFreezeObservationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal(EvidenceKind.CANDIDATE_FREEZE),
+    firstSourceDigest: z.string(),
+    secondSourceDigest: z.string(),
+    changeSetDigest: z.string(),
+  })
+  .strict();
+const fakeVerificationObservationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal('FAKE_VERIFICATION'),
+    checkSpecRef: nonBlankStringSchema,
+    observedResult: z.enum([
+      EvidenceResultStatus.PASS,
+      EvidenceResultStatus.FAIL,
+      EvidenceResultStatus.RUNNER_ERROR,
+      EvidenceResultStatus.TIMEOUT,
+    ]),
+    detailCode: z.enum(Object.values(FakeVerificationDetailCode)),
+  })
+  .strict();
+const evidenceObservationSchema = z.discriminatedUnion('kind', [
+  candidateFreezeObservationSchema,
+  fakeVerificationObservationSchema,
+]);
+
+export function decodeEvidenceObservation(value: unknown): EvidenceObservation {
+  const parsed = evidenceObservationSchema.parse(value);
+  return parsed.kind === EvidenceKind.CANDIDATE_FREEZE
+    ? Object.freeze({
+        schemaVersion: parsed.schemaVersion,
+        kind: parsed.kind,
+        firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
+        secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
+        changeSetDigest: sha256Digest(parsed.changeSetDigest),
+      })
+    : Object.freeze({ ...parsed });
+}
+
+const evidenceEnvironmentIdentitySchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal('M1_LOGICAL'),
+    identity: nonBlankStringSchema,
+    digest: z.string(),
+  })
+  .strict();
+
+function decodeEvidenceEnvironmentIdentity(value: unknown): EvidenceEnvironmentIdentity {
+  const parsed = evidenceEnvironmentIdentitySchema.parse(value);
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    kind: parsed.kind,
+    identity: parsed.identity,
+    digest: sha256Digest(parsed.digest),
+  });
+}
+
+const evidenceRecordBaseShape = {
+  id: z.string(),
+  schemaVersion: z.literal(1),
+  producerIdentity: nonBlankStringSchema,
+  goalId: z.string(),
+  goalRevision: z.number().int().positive(),
+  workflowId: z.string(),
+  attemptId: z.string(),
+  candidateGenerationId: z.string(),
+  candidateDigest: z.string(),
+  policyBundleId: z.string(),
+  policyBundleDigest: z.string(),
+  checkSpec: checkSpecificationSchema,
+  startedAt: z.string(),
+  endedAt: z.string(),
+  payloadRefs: z.array(z.string()).length(1),
+  observationDigest: z.string(),
+  recordedAt: z.string(),
+  recordDigest: z.string(),
+} as const;
+
+const candidateFreezeEvidenceRecordSchema = z
+  .object({
+    ...evidenceRecordBaseShape,
+    kind: z.literal(EvidenceKind.CANDIDATE_FREEZE),
+    producerType: z.literal(EvidenceProducerType.CANDIDATE_MANAGER),
+    observation: candidateFreezeObservationSchema,
+    resultStatus: z.literal(EvidenceResultStatus.OBSERVED),
+  })
+  .strict();
+const testResultEvidenceRecordSchema = z
+  .object({
+    ...evidenceRecordBaseShape,
+    kind: z.literal(EvidenceKind.TEST_RESULT),
+    producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
+    verificationObligationId: z.string(),
+    environmentIdentity: evidenceEnvironmentIdentitySchema,
+    observation: fakeVerificationObservationSchema,
+    resultStatus: z.enum([
+      EvidenceResultStatus.PASS,
+      EvidenceResultStatus.FAIL,
+      EvidenceResultStatus.RUNNER_ERROR,
+      EvidenceResultStatus.TIMEOUT,
+    ]),
+  })
+  .strict();
+const evidenceRecordSchema = z.discriminatedUnion('kind', [
+  candidateFreezeEvidenceRecordSchema,
+  testResultEvidenceRecordSchema,
+]);
+
+export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
+  const parsed = evidenceRecordSchema.parse(value);
+  const common = {
+    id: evidenceId(parsed.id),
+    schemaVersion: parsed.schemaVersion,
+    producerIdentity: parsed.producerIdentity,
+    goalId: goalId(parsed.goalId),
+    goalRevision: goalRevision(parsed.goalRevision),
+    workflowId: workflowId(parsed.workflowId),
+    attemptId: attemptId(parsed.attemptId),
+    candidateGenerationId: candidateGenerationId(parsed.candidateGenerationId),
+    candidateDigest: sha256Digest(parsed.candidateDigest),
+    policyBundleId: policyBundleId(parsed.policyBundleId),
+    policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
+    checkSpec: decodeCheckSpecification(parsed.checkSpec),
+    startedAt: isoTimestamp(parsed.startedAt),
+    endedAt: isoTimestamp(parsed.endedAt),
+    observationDigest: sha256Digest(parsed.observationDigest),
+    recordedAt: isoTimestamp(parsed.recordedAt),
+    recordDigest: sha256Digest(parsed.recordDigest),
+  };
+  const payloadReference = parsed.payloadRefs[0];
+  if (payloadReference === undefined) {
+    throw new TypeError('M1 Evidence payload disappeared after schema validation');
+  }
+  const payloadRefs = Object.freeze([sha256Digest(payloadReference)] as const);
+  let record: EvidenceRecord;
+  if (parsed.kind === EvidenceKind.CANDIDATE_FREEZE) {
+    const observation = decodeEvidenceObservation(parsed.observation);
+    if (observation.kind !== EvidenceKind.CANDIDATE_FREEZE) {
+      throw new TypeError('Candidate freeze Evidence observation changed kind');
+    }
+    record = Object.freeze({
+      ...common,
+      kind: parsed.kind,
+      producerType: parsed.producerType,
+      observation,
+      payloadRefs,
+      resultStatus: parsed.resultStatus,
+    });
+  } else {
+    const observation = decodeEvidenceObservation(parsed.observation);
+    if (observation.kind !== 'FAKE_VERIFICATION') {
+      throw new TypeError('Test Evidence observation changed kind');
+    }
+    record = Object.freeze({
+      ...common,
+      kind: parsed.kind,
+      producerType: parsed.producerType,
+      verificationObligationId: verificationObligationId(parsed.verificationObligationId),
+      environmentIdentity: decodeEvidenceEnvironmentIdentity(parsed.environmentIdentity),
+      observation,
+      payloadRefs,
+      resultStatus: parsed.resultStatus,
+    });
+  }
+  assertEvidenceRecordInvariant(record);
+  return record;
+}
+
+const eligibleEvidenceSchema = z
+  .object({
+    evidenceId: z.string(),
+    version: z.literal(1),
+    state: z.literal(EvidenceEligibilityState.ELIGIBLE),
+    changedAt: z.string(),
+  })
+  .strict();
+const ineligibleEvidenceSchema = z
+  .object({
+    evidenceId: z.string(),
+    version: z.literal(2),
+    state: z.literal(EvidenceEligibilityState.INELIGIBLE),
+    reasonCode: nonBlankStringSchema,
+    sourceRef: nonBlankStringSchema,
+    changedAt: z.string(),
+  })
+  .strict();
+const evidenceEligibilitySchema = z.discriminatedUnion('state', [
+  eligibleEvidenceSchema,
+  ineligibleEvidenceSchema,
+]);
+
+export function decodeEvidenceEligibility(value: unknown): EvidenceEligibility {
+  const parsed = evidenceEligibilitySchema.parse(value);
+  const eligibility: EvidenceEligibility =
+    parsed.state === EvidenceEligibilityState.ELIGIBLE
+      ? Object.freeze({
+          evidenceId: evidenceId(parsed.evidenceId),
+          version: aggregateVersion(parsed.version),
+          state: parsed.state,
+          changedAt: isoTimestamp(parsed.changedAt),
+        })
+      : Object.freeze({
+          evidenceId: evidenceId(parsed.evidenceId),
+          version: aggregateVersion(parsed.version),
+          state: parsed.state,
+          reasonCode: parsed.reasonCode,
+          sourceRef: parsed.sourceRef,
+          changedAt: isoTimestamp(parsed.changedAt),
+        });
+  assertEvidenceEligibilityInvariant(eligibility);
+  return eligibility;
+}
+
+const evidenceSetObligationMappingSchema = z
+  .object({
+    obligationId: z.string(),
+    evidenceIds: z.array(z.string()),
+  })
+  .strict();
+const evidenceSetEntrySchema = z
+  .object({
+    evidenceId: z.string(),
+    evidenceRecordDigest: z.string(),
+    eligibilityVersion: z.number().int().positive(),
+    eligibilityState: evidenceEligibilityStateSchema,
+  })
+  .strict();
+const evidenceSetSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    goalId: z.string(),
+    goalRevision: z.number().int().positive(),
+    candidateGenerationId: z.string(),
+    candidateDigest: z.string(),
+    obligationMappings: z.array(evidenceSetObligationMappingSchema),
+    evidenceRefs: z.array(evidenceSetEntrySchema),
+    unresolvedEvidenceRequirements: z.array(z.string()),
+    digest: z.string(),
+  })
+  .strict();
+
+export function decodeEvidenceSet(value: unknown): EvidenceSet {
+  const parsed = evidenceSetSchema.parse(value);
+  const mappings: readonly EvidenceSetObligationMapping[] = Object.freeze(
+    parsed.obligationMappings.map((mapping) =>
+      Object.freeze({
+        obligationId: verificationObligationId(mapping.obligationId),
+        evidenceIds: Object.freeze(mapping.evidenceIds.map((id) => evidenceId(id))),
+      }),
+    ),
+  );
+  const entries: readonly EvidenceSetEntry[] = Object.freeze(
+    parsed.evidenceRefs.map((entry) =>
+      Object.freeze({
+        evidenceId: evidenceId(entry.evidenceId),
+        evidenceRecordDigest: sha256Digest(entry.evidenceRecordDigest),
+        eligibilityVersion: aggregateVersion(entry.eligibilityVersion),
+        eligibilityState: entry.eligibilityState,
+      }),
+    ),
+  );
+  const set: EvidenceSet = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    goalId: goalId(parsed.goalId),
+    goalRevision: goalRevision(parsed.goalRevision),
+    candidateGenerationId: candidateGenerationId(parsed.candidateGenerationId),
+    candidateDigest: sha256Digest(parsed.candidateDigest),
+    obligationMappings: mappings,
+    evidenceRefs: entries,
+    unresolvedEvidenceRequirements: Object.freeze(
+      parsed.unresolvedEvidenceRequirements.map((id) => verificationObligationId(id)),
+    ),
+    digest: sha256Digest(parsed.digest),
+  });
+  assertEvidenceSetInvariant(set);
+  return set;
 }

@@ -3,11 +3,12 @@
 ## Status
 
 This document defines the target Context Compiler contract. The current M1
-Slice 4 implementation provides the deterministic subset described under
-[M1 Boundary](#m1-boundary): canonical Context Packages and Manifests,
-a fail-closed compiler-owned source subset, exact digest binding, atomic
-Attempt binding, and `FakeWorker` dispatch. Retrieval, relevance packing, a
-full Fact Graph, and Codex Thread policy remain planned for later milestones.
+implementation through Slice 5 provides the deterministic subset described
+under [M1 Boundary](#m1-boundary): canonical Context Packages and Manifests, a
+fail-closed source subset, exact digest binding, atomic Attempt binding,
+`FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
+Retrieval, relevance packing, a full Fact Graph, and Codex Thread policy remain
+planned for later milestones.
 
 ## Purpose
 
@@ -109,6 +110,11 @@ ContextPackage
 
 The worker-visible rendering may be Markdown, structured JSON, or a combination.
 The canonical identity is the `ContextManifest`, not presentation formatting.
+
+The M1 `responseContract` is compiler-owned and binds the allowed result kinds,
+closed Worker Event schema behavior, and `maxEventBytes`. Admission measures
+the strictly decoded event's canonical UTF-8 JSON bytes against that limit; a
+Worker cannot enlarge its own output budget.
 
 ## Context Manifest
 
@@ -303,18 +309,24 @@ sufficient for `FakeWorker`:
 - Goal identity and criteria;
 - Workflow, phase, Attempt, and capability-grant identity;
 - response contract;
+- a 65,536-byte maximum canonical Worker Event;
 - Context Manifest, package digest, and manifest digest;
+- exact active `MUTABLE` Candidate generation and `baseDigest` for `IMPLEMENT`;
 - invalidation on Goal or phase revision.
 
-The M1 package has an empty `selectedEntries` collection, its Manifest has no
-omission decisions, and its entries are limited to compiler-owned Goal and
-success-criterion bindings. Candidate binding is also closed in Slice 4:
-the factory cannot prove Candidate lifecycle or digest merely from the active
-Workflow identifier. Slice 5 must introduce the Candidate Manager resolver
-before Candidate Context is enabled. The Context factory is not a source
-authority. Durable relationship lookup and relevance selection over the
-Fact/Decision stores remain M3 work; a later accepted ADR must introduce the
-owning resolver before those entries can enter Worker Context.
+The M1 package still has an empty `selectedEntries` collection and its Manifest
+has no omission decisions. Its ordinary entries are limited to compiler-owned
+Goal and success-criterion bindings. For `IMPLEMENT` only, the Runtime now
+resolves the Workflow's active Candidate through the Candidate Store, requires
+the exact generation to be `MUTABLE`, and gives the compiler its immutable
+`baseDigest`; the Runtime and Store independently rederive that dedicated
+Candidate Manifest entry. `DISCOVERY` and `PLAN` remain Candidate-free. The
+Context factory is not a source authority. Durable relationship lookup and
+relevance selection over the Fact/Decision stores remain M3 work; a later
+accepted ADR must introduce the owning resolver before those entries can enter
+Worker Context. See
+[ADR 0016](adr/0016-candidate-and-evidence-authority-boundary.md) and
+[ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 Code relevance retrieval, full Fact Graph traversal, token-aware packing, and
 Codex Thread policy belong to later milestones.
@@ -327,6 +339,8 @@ Codex Thread policy belong to later milestones.
 - lower-authority working context cannot override a Goal field;
 - required oversized content fails explicitly;
 - stale worker results referencing an old manifest cannot advance state;
+- Candidate Context names only the exact active `MUTABLE` generation and
+  `baseDigest`, and is absent from non-`IMPLEMENT` M1 packages;
 - a factory-labelled Fact or Human Decision without durable source authority
   cannot enter the M1 package;
 - no authority field depends solely on a transcript excerpt.

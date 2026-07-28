@@ -1,12 +1,8 @@
 import { createHash } from 'node:crypto';
 
+import { WorkerResultKind, sha256Digest, workerEventId } from '@codeclosure/domain';
 import {
-  AttemptFailureClass,
-  WorkerResultKind,
-  sha256Digest,
-  workerEventId,
-} from '@codeclosure/domain';
-import {
+  WorkerFailureReasonCode,
   assertWorkerEventBindsRequest,
   decodeWorkerEvent,
   decodeWorkerRequest,
@@ -24,6 +20,7 @@ export const FakeWorkerFixture = {
   CONTROL_MUTATION: 'control-mutation',
   FAILURE: 'failure',
   ABRUPT_TERMINATION: 'abrupt-termination',
+  SENSITIVE_ABRUPT_TERMINATION: 'sensitive-abrupt-termination',
   DELAYED_RESULT: 'delayed-result',
 } as const;
 export type FakeWorkerFixture = (typeof FakeWorkerFixture)[keyof typeof FakeWorkerFixture];
@@ -102,6 +99,9 @@ export class FakeWorker implements WorkerPort {
     if (this.#fixture === FakeWorkerFixture.ABRUPT_TERMINATION) {
       throw new Error('FakeWorker terminated abruptly');
     }
+    if (this.#fixture === FakeWorkerFixture.SENSITIVE_ABRUPT_TERMINATION) {
+      throw new Error('token=demo-sensitive-value');
+    }
     if (this.#delay !== undefined) {
       await Promise.race([
         this.#delay,
@@ -158,8 +158,7 @@ export class FakeWorker implements WorkerPort {
         return Object.freeze({
           ...common,
           type: 'WORKER_FAILURE',
-          failureClass: AttemptFailureClass.TRANSIENT_BACKEND,
-          reason: 'deterministic fake backend failure',
+          reasonCode: WorkerFailureReasonCode.BACKEND_FAILURE,
         });
       case FakeWorkerFixture.VALID_RESULT:
       case FakeWorkerFixture.DUPLICATE_RESULT:
@@ -173,6 +172,7 @@ export class FakeWorker implements WorkerPort {
         return event;
       }
       case FakeWorkerFixture.ABRUPT_TERMINATION:
+      case FakeWorkerFixture.SENSITIVE_ABRUPT_TERMINATION:
         throw new Error('Abrupt fixture should terminate before event construction');
     }
   }

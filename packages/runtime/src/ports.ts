@@ -4,15 +4,25 @@ import type {
   AttemptEvent,
   AttemptId,
   AuditEventId,
+  Candidate,
+  CandidateGeneration,
+  CandidateStateChanged,
+  CheckSpecification,
   CommandId,
   ContextManifest,
   ContextManifestId,
+  EvidenceEligibility,
+  EvidenceId,
+  EvidenceRecord,
+  EvidenceSet,
   Goal,
   GoalId,
   IsoTimestamp,
   PolicyBundle,
   PolicyBundleId,
   Sha256Digest,
+  VerificationObligation,
+  VerificationObligationId,
   WorkflowEvent,
   WorkflowId,
   WorkflowInstance,
@@ -94,6 +104,87 @@ export interface CommittedContextAttempt {
   readonly workflow: WorkflowInstance;
   readonly attempt: Attempt;
   readonly contextManifest: ContextManifest;
+}
+
+export interface CandidateAuthorityView {
+  readonly candidate: Candidate;
+  readonly generation: CandidateGeneration;
+  readonly workflowId: WorkflowId;
+}
+
+export interface CommitCandidatePreparation extends CommitWorkflowEvent {
+  readonly candidate: Candidate;
+  readonly generation: CandidateGeneration;
+  readonly checkSpecifications: readonly CheckSpecification[];
+  readonly obligations: readonly VerificationObligation[];
+  readonly candidateAuditEventId: AuditEventId;
+  readonly generationAuditEventId: AuditEventId;
+  readonly checkSpecificationAuditEventIds: readonly AuditEventId[];
+  readonly obligationAuditEventIds: readonly AuditEventId[];
+}
+
+export interface CommittedCandidatePreparation {
+  readonly workflow: WorkflowInstance;
+  readonly authority: CandidateAuthorityView;
+  readonly checkSpecifications: readonly CheckSpecification[];
+  readonly obligations: readonly VerificationObligation[];
+}
+
+export interface CommitWorkflowCandidateEvent extends CommitWorkflowEvent {
+  readonly candidateEvent: CandidateStateChanged;
+  readonly candidateAuditEventId: AuditEventId;
+}
+
+export interface CommittedWorkflowCandidateEvent {
+  readonly workflow: WorkflowInstance;
+  readonly authority: CandidateAuthorityView;
+}
+
+export interface CommitCandidateIntegrityFailure extends CommitWorkflowEvent {
+  readonly candidateEvent: CandidateStateChanged;
+  readonly expectedFrozenDigest: Sha256Digest;
+  readonly observedDigest: Sha256Digest;
+  readonly candidateAuditEventId: AuditEventId;
+  readonly invalidatedEvidenceAuditEventIds: readonly AuditEventId[];
+}
+
+export interface CommittedCandidateIntegrityFailure {
+  readonly workflow: WorkflowInstance;
+  readonly authority: CandidateAuthorityView;
+  readonly invalidatedEvidence: readonly EvidenceEligibility[];
+}
+
+export interface CommitCandidateAttemptOutcome extends CommitAttemptEvent {
+  readonly candidateEvent: CandidateStateChanged;
+  readonly candidateAuditEventId: AuditEventId;
+  readonly evidence?: EvidenceRecord;
+  readonly initialEligibility?: EvidenceEligibility;
+  readonly evidenceAuditEventId?: AuditEventId;
+  readonly invalidatedEvidenceAuditEventIds: readonly AuditEventId[];
+}
+
+export interface CommittedCandidateAttemptOutcome extends AppliedAttemptEvent {
+  readonly authority: CandidateAuthorityView;
+  readonly evidence?: EvidenceRecord;
+  readonly eligibility?: EvidenceEligibility;
+  readonly invalidatedEvidence: readonly EvidenceEligibility[];
+}
+
+export interface CommitVerificationAttemptOutcome extends CommitAttemptEvent {
+  readonly obligationId: VerificationObligationId;
+  readonly evidence: EvidenceRecord;
+  readonly initialEligibility: EvidenceEligibility;
+  readonly evidenceAuditEventId: AuditEventId;
+}
+
+export interface CommittedVerificationAttemptOutcome extends AppliedAttemptEvent {
+  readonly evidence: EvidenceRecord;
+  readonly eligibility: EvidenceEligibility;
+}
+
+export interface CommitEvidenceSetTransition extends CommitWorkflowEvent {
+  readonly evidenceSet: EvidenceSet;
+  readonly evidenceSetAuditEventId: AuditEventId;
 }
 
 export interface CommitWorkerAttemptEvent extends CommitAttemptEvent {
@@ -190,4 +281,45 @@ export interface WorkerControlStore extends WorkflowControlStore {
     input: CommitWorkerAttemptEvent,
   ): WorkerEventStoreResult<AppliedAttemptEvent>;
   recordIgnoredWorkerEvent(input: RecordIgnoredWorkerEvent): WorkerEventStoreResult<undefined>;
+}
+
+export interface CandidateEvidenceControlStore extends WorkerControlStore {
+  getCandidateForGoal(goalId: GoalId): Candidate | undefined;
+  getCandidateGeneration(
+    candidateGenerationId: CandidateGeneration['id'],
+  ): CandidateGeneration | undefined;
+  getCandidateAuthorityForWorkflow(workflowId: WorkflowId): CandidateAuthorityView | undefined;
+  nextCandidateGenerationSequence(candidateId: Candidate['id']): number;
+  getCheckSpecification(
+    checkSpecificationId: CheckSpecification['id'],
+  ): CheckSpecification | undefined;
+  listCheckSpecifications(): readonly CheckSpecification[];
+  getVerificationObligation(
+    verificationObligationId: VerificationObligationId,
+  ): VerificationObligation | undefined;
+  listVerificationObligations(goalId: GoalId): readonly VerificationObligation[];
+  getEvidence(evidenceId: EvidenceId): EvidenceRecord | undefined;
+  getEvidenceEligibility(evidenceId: EvidenceId): EvidenceEligibility | undefined;
+  listEvidenceForGeneration(
+    candidateGenerationId: CandidateGeneration['id'],
+  ): readonly { readonly record: EvidenceRecord; readonly eligibility: EvidenceEligibility }[];
+  getEvidenceSet(digest: Sha256Digest): EvidenceSet | undefined;
+  commitCandidatePreparation(
+    input: CommitCandidatePreparation,
+  ): StoreCommandResult<CommittedCandidatePreparation>;
+  commitWorkflowCandidateEvent(
+    input: CommitWorkflowCandidateEvent,
+  ): StoreCommandResult<CommittedWorkflowCandidateEvent>;
+  commitCandidateIntegrityFailure(
+    input: CommitCandidateIntegrityFailure,
+  ): StoreCommandResult<CommittedCandidateIntegrityFailure>;
+  commitCandidateAttemptOutcome(
+    input: CommitCandidateAttemptOutcome,
+  ): StoreCommandResult<CommittedCandidateAttemptOutcome>;
+  commitVerificationAttemptOutcome(
+    input: CommitVerificationAttemptOutcome,
+  ): StoreCommandResult<CommittedVerificationAttemptOutcome>;
+  commitEvidenceSetTransition(
+    input: CommitEvidenceSetTransition,
+  ): StoreCommandResult<WorkflowInstance>;
 }

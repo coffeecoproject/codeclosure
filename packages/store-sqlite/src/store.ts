@@ -2,37 +2,62 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
+import { z } from 'zod';
 
 import {
+  AttemptFailureClass,
   AttemptStatus,
+  CandidateGenerationState,
+  CheckSpecificationKind,
   ContextEntryKind,
+  EvidenceEligibilityState,
+  EvidenceKind,
   GoalStatus,
+  GuardOutcome,
   RunStatus,
+  WorkflowGuard,
   WorkflowPhase,
   applyAttemptEvent,
+  applyCandidateEvent,
+  applyEvidenceEligibilityEvent,
   applyWorkflowCancellationToAttempt,
   applyWorkflowEvent,
   attemptId,
   auditEventId,
+  candidateGenerationId,
+  candidateId,
+  checkSpecificationId,
   commandId,
   contextManifestId,
   decodeContextPackage,
+  decodeCandidate,
+  decodeCandidateEvent,
+  decodeCandidateGeneration,
+  decodeCheckSpecification,
+  decodeEvidenceEligibility,
+  decodeEvidenceRecord,
+  decodeEvidenceSet,
   decodeContextManifest,
   decodeAttemptEvent,
   decodeGoalSnapshot,
   decodeWorkflowEvent,
   decodeWorkflowSnapshot,
   decodePolicyBundle,
+  decodeVerificationObligation,
+  decideEvidenceInvalidation,
   assertWorkflowInvariant,
   deriveGoalStatus,
   goalId,
   goalRevision,
+  evidenceId,
+  evidenceSetDigestProjection,
   isoTimestamp,
   policyBundleId,
   policyBundleProjection,
   sha256Digest,
   workflowId,
   workflowVersion,
+  verificationObligationId,
   workerEventId,
   type AppliedAttemptEvent,
   type Attempt,
@@ -40,8 +65,17 @@ import {
   type AttemptId,
   type AuditEventId,
   type CommandId,
+  type Candidate,
+  type CandidateGeneration,
+  type CandidateGenerationId,
+  type CheckSpecification,
+  type CheckSpecificationId,
   type ContextManifest,
   type ContextManifestId,
+  type EvidenceEligibility,
+  type EvidenceId,
+  type EvidenceRecord,
+  type EvidenceSet,
   type Goal,
   type GoalId,
   type IsoTimestamp,
@@ -52,6 +86,8 @@ import {
   type WorkflowId,
   type WorkflowInstance,
   type WorkflowVersion,
+  type VerificationObligation,
+  type VerificationObligationId,
   type WorkerEventId,
 } from '@codeclosure/domain';
 import {
@@ -67,14 +103,32 @@ import {
   decodeWorkerDispatchClaim,
   decodeWorkerEventReceipt,
   deriveContextManifestEntries,
+  deriveM1BaseProjectIdentity,
+  deriveM1WorkspaceIdentity,
+  attemptFailureClassForKnownWorkerReasonCode,
   m1PhaseObjective,
   m1WorkerResponseContract,
+  validateM1CandidateEvidencePolicy,
+  verifyEvidenceSetAuthority,
   assertStoredCommandOutcomeBinding,
   StoredCommandDisposition,
   storedCommandOutcomeToJson,
   type CommandTarget,
   type AdmittedWorkerEventReceipt,
   type ClaimWorkerDispatch,
+  type CandidateAuthorityView,
+  type CandidateEvidenceControlStore,
+  type CommitCandidateAttemptOutcome,
+  type CommitCandidateIntegrityFailure,
+  type CommitCandidatePreparation,
+  type CommitEvidenceSetTransition,
+  type CommittedCandidateAttemptOutcome,
+  type CommittedCandidateIntegrityFailure,
+  type CommittedCandidatePreparation,
+  type CommittedVerificationAttemptOutcome,
+  type CommittedWorkflowCandidateEvent,
+  type CommitVerificationAttemptOutcome,
+  type CommitWorkflowCandidateEvent,
   type CommitContextBoundAttemptStart,
   type CommittedContextAttempt,
   type CommitWorkerAttemptEvent,
@@ -85,11 +139,11 @@ import {
   type RecordIgnoredWorkerEvent,
   type RecordCommandRejection,
   type StoreCommandResult,
-  type WorkerControlStore,
   type WorkerDispatchClaim,
   type WorkerDispatchClaimResult,
   type WorkerEventReceipt,
   type WorkerEventStoreResult,
+  verifyEvidenceRecordDigests,
 } from '@codeclosure/runtime';
 
 import {
@@ -106,13 +160,20 @@ import {
 import {
   decodeAttempt,
   decodeAuditEvent,
+  decodeCandidateGenerationRow,
+  decodeCandidateRow,
+  decodeCheckSpecificationRow,
   decodeGoal,
   decodeContextManifestRow,
   decodePolicyBundleRow,
+  decodeEvidenceEligibilityRow,
+  decodeEvidenceRecordRow,
+  decodeEvidenceSetRow,
   decodeProcessedCommand,
   decodeWorkflow,
   decodeWorkerDispatchClaimRow,
   decodeWorkerEventReceiptRow,
+  decodeVerificationObligationRow,
   type AuditEventRecord,
   type ProcessedCommandRecord,
 } from './rows.js';
@@ -137,12 +198,24 @@ export const WorkerTransactionStep = {
 export type WorkerTransactionStep =
   (typeof WorkerTransactionStep)[keyof typeof WorkerTransactionStep];
 
+export const CandidateEvidenceTransactionStep = {
+  AFTER_CANDIDATE_WRITE: 'AFTER_CANDIDATE_WRITE',
+  AFTER_CANDIDATE_TRANSITION: 'AFTER_CANDIDATE_TRANSITION',
+  AFTER_EVIDENCE_WRITE: 'AFTER_EVIDENCE_WRITE',
+  AFTER_ELIGIBILITY_WRITE: 'AFTER_ELIGIBILITY_WRITE',
+  AFTER_EVIDENCE_SET_WRITE: 'AFTER_EVIDENCE_SET_WRITE',
+} as const;
+export type CandidateEvidenceTransactionStep =
+  (typeof CandidateEvidenceTransactionStep)[keyof typeof CandidateEvidenceTransactionStep];
+
 export interface SqliteControlStoreOptions {
   readonly filename: string;
   readonly migrationsDirectory?: string;
   readonly busyTimeoutMilliseconds?: number;
   readonly now?: () => IsoTimestamp;
-  readonly transactionProbe?: (step: TransactionStep | WorkerTransactionStep) => void;
+  readonly transactionProbe?: (
+    step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep,
+  ) => void;
 }
 
 interface AuditWriteIdentity {
@@ -151,6 +224,14 @@ interface AuditWriteIdentity {
   readonly correlationId?: string;
   readonly causationId?: string;
 }
+
+const evidenceIdentifierRowsSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+    })
+    .strict(),
+);
 
 export interface CreateGoalWithWorkflowInput extends AuditWriteIdentity {
   readonly commandId: CommandId;
@@ -264,7 +345,7 @@ function validateCommitAttemptEventInput(
 ): CommitAttemptEventInput {
   const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
   const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
-  return Object.freeze({
+  const input = Object.freeze({
     inputDigest: sha256Digest(rawInput.inputDigest),
     target: decodeCommandTarget(rawInput.target),
     event: decodeAttemptEvent(rawInput.event),
@@ -274,6 +355,35 @@ function validateCommitAttemptEventInput(
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(causationId === undefined ? {} : { causationId }),
   });
+  assertKnownWorkerFailureClassification(input.event);
+  return input;
+}
+
+function assertKnownWorkerFailureClassification(event: AttemptEvent): void {
+  if (event.type !== 'ATTEMPT_FINISHED') {
+    return;
+  }
+  assertKnownWorkerFailureClassificationFields(
+    event.terminationReason,
+    event.toStatus,
+    event.failureClass,
+  );
+}
+
+function assertKnownWorkerFailureClassificationFields(
+  terminationReason: string | undefined,
+  status: Attempt['status'],
+  failureClass: Attempt['failureClass'],
+): void {
+  if (terminationReason === undefined) {
+    return;
+  }
+  const expected = attemptFailureClassForKnownWorkerReasonCode(terminationReason);
+  if (expected !== undefined && (status !== AttemptStatus.FAILED || failureClass !== expected)) {
+    throw new StoreInvariantError(
+      `Worker termination reason ${terminationReason} requires failure class ${expected}`,
+    );
+  }
 }
 
 function validateCommitWorkflowEventInput(
@@ -377,6 +487,223 @@ function validateClaimWorkerDispatch(rawInput: ClaimWorkerDispatch): ClaimWorker
   });
 }
 
+function validateAuditIdentifiers(
+  values: unknown,
+  expectedLength: number,
+  name: string,
+): readonly AuditEventId[] {
+  if (!Array.isArray(values) || values.length !== expectedLength) {
+    throw new StoreInvariantError(`${name} must contain exactly ${expectedLength} audit IDs`);
+  }
+  const identifiers = Object.freeze(
+    values.map((value) => {
+      if (typeof value !== 'string') {
+        throw new StoreInvariantError(`${name} contains a malformed audit ID`);
+      }
+      return auditEventId(value);
+    }),
+  );
+  if (new Set(identifiers).size !== identifiers.length) {
+    throw new StoreInvariantError(`${name} audit IDs must be unique`);
+  }
+  return identifiers;
+}
+
+function validateCommitCandidatePreparation(
+  rawInput: CommitCandidatePreparation,
+): CommitCandidatePreparation {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const candidate = decodeCandidate(rawInput.candidate);
+  const generation = decodeCandidateGeneration(rawInput.generation);
+  const checkSpecifications = Object.freeze(
+    rawInput.checkSpecifications.map((specification) => decodeCheckSpecification(specification)),
+  );
+  const obligations = Object.freeze(
+    rawInput.obligations.map((obligation) => decodeVerificationObligation(obligation)),
+  );
+  const candidateAuditEventId = auditEventId(rawInput.candidateAuditEventId);
+  const generationAuditEventId = auditEventId(rawInput.generationAuditEventId);
+  const checkSpecificationAuditEventIds = validateAuditIdentifiers(
+    rawInput.checkSpecificationAuditEventIds,
+    checkSpecifications.length,
+    'Check Specification',
+  );
+  const obligationAuditEventIds = validateAuditIdentifiers(
+    rawInput.obligationAuditEventIds,
+    obligations.length,
+    'Verification Obligation',
+  );
+  if (
+    base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
+    base.event.toPhase !== WorkflowPhase.IMPLEMENT ||
+    base.event.nextCandidateGenerationId !== generation.id ||
+    candidate.id !== generation.candidateId ||
+    generation.state !== CandidateGenerationState.MUTABLE ||
+    generation.version !== 1
+  ) {
+    throw new StoreInvariantError('Candidate preparation does not bind its Workflow transition');
+  }
+  return Object.freeze({
+    ...base,
+    candidate,
+    generation,
+    checkSpecifications,
+    obligations,
+    candidateAuditEventId,
+    generationAuditEventId,
+    checkSpecificationAuditEventIds,
+    obligationAuditEventIds,
+  });
+}
+
+function validateCommitWorkflowCandidateEvent(
+  rawInput: CommitWorkflowCandidateEvent,
+): CommitWorkflowCandidateEvent {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const candidateEvent = decodeCandidateEvent(rawInput.candidateEvent);
+  if (
+    base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
+    base.event.fromPhase !== WorkflowPhase.IMPLEMENT ||
+    base.event.toPhase !== WorkflowPhase.SOURCE_FREEZE ||
+    base.event.commandId !== candidateEvent.commandId ||
+    base.event.occurredAt !== candidateEvent.occurredAt ||
+    candidateEvent.fromState !== CandidateGenerationState.MUTABLE ||
+    candidateEvent.toState !== CandidateGenerationState.FREEZING
+  ) {
+    throw new StoreInvariantError('Candidate freeze start does not bind its Workflow transition');
+  }
+  return Object.freeze({
+    ...base,
+    candidateEvent,
+    candidateAuditEventId: auditEventId(rawInput.candidateAuditEventId),
+  });
+}
+
+function validateCommitCandidateIntegrityFailure(
+  rawInput: CommitCandidateIntegrityFailure,
+): CommitCandidateIntegrityFailure {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const candidateEvent = decodeCandidateEvent(rawInput.candidateEvent);
+  const expectedFrozenDigest = sha256Digest(rawInput.expectedFrozenDigest);
+  const observedDigest = sha256Digest(rawInput.observedDigest);
+  if (
+    base.event.type !== 'WORKFLOW_INTEGRITY_FAILED' ||
+    base.event.commandId !== candidateEvent.commandId ||
+    base.event.occurredAt !== candidateEvent.occurredAt ||
+    candidateEvent.fromState !== CandidateGenerationState.FROZEN ||
+    candidateEvent.toState !== CandidateGenerationState.INVALIDATED ||
+    candidateEvent.reason !== 'FROZEN_CANDIDATE_DRIFT' ||
+    expectedFrozenDigest === observedDigest
+  ) {
+    throw new StoreInvariantError('Candidate integrity failure does not bind its Workflow failure');
+  }
+  return Object.freeze({
+    ...base,
+    candidateEvent,
+    expectedFrozenDigest,
+    observedDigest,
+    candidateAuditEventId: auditEventId(rawInput.candidateAuditEventId),
+    invalidatedEvidenceAuditEventIds: Object.freeze(
+      rawInput.invalidatedEvidenceAuditEventIds.map((identifier) => auditEventId(identifier)),
+    ),
+  });
+}
+
+function validateCommitCandidateAttemptOutcome(
+  rawInput: CommitCandidateAttemptOutcome,
+): CommitCandidateAttemptOutcome {
+  const base = validateCommitAttemptEventInput(rawInput);
+  const candidateEvent = decodeCandidateEvent(rawInput.candidateEvent);
+  const evidence =
+    rawInput.evidence === undefined ? undefined : decodeEvidenceRecord(rawInput.evidence);
+  const initialEligibility =
+    rawInput.initialEligibility === undefined
+      ? undefined
+      : decodeEvidenceEligibility(rawInput.initialEligibility);
+  const evidenceAuditEventId =
+    rawInput.evidenceAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.evidenceAuditEventId);
+  if (
+    base.event.type !== 'ATTEMPT_FINISHED' ||
+    base.event.phase !== WorkflowPhase.SOURCE_FREEZE ||
+    base.event.commandId !== candidateEvent.commandId ||
+    base.event.occurredAt !== candidateEvent.occurredAt ||
+    (evidence === undefined) !== (initialEligibility === undefined) ||
+    (evidence === undefined) !== (evidenceAuditEventId === undefined) ||
+    (evidence !== undefined && initialEligibility?.evidenceId !== evidence.id)
+  ) {
+    throw new StoreInvariantError('Candidate freeze outcome has inconsistent authority fields');
+  }
+  const isFrozenResult =
+    candidateEvent.fromState === CandidateGenerationState.FREEZING &&
+    candidateEvent.toState === CandidateGenerationState.FROZEN &&
+    base.event.toStatus === AttemptStatus.RESULT_RECORDED &&
+    evidence !== undefined;
+  const isInvalidatedFailure =
+    candidateEvent.toState === CandidateGenerationState.INVALIDATED &&
+    base.event.toStatus === AttemptStatus.FAILED &&
+    evidence === undefined;
+  if (!isFrozenResult && !isInvalidatedFailure) {
+    throw new StoreInvariantError('Candidate freeze outcome is not a supported lifecycle result');
+  }
+  return Object.freeze({
+    ...base,
+    candidateEvent,
+    candidateAuditEventId: auditEventId(rawInput.candidateAuditEventId),
+    ...(evidence === undefined ? {} : { evidence }),
+    ...(initialEligibility === undefined ? {} : { initialEligibility }),
+    ...(evidenceAuditEventId === undefined ? {} : { evidenceAuditEventId }),
+    invalidatedEvidenceAuditEventIds: Object.freeze(
+      rawInput.invalidatedEvidenceAuditEventIds.map((identifier) => auditEventId(identifier)),
+    ),
+  });
+}
+
+function validateCommitVerificationAttemptOutcome(
+  rawInput: CommitVerificationAttemptOutcome,
+): CommitVerificationAttemptOutcome {
+  const base = validateCommitAttemptEventInput(rawInput);
+  const obligationId = verificationObligationId(rawInput.obligationId);
+  const evidence = decodeEvidenceRecord(rawInput.evidence);
+  const initialEligibility = decodeEvidenceEligibility(rawInput.initialEligibility);
+  if (
+    base.event.type !== 'ATTEMPT_FINISHED' ||
+    base.event.phase !== WorkflowPhase.EVIDENCE_BUILD ||
+    base.event.toStatus !== AttemptStatus.RESULT_RECORDED ||
+    evidence.attemptId !== base.event.attemptId ||
+    initialEligibility.evidenceId !== evidence.id
+  ) {
+    throw new StoreInvariantError('Verification outcome does not bind its Attempt');
+  }
+  return Object.freeze({
+    ...base,
+    obligationId,
+    evidence,
+    initialEligibility,
+    evidenceAuditEventId: auditEventId(rawInput.evidenceAuditEventId),
+  });
+}
+
+function validateCommitEvidenceSetTransition(
+  rawInput: CommitEvidenceSetTransition,
+): CommitEvidenceSetTransition {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const evidenceSet = decodeEvidenceSet(rawInput.evidenceSet);
+  if (
+    base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
+    base.event.fromPhase !== WorkflowPhase.EVIDENCE_BUILD ||
+    base.event.toPhase !== WorkflowPhase.FINAL_VERIFY
+  ) {
+    throw new StoreInvariantError('Evidence Set does not bind an Evidence-to-Final transition');
+  }
+  return Object.freeze({
+    ...base,
+    evidenceSet,
+    evidenceSetAuditEventId: auditEventId(rawInput.evidenceSetAuditEventId),
+  });
+}
+
 function validateAggregateLookup(value: unknown, fieldName: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new TypeError(`${fieldName} must be a non-empty string`);
@@ -384,16 +711,20 @@ function validateAggregateLookup(value: unknown, fieldName: string): string {
   return value;
 }
 
-export class SqliteControlStore implements WorkerControlStore {
+export class SqliteControlStore implements CandidateEvidenceControlStore {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
-  readonly #transactionProbe: ((step: TransactionStep | WorkerTransactionStep) => void) | undefined;
+  readonly #transactionProbe:
+    | ((step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep) => void)
+    | undefined;
   #closed = false;
 
   private constructor(
     database: Database.Database,
     appliedMigrations: readonly AppliedMigration[],
-    transactionProbe: ((step: TransactionStep | WorkerTransactionStep) => void) | undefined,
+    transactionProbe:
+      | ((step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep) => void)
+      | undefined,
   ) {
     this.#database = database;
     this.#appliedMigrations = Object.freeze([...appliedMigrations]);
@@ -424,6 +755,7 @@ export class SqliteControlStore implements WorkerControlStore {
       );
       const store = new SqliteControlStore(database, migrations, options.transactionProbe);
       store.assertRetainedWorkerAuthorityClosure();
+      store.assertRetainedCandidateEvidenceAuthorityClosure();
       return store;
     } catch (error) {
       database.close();
@@ -516,6 +848,200 @@ export class SqliteControlStore implements WorkerControlStore {
       .prepare('SELECT * FROM context_manifests WHERE id = ?')
       .get(manifestIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedContextManifestRow(row);
+  }
+
+  public getCandidateForGoal(rawGoalIdentifier: GoalId): Candidate | undefined {
+    this.assertOpen();
+    const goalIdentifier = goalId(rawGoalIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM candidates WHERE goal_id = ?')
+      .get(goalIdentifier);
+    return row === undefined ? undefined : decodeCandidateRow(row);
+  }
+
+  public getCandidateGeneration(
+    rawGenerationIdentifier: CandidateGenerationId,
+  ): CandidateGeneration | undefined {
+    this.assertOpen();
+    const generationIdentifier = candidateGenerationId(rawGenerationIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+      .get(generationIdentifier);
+    return row === undefined ? undefined : decodeCandidateGenerationRow(row).generation;
+  }
+
+  public getCandidateAuthorityForWorkflow(
+    rawWorkflowIdentifier: WorkflowId,
+  ): CandidateAuthorityView | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    return this.runRead(() => {
+      const workflow = this.getWorkflowInsideTransaction(workflowIdentifier);
+      if (workflow.activeCandidateGenerationId === undefined) {
+        return undefined;
+      }
+      const generationRow = this.#database
+        .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+        .get(workflow.activeCandidateGenerationId);
+      if (generationRow === undefined) {
+        throw new StoreInvariantError(
+          `Workflow ${workflow.id} has no active Candidate generation authority`,
+        );
+      }
+      const decoded = decodeCandidateGenerationRow(generationRow);
+      const candidateRow = this.#database
+        .prepare('SELECT * FROM candidates WHERE id = ?')
+        .get(decoded.generation.candidateId);
+      if (candidateRow === undefined) {
+        throw new StoreInvariantError(
+          `Candidate generation ${decoded.generation.id} has no Candidate root`,
+        );
+      }
+      const candidate = decodeCandidateRow(candidateRow);
+      if (decoded.workflowId !== workflow.id || candidate.goalId !== workflow.goalId) {
+        throw new StoreInvariantError(
+          `Candidate generation ${decoded.generation.id} belongs to another authority`,
+        );
+      }
+      return Object.freeze({ candidate, generation: decoded.generation, workflowId: workflow.id });
+    });
+  }
+
+  public nextCandidateGenerationSequence(rawCandidateIdentifier: Candidate['id']): number {
+    this.assertOpen();
+    const candidateIdentifier = candidateId(rawCandidateIdentifier);
+    const row = this.#database
+      .prepare(
+        `SELECT COALESCE(MAX(candidate_generations.sequence), 0) + 1 AS next_sequence
+           FROM candidates
+           LEFT JOIN candidate_generations
+             ON candidate_generations.candidate_id = candidates.id
+          WHERE candidates.id = ?
+          GROUP BY candidates.id`,
+      )
+      .get(candidateIdentifier);
+    if (
+      typeof row !== 'object' ||
+      row === null ||
+      !('next_sequence' in row) ||
+      typeof row.next_sequence !== 'number' ||
+      !Number.isSafeInteger(row.next_sequence) ||
+      row.next_sequence < 1
+    ) {
+      throw new StoreInvariantError(`Candidate ${candidateIdentifier} does not exist`);
+    }
+    return row.next_sequence;
+  }
+
+  public getCheckSpecification(
+    rawCheckSpecificationIdentifier: CheckSpecificationId,
+  ): CheckSpecification | undefined {
+    this.assertOpen();
+    const specificationIdentifier = checkSpecificationId(rawCheckSpecificationIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM check_specifications WHERE id = ?')
+      .get(specificationIdentifier);
+    return row === undefined ? undefined : decodeCheckSpecificationRow(row);
+  }
+
+  public listCheckSpecifications(): readonly CheckSpecification[] {
+    this.assertOpen();
+    return Object.freeze(
+      this.#database
+        .prepare('SELECT * FROM check_specifications ORDER BY id')
+        .all()
+        .map((row) => decodeCheckSpecificationRow(row)),
+    );
+  }
+
+  public getVerificationObligation(
+    rawObligationIdentifier: VerificationObligationId,
+  ): VerificationObligation | undefined {
+    this.assertOpen();
+    const obligationIdentifier = verificationObligationId(rawObligationIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM verification_obligations WHERE id = ?')
+      .get(obligationIdentifier);
+    return row === undefined ? undefined : decodeVerificationObligationRow(row);
+  }
+
+  public listVerificationObligations(rawGoalIdentifier: GoalId): readonly VerificationObligation[] {
+    this.assertOpen();
+    const goalIdentifier = goalId(rawGoalIdentifier);
+    return Object.freeze(
+      this.#database
+        .prepare('SELECT * FROM verification_obligations WHERE goal_id = ? ORDER BY id')
+        .all(goalIdentifier)
+        .map((row) => decodeVerificationObligationRow(row)),
+    );
+  }
+
+  public getEvidence(rawEvidenceIdentifier: EvidenceId): EvidenceRecord | undefined {
+    this.assertOpen();
+    const evidenceIdentifier = evidenceId(rawEvidenceIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM evidence_records WHERE id = ?')
+      .get(evidenceIdentifier);
+    return row === undefined ? undefined : this.decodeVerifiedEvidenceRecordRow(row);
+  }
+
+  public getEvidenceEligibility(
+    rawEvidenceIdentifier: EvidenceId,
+  ): EvidenceEligibility | undefined {
+    this.assertOpen();
+    const evidenceIdentifier = evidenceId(rawEvidenceIdentifier);
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM evidence_eligibility
+          WHERE evidence_id = ?
+          ORDER BY version DESC
+          LIMIT 1`,
+      )
+      .get(evidenceIdentifier);
+    return row === undefined ? undefined : decodeEvidenceEligibilityRow(row);
+  }
+
+  public listEvidenceForGeneration(
+    rawGenerationIdentifier: CandidateGenerationId,
+  ): readonly { readonly record: EvidenceRecord; readonly eligibility: EvidenceEligibility }[] {
+    this.assertOpen();
+    const generationIdentifier = candidateGenerationId(rawGenerationIdentifier);
+    const identifierRows = evidenceIdentifierRowsSchema.parse(
+      this.#database
+        .prepare('SELECT id FROM evidence_records WHERE candidate_generation_id = ? ORDER BY id')
+        .all(generationIdentifier),
+    );
+    return Object.freeze(
+      identifierRows.map(({ id: rawIdentifier }) => {
+        const identifier = evidenceId(rawIdentifier);
+        const record = this.getEvidence(identifier);
+        const eligibility = this.getEvidenceEligibility(identifier);
+        if (record === undefined || eligibility === undefined) {
+          throw new StoreInvariantError(`Evidence ${identifier} has incomplete authority`);
+        }
+        return Object.freeze({ record, eligibility });
+      }),
+    );
+  }
+
+  public getEvidenceSet(rawDigest: Sha256Digest): EvidenceSet | undefined {
+    this.assertOpen();
+    const digest = sha256Digest(rawDigest);
+    const row = this.#database.prepare('SELECT * FROM evidence_sets WHERE digest = ?').get(digest);
+    if (row === undefined) {
+      return undefined;
+    }
+    const set = decodeEvidenceSetRow(row);
+    const expected = sha256Digest(
+      canonicalAuthorityDigests.digest(evidenceSetDigestProjection(set)),
+    );
+    if (set.digest !== expected) {
+      throw new StoreInvariantError(
+        `Evidence Set ${set.digest} digest does not match its canonical projection`,
+      );
+    }
+    this.assertRetainedEvidenceSetAuthority(set);
+    return set;
   }
 
   public getPolicyBundle(
@@ -889,6 +1415,18 @@ export class SqliteControlStore implements WorkerControlStore {
   ): StoreCommandResult<AppliedAttemptEvent> {
     this.assertOpen();
     const input = validateCommitAttemptEventInput(rawInput);
+    if (
+      input.event.type === 'ATTEMPT_FINISHED' &&
+      input.event.toStatus !== AttemptStatus.INTERRUPTED &&
+      (input.event.phase === WorkflowPhase.SOURCE_FREEZE ||
+        (input.event.phase === WorkflowPhase.EVIDENCE_BUILD &&
+          (input.event.toStatus !== AttemptStatus.FAILED ||
+            input.event.failureClass !== AttemptFailureClass.PROTOCOL_ERROR)))
+    ) {
+      throw new StoreInvariantError(
+        'Candidate freeze and successful verification Attempts require their compound authority commit',
+      );
+    }
     return this.runCommandImmediate(() => this.commitAttemptEventInsideTransaction(input));
   }
 
@@ -1180,6 +1718,23 @@ export class SqliteControlStore implements WorkerControlStore {
   ): StoreCommandResult<WorkflowInstance> {
     this.assertOpen();
     const input = validateCommitWorkflowEventInput(rawInput);
+    if (
+      input.event.type === 'WORKFLOW_INTEGRITY_FAILED' ||
+      (input.event.type === 'WORKFLOW_PHASE_TRANSITIONED' &&
+        ((input.event.fromPhase === WorkflowPhase.PLAN &&
+          input.event.toPhase === WorkflowPhase.IMPLEMENT) ||
+          (input.event.fromPhase === WorkflowPhase.IMPLEMENT &&
+            input.event.toPhase === WorkflowPhase.SOURCE_FREEZE) ||
+          (input.event.fromPhase === WorkflowPhase.EVIDENCE_BUILD &&
+            input.event.toPhase === WorkflowPhase.FINAL_VERIFY) ||
+          (input.event.fromPhase === WorkflowPhase.FINAL_VERIFY &&
+            (input.event.toPhase === WorkflowPhase.IMPLEMENT ||
+              input.event.toPhase === WorkflowPhase.CLOSEOUT))))
+    ) {
+      throw new StoreInvariantError(
+        'Authority-bearing Workflow events require their owning compound commit',
+      );
+    }
 
     return this.runCommandImmediate(() => {
       const replay = this.checkCommand(
@@ -1202,6 +1757,13 @@ export class SqliteControlStore implements WorkerControlStore {
       }
       if (current.version !== input.event.fromVersion) {
         throw new OptimisticConcurrencyError('Workflow', input.event.workflowId);
+      }
+      if (
+        input.event.type === 'WORKFLOW_PHASE_TRANSITIONED' &&
+        input.event.fromPhase === WorkflowPhase.SOURCE_FREEZE &&
+        input.event.toPhase === WorkflowPhase.EVIDENCE_BUILD
+      ) {
+        this.assertFrozenCandidateTransitionAuthority(current, input.event);
       }
       let next: WorkflowInstance;
       let interruptedAttempt: Attempt | undefined;
@@ -1324,6 +1886,1019 @@ export class SqliteControlStore implements WorkerControlStore {
       ]);
 
       return { status: 'APPLIED', outcome: persistedCommand.outcome, value: persistedWorkflow };
+    });
+  }
+
+  public commitCandidatePreparation(
+    rawInput: CommitCandidatePreparation,
+  ): StoreCommandResult<CommittedCandidatePreparation> {
+    this.assertOpen();
+    const input = validateCommitCandidatePreparation(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const next = applyWorkflowEvent(current, input.event);
+      if (
+        input.candidate.goalId !== current.goalId ||
+        next.activeCandidateGenerationId !== input.generation.id ||
+        input.generation.createdAt !== input.event.occurredAt ||
+        input.generation.updatedAt !== input.event.occurredAt
+      ) {
+        throw new StoreInvariantError('Prepared Candidate does not bind the resulting Workflow');
+      }
+      if (input.checkSpecifications.length !== 2) {
+        throw new StoreInvariantError('Candidate preparation requires exactly two M1 Checks');
+      }
+      const goal = this.getGoal(current.goalId);
+      const freeze = input.checkSpecifications[0];
+      const verification = input.checkSpecifications[1];
+      if (goal === undefined || freeze === undefined || verification === undefined) {
+        throw new StoreInvariantError('Candidate preparation lacks its M1 policy authority');
+      }
+      if (
+        input.candidate.baseProjectIdentity !==
+          deriveM1BaseProjectIdentity(goal.scope.projectPath, canonicalAuthorityDigests) ||
+        input.generation.workspaceIdentity !== deriveM1WorkspaceIdentity(input.generation.id)
+      ) {
+        throw new StoreInvariantError('Candidate preparation contains non-canonical M1 identities');
+      }
+      validateM1CandidateEvidencePolicy(
+        goal,
+        input.generation,
+        { freeze, verification, obligations: input.obligations },
+        input.event.occurredAt,
+      );
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          candidate: input.candidate,
+          generation: input.generation,
+          checkSpecifications: input.checkSpecifications,
+          obligations: input.obligations,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError(
+          'Candidate preparation audit digest does not bind its compound authority',
+        );
+      }
+
+      const expectedSequence = this.nextCandidateSequenceForPreparation(input.candidate.id);
+      if (input.generation.sequence !== expectedSequence) {
+        throw new StoreInvariantError(`Candidate generation sequence must be ${expectedSequence}`);
+      }
+      const existingCandidate = this.getCandidateForGoal(current.goalId);
+      if (
+        existingCandidate !== undefined &&
+        (existingCandidate.id !== input.candidate.id ||
+          existingCandidate.baseProjectIdentity !== input.candidate.baseProjectIdentity)
+      ) {
+        throw new StoreInvariantError('Goal already has another Candidate root authority');
+      }
+
+      this.insertAuditEvent({
+        id: input.candidateAuditEventId,
+        aggregateType: 'CANDIDATE',
+        aggregateId: input.candidate.id,
+        eventType:
+          existingCandidate === undefined ? 'CANDIDATE_CREATED' : 'CANDIDATE_REUSED_FOR_GENERATION',
+        commandId: input.event.commandId,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      if (existingCandidate === undefined) {
+        this.#database
+          .prepare('INSERT INTO candidates(id, goal_id, base_project_identity) VALUES (?, ?, ?)')
+          .run(input.candidate.id, input.candidate.goalId, input.candidate.baseProjectIdentity);
+      }
+
+      this.insertAuditEvent({
+        id: input.generationAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: input.generation.id,
+        eventType: 'CANDIDATE_GENERATION_CREATED',
+        commandId: input.event.commandId,
+        afterVersion: input.generation.version,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.insertCandidateGeneration(input.generation, current.id);
+
+      const specificationRefs = new Set<string>();
+      input.checkSpecifications.forEach((specification, index) => {
+        const specificationRef = `${specification.id}@${specification.version}`;
+        if (specificationRefs.has(specificationRef)) {
+          throw new StoreInvariantError('Prepared Check Specifications must be unique');
+        }
+        specificationRefs.add(specificationRef);
+        const auditIdentifier = input.checkSpecificationAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Check Specification audit identity is missing');
+        }
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'CHECK_SPECIFICATION',
+          aggregateId: specification.id,
+          eventType: 'CHECK_SPECIFICATION_RECORDED',
+          commandId: input.event.commandId,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.payloadDigest,
+          occurredAt: input.event.occurredAt,
+        });
+        this.#database
+          .prepare(
+            `INSERT INTO check_specifications(id, version, canonical_json)
+             VALUES (?, ?, ?)`,
+          )
+          .run(
+            specification.id,
+            specification.version,
+            serializeJson(decodeJsonValue(specification)),
+          );
+      });
+
+      input.obligations.forEach((obligation, index) => {
+        if (
+          obligation.goalId !== current.goalId ||
+          obligation.goalRevision !== current.goalRevision ||
+          obligation.candidateGenerationId !== input.generation.id ||
+          obligation.createdAt !== input.event.occurredAt ||
+          !specificationRefs.has(obligation.checkSpecRef)
+        ) {
+          throw new StoreInvariantError(
+            `Verification Obligation ${obligation.id} has stale preparation authority`,
+          );
+        }
+        const auditIdentifier = input.obligationAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Verification Obligation audit identity is missing');
+        }
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'VERIFICATION_OBLIGATION',
+          aggregateId: obligation.id,
+          eventType: 'VERIFICATION_OBLIGATION_RECORDED',
+          commandId: input.event.commandId,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.payloadDigest,
+          occurredAt: input.event.occurredAt,
+        });
+        this.insertVerificationObligation(obligation);
+      });
+      this.probe(CandidateEvidenceTransactionStep.AFTER_CANDIDATE_WRITE);
+
+      this.updateWorkflow(current, next);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: input.event.workflowId,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, next, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedWorkflow = this.getWorkflowInsideTransaction(next.id);
+      const authority = this.getCandidateAuthorityForWorkflow(next.id);
+      if (authority?.generation.id !== input.generation.id) {
+        throw new StoreInvariantError('Prepared Candidate authority did not round-trip');
+      }
+      const specifications = Object.freeze(
+        input.checkSpecifications.map((specification) => {
+          const persisted = this.getCheckSpecification(specification.id);
+          if (persisted === undefined) {
+            throw new StoreInvariantError(
+              `Check Specification ${specification.id} did not round-trip`,
+            );
+          }
+          return persisted;
+        }),
+      );
+      const obligations = Object.freeze(
+        input.obligations.map((obligation) => {
+          const persisted = this.getVerificationObligation(obligation.id);
+          if (persisted === undefined) {
+            throw new StoreInvariantError(
+              `Verification Obligation ${obligation.id} did not round-trip`,
+            );
+          }
+          return persisted;
+        }),
+      );
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        next.goalId,
+        next.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.auditEventId,
+        input.candidateAuditEventId,
+        input.generationAuditEventId,
+        ...input.checkSpecificationAuditEventIds,
+        ...input.obligationAuditEventIds,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow: persistedWorkflow,
+          authority,
+          checkSpecifications: specifications,
+          obligations,
+        }),
+      };
+    });
+  }
+
+  public commitWorkflowCandidateEvent(
+    rawInput: CommitWorkflowCandidateEvent,
+  ): StoreCommandResult<CommittedWorkflowCandidateEvent> {
+    this.assertOpen();
+    const input = validateCommitWorkflowCandidateEvent(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const authority = this.getCandidateAuthorityForWorkflow(current.id);
+      if (
+        authority?.generation.id !== input.candidateEvent.candidateGenerationId ||
+        authority.generation.version !== input.candidateEvent.fromVersion
+      ) {
+        throw new StoreInvariantError('Candidate transition does not target current authority');
+      }
+      if (
+        input.payloadDigest !==
+        sha256Digest(
+          canonicalAuthorityDigests.digest({
+            event: input.event,
+            candidateEvent: input.candidateEvent,
+          }),
+        )
+      ) {
+        throw new StoreInvariantError('Candidate transition audit digest is incomplete');
+      }
+      const nextWorkflow = applyWorkflowEvent(current, input.event);
+      const nextGeneration = applyCandidateEvent(authority.generation, input.candidateEvent);
+
+      this.insertAuditEvent({
+        id: input.candidateAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: nextGeneration.id,
+        eventType: input.candidateEvent.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.candidateEvent.fromVersion,
+        afterVersion: input.candidateEvent.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.updateCandidateGeneration(authority.generation, nextGeneration);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION);
+      this.updateWorkflow(current, nextWorkflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: input.event.workflowId,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, nextWorkflow, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedWorkflow = this.getWorkflowInsideTransaction(nextWorkflow.id);
+      const persistedAuthority = this.getCandidateAuthorityForWorkflow(nextWorkflow.id);
+      if (persistedAuthority?.generation.state !== CandidateGenerationState.FREEZING) {
+        throw new StoreInvariantError('Candidate freeze start did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        nextWorkflow.goalId,
+        nextWorkflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([input.auditEventId, input.candidateAuditEventId]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({ workflow: persistedWorkflow, authority: persistedAuthority }),
+      };
+    });
+  }
+
+  public commitCandidateIntegrityFailure(
+    rawInput: CommitCandidateIntegrityFailure,
+  ): StoreCommandResult<CommittedCandidateIntegrityFailure> {
+    this.assertOpen();
+    const input = validateCommitCandidateIntegrityFailure(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const authority = this.getCandidateAuthorityForWorkflow(current.id);
+      if (
+        authority?.generation.id !== input.candidateEvent.candidateGenerationId ||
+        authority.generation.version !== input.candidateEvent.fromVersion ||
+        authority.generation.frozenDigest !== input.expectedFrozenDigest
+      ) {
+        throw new StoreInvariantError('Integrity failure targets stale Candidate authority');
+      }
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          candidateEvent: input.candidateEvent,
+          expectedFrozenDigest: input.expectedFrozenDigest,
+          observedDigest: input.observedDigest,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError(
+          'Candidate integrity audit digest does not bind its source observation',
+        );
+      }
+      const nextWorkflow = applyWorkflowEvent(current, input.event);
+      const nextGeneration = applyCandidateEvent(authority.generation, input.candidateEvent);
+      const eligibleEvidence = this.listEvidenceForGeneration(authority.generation.id).filter(
+        ({ eligibility }) => eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+      );
+      if (input.invalidatedEvidenceAuditEventIds.length !== eligibleEvidence.length) {
+        throw new StoreInvariantError(
+          'Integrity failure requires one audit identity per eligible Evidence record',
+        );
+      }
+
+      this.insertAuditEvent({
+        id: input.candidateAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: nextGeneration.id,
+        eventType: input.candidateEvent.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.candidateEvent.fromVersion,
+        afterVersion: input.candidateEvent.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.updateCandidateGeneration(authority.generation, nextGeneration);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION);
+
+      const invalidatedEvidence = eligibleEvidence.map(({ eligibility }, index) => {
+        const auditIdentifier = input.invalidatedEvidenceAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Evidence invalidation audit identity is missing');
+        }
+        const event = decideEvidenceInvalidation(eligibility, {
+          commandId: input.event.commandId,
+          expectedVersion: eligibility.version,
+          reasonCode: 'FROZEN_CANDIDATE_DRIFT',
+          sourceRef: nextGeneration.id,
+          occurredAt: input.event.occurredAt,
+        });
+        const next = applyEvidenceEligibilityEvent(eligibility, event);
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'EVIDENCE',
+          aggregateId: eligibility.evidenceId,
+          eventType: event.type,
+          commandId: input.event.commandId,
+          beforeVersion: event.fromVersion,
+          afterVersion: event.toVersion,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.payloadDigest,
+          occurredAt: event.occurredAt,
+        });
+        this.insertEvidenceEligibility(next);
+        return next;
+      });
+      this.probe(CandidateEvidenceTransactionStep.AFTER_ELIGIBILITY_WRITE);
+
+      this.updateWorkflow(current, nextWorkflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: input.event.workflowId,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, nextWorkflow, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedWorkflow = this.getWorkflowInsideTransaction(nextWorkflow.id);
+      const persistedAuthority = this.getCandidateAuthorityForWorkflow(nextWorkflow.id);
+      if (persistedAuthority?.generation.state !== CandidateGenerationState.INVALIDATED) {
+        throw new StoreInvariantError('Candidate integrity failure did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        nextWorkflow.goalId,
+        nextWorkflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.auditEventId,
+        input.candidateAuditEventId,
+        ...input.invalidatedEvidenceAuditEventIds,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow: persistedWorkflow,
+          authority: persistedAuthority,
+          invalidatedEvidence: Object.freeze(invalidatedEvidence),
+        }),
+      };
+    });
+  }
+
+  public commitCandidateAttemptOutcome(
+    rawInput: CommitCandidateAttemptOutcome,
+  ): StoreCommandResult<CommittedCandidateAttemptOutcome> {
+    this.assertOpen();
+    const input = validateCommitCandidateAttemptOutcome(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const currentWorkflow = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, currentWorkflow);
+      if (currentWorkflow.version !== input.event.fromWorkflowVersion) {
+        throw new OptimisticConcurrencyError('Workflow', currentWorkflow.id);
+      }
+      if (input.event.type !== 'ATTEMPT_FINISHED') {
+        throw new StoreInvariantError('Candidate outcome requires an Attempt finish event');
+      }
+      const currentAttempt = this.getAttemptInsideTransaction(input.event.attemptId);
+      const authority = this.getCandidateAuthorityForWorkflow(currentWorkflow.id);
+      if (
+        authority?.generation.id !== input.candidateEvent.candidateGenerationId ||
+        authority.generation.version !== input.candidateEvent.fromVersion
+      ) {
+        throw new StoreInvariantError('Freeze outcome does not target current Candidate authority');
+      }
+      const appliedAttempt = applyAttemptEvent(currentWorkflow, currentAttempt, input.event);
+      const nextGeneration = applyCandidateEvent(authority.generation, input.candidateEvent);
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          candidateEvent: input.candidateEvent,
+          ...(input.evidence === undefined
+            ? {}
+            : { evidenceRecordDigest: input.evidence.recordDigest }),
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError('Candidate outcome audit digest is incomplete');
+      }
+
+      const eligibleEvidence = this.listEvidenceForGeneration(authority.generation.id).filter(
+        ({ eligibility }) => eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+      );
+      if (
+        nextGeneration.state === CandidateGenerationState.INVALIDATED &&
+        input.invalidatedEvidenceAuditEventIds.length !== eligibleEvidence.length
+      ) {
+        throw new StoreInvariantError(
+          'Candidate invalidation requires one audit identity per eligible Evidence record',
+        );
+      }
+      if (
+        nextGeneration.state !== CandidateGenerationState.INVALIDATED &&
+        input.invalidatedEvidenceAuditEventIds.length !== 0
+      ) {
+        throw new StoreInvariantError('Stable Candidate freeze cannot invalidate Evidence');
+      }
+
+      this.insertAuditEvent({
+        id: input.candidateAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: nextGeneration.id,
+        eventType: input.candidateEvent.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.candidateEvent.fromVersion,
+        afterVersion: input.candidateEvent.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.updateCandidateGeneration(authority.generation, nextGeneration);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION);
+
+      let persistedEvidence: EvidenceRecord | undefined;
+      let persistedEligibility: EvidenceEligibility | undefined;
+      if (
+        input.evidence !== undefined &&
+        input.initialEligibility !== undefined &&
+        input.evidenceAuditEventId !== undefined
+      ) {
+        const evidence = verifyEvidenceRecordDigests(input.evidence, canonicalAuthorityDigests);
+        this.assertEvidenceAdmissionAuthority(
+          evidence,
+          input.initialEligibility,
+          appliedAttempt.attempt,
+          appliedAttempt.workflow,
+          nextGeneration,
+        );
+        this.insertAuditEvent({
+          id: input.evidenceAuditEventId,
+          aggregateType: 'EVIDENCE',
+          aggregateId: evidence.id,
+          eventType: 'EVIDENCE_RECORDED_ELIGIBLE',
+          commandId: input.event.commandId,
+          afterVersion: input.initialEligibility.version,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: evidence.recordDigest,
+          occurredAt: evidence.recordedAt,
+        });
+        this.insertEvidenceRecord(evidence);
+        this.probe(CandidateEvidenceTransactionStep.AFTER_EVIDENCE_WRITE);
+        this.insertEvidenceEligibility(input.initialEligibility);
+        this.probe(CandidateEvidenceTransactionStep.AFTER_ELIGIBILITY_WRITE);
+      }
+
+      const invalidatedEvidence: EvidenceEligibility[] = [];
+      eligibleEvidence.forEach(({ eligibility }, index) => {
+        const auditIdentifier = input.invalidatedEvidenceAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Evidence invalidation audit identity is missing');
+        }
+        const event = decideEvidenceInvalidation(eligibility, {
+          commandId: input.event.commandId,
+          expectedVersion: eligibility.version,
+          reasonCode: 'CANDIDATE_INVALIDATED',
+          sourceRef: nextGeneration.id,
+          occurredAt: input.event.occurredAt,
+        });
+        const nextEligibility = applyEvidenceEligibilityEvent(eligibility, event);
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'EVIDENCE',
+          aggregateId: eligibility.evidenceId,
+          eventType: event.type,
+          commandId: input.event.commandId,
+          beforeVersion: event.fromVersion,
+          afterVersion: event.toVersion,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.payloadDigest,
+          occurredAt: event.occurredAt,
+        });
+        this.insertEvidenceEligibility(nextEligibility);
+        invalidatedEvidence.push(nextEligibility);
+      });
+      if (invalidatedEvidence.length > 0) {
+        this.probe(CandidateEvidenceTransactionStep.AFTER_ELIGIBILITY_WRITE);
+      }
+
+      this.updateTerminalAttempt(currentAttempt, appliedAttempt.attempt);
+      this.probe(TransactionStep.AFTER_ATTEMPT_STATE_WRITE);
+      this.updateWorkflow(currentWorkflow, appliedAttempt.workflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAttemptAndWorkflowAudits(input, appliedAttempt);
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      if (input.evidence !== undefined) {
+        persistedEvidence = this.getEvidence(input.evidence.id);
+        persistedEligibility = this.getEvidenceEligibility(input.evidence.id);
+        if (persistedEvidence === undefined || persistedEligibility === undefined) {
+          throw new StoreInvariantError(`Freeze Evidence ${input.evidence.id} did not round-trip`);
+        }
+      }
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(
+          input.target,
+          appliedAttempt.workflow,
+          input.event.commandId,
+        ),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedWorkflow = this.getWorkflowInsideTransaction(appliedAttempt.workflow.id);
+      const persistedAttempt = this.getAttemptInsideTransaction(appliedAttempt.attempt.id);
+      const persistedAuthority = this.getCandidateAuthorityForWorkflow(persistedWorkflow.id);
+      if (persistedAuthority?.generation.id !== nextGeneration.id) {
+        throw new StoreInvariantError('Candidate freeze outcome did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        appliedAttempt.workflow.goalId,
+        appliedAttempt.workflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.auditEventId,
+        input.workflowAuditEventId,
+        input.candidateAuditEventId,
+        ...(input.evidenceAuditEventId === undefined ? [] : [input.evidenceAuditEventId]),
+        ...input.invalidatedEvidenceAuditEventIds,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow: persistedWorkflow,
+          attempt: persistedAttempt,
+          authority: persistedAuthority,
+          ...(persistedEvidence === undefined ? {} : { evidence: persistedEvidence }),
+          ...(persistedEligibility === undefined ? {} : { eligibility: persistedEligibility }),
+          invalidatedEvidence: Object.freeze(invalidatedEvidence),
+        }),
+      };
+    });
+  }
+
+  public commitVerificationAttemptOutcome(
+    rawInput: CommitVerificationAttemptOutcome,
+  ): StoreCommandResult<CommittedVerificationAttemptOutcome> {
+    this.assertOpen();
+    const input = validateCommitVerificationAttemptOutcome(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const currentWorkflow = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, currentWorkflow);
+      if (currentWorkflow.version !== input.event.fromWorkflowVersion) {
+        throw new OptimisticConcurrencyError('Workflow', currentWorkflow.id);
+      }
+      if (input.event.type !== 'ATTEMPT_FINISHED') {
+        throw new StoreInvariantError('Verification outcome requires an Attempt finish event');
+      }
+      const currentAttempt = this.getAttemptInsideTransaction(input.event.attemptId);
+      const applied = applyAttemptEvent(currentWorkflow, currentAttempt, input.event);
+      const authority = this.getCandidateAuthorityForWorkflow(currentWorkflow.id);
+      if (authority?.generation.state !== CandidateGenerationState.FROZEN) {
+        throw new StoreInvariantError('Verification has no current frozen Candidate authority');
+      }
+      const obligation = this.getVerificationObligation(input.obligationId);
+      if (
+        obligation?.goalId !== currentWorkflow.goalId ||
+        obligation.goalRevision !== currentWorkflow.goalRevision ||
+        obligation.candidateGenerationId !== authority.generation.id
+      ) {
+        throw new StoreInvariantError('Verification Obligation is stale or belongs elsewhere');
+      }
+      const evidence = verifyEvidenceRecordDigests(input.evidence, canonicalAuthorityDigests);
+      this.assertEvidenceAdmissionAuthority(
+        evidence,
+        input.initialEligibility,
+        applied.attempt,
+        applied.workflow,
+        authority.generation,
+      );
+      if (
+        evidence.verificationObligationId !== obligation.id ||
+        evidence.kind !== obligation.requiredEvidenceKind ||
+        `${evidence.checkSpec.id}@${evidence.checkSpec.version}` !== obligation.checkSpecRef
+      ) {
+        throw new StoreInvariantError('Verification Evidence does not satisfy its Obligation');
+      }
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          evidenceRecordDigest: evidence.recordDigest,
+          obligationId: obligation.id,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError('Verification outcome audit digest is incomplete');
+      }
+
+      this.insertAuditEvent({
+        id: input.evidenceAuditEventId,
+        aggregateType: 'EVIDENCE',
+        aggregateId: evidence.id,
+        eventType: 'EVIDENCE_RECORDED_ELIGIBLE',
+        commandId: input.event.commandId,
+        afterVersion: input.initialEligibility.version,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: evidence.recordDigest,
+        occurredAt: evidence.recordedAt,
+      });
+      this.insertEvidenceRecord(evidence);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_EVIDENCE_WRITE);
+      this.insertEvidenceEligibility(input.initialEligibility);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_ELIGIBILITY_WRITE);
+
+      this.updateTerminalAttempt(currentAttempt, applied.attempt);
+      this.probe(TransactionStep.AFTER_ATTEMPT_STATE_WRITE);
+      this.updateWorkflow(currentWorkflow, applied.workflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAttemptAndWorkflowAudits(input, applied);
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, applied.workflow, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedEvidence = this.getEvidence(evidence.id);
+      const persistedEligibility = this.getEvidenceEligibility(evidence.id);
+      if (persistedEvidence === undefined || persistedEligibility === undefined) {
+        throw new StoreInvariantError(`Verification Evidence ${evidence.id} did not round-trip`);
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        applied.workflow.goalId,
+        applied.workflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.auditEventId,
+        input.workflowAuditEventId,
+        input.evidenceAuditEventId,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow: this.getWorkflowInsideTransaction(applied.workflow.id),
+          attempt: this.getAttemptInsideTransaction(applied.attempt.id),
+          evidence: persistedEvidence,
+          eligibility: persistedEligibility,
+        }),
+      };
+    });
+  }
+
+  public commitEvidenceSetTransition(
+    rawInput: CommitEvidenceSetTransition,
+  ): StoreCommandResult<WorkflowInstance> {
+    this.assertOpen();
+    const input = validateCommitEvidenceSetTransition(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const authority = this.getCandidateAuthorityForWorkflow(current.id);
+      if (
+        authority?.generation.state !== CandidateGenerationState.FROZEN ||
+        authority.generation.frozenDigest !== input.evidenceSet.candidateDigest ||
+        authority.generation.id !== input.evidenceSet.candidateGenerationId ||
+        input.evidenceSet.goalId !== current.goalId ||
+        input.evidenceSet.goalRevision !== current.goalRevision ||
+        input.evidenceSet.obligationMappings.length === 0 ||
+        input.evidenceSet.evidenceRefs.length === 0 ||
+        input.evidenceSet.unresolvedEvidenceRequirements.length !== 0
+      ) {
+        throw new StoreInvariantError(
+          'Evidence Set is incomplete or has stale Candidate authority',
+        );
+      }
+      const expectedSetDigest = sha256Digest(
+        canonicalAuthorityDigests.digest(evidenceSetDigestProjection(input.evidenceSet)),
+      );
+      if (input.evidenceSet.digest !== expectedSetDigest) {
+        throw new StoreInvariantError('Evidence Set digest does not match its projection');
+      }
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          evidenceSetDigest: input.evidenceSet.digest,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError('Evidence Set transition audit digest is incomplete');
+      }
+      this.assertEvidenceSetBindingsCurrent(input.evidenceSet);
+      this.assertEvidenceSetTransitionGuardAuthority(current, input.event, input.evidenceSet);
+      const next = applyWorkflowEvent(current, input.event);
+
+      this.insertAuditEvent({
+        id: input.evidenceSetAuditEventId,
+        aggregateType: 'EVIDENCE_SET',
+        aggregateId: input.evidenceSet.digest,
+        eventType: 'EVIDENCE_SET_RECORDED',
+        commandId: input.event.commandId,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.evidenceSet.digest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.insertEvidenceSet(input.evidenceSet);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_EVIDENCE_SET_WRITE);
+      this.updateWorkflow(current, next);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: input.event.workflowId,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, next, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedSet = this.getEvidenceSet(input.evidenceSet.digest);
+      if (persistedSet === undefined) {
+        throw new StoreInvariantError(
+          `Evidence Set ${input.evidenceSet.digest} did not round-trip`,
+        );
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        next.goalId,
+        next.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([input.auditEventId, input.evidenceSetAuditEventId]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: this.getWorkflowInsideTransaction(next.id),
+      };
     });
   }
 
@@ -1466,6 +3041,726 @@ export class SqliteControlStore implements WorkerControlStore {
       throw new StoreInvariantError(
         `${target.aggregateType} command target does not own Workflow ${workflow.id}`,
       );
+    }
+  }
+
+  private nextCandidateSequenceForPreparation(candidateIdentifier: Candidate['id']): number {
+    const existing = this.#database
+      .prepare('SELECT id FROM candidates WHERE id = ?')
+      .get(candidateIdentifier);
+    if (existing === undefined) {
+      return 1;
+    }
+    return this.nextCandidateGenerationSequence(candidateIdentifier);
+  }
+
+  private insertCandidateGeneration(
+    generation: CandidateGeneration,
+    workflowIdentifier: WorkflowId,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO candidate_generations(
+           id, candidate_id, workflow_id, sequence, parent_generation_id,
+           workspace_identity, state, base_digest, frozen_digest,
+           invalidation_reason, version, created_at, updated_at, frozen_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        generation.id,
+        generation.candidateId,
+        workflowIdentifier,
+        generation.sequence,
+        generation.parentGenerationId ?? null,
+        generation.workspaceIdentity,
+        generation.state,
+        generation.baseDigest,
+        generation.frozenDigest ?? null,
+        generation.invalidationReason ?? null,
+        generation.version,
+        generation.createdAt,
+        generation.updatedAt,
+        generation.frozenAt ?? null,
+      );
+  }
+
+  private updateCandidateGeneration(current: CandidateGeneration, next: CandidateGeneration): void {
+    const update = this.#database
+      .prepare(
+        `UPDATE candidate_generations
+            SET state = ?, frozen_digest = ?, invalidation_reason = ?, version = ?,
+                updated_at = ?, frozen_at = ?
+          WHERE id = ? AND version = ?`,
+      )
+      .run(
+        next.state,
+        next.frozenDigest ?? null,
+        next.invalidationReason ?? null,
+        next.version,
+        next.updatedAt,
+        next.frozenAt ?? null,
+        current.id,
+        current.version,
+      );
+    if (update.changes !== 1) {
+      throw new OptimisticConcurrencyError('CandidateGeneration', current.id);
+    }
+  }
+
+  private insertVerificationObligation(obligation: VerificationObligation): void {
+    this.#database
+      .prepare(
+        `INSERT INTO verification_obligations(
+           id, goal_id, source_criterion_refs_json, scenario_refs_json,
+           check_spec_ref, required_evidence_kind, strength, created_at, goal_revision,
+           candidate_generation_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        obligation.id,
+        obligation.goalId,
+        serializeJson(decodeJsonValue(obligation.sourceCriterionRefs)),
+        serializeJson(decodeJsonValue(obligation.scenarioRefs)),
+        obligation.checkSpecRef,
+        obligation.requiredEvidenceKind,
+        obligation.strength,
+        obligation.createdAt,
+        obligation.goalRevision,
+        obligation.candidateGenerationId,
+      );
+  }
+
+  private insertEvidenceRecord(record: EvidenceRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO evidence_records(
+           id, schema_version, kind, producer_type, producer_identity, goal_id,
+           goal_revision, workflow_id, attempt_id, verification_obligation_id,
+           candidate_generation_id,
+           candidate_digest, fact_snapshot_digest, policy_bundle_digest,
+           check_spec_json, environment_identity_json, started_at, ended_at,
+           observation_json, payload_refs_json, observation_digest, result_status,
+           recorded_at, record_digest, policy_bundle_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.kind,
+        record.producerType,
+        record.producerIdentity,
+        record.goalId,
+        record.goalRevision,
+        record.workflowId,
+        record.attemptId,
+        record.verificationObligationId ?? null,
+        record.candidateGenerationId,
+        record.candidateDigest,
+        null,
+        record.policyBundleDigest,
+        serializeJson(decodeJsonValue(record.checkSpec)),
+        record.environmentIdentity === undefined
+          ? null
+          : serializeJson(decodeJsonValue(record.environmentIdentity)),
+        record.startedAt,
+        record.endedAt,
+        serializeJson(decodeJsonValue(record.observation)),
+        serializeJson(decodeJsonValue(record.payloadRefs)),
+        record.observationDigest,
+        record.resultStatus,
+        record.recordedAt,
+        record.recordDigest,
+        record.policyBundleId,
+      );
+  }
+
+  private insertEvidenceEligibility(eligibility: EvidenceEligibility): void {
+    this.#database
+      .prepare(
+        `INSERT INTO evidence_eligibility(
+           evidence_id, version, state, reason_code, source_ref, changed_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        eligibility.evidenceId,
+        eligibility.version,
+        eligibility.state,
+        eligibility.state === EvidenceEligibilityState.INELIGIBLE ? eligibility.reasonCode : null,
+        eligibility.state === EvidenceEligibilityState.INELIGIBLE ? eligibility.sourceRef : null,
+        eligibility.changedAt,
+      );
+  }
+
+  private insertEvidenceSet(set: EvidenceSet): void {
+    this.#database
+      .prepare(
+        `INSERT INTO evidence_sets(
+           digest, schema_version, goal_id, goal_revision, candidate_generation_id,
+           candidate_digest, obligation_mappings_json, evidence_refs_json,
+           unresolved_requirements_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        set.digest,
+        set.schemaVersion,
+        set.goalId,
+        set.goalRevision,
+        set.candidateGenerationId,
+        set.candidateDigest,
+        serializeJson(decodeJsonValue(set.obligationMappings)),
+        serializeJson(decodeJsonValue(set.evidenceRefs)),
+        serializeJson(decodeJsonValue(set.unresolvedEvidenceRequirements)),
+      );
+  }
+
+  private updateTerminalAttempt(current: Attempt, next: Attempt): void {
+    if (current.status !== AttemptStatus.RUNNING || next.status === AttemptStatus.RUNNING) {
+      throw new StoreInvariantError('Compound Attempt outcome requires RUNNING to terminal');
+    }
+    const update = this.#database
+      .prepare(
+        `UPDATE attempts
+            SET status = ?, failure_class = ?, termination_reason = ?, ended_at = ?
+          WHERE id = ? AND workflow_id = ? AND status = ?`,
+      )
+      .run(
+        next.status,
+        next.failureClass ?? null,
+        next.terminationReason,
+        next.endedAt,
+        next.id,
+        next.workflowId,
+        AttemptStatus.RUNNING,
+      );
+    if (update.changes !== 1) {
+      throw new OptimisticConcurrencyError('Attempt', current.id);
+    }
+  }
+
+  private insertAttemptAndWorkflowAudits(
+    input: CommitAttemptEventInput,
+    applied: AppliedAttemptEvent,
+  ): void {
+    this.insertAuditEvent({
+      id: input.auditEventId,
+      aggregateType: 'ATTEMPT',
+      aggregateId: applied.attempt.id,
+      eventType: input.event.type,
+      commandId: input.event.commandId,
+      beforeVersion: input.event.fromWorkflowVersion,
+      afterVersion: input.event.toWorkflowVersion,
+      ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+      ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+      payloadDigest: input.payloadDigest,
+      occurredAt: input.event.occurredAt,
+    });
+    this.insertAuditEvent({
+      id: input.workflowAuditEventId,
+      aggregateType: 'WORKFLOW',
+      aggregateId: applied.workflow.id,
+      eventType: 'WORKFLOW_ATTEMPT_FINISHED',
+      commandId: input.event.commandId,
+      beforeVersion: input.event.fromWorkflowVersion,
+      afterVersion: input.event.toWorkflowVersion,
+      ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+      ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+      payloadDigest: input.payloadDigest,
+      occurredAt: input.event.occurredAt,
+    });
+  }
+
+  private assertEvidenceAdmissionAuthority(
+    record: EvidenceRecord,
+    eligibility: EvidenceEligibility,
+    attempt: Attempt,
+    workflow: WorkflowInstance,
+    generation: CandidateGeneration,
+  ): void {
+    if (
+      eligibility.state !== EvidenceEligibilityState.ELIGIBLE ||
+      eligibility.evidenceId !== record.id ||
+      eligibility.changedAt !== record.recordedAt ||
+      attempt.status === AttemptStatus.RUNNING ||
+      record.attemptId !== attempt.id ||
+      record.workflowId !== workflow.id ||
+      record.goalId !== workflow.goalId ||
+      record.goalRevision !== workflow.goalRevision ||
+      record.candidateGenerationId !== generation.id ||
+      generation.state !== CandidateGenerationState.FROZEN ||
+      record.candidateDigest !== generation.frozenDigest ||
+      record.checkSpec.inputRefs.length !== 1 ||
+      record.checkSpec.inputRefs[0] !== generation.id ||
+      !(
+        (attempt.phase === WorkflowPhase.SOURCE_FREEZE &&
+          record.kind === EvidenceKind.CANDIDATE_FREEZE) ||
+        (attempt.phase === WorkflowPhase.EVIDENCE_BUILD && record.kind === EvidenceKind.TEST_RESULT)
+      ) ||
+      record.startedAt < attempt.startedAt ||
+      record.endedAt > attempt.endedAt ||
+      record.recordedAt !== attempt.endedAt
+    ) {
+      throw new StoreInvariantError('Evidence does not bind its exact terminal Attempt authority');
+    }
+    const policy = this.getPolicyBundle(record.policyBundleId);
+    const checkSpecification = this.getCheckSpecification(record.checkSpec.id);
+    if (
+      policy?.bundle.digest !== record.policyBundleDigest ||
+      checkSpecification === undefined ||
+      canonicalizeJson(checkSpecification) !== canonicalizeJson(record.checkSpec)
+    ) {
+      throw new StoreInvariantError('Evidence Policy or Check Specification authority is stale');
+    }
+  }
+
+  private assertFrozenCandidateTransitionAuthority(
+    workflow: WorkflowInstance,
+    event: Extract<WorkflowEvent, { readonly type: 'WORKFLOW_PHASE_TRANSITIONED' }>,
+  ): void {
+    const authority = this.getCandidateAuthorityForWorkflow(workflow.id);
+    if (authority?.generation.state !== CandidateGenerationState.FROZEN) {
+      throw new StoreInvariantError('Evidence phase requires a current frozen Candidate');
+    }
+    const freezeEntry = this.listEvidenceForGeneration(authority.generation.id).find(
+      ({ record, eligibility }) =>
+        record.kind === EvidenceKind.CANDIDATE_FREEZE &&
+        record.candidateDigest === authority.generation.frozenDigest &&
+        eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+    );
+    if (freezeEntry?.record.observation.kind !== EvidenceKind.CANDIDATE_FREEZE) {
+      throw new StoreInvariantError('Evidence phase requires current Candidate freeze Evidence');
+    }
+    const record = freezeEntry.record;
+    const observation = record.observation;
+    if (observation.kind !== EvidenceKind.CANDIDATE_FREEZE) {
+      throw new StoreInvariantError('Candidate freeze Evidence observation kind is invalid');
+    }
+    const policy = this.getPolicyBundle(record.policyBundleId);
+    if (policy?.bundle.digest !== record.policyBundleDigest) {
+      throw new StoreInvariantError('Candidate freeze Evidence Policy is not current');
+    }
+    const expectedGuards = [
+      {
+        guard: WorkflowGuard.NO_WRITE_CAPABLE_WORKER,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'NO_ACTIVE_ATTEMPT',
+        supportingRefs: [workflow.id, `workflow-version:${String(workflow.version)}`],
+      },
+      {
+        guard: WorkflowGuard.FREEZE_IDENTITY_STABLE,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'TWO_SOURCE_DIGESTS_MATCH',
+        supportingRefs: [observation.firstSourceDigest, observation.secondSourceDigest, record.id],
+      },
+      {
+        guard: WorkflowGuard.CHANGE_IDENTITY_RECORDED,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'CHANGE_SET_DIGEST_RECORDED',
+        supportingRefs: [observation.changeSetDigest, record.recordDigest],
+      },
+      {
+        guard: WorkflowGuard.FROZEN_DIGEST_PERSISTED,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'CANDIDATE_FROZEN',
+        supportingRefs: [authority.generation.id, authority.generation.frozenDigest],
+      },
+      {
+        guard: WorkflowGuard.INTEGRITY_POLICY_PASSED,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'FREEZE_EVIDENCE_POLICY_CURRENT',
+        supportingRefs: [record.policyBundleId, record.policyBundleDigest, record.checkSpec.id],
+      },
+    ];
+    if (canonicalizeJson(event.guardResults) !== canonicalizeJson(expectedGuards)) {
+      throw new StoreInvariantError(
+        'Source-freeze transition guard proof does not match persisted authority',
+      );
+    }
+  }
+
+  private decodeVerifiedEvidenceRecordRow(row: unknown): EvidenceRecord {
+    const record = verifyEvidenceRecordDigests(
+      decodeEvidenceRecordRow(row),
+      canonicalAuthorityDigests,
+    );
+    const generationRow = this.#database
+      .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+      .get(record.candidateGenerationId);
+    const attempt = this.getAttempt(record.attemptId);
+    const workflow = this.getWorkflow(record.workflowId);
+    const policy = this.getPolicyBundle(record.policyBundleId);
+    const specification = this.getCheckSpecification(record.checkSpec.id);
+    if (generationRow === undefined) {
+      throw new StoreInvariantError(`Evidence ${record.id} has no Candidate generation`);
+    }
+    const decodedGeneration = decodeCandidateGenerationRow(generationRow);
+    const candidateRow = this.#database
+      .prepare('SELECT * FROM candidates WHERE id = ?')
+      .get(decodedGeneration.generation.candidateId);
+    const candidate = candidateRow === undefined ? undefined : decodeCandidateRow(candidateRow);
+    const matchingObligation = this.listVerificationObligations(record.goalId).some(
+      (obligation) =>
+        obligation.id === record.verificationObligationId &&
+        obligation.goalRevision === record.goalRevision &&
+        obligation.requiredEvidenceKind === record.kind &&
+        obligation.checkSpecRef === `${record.checkSpec.id}@${record.checkSpec.version}`,
+    );
+    if (
+      attempt === undefined ||
+      workflow === undefined ||
+      policy === undefined ||
+      specification === undefined ||
+      candidate === undefined ||
+      decodedGeneration.workflowId !== workflow.id ||
+      candidate.goalId !== record.goalId ||
+      workflow.goalId !== record.goalId ||
+      workflow.goalRevision !== record.goalRevision ||
+      attempt.workflowId !== workflow.id ||
+      attempt.id !== record.attemptId ||
+      attempt.status !== AttemptStatus.RESULT_RECORDED ||
+      (record.kind === EvidenceKind.CANDIDATE_FREEZE
+        ? attempt.phase !== WorkflowPhase.SOURCE_FREEZE
+        : attempt.phase !== WorkflowPhase.EVIDENCE_BUILD) ||
+      record.startedAt < attempt.startedAt ||
+      record.endedAt > attempt.endedAt ||
+      record.recordedAt !== attempt.endedAt ||
+      decodedGeneration.generation.frozenDigest !== record.candidateDigest ||
+      !record.checkSpec.inputRefs.includes(decodedGeneration.generation.id) ||
+      policy.bundle.digest !== record.policyBundleDigest ||
+      policy.installedAt > record.startedAt ||
+      (record.kind === EvidenceKind.TEST_RESULT && !matchingObligation) ||
+      canonicalizeJson(specification) !== canonicalizeJson(record.checkSpec)
+    ) {
+      throw new StoreInvariantError(`Evidence ${record.id} has stale authority bindings`);
+    }
+    return record;
+  }
+
+  private assertEvidenceSetBindingsCurrent(set: EvidenceSet): void {
+    const obligations = this.listVerificationObligations(set.goalId).filter(
+      (obligation) =>
+        obligation.goalRevision === set.goalRevision &&
+        obligation.candidateGenerationId === set.candidateGenerationId,
+    );
+    const mappingById = new Map(
+      set.obligationMappings.map((mapping) => [mapping.obligationId, mapping]),
+    );
+    if (
+      obligations.length === 0 ||
+      set.evidenceRefs.length === 0 ||
+      mappingById.size !== obligations.length ||
+      obligations.some((obligation) => !mappingById.has(obligation.id))
+    ) {
+      throw new StoreInvariantError('Evidence Set does not map the complete obligation authority');
+    }
+    const referenced = new Map(
+      set.evidenceRefs.map((reference) => [reference.evidenceId, reference]),
+    );
+    for (const reference of set.evidenceRefs) {
+      const record = this.getEvidence(reference.evidenceId);
+      const eligibility = this.getEvidenceEligibility(reference.evidenceId);
+      if (
+        record === undefined ||
+        eligibility === undefined ||
+        record.recordDigest !== reference.evidenceRecordDigest ||
+        eligibility.version !== reference.eligibilityVersion ||
+        eligibility.state !== EvidenceEligibilityState.ELIGIBLE ||
+        reference.eligibilityState !== EvidenceEligibilityState.ELIGIBLE ||
+        record.goalId !== set.goalId ||
+        record.goalRevision !== set.goalRevision ||
+        record.candidateGenerationId !== set.candidateGenerationId ||
+        record.candidateDigest !== set.candidateDigest
+      ) {
+        throw new StoreInvariantError(`Evidence Set reference ${reference.evidenceId} is stale`);
+      }
+    }
+    for (const obligation of obligations) {
+      const mapping = mappingById.get(obligation.id);
+      if (mapping === undefined || mapping.evidenceIds.length === 0) {
+        throw new StoreInvariantError(`Obligation ${obligation.id} has no current Evidence`);
+      }
+      for (const identifier of mapping.evidenceIds) {
+        if (!referenced.has(identifier)) {
+          throw new StoreInvariantError(`Mapped Evidence ${identifier} is not in the Evidence Set`);
+        }
+        const record = this.getEvidence(identifier);
+        if (
+          record?.verificationObligationId !== obligation.id ||
+          record.kind !== obligation.requiredEvidenceKind ||
+          `${record.checkSpec.id}@${record.checkSpec.version}` !== obligation.checkSpecRef
+        ) {
+          throw new StoreInvariantError(
+            `Mapped Evidence ${identifier} does not meet its Obligation`,
+          );
+        }
+      }
+    }
+    try {
+      verifyEvidenceSetAuthority(
+        set,
+        obligations,
+        this.listEvidenceForGeneration(set.candidateGenerationId),
+        canonicalAuthorityDigests,
+      );
+    } catch (error) {
+      throw new StoreInvariantError(
+        'Evidence Set does not equal the canonical selection from current authority',
+        { cause: error },
+      );
+    }
+  }
+
+  private assertEvidenceSetTransitionGuardAuthority(
+    workflow: WorkflowInstance,
+    event: WorkflowEvent,
+    set: EvidenceSet,
+  ): void {
+    if (
+      event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
+      event.fromPhase !== WorkflowPhase.EVIDENCE_BUILD ||
+      event.toPhase !== WorkflowPhase.FINAL_VERIFY
+    ) {
+      throw new StoreInvariantError('Evidence Set transition event has the wrong phase authority');
+    }
+    const authority = this.getCandidateAuthorityForWorkflow(workflow.id);
+    if (authority?.generation.state !== CandidateGenerationState.FROZEN) {
+      throw new StoreInvariantError('Evidence Set transition has no frozen Candidate authority');
+    }
+    const cleanupProven =
+      set.evidenceRefs.length > 0 &&
+      set.evidenceRefs.every(
+        (reference) =>
+          this.getEvidence(reference.evidenceId)?.checkSpec.cleanupPolicy ===
+          'M1_LOGICAL_NO_EXTERNAL_RESOURCES',
+      );
+    if (!cleanupProven) {
+      throw new StoreInvariantError('Evidence Set transition lacks M1 cleanup authority');
+    }
+    const expectedGuards = [
+      {
+        guard: WorkflowGuard.REQUIRED_EVIDENCE_ACCOUNTED,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'ALL_OBLIGATIONS_MAPPED',
+        supportingRefs: [set.digest],
+      },
+      {
+        guard: WorkflowGuard.EVIDENCE_BINDINGS_CURRENT,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'EVIDENCE_SET_CURRENT',
+        supportingRefs: [
+          set.digest,
+          ...set.evidenceRefs.map((reference) => reference.evidenceRecordDigest),
+        ],
+      },
+      {
+        guard: WorkflowGuard.CLEANUP_PROVEN,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'M1_LOGICAL_CLEANUP_PROVEN',
+        supportingRefs: set.evidenceRefs.map((reference) => reference.evidenceId),
+      },
+      {
+        guard: WorkflowGuard.SOURCE_DIGEST_CURRENT,
+        outcome: GuardOutcome.PASS,
+        reasonCode: 'FROZEN_SOURCE_REOBSERVED',
+        supportingRefs: [authority.generation.frozenDigest, authority.generation.id],
+      },
+    ];
+    if (canonicalizeJson(event.guardResults) !== canonicalizeJson(expectedGuards)) {
+      throw new StoreInvariantError(
+        'Evidence Set transition guard proof does not match persisted authority',
+      );
+    }
+  }
+
+  private assertRetainedEvidenceSetAuthority(set: EvidenceSet): void {
+    const generationRow = this.#database
+      .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+      .get(set.candidateGenerationId);
+    if (generationRow === undefined) {
+      throw new StoreInvariantError(`Evidence Set ${set.digest} has no Candidate authority`);
+    }
+    const decodedGeneration = decodeCandidateGenerationRow(generationRow);
+    const candidateRow = this.#database
+      .prepare('SELECT * FROM candidates WHERE id = ?')
+      .get(decodedGeneration.generation.candidateId);
+    const candidate = candidateRow === undefined ? undefined : decodeCandidateRow(candidateRow);
+    const workflow = this.getWorkflow(decodedGeneration.workflowId);
+    const obligations = this.listVerificationObligations(set.goalId).filter(
+      (obligation) =>
+        obligation.goalRevision === set.goalRevision &&
+        obligation.candidateGenerationId === set.candidateGenerationId,
+    );
+    const setAudits = this.listAuditEvents('EVIDENCE_SET', set.digest);
+    const setAudit = setAudits[0];
+    if (setAudit === undefined) {
+      throw new StoreInvariantError(`Evidence Set ${set.digest} has no retained audit authority`);
+    }
+    if (
+      candidate?.goalId !== set.goalId ||
+      workflow?.goalId !== set.goalId ||
+      workflow.goalRevision !== set.goalRevision ||
+      decodedGeneration.generation.frozenDigest !== set.candidateDigest ||
+      set.evidenceRefs.length === 0 ||
+      set.unresolvedEvidenceRequirements.length !== 0 ||
+      setAudits.length !== 1 ||
+      setAudit.eventType !== 'EVIDENCE_SET_RECORDED' ||
+      setAudit.actorType !== 'RUNTIME' ||
+      setAudit.commandId === undefined ||
+      setAudit.beforeVersion !== undefined ||
+      setAudit.afterVersion !== undefined ||
+      setAudit.payloadDigest !== set.digest
+    ) {
+      throw new StoreInvariantError(`Evidence Set ${set.digest} has invalid retained authority`);
+    }
+
+    const matchingWorkflowAudits = this.listAuditEvents(
+      'WORKFLOW',
+      decodedGeneration.workflowId,
+    ).filter(
+      (audit) =>
+        audit.eventType === 'WORKFLOW_PHASE_TRANSITIONED' &&
+        audit.actorType === 'RUNTIME' &&
+        audit.commandId === setAudit.commandId &&
+        audit.occurredAt === setAudit.occurredAt &&
+        audit.sequence > setAudit.sequence &&
+        audit.beforeVersion !== undefined &&
+        audit.afterVersion === audit.beforeVersion + 1,
+    );
+    const processed = this.getProcessedCommand(setAudit.commandId);
+    if (
+      matchingWorkflowAudits.length !== 1 ||
+      processed?.aggregateType !== 'WORKFLOW' ||
+      processed.aggregateId !== decodedGeneration.workflowId ||
+      processed.completedAt !== setAudit.occurredAt
+    ) {
+      throw new StoreInvariantError(
+        `Evidence Set ${set.digest} is not closed by its Workflow command authority`,
+      );
+    }
+
+    try {
+      verifyEvidenceSetAuthority(
+        set,
+        obligations,
+        this.evidenceAuthorityAtAuditSequence(set.candidateGenerationId, setAudit.sequence),
+        canonicalAuthorityDigests,
+      );
+    } catch (error) {
+      throw new StoreInvariantError(
+        `Evidence Set ${set.digest} does not match authority at its recording sequence`,
+        { cause: error },
+      );
+    }
+  }
+
+  private evidenceAuthorityAtAuditSequence(
+    generationIdentifier: CandidateGenerationId,
+    auditSequence: number,
+  ): readonly { readonly record: EvidenceRecord; readonly eligibility: EvidenceEligibility }[] {
+    const rows = this.#database
+      .prepare('SELECT * FROM evidence_records WHERE candidate_generation_id = ? ORDER BY id')
+      .all(generationIdentifier);
+    const authority: { record: EvidenceRecord; eligibility: EvidenceEligibility }[] = [];
+    for (const row of rows) {
+      const record = this.decodeVerifiedEvidenceRecordRow(row);
+      const history = this.#database
+        .prepare('SELECT * FROM evidence_eligibility WHERE evidence_id = ? ORDER BY version')
+        .all(record.id)
+        .map((eligibilityRow) => decodeEvidenceEligibilityRow(eligibilityRow));
+      const audits = this.listAuditEvents('EVIDENCE', record.id);
+      this.assertRetainedEvidenceHistory(record, history, audits);
+      const recordedAudit = audits.find(
+        (audit) => audit.eventType === 'EVIDENCE_RECORDED_ELIGIBLE',
+      );
+      if (recordedAudit === undefined || recordedAudit.sequence >= auditSequence) {
+        continue;
+      }
+      const invalidationAudit = audits.find(
+        (audit) => audit.eventType === 'EVIDENCE_ELIGIBILITY_CHANGED',
+      );
+      const eligibilityVersion =
+        invalidationAudit !== undefined && invalidationAudit.sequence < auditSequence ? 2 : 1;
+      const eligibility = history.find((entry) => entry.version === eligibilityVersion);
+      if (eligibility === undefined) {
+        throw new StoreInvariantError(
+          `Evidence ${record.id} has no eligibility at audit sequence ${String(auditSequence)}`,
+        );
+      }
+      authority.push(Object.freeze({ record, eligibility }));
+    }
+    return Object.freeze(authority);
+  }
+
+  private assertRetainedEvidenceHistory(
+    record: EvidenceRecord,
+    history: readonly EvidenceEligibility[],
+    audits: readonly AuditEventRecord[],
+  ): void {
+    const reject = (): never => {
+      throw new StoreInvariantError(
+        `Evidence ${record.id} has invalid retained eligibility authority`,
+      );
+    };
+    if (history.length < 1 || history.length > 2) {
+      reject();
+    }
+    const initial = history[0];
+    if (initial === undefined) {
+      throw new StoreInvariantError(
+        `Evidence ${record.id} has invalid retained eligibility authority`,
+      );
+    }
+    const recordedAudits = audits.filter(
+      (audit) => audit.eventType === 'EVIDENCE_RECORDED_ELIGIBLE',
+    );
+    const invalidationAudits = audits.filter(
+      (audit) => audit.eventType === 'EVIDENCE_ELIGIBILITY_CHANGED',
+    );
+    const recordedAudit = recordedAudits[0];
+    if (recordedAudit === undefined) {
+      throw new StoreInvariantError(
+        `Evidence ${record.id} has invalid retained eligibility authority`,
+      );
+    }
+    if (
+      initial.evidenceId !== record.id ||
+      initial.state !== EvidenceEligibilityState.ELIGIBLE ||
+      initial.version !== 1 ||
+      initial.changedAt !== record.recordedAt ||
+      recordedAudits.length !== 1 ||
+      recordedAudit.actorType !== 'RUNTIME' ||
+      recordedAudit.commandId === undefined ||
+      recordedAudit.beforeVersion !== undefined ||
+      recordedAudit.afterVersion !== 1 ||
+      recordedAudit.payloadDigest !== record.recordDigest ||
+      recordedAudit.occurredAt !== record.recordedAt ||
+      invalidationAudits.length !== history.length - 1 ||
+      audits.length !== history.length
+    ) {
+      reject();
+    }
+
+    const invalidated = history[1];
+    if (invalidated === undefined) {
+      return;
+    }
+    const invalidationAudit = invalidationAudits[0];
+    if (invalidationAudit === undefined) {
+      throw new StoreInvariantError(
+        `Evidence ${record.id} has invalid retained eligibility authority`,
+      );
+    }
+    if (
+      invalidated.evidenceId !== record.id ||
+      invalidated.state !== EvidenceEligibilityState.INELIGIBLE ||
+      invalidated.version !== 2 ||
+      invalidationAudit.actorType !== 'RUNTIME' ||
+      invalidationAudit.commandId === undefined ||
+      invalidationAudit.beforeVersion !== 1 ||
+      invalidationAudit.afterVersion !== 2 ||
+      invalidationAudit.occurredAt !== invalidated.changedAt ||
+      invalidationAudit.sequence <= recordedAudit.sequence
+    ) {
+      reject();
     }
   }
 
@@ -1647,12 +3942,12 @@ export class SqliteControlStore implements WorkerControlStore {
   private decodeVerifiedContextManifestRow(row: unknown): ContextManifest {
     const manifest = decodeContextManifestRow(row);
     if (
-      manifest.candidateGenerationId !== undefined ||
-      manifest.candidateDigest !== undefined ||
       manifest.omissionDecisions.length !== 0 ||
       manifest.entries.some(
         (entry) =>
-          entry.kind !== ContextEntryKind.GOAL && entry.kind !== ContextEntryKind.SUCCESS_CRITERION,
+          entry.kind !== ContextEntryKind.GOAL &&
+          entry.kind !== ContextEntryKind.SUCCESS_CRITERION &&
+          entry.kind !== ContextEntryKind.CANDIDATE,
       )
     ) {
       throw new StoreInvariantError(
@@ -1678,6 +3973,51 @@ export class SqliteControlStore implements WorkerControlStore {
       );
     }
     const { goal, workflow } = goalView;
+    let candidateBinding:
+      { readonly generationId: CandidateGenerationId; readonly digest: Sha256Digest } | undefined;
+    if (manifest.phase === WorkflowPhase.IMPLEMENT) {
+      if (manifest.candidateGenerationId === undefined || manifest.candidateDigest === undefined) {
+        throw new StoreInvariantError(
+          `IMPLEMENT Context Manifest ${manifest.id} has no Candidate binding`,
+        );
+      }
+      const generationRow = this.#database
+        .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+        .get(manifest.candidateGenerationId);
+      if (generationRow === undefined) {
+        throw new StoreInvariantError(
+          `Context Manifest ${manifest.id} cannot resolve its Candidate generation`,
+        );
+      }
+      const decodedGeneration = decodeCandidateGenerationRow(generationRow);
+      const candidateRow = this.#database
+        .prepare('SELECT * FROM candidates WHERE id = ?')
+        .get(decodedGeneration.generation.candidateId);
+      const candidate = candidateRow === undefined ? undefined : decodeCandidateRow(candidateRow);
+      if (
+        candidate === undefined ||
+        decodedGeneration.workflowId !== workflow.id ||
+        candidate.goalId !== goal.id ||
+        decodedGeneration.generation.baseDigest !== manifest.candidateDigest ||
+        decodedGeneration.generation.createdAt > manifest.createdAt
+      ) {
+        throw new StoreInvariantError(
+          `Context Manifest ${manifest.id} has stale Candidate source authority`,
+        );
+      }
+      candidateBinding = Object.freeze({
+        generationId: decodedGeneration.generation.id,
+        digest: decodedGeneration.generation.baseDigest,
+      });
+    } else if (
+      manifest.candidateGenerationId !== undefined ||
+      manifest.candidateDigest !== undefined ||
+      manifest.entries.some((entry) => entry.kind === ContextEntryKind.CANDIDATE)
+    ) {
+      throw new StoreInvariantError(
+        `Non-IMPLEMENT Context Manifest ${manifest.id} contains Candidate authority`,
+      );
+    }
     if (
       manifest.goalRevision !== goal.revision ||
       manifest.workflowId !== workflow.id ||
@@ -1713,6 +4053,12 @@ export class SqliteControlStore implements WorkerControlStore {
         nonGoals: goal.nonGoals,
       },
       selectedEntries: [],
+      ...(candidateBinding === undefined
+        ? {}
+        : {
+            candidateGenerationId: candidateBinding.generationId,
+            candidateDigest: candidateBinding.digest,
+          }),
       policyBundleId: installedPolicy.bundle.id,
       policyBundleDigest: installedPolicy.bundle.digest,
       responseContract: m1WorkerResponseContract(manifest.phase),
@@ -1849,6 +4195,18 @@ export class SqliteControlStore implements WorkerControlStore {
   }
 
   private assertRetainedWorkerAuthorityClosure(): void {
+    if (this.hasTable('attempts')) {
+      const attemptRows = this.#database.prepare('SELECT * FROM attempts ORDER BY id').all();
+      for (const row of attemptRows) {
+        const attempt = decodeAttempt(row);
+        assertKnownWorkerFailureClassificationFields(
+          attempt.terminationReason,
+          attempt.status,
+          attempt.failureClass,
+        );
+      }
+    }
+
     if (this.hasTable('policy_bundles')) {
       const rows = this.#database.prepare('SELECT * FROM policy_bundles ORDER BY id').all();
       for (const row of rows) {
@@ -1897,6 +4255,181 @@ export class SqliteControlStore implements WorkerControlStore {
           this.assertAdmittedWorkerEventHasDispatchClaim(receipt);
         } else {
           this.assertWorkerEventHasDispatchCausality(receipt);
+        }
+      }
+    }
+  }
+
+  private assertRetainedCandidateEvidenceAuthorityClosure(): void {
+    if (!this.hasTable('candidates')) {
+      return;
+    }
+    const candidateRows = this.#database.prepare('SELECT * FROM candidates ORDER BY id').all();
+    for (const row of candidateRows) {
+      const candidate = decodeCandidateRow(row);
+      const goal = this.getGoal(candidate.goalId);
+      const matchingAudit = this.listAuditEvents('CANDIDATE', candidate.id).some(
+        (audit) =>
+          audit.eventType === 'CANDIDATE_CREATED' &&
+          audit.actorType === 'RUNTIME' &&
+          audit.commandId !== undefined,
+      );
+      if (
+        goal === undefined ||
+        candidate.baseProjectIdentity !==
+          deriveM1BaseProjectIdentity(goal.scope.projectPath, canonicalAuthorityDigests) ||
+        !matchingAudit
+      ) {
+        throw new StoreInvariantError(
+          `Candidate ${candidate.id} has no Goal or creation audit authority`,
+        );
+      }
+    }
+
+    const generationRows = this.#database
+      .prepare('SELECT * FROM candidate_generations ORDER BY id')
+      .all();
+    for (const row of generationRows) {
+      const decoded = decodeCandidateGenerationRow(row);
+      const candidateRow = this.#database
+        .prepare('SELECT * FROM candidates WHERE id = ?')
+        .get(decoded.generation.candidateId);
+      const candidate = candidateRow === undefined ? undefined : decodeCandidateRow(candidateRow);
+      const workflow = this.getWorkflow(decoded.workflowId);
+      const audits = this.listAuditEvents('CANDIDATE_GENERATION', decoded.generation.id);
+      const creation = audits.filter(
+        (audit) => audit.eventType === 'CANDIDATE_GENERATION_CREATED' && audit.afterVersion === 1,
+      );
+      const transitions = audits.filter((audit) => audit.eventType === 'CANDIDATE_STATE_CHANGED');
+      if (
+        candidate?.goalId === undefined ||
+        candidate.goalId !== workflow?.goalId ||
+        decoded.generation.workspaceIdentity !== deriveM1WorkspaceIdentity(decoded.generation.id) ||
+        creation.length !== 1 ||
+        transitions.length !== decoded.generation.version - 1 ||
+        transitions.some(
+          (audit, index) => audit.beforeVersion !== index + 1 || audit.afterVersion !== index + 2,
+        )
+      ) {
+        throw new StoreInvariantError(
+          `Candidate generation ${decoded.generation.id} has incomplete retained authority`,
+        );
+      }
+    }
+
+    if (this.hasTable('check_specifications')) {
+      const rows = this.#database.prepare('SELECT * FROM check_specifications ORDER BY id').all();
+      for (const row of rows) {
+        const specification = decodeCheckSpecificationRow(row);
+        if (
+          !this.listAuditEvents('CHECK_SPECIFICATION', specification.id).some(
+            (audit) => audit.eventType === 'CHECK_SPECIFICATION_RECORDED',
+          )
+        ) {
+          throw new StoreInvariantError(
+            `Check Specification ${specification.id} has no recording audit`,
+          );
+        }
+      }
+    }
+
+    const obligationRows = this.#database
+      .prepare('SELECT * FROM verification_obligations ORDER BY id')
+      .all();
+    for (const row of obligationRows) {
+      const obligation = decodeVerificationObligationRow(row);
+      const goal = this.getGoal(obligation.goalId);
+      const checkIdentifier = obligation.checkSpecRef.split('@', 1)[0];
+      const check =
+        checkIdentifier === undefined
+          ? undefined
+          : this.getCheckSpecification(checkSpecificationId(checkIdentifier));
+      if (
+        goal?.revision !== obligation.goalRevision ||
+        check === undefined ||
+        `${check.id}@${check.version}` !== obligation.checkSpecRef ||
+        !this.listAuditEvents('VERIFICATION_OBLIGATION', obligation.id).some(
+          (audit) => audit.eventType === 'VERIFICATION_OBLIGATION_RECORDED',
+        )
+      ) {
+        throw new StoreInvariantError(
+          `Verification Obligation ${obligation.id} has stale retained authority`,
+        );
+      }
+    }
+
+    for (const row of generationRows) {
+      const generation = decodeCandidateGenerationRow(row).generation;
+      const candidateRow = this.#database
+        .prepare('SELECT * FROM candidates WHERE id = ?')
+        .get(generation.candidateId);
+      const candidate = candidateRow === undefined ? undefined : decodeCandidateRow(candidateRow);
+      const goal = candidate === undefined ? undefined : this.getGoal(candidate.goalId);
+      const relatedSpecifications = this.listCheckSpecifications().filter(
+        (specification) =>
+          specification.inputRefs.length === 1 && specification.inputRefs[0] === generation.id,
+      );
+      const freeze = relatedSpecifications.find(
+        (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+      );
+      const verification = relatedSpecifications.find(
+        (specification) => specification.kind === CheckSpecificationKind.FAKE_VERIFICATION,
+      );
+      if (
+        goal === undefined ||
+        relatedSpecifications.length !== 2 ||
+        freeze === undefined ||
+        verification === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Candidate generation ${generation.id} has incomplete M1 Check authority`,
+        );
+      }
+      const obligations = this.listVerificationObligations(goal.id).filter(
+        (obligation) => obligation.candidateGenerationId === generation.id,
+      );
+      validateM1CandidateEvidencePolicy(
+        goal,
+        generation,
+        { freeze, verification, obligations },
+        generation.createdAt,
+      );
+    }
+
+    const evidenceRows = this.#database.prepare('SELECT * FROM evidence_records ORDER BY id').all();
+    for (const row of evidenceRows) {
+      const record = this.decodeVerifiedEvidenceRecordRow(row);
+      const history = this.#database
+        .prepare('SELECT * FROM evidence_eligibility WHERE evidence_id = ? ORDER BY version')
+        .all(record.id)
+        .map((eligibilityRow) => decodeEvidenceEligibilityRow(eligibilityRow));
+      this.assertRetainedEvidenceHistory(
+        record,
+        history,
+        this.listAuditEvents('EVIDENCE', record.id),
+      );
+    }
+
+    for (const row of generationRows) {
+      const generation = decodeCandidateGenerationRow(row).generation;
+      if (
+        generation.state === CandidateGenerationState.INVALIDATED &&
+        this.listEvidenceForGeneration(generation.id).some(
+          ({ eligibility }) => eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+        )
+      ) {
+        throw new StoreInvariantError(
+          `Invalidated Candidate generation ${generation.id} retains eligible Evidence`,
+        );
+      }
+    }
+
+    if (this.hasTable('evidence_sets')) {
+      const rows = this.#database.prepare('SELECT * FROM evidence_sets ORDER BY digest').all();
+      for (const row of rows) {
+        const set = decodeEvidenceSetRow(row);
+        if (this.getEvidenceSet(set.digest) === undefined) {
+          throw new StoreInvariantError(`Evidence Set ${set.digest} disappeared on reopen`);
         }
       }
     }
@@ -2087,7 +4620,9 @@ export class SqliteControlStore implements WorkerControlStore {
     }
   }
 
-  private probe(step: TransactionStep | WorkerTransactionStep): void {
+  private probe(
+    step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep,
+  ): void {
     this.#transactionProbe?.(step);
   }
 

@@ -2,6 +2,7 @@ import {
   aggregateVersion,
   candidateGenerationId,
   candidateId,
+  goalId,
   isoTimestamp,
   nextAggregateVersion,
   sha256Digest,
@@ -20,6 +21,22 @@ export interface Candidate {
   readonly id: CandidateId;
   readonly goalId: GoalId;
   readonly baseProjectIdentity: string;
+}
+
+export interface CreateCandidateInput {
+  readonly id: CandidateId;
+  readonly goalId: GoalId;
+  readonly baseProjectIdentity: string;
+}
+
+export interface CreateCandidateGenerationInput {
+  readonly id: CandidateGenerationId;
+  readonly candidateId: CandidateId;
+  readonly sequence: number;
+  readonly parentGenerationId?: CandidateGenerationId;
+  readonly workspaceIdentity: string;
+  readonly baseDigest: Sha256Digest;
+  readonly createdAt: IsoTimestamp;
 }
 
 interface CandidateGenerationBase {
@@ -152,6 +169,45 @@ function isTerminal(state: CandidateGenerationState): boolean {
     state === CandidateGenerationState.REJECTED ||
     state === CandidateGenerationState.ACCEPTED
   );
+}
+
+export function assertCandidateRootInvariant(candidate: Candidate): void {
+  candidateId(candidate.id);
+  goalId(candidate.goalId);
+  if (candidate.baseProjectIdentity.trim().length === 0) {
+    throw new DomainInvariantError('Candidate base project identity must not be empty');
+  }
+}
+
+export function createCandidate(input: CreateCandidateInput): Candidate {
+  const candidate = Object.freeze({
+    id: candidateId(input.id),
+    goalId: goalId(input.goalId),
+    baseProjectIdentity: input.baseProjectIdentity.trim(),
+  });
+  assertCandidateRootInvariant(candidate);
+  return candidate;
+}
+
+export function createCandidateGeneration(
+  input: CreateCandidateGenerationInput,
+): MutableCandidateGeneration {
+  const generation = Object.freeze({
+    id: candidateGenerationId(input.id),
+    candidateId: candidateId(input.candidateId),
+    sequence: input.sequence,
+    ...(input.parentGenerationId === undefined
+      ? {}
+      : { parentGenerationId: candidateGenerationId(input.parentGenerationId) }),
+    workspaceIdentity: input.workspaceIdentity.trim(),
+    state: CandidateGenerationState.MUTABLE,
+    baseDigest: sha256Digest(input.baseDigest),
+    version: aggregateVersion(1),
+    createdAt: isoTimestamp(input.createdAt),
+    updatedAt: isoTimestamp(input.createdAt),
+  });
+  assertCandidateInvariant(generation);
+  return generation;
 }
 
 export function assertCandidateInvariant(

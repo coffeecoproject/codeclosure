@@ -39,7 +39,9 @@ import {
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
   RuntimeErrorCode,
+  WorkerFailureReasonCode,
   WorkerEventNonAdmissionClass,
+  WorkerPortFailureReasonCode,
   contextManifestDigestProjection,
   createPolicyInstaller,
   createWorkerExecutionApplication,
@@ -525,7 +527,7 @@ void test('[I-002][I-008] abrupt Worker termination remains distinguishable from
   const application = createWorkerExecutionApplication(
     runtimeDependencies(
       store,
-      new FakeWorker({ fixture: FakeWorkerFixture.ABRUPT_TERMINATION }),
+      new FakeWorker({ fixture: FakeWorkerFixture.SENSITIVE_ABRUPT_TERMINATION }),
       authority,
       'abruptstream',
       undefined,
@@ -545,8 +547,20 @@ void test('[I-002][I-008] abrupt Worker termination remains distinguishable from
   const attempt = store.getAttempt(execution.dispatch.claim.attemptId);
   assert.equal(attempt?.status, AttemptStatus.FAILED);
   assert.equal(attempt.failureClass, AttemptFailureClass.ABRUPT_TERMINATION);
+  assert.equal(attempt.terminationReason, WorkerPortFailureReasonCode.INVOCATION_FAILED);
   assert.equal(attempt.endedAt, execution.dispatch.claim.claimedAt);
   assert.equal(workflow.updatedAt, execution.dispatch.claim.claimedAt);
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  const persistedAuthority = JSON.stringify(
+    inspected
+      .prepare(
+        `SELECT termination_reason AS value FROM attempts
+         UNION ALL SELECT outcome_json FROM processed_commands`,
+      )
+      .all(),
+  );
+  inspected.close();
+  assert.equal(persistedAuthority.includes('token=demo-sensitive-value'), false);
 });
 
 void test('[I-005][I-006][I-019] Runtime rejects a self-consistent Context that disagrees with source authority', async (t) => {
@@ -1092,11 +1106,7 @@ void test('[I-008][I-010] Runtime refuses Worker delivery without a durable disp
   }
 
   assert.equal(
-    kernel.recordWorkerPortFailure(
-      request,
-      AttemptFailureClass.PROTOCOL_ERROR,
-      'must not record failure before dispatch',
-    ),
+    kernel.recordWorkerPortFailure(request, WorkerPortFailureReasonCode.NO_TERMINAL_EVENT),
     undefined,
   );
   assert.throws(
@@ -1184,6 +1194,48 @@ void test('[I-006][I-008][I-009] SQLite backstops reject forged dispatch and imm
   if (currentAttempt === undefined) {
     assert.fail('Dispatch time backstop fixture must retain its Attempt');
   }
+  const forgedClassificationCommandId = commandId('command_forged-worker-classification');
+  const forgedClassificationDecision = decideAttempt(workflow, currentAttempt, {
+    type: 'RECORD_ATTEMPT_FAILURE',
+    commandId: forgedClassificationCommandId,
+    workflowId: workflow.id,
+    expectedWorkflowVersion: workflow.version,
+    attemptId: currentAttempt.id,
+    failureClass: AttemptFailureClass.PERMANENT_BACKEND,
+    occurredAt: isoTimestamp('2026-07-27T00:00:00.100Z'),
+    reason: WorkerFailureReasonCode.BACKEND_FAILURE,
+  });
+  if (!forgedClassificationDecision.accepted) {
+    assert.fail(forgedClassificationDecision.rejection.message);
+  }
+  const forgedClassificationEvent = forgedClassificationDecision.events[0];
+  const forgedClassificationIds = new DeterministicIds('forged-worker-classification');
+  assert.throws(
+    () =>
+      store.commitAttemptEvent({
+        inputDigest: digests.digest({ schemaVersion: 1, forgedClassificationCommandId }),
+        target: Object.freeze({ aggregateType: 'WORKFLOW', aggregateId: workflow.id }),
+        event: forgedClassificationEvent,
+        auditEventId: forgedClassificationIds.nextAuditEventId(),
+        workflowAuditEventId: forgedClassificationIds.nextAuditEventId(),
+        payloadDigest: digests.digest(forgedClassificationEvent),
+      }),
+    /requires failure class TRANSIENT_BACKEND/,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `UPDATE attempts
+              SET status = 'FAILED', failure_class = 'PROTOCOL_ERROR',
+                  termination_reason = 'WORKER_BACKEND_FAILURE',
+                  ended_at = '2026-07-27T00:00:00.100Z'
+            WHERE id = ?`,
+        )
+        .run(request.attemptId),
+    /Worker failure reason requires its runtime-owned failure class/,
+  );
+  assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RUNNING);
   const bypassCommandId = commandId('command_bypass-dispatch-time');
   const bypassDecision = decideAttempt(workflow, currentAttempt, {
     type: 'RECORD_ATTEMPT_FAILURE',
@@ -1722,6 +1774,87 @@ void test('[I-006][I-008][I-010] migration 0010 refuses an Attempt ended before 
   assert.equal(
     inspected
       .prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 10')
+      .pluck()
+      .get(),
+    0,
+  );
+});
+
+void test('[I-006][I-008] migration 0012 refuses a retained Worker failure classification conflict atomically', (t) => {
+  const filename = temporaryDatabase(t, 'worker-failure-classification-migration.sqlite');
+  const migrationsDirectory = mkdtempSync(
+    join(tmpdir(), 'codeclosure-worker-classification-closure-'),
+  );
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) =>
+      candidate.endsWith('.sql') && candidate < '0012_worker_failure_classification_closure.sql',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const authority = seedAuthority(oldStore, 'workerclassificationmigration');
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(oldStore, new CountingWorker(), authority, 'workerclassificationmigration'),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'workerclassificationmigration')).status,
+    'APPLIED',
+  );
+  const running = oldStore.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Worker classification migration fixture must have an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined || kernel.claimWorkerDispatch(request).status !== 'CLAIMED') {
+    assert.fail('Worker classification migration fixture must retain a dispatch claim');
+  }
+  oldStore.close();
+
+  const raw = new Database(filename);
+  raw
+    .prepare(
+      `UPDATE attempts
+          SET status = 'FAILED', failure_class = 'PROTOCOL_ERROR',
+              termination_reason = 'WORKER_BACKEND_FAILURE',
+              ended_at = '2026-07-27T00:00:00.100Z'
+        WHERE id = ?`,
+    )
+    .run(request.attemptId);
+  raw.close();
+  copyFileSync(
+    join(sourceDirectory, '0012_worker_failure_classification_closure.sql'),
+    join(migrationsDirectory, '0012_worker_failure_classification_closure.sql'),
+  );
+
+  assert.throws(
+    () =>
+      openSqliteControlStore({
+        filename,
+        migrationsDirectory,
+        now: () => createdAt,
+      }),
+    /CHECK constraint failed/,
+  );
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 12')
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name = 'attempts_worker_failure_classification_update_guard'",
+      )
       .pluck()
       .get(),
     0,

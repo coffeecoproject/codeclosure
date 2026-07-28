@@ -1,10 +1,4 @@
-import {
-  AttemptFailureClass,
-  decodeWorkflowSnapshot,
-  goalId,
-  type GoalId,
-  type WorkflowId,
-} from '@codeclosure/domain';
+import { decodeWorkflowSnapshot, goalId, type GoalId, type WorkflowId } from '@codeclosure/domain';
 
 import type { RuntimeCommandResult } from './contracts.js';
 import type { WorkerControlStore, WorkerPort } from './ports.js';
@@ -17,6 +11,7 @@ import {
 import {
   WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
+  WorkerPortFailureReasonCode,
   type WorkerDispatchResult,
   type WorkerEventAdmissionResult,
 } from './worker-contracts.js';
@@ -129,8 +124,7 @@ class WorkerExecutionCoordinator implements WorkerExecutionApplication {
       if (!isAsyncIterable(stream)) {
         workerFailure = this.#kernel.recordWorkerPortFailure(
           request,
-          AttemptFailureClass.PROTOCOL_ERROR,
-          'WorkerPort returned a non-async event stream',
+          WorkerPortFailureReasonCode.NON_ASYNC_STREAM,
         );
       } else {
         for await (const rawEvent of stream) {
@@ -141,8 +135,7 @@ class WorkerExecutionCoordinator implements WorkerExecutionApplication {
       if (!isAbortError(error, controller.signal)) {
         workerFailure = this.#kernel.recordWorkerPortFailure(
           request,
-          AttemptFailureClass.ABRUPT_TERMINATION,
-          error instanceof Error ? error.message : 'Worker port failed without an Error value',
+          WorkerPortFailureReasonCode.INVOCATION_FAILED,
         );
       }
     } finally {
@@ -165,15 +158,11 @@ class WorkerExecutionCoordinator implements WorkerExecutionApplication {
           admission.nonAdmissionClass === WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
       )
     ) {
-      const rejectedReasons = admissions
-        .filter((admission) => admission.status === 'REJECTED' || admission.status === 'IGNORED')
-        .map((admission) => admission.reasonCode);
       workerFailure = this.#kernel.recordWorkerPortFailure(
         request,
-        AttemptFailureClass.PROTOCOL_ERROR,
-        rejectedReasons.length === 0
-          ? 'Worker stream ended without a terminal event'
-          : `Worker stream ended without an admitted terminal event: ${rejectedReasons.join(', ')}`,
+        admissions.length === 0
+          ? WorkerPortFailureReasonCode.NO_TERMINAL_EVENT
+          : WorkerPortFailureReasonCode.NO_ADMITTED_TERMINAL_EVENT,
       );
     }
     return Object.freeze({

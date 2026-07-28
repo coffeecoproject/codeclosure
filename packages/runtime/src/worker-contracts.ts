@@ -25,6 +25,8 @@ import {
   type WorkflowVersion,
 } from '@codeclosure/domain';
 
+import { canonicalizeJson } from './canonical-json.js';
+
 export interface WorkerRequest {
   readonly schemaVersion: 1;
   readonly workerSessionId: WorkerSessionId;
@@ -71,10 +73,24 @@ export interface WorkerResultEvent extends WorkerEventBase {
   readonly result: WorkerResult;
 }
 
+export const WorkerFailureReasonCode = {
+  BACKEND_FAILURE: 'WORKER_BACKEND_FAILURE',
+} as const;
+export type WorkerFailureReasonCode =
+  (typeof WorkerFailureReasonCode)[keyof typeof WorkerFailureReasonCode];
+
+export const WorkerPortFailureReasonCode = {
+  NON_ASYNC_STREAM: 'WORKER_PORT_NON_ASYNC_STREAM',
+  INVOCATION_FAILED: 'WORKER_PORT_INVOCATION_FAILED',
+  NO_TERMINAL_EVENT: 'WORKER_STREAM_NO_TERMINAL_EVENT',
+  NO_ADMITTED_TERMINAL_EVENT: 'WORKER_STREAM_NO_ADMITTED_TERMINAL_EVENT',
+} as const;
+export type WorkerPortFailureReasonCode =
+  (typeof WorkerPortFailureReasonCode)[keyof typeof WorkerPortFailureReasonCode];
+
 export interface WorkerFailureEvent extends WorkerEventBase {
   readonly type: 'WORKER_FAILURE';
-  readonly failureClass: AttemptFailureClass;
-  readonly reason: string;
+  readonly reasonCode: WorkerFailureReasonCode;
 }
 
 export type WorkerEvent = WorkerResultEvent | WorkerFailureEvent;
@@ -166,9 +182,17 @@ export type WorkerEventAdmissionResult =
       readonly nonAdmissionClass: WorkerEventNonAdmissionClass;
     };
 
-const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 0, {
-  error: 'String must not be blank',
-});
+const WORKER_TEXT_LIMIT_CHARACTERS = 65_536;
+const WORKER_COLLECTION_LIMIT = 128;
+const nonBlankStringSchema = z
+  .string()
+  .max(WORKER_TEXT_LIMIT_CHARACTERS)
+  .refine((value) => value.trim().length > 0, {
+    error: 'String must not be blank',
+  });
+
+const workerFailureReasonCodeSchema = z.enum(Object.values(WorkerFailureReasonCode));
+const workerPortFailureReasonCodeSchema = z.enum(Object.values(WorkerPortFailureReasonCode));
 
 const workerRequestSchema = z
   .object({
@@ -197,7 +221,7 @@ const workerProposalSchema = z
   .object({
     kind: nonBlankStringSchema,
     summary: nonBlankStringSchema,
-    sourceRefs: z.array(nonBlankStringSchema),
+    sourceRefs: z.array(nonBlankStringSchema).max(WORKER_COLLECTION_LIMIT),
   })
   .strict();
 
@@ -205,7 +229,7 @@ const workerResultSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal(WorkerResultKind.PROPOSALS),
-      proposals: z.array(workerProposalSchema),
+      proposals: z.array(workerProposalSchema).max(WORKER_COLLECTION_LIMIT),
     })
     .strict(),
   z
@@ -213,7 +237,7 @@ const workerResultSchema = z.discriminatedUnion('kind', [
       kind: z.literal(WorkerResultKind.COMPLETION_REQUEST),
       claimedScope: nonBlankStringSchema,
       summary: nonBlankStringSchema,
-      proposedEvidenceRefs: z.array(nonBlankStringSchema),
+      proposedEvidenceRefs: z.array(nonBlankStringSchema).max(WORKER_COLLECTION_LIMIT),
     })
     .strict(),
 ]);
@@ -228,8 +252,7 @@ const workerEventSchema = z.discriminatedUnion('type', [
   workerEventBaseSchema
     .extend({
       type: z.literal('WORKER_FAILURE'),
-      failureClass: z.enum(Object.values(AttemptFailureClass)),
-      reason: nonBlankStringSchema,
+      reasonCode: workerFailureReasonCodeSchema,
     })
     .strict(),
 ]);
@@ -345,9 +368,61 @@ export function decodeWorkerEvent(value: unknown): WorkerEvent {
     : Object.freeze({
         ...common,
         type: parsed.type,
-        failureClass: parsed.failureClass,
-        reason: parsed.reason,
+        reasonCode: parsed.reasonCode,
       });
+}
+
+export function workerPortFailureReasonCode(value: unknown): WorkerPortFailureReasonCode {
+  return workerPortFailureReasonCodeSchema.parse(value);
+}
+
+export function attemptFailureClassForWorkerReasonCode(
+  rawReasonCode: WorkerFailureReasonCode,
+): AttemptFailureClass {
+  const reasonCode = workerFailureReasonCodeSchema.parse(rawReasonCode);
+  const failureClass = attemptFailureClassForKnownWorkerReasonCode(reasonCode);
+  if (failureClass === undefined) {
+    throw new TypeError(`Worker failure reason ${reasonCode} has no authoritative classification`);
+  }
+  return failureClass;
+}
+
+export function attemptFailureClassForWorkerPortReasonCode(
+  rawReasonCode: WorkerPortFailureReasonCode,
+): AttemptFailureClass {
+  const reasonCode = workerPortFailureReasonCodeSchema.parse(rawReasonCode);
+  const failureClass = attemptFailureClassForKnownWorkerReasonCode(reasonCode);
+  if (failureClass === undefined) {
+    throw new TypeError(`Worker port reason ${reasonCode} has no authoritative classification`);
+  }
+  return failureClass;
+}
+
+export function attemptFailureClassForKnownWorkerReasonCode(
+  reasonCode: string,
+): AttemptFailureClass | undefined {
+  switch (reasonCode) {
+    case WorkerFailureReasonCode.BACKEND_FAILURE:
+      return AttemptFailureClass.TRANSIENT_BACKEND;
+    case WorkerPortFailureReasonCode.INVOCATION_FAILED:
+      return AttemptFailureClass.ABRUPT_TERMINATION;
+    case WorkerPortFailureReasonCode.NON_ASYNC_STREAM:
+    case WorkerPortFailureReasonCode.NO_TERMINAL_EVENT:
+    case WorkerPortFailureReasonCode.NO_ADMITTED_TERMINAL_EVENT:
+      return AttemptFailureClass.PROTOCOL_ERROR;
+    default:
+      return undefined;
+  }
+}
+
+export function assertWorkerEventWithinResponseContract(
+  event: WorkerEvent,
+  request: WorkerRequest,
+): void {
+  const encodedBytes = Buffer.byteLength(canonicalizeJson(event), 'utf8');
+  if (encodedBytes > request.contextPackage.responseContract.maxEventBytes) {
+    throw new TypeError('Worker Event exceeds the bound response contract');
+  }
 }
 
 export function decodeWorkerEventReceipt(value: unknown): WorkerEventReceipt {

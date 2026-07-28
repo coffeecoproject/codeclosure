@@ -3,12 +3,14 @@
 ## Status
 
 This document defines the target architecture. The current M1 implementation
-has reached the Context-bound `FakeWorker` runtime slice: deterministic domain
-and Workflow control, SQLite persistence and audit, minimal Context compilation,
-typed Worker dispatch, and event admission exist. Candidate/Evidence,
-Acceptance, CLI proof scenarios, and complete startup orchestration remain M1
-work. Components marked for M2 or later are architectural boundaries, not
-current implementation claims.
+has reached the Candidate/Evidence slice: deterministic domain and Workflow
+control, SQLite persistence and audit, minimal Context compilation, typed
+`FakeWorker` dispatch and event admission, logical Candidate generations,
+stable freeze observation, independent fake verification, immutable Evidence,
+and canonical Evidence Sets exist. Acceptance, CLI proof scenarios, and
+complete startup orchestration remain M1 work. Real candidate isolation and
+real project verification remain M2 work. Components marked for later slices
+or milestones are architectural boundaries, not current implementation claims.
 
 ## Architectural Goal
 
@@ -163,7 +165,19 @@ claims dispatch against the exact active Workflow version, owns cancellation
 and `AbortSignal` ordering, reloads that claim before every event admission,
 and converts a validated Worker event into a runtime-authored internal command.
 Every durable receipt retains dispatch causality. The Worker cannot choose that
-command or mutate state through its delivery identity.
+command, its failure classification, or mutate state through its delivery
+identity. Strict event shape and a compiler-owned canonical byte budget bound
+Worker output before semantic admission.
+
+In the current Candidate/Evidence path, the Runtime coordinates the owning
+Candidate Source, Verification Runner, and Store without giving any of them a
+Workflow mutation method. Candidate creation, freeze, drift failure, Evidence
+admission, eligibility invalidation, and Evidence Set finalization use
+authority-specific compound transactions. Generic phase guards cannot
+self-attest Candidate, Evidence, or Acceptance facts. Candidate Source output
+cannot author project/workspace identity; Check Specifications bind the M1
+producer, and specialized Runtime builders derive Evidence producer,
+environment, payload, and result fields.
 
 The M1 package root exposes a narrow Goal application capability for public
 adapters. That capability contains only public Goal commands; the internal
@@ -193,12 +207,15 @@ identity domain separate from application commands. See
 [ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md).
 
 M1 does not yet have a durable resolver for selected Fact, Human Decision, or
-project-source authority, and Slice 4 has no Candidate Manager authority port.
-Its Context Packages therefore contain no selected entries, omission decisions,
-or Candidate bindings; only compiler-owned Goal and criterion Manifest entries
-are allowed. A factory cannot create authority by assigning a trusted-looking
-label or a self-consistent Candidate digest. See
-[ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md).
+project-source authority. Those selected entries and all omission decisions
+therefore remain closed under
+[ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md). Slice 5 opens
+only one additional source class: an `IMPLEMENT` package binds the exact active
+`MUTABLE` Candidate generation and its `baseDigest`, resolved through Candidate
+authority and independently rechecked by Runtime and Store. `DISCOVERY` and
+`PLAN` remain Candidate-free, and source freeze or verification uses its own
+port instead of a coding-Worker prompt. See
+[ADR 0016](docs/adr/0016-candidate-and-evidence-authority-boundary.md).
 
 ### Candidate Manager
 
@@ -209,11 +226,23 @@ invalidates dependent evidence.
 The worker never edits the authoritative control store and should not edit the
 user's source checkout directly in the governed path.
 
+The current M1 adapter is logical and deterministic: it proves generation,
+freeze, and invalidation authority but does not create a filesystem-isolated
+workspace or edit a real project. Concrete isolation remains M2 work.
+
 ### Evidence Store
 
 Stores immutable, typed observations and their content-addressed payloads. It
 tracks provenance, candidate binding, policy/check identity, redaction, and
 invalidation.
+
+The current M1 runner reports only a closed result status. Request-aware
+Runtime admission derives the producer and check binding from the validated
+request, constructs the normalized fake observation, and uses its
+Runtime-computed digest as the fake payload reference. Unknown fields and raw
+adapter exceptions are rejected without becoming authority. A
+CodeClosure-owned content-addressed blob store is required before larger real
+runner payloads are admitted.
 
 ### Acceptance Engine
 
@@ -286,8 +315,10 @@ strict. See [ADR 0012](docs/adr/0012-causal-control-timestamps.md).
 
 Expected version and command-identity conflicts are explicit store-port result
 variants. Adapter-specific exception class names are not part of the Runtime
-contract. On a version conflict, the Runtime reloads and reevaluates an admitted
-command before deciding whether to persist a rejection.
+contract. External Worker, Candidate Source, and Verification Runner failures
+cross the M1 authority boundary only as closed Runtime-owned reason codes; raw
+exception text is not persisted. On a version conflict, the Runtime reloads and
+reevaluates an admitted command before deciding whether to persist a rejection.
 
 Every processed-command row stores a schema-versioned outcome envelope authored
 by the Store inside the command transaction. Envelope version 3 distinguishes
@@ -323,6 +354,11 @@ codec rules as defense in depth, and strengthening migrations fail closed for
 retained rows that cannot prove the new contract. See
 [ADR 0013](docs/adr/0013-authority-boundary-validation-closure.md).
 
+SQLite authority guards express validity as a positive predicate and treat SQL
+`NULL`/unknown as invalid. A later migration that replaces or extends a guard
+must preserve the complete earlier contract rather than validating only its new
+fields.
+
 Policy installation follows the same closure. The Runtime accepts a definition
 without caller-authored identity, computes its canonical digest, and assigns
 installation time and audit identity. The Store independently recomputes the
@@ -333,6 +369,12 @@ M1 Context identity from its authoritative sources and validates dispatch
 claims, terminal Attempt time, and every Worker receipt's causal link to its
 claim. SQLite triggers protect normal writes; startup checks detect authority
 data changed while the Store was offline.
+
+Retained Evidence Sets use their unique recording audit sequence as a temporal
+cut. Startup reconstructs which Evidence and eligibility version existed at
+that cut and rebuilds the canonical set. Later invalidation preserves that
+historical record but makes it unusable as current acceptance input. See
+[ADR 0017](docs/adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 ## Capability Enforcement
 
@@ -418,8 +460,9 @@ packages/workspace
 packages/adapter-codex
 ```
 
-M1 still implements its minimal Context Manifest, Evidence, and Acceptance
-behavior inside `domain` and `runtime`; it does not defer those controls.
+M1 keeps its minimal Context Manifest, Evidence, and eventual Acceptance
+behavior inside `domain` and `runtime`; Slice 6 still has to implement the
+Acceptance behavior before that control exists.
 
 Codex protocol DTOs must remain inside `adapter-codex`.
 

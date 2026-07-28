@@ -60,6 +60,7 @@ export interface WorkerResponseContract {
   readonly workerEventSchemaVersion: 1;
   readonly allowedResultKinds: readonly WorkerResultKind[];
   readonly unknownFields: 'REJECT';
+  readonly maxEventBytes: number;
 }
 
 export interface ContextPackageEntry {
@@ -247,6 +248,9 @@ export function assertWorkerResponseContractInvariant(contract: WorkerResponseCo
   }
   if (contract.allowedResultKinds.length === 0) {
     throw new TypeError('Worker response contract must allow at least one result kind');
+  }
+  if (!Number.isSafeInteger(contract.maxEventBytes) || contract.maxEventBytes < 1) {
+    throw new TypeError('Worker response contract event limit must be a positive safe integer');
   }
   const seen = new Set<WorkerResultKind>();
   for (const kind of contract.allowedResultKinds) {

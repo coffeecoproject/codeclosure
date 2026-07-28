@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  AttemptFailureClass,
   WorkerResultKind,
   attemptId,
   contextManifestId,
@@ -18,7 +19,12 @@ import {
   WorkflowPhase,
 } from '@codeclosure/domain';
 import {
+  WorkerFailureReasonCode,
+  WorkerPortFailureReasonCode,
+  assertWorkerEventWithinResponseContract,
   assertWorkerEventBindsRequest,
+  attemptFailureClassForWorkerPortReasonCode,
+  attemptFailureClassForWorkerReasonCode,
   createWorkerRequest,
   decodeWorkerEvent,
   type WorkerRequest,
@@ -60,6 +66,7 @@ function request(): WorkerRequest {
       workerEventSchemaVersion: 1,
       allowedResultKinds: [WorkerResultKind.PROPOSALS],
       unknownFields: 'REJECT',
+      maxEventBytes: 65_536,
     },
   });
   return createWorkerRequest(
@@ -128,12 +135,62 @@ void test('[I-027] Worker failure is typed while abrupt termination remains a po
     workerRequest,
   );
   const failure = decodeWorkerEvent(rawFailure);
-  assert.equal(failure.type, 'WORKER_FAILURE');
+  if (failure.type !== 'WORKER_FAILURE') {
+    assert.fail('Failure fixture must emit a Worker failure event');
+  }
+  assert.equal(failure.reasonCode, WorkerFailureReasonCode.BACKEND_FAILURE);
+  assert.equal(
+    attemptFailureClassForWorkerReasonCode(failure.reasonCode),
+    AttemptFailureClass.TRANSIENT_BACKEND,
+  );
+  assert.equal(
+    attemptFailureClassForWorkerPortReasonCode(WorkerPortFailureReasonCode.INVOCATION_FAILED),
+    AttemptFailureClass.ABRUPT_TERMINATION,
+  );
+  assert.equal(
+    attemptFailureClassForWorkerPortReasonCode(WorkerPortFailureReasonCode.NO_TERMINAL_EVENT),
+    AttemptFailureClass.PROTOCOL_ERROR,
+  );
+  assert.throws(
+    () =>
+      decodeWorkerEvent({
+        ...failure,
+        failureClass: AttemptFailureClass.PERMANENT_BACKEND,
+      }),
+    /unrecognized key/i,
+  );
   assertWorkerEventBindsRequest(failure, workerRequest);
 
   await assert.rejects(
     collect(new FakeWorker({ fixture: FakeWorkerFixture.ABRUPT_TERMINATION }), workerRequest),
     /terminated abruptly/,
+  );
+});
+
+void test('[I-004][I-012] Worker Event bytes are bounded by the compiler-owned response contract', async () => {
+  const workerRequest = request();
+  const [rawEvent] = await collect(
+    new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+    workerRequest,
+  );
+  const event = decodeWorkerEvent(rawEvent);
+  const boundedContextPackage = decodeContextPackage({
+    ...workerRequest.contextPackage,
+    responseContract: {
+      ...workerRequest.contextPackage.responseContract,
+      maxEventBytes: 32,
+    },
+  });
+  const boundedRequest = createWorkerRequest(
+    workerRequest.workerSessionId,
+    workerRequest.contextManifestId,
+    workerRequest.contextManifestDigest,
+    workerRequest.packageDigest,
+    boundedContextPackage,
+  );
+  assert.throws(
+    () => assertWorkerEventWithinResponseContract(event, boundedRequest),
+    /exceeds the bound response contract/,
   );
 });
 

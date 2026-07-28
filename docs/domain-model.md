@@ -2,10 +2,11 @@
 
 ## Status
 
-This document defines the canonical M0 semantic contract. It does not describe
-an implemented runtime. M1 implements only the subset named in
-[`milestones.md`](milestones.md) and the
-[`M1 implementation plan`](plans/m1-deterministic-skeleton.md).
+This document defines the canonical semantic contract. A structure appearing
+here is not by itself an implementation claim. Current M1 behavior is limited
+to the slices explicitly marked implemented in the
+[`M1 implementation plan`](plans/m1-deterministic-skeleton.md); the milestone
+boundary remains defined by [`milestones.md`](milestones.md).
 
 ## Design Rules
 
@@ -47,6 +48,8 @@ At minimum, M1 uses distinct opaque identifiers for:
 - `FactId`
 - `DecisionId`
 - `EvidenceId`
+- `VerificationObligationId`
+- `CheckSpecificationId`
 - `AcceptanceDecisionId`
 - `PolicyBundleId`
 - `AuditEventId`
@@ -106,6 +109,11 @@ SuccessCriterion
   scenarioRefs[]
   verificationObligationRefs[]
 ```
+
+A Goal MUST contain at least one criterion whose `required` value is `true`.
+Additional optional criteria MAY describe useful expectations, but a Goal with
+only optional criteria is invalid because it has no blocking completion
+boundary.
 
 A criterion is not considered satisfied because the worker repeats its text.
 Acceptance rules map it to current evidence.
@@ -232,6 +240,11 @@ One domain invariant validator owns the complete snapshot rule and is called
 for both current and resulting Attempt state. Persistence decoding delegates to
 that validator; SQLite mirrors the same lifecycle matrix so an invalid row
 cannot be written and discovered only on a later read.
+
+Worker failure payloads do not carry `failureClass`. They report a closed
+reason code; the Runtime owns the exhaustive M1 reason-to-class mapping. The
+Store and SQLite reject a known Worker reason paired with another persisted
+class, so retry/recovery policy cannot be co-authored by the Worker.
 
 `RESULT_RECORDED` is deliberately not named `SUCCEEDED`: a worker operation
 ending normally or returning a Completion Request grants no acceptance or
@@ -549,20 +562,57 @@ generation. Candidate commands and events cannot precede the generation's
 current `updatedAt`; `updatedAt` cannot precede `createdAt`, and `frozenAt`,
 when present, remains inside that lifecycle interval.
 
+In M1 the Candidate Source returns `baseDigest`, not either identity field. The
+Runtime derives `baseProjectIdentity` from the Goal's exact project path and
+derives `workspaceIdentity` from the Runtime-allocated generation ID. The Store
+rederives both on write and reopen; adapter fixture labels are not identity
+authority.
+
+## Check Specification
+
+```text
+CheckSpecification
+  id
+  version
+  kind
+  producerType
+  producerIdentity
+  operation
+  cwdIdentity
+  inputRefs[]
+  environmentPolicy
+  timeoutMilliseconds
+  outputLimitBytes
+  expectedObservationSchema
+  cleanupPolicy?
+```
+
+The current M1 `m1.2` specification persistently authorizes one producer as
+well as one bounded operation. Evidence must match its exact producer type and
+identity; a runner response cannot supply an alternate binding.
+
 ## Verification Obligation
 
 ```text
 VerificationObligation
   id
+  goalId
+  goalRevision
+  candidateGenerationId
   sourceCriterionRefs[]
   scenarioRefs[]
   checkSpecRef
   requiredEvidenceKind
   strength
+  createdAt
 ```
 
 Obligations bridge success criteria and scenarios to executable checks without
-allowing a test command to redefine the goal.
+allowing a test command to redefine the goal. In current M1, each Candidate
+generation receives exactly one fake verification obligation per required
+criterion, and that set is therefore non-empty. A repair generation must
+receive a fresh set; collection order or a shared Check Specification does not
+merge obligation identity.
 
 ## Evidence Record
 
@@ -573,13 +623,26 @@ EvidenceRecord
   id
   schemaVersion
   kind
+  producerType
+  producerIdentity
   goalId
   goalRevision
+  workflowId
+  attemptId
+  verificationObligationId?
   candidateGenerationId
   candidateDigest
-  checkSpecRef
+  policyBundleId
+  policyBundleDigest
+  checkSpec
+  environmentIdentity?
+  startedAt
+  endedAt
+  observation
+  payloadRefs[]
   observationDigest
   resultStatus
+  recordedAt
   recordDigest
 
 EvidenceEligibility
@@ -594,7 +657,16 @@ EvidenceEligibility
 `resultStatus` is the immutable observed check outcome. Eligibility is a
 separate, monotonic lifecycle state: it begins `ELIGIBLE` after validation and
 may move to `INELIGIBLE`, but never back to `ELIGIBLE`. Acceptance revalidates
-the complete Evidence record digest and current eligibility.
+the complete Evidence record digest and current eligibility. Current M1
+`TEST_RESULT` Evidence binds one exact `verificationObligationId`; matching only
+the Check Specification is insufficient. `CANDIDATE_FREEZE` Evidence carries no
+Verification Obligation ID.
+
+M1 uses strict `CandidateFreezeEvidenceRecord` and
+`TestResultEvidenceRecord` variants. Specialized Runtime builders derive the
+producer, environment, payload, and result fields that follow from the Check
+and typed observation. M1 rejects a `factSnapshotDigest` on either variant and
+does not expose a generic producer-authored Evidence constructor.
 
 ## Acceptance Input Manifest and Decision
 

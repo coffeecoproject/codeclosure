@@ -283,7 +283,8 @@ project correctness:
 - Goal revision must match;
 - current Candidate must be frozen;
 - Candidate digest must match;
-- one required fake obligation must have eligible passing fake evidence;
+- at least one required fake obligation must exist;
+- every required fake obligation must have eligible passing fake evidence;
 - no required Pending Issue may remain;
 - manifest and policy digests must match;
 - worker Completion Request cannot satisfy any rule directly.

@@ -4,29 +4,46 @@ import {
   AttemptFailureClass,
   AttemptRejectionCode,
   AttemptInterruptionReason,
+  CandidateGenerationState,
+  CheckSpecificationKind,
   ContextEntryKind,
+  EvidenceEligibilityState,
+  EvidenceKind,
   GuardOutcome,
   RunStatus,
   WorkflowGuard,
   WorkflowPhase,
   WorkflowRejectionCode,
   attemptId,
+  applyCandidateEvent,
   applyAttemptEvent,
   auditEventId,
+  candidateId,
   candidateGenerationId,
+  checkSpecificationId,
   commandId,
   contextManifestId,
   decodeContextManifest,
   decodeContextPackage,
+  decodeCandidate,
+  decodeCandidateGeneration,
+  decodeCheckSpecification,
+  decodeEvidenceEligibility,
+  decodeVerificationObligation,
   decodeAttemptSnapshot,
   decodeGoalSnapshot,
   decodePolicyBundle,
   decodeWorkflowSnapshot,
   decideAttempt,
+  decideCandidate,
   decideWorkflow,
+  createCandidate,
+  createCandidateGeneration,
+  createInitialEvidenceEligibility,
   deriveGoalStatus,
   goalId,
   goalRevision,
+  evidenceId,
   isoTimestamp,
   latestIsoTimestamp,
   policyBundleId,
@@ -34,12 +51,14 @@ import {
   workflowId,
   workflowVersion,
   workerSessionId,
+  verificationObligationId,
   type AttemptDecision,
   type Attempt,
   type AttemptId,
   type AttemptStarted,
   type AttemptRejection,
   type CandidateGenerationId,
+  type CandidateGeneration,
   type CommandId,
   type ContextCompilation,
   type ContextManifestId,
@@ -47,10 +66,12 @@ import {
   type GoalId,
   type GoalRevision,
   type GuardResult,
+  type EvidenceRecord,
   type IsoTimestamp,
   type PolicyBundle,
   type PolicyBundleId,
   type Sha256Digest,
+  type VerificationObligationId,
   type WorkflowId,
   type WorkflowInstance,
   type WorkflowPhase as WorkflowPhaseType,
@@ -74,6 +95,8 @@ import {
   type StoredCommandOutcomeEnvelope,
 } from './contracts.js';
 import type {
+  CandidateAuthorityView,
+  CandidateEvidenceControlStore,
   Clock,
   CommandTarget,
   DigestProvider,
@@ -83,11 +106,48 @@ import type {
   WorkerIdentityGenerator,
   WorkflowControlStore,
 } from './ports.js';
+import type {
+  CandidateEvidenceIdentityGenerator,
+  CandidateSourcePort,
+  VerificationResult,
+  VerificationResultAdmissionFailureCode,
+  VerificationPort,
+} from './candidate-evidence-contracts.js';
+import {
+  CandidateSourceFailureCode,
+  VerificationResultAdmissionFailureCode as VerificationAdmissionFailure,
+  admitVerificationResult,
+  decodeCandidateFreezeObservation,
+  decodeCandidatePreparation,
+  decodeFrozenCandidateIntegrityObservation,
+  decodeVerificationRequest,
+  validateCandidateFreezeRequest,
+  validateCandidatePreparationRequest,
+  validateFrozenCandidateIntegrityRequest,
+} from './candidate-evidence-contracts.js';
+import {
+  createM1CandidateEvidencePolicy,
+  deriveM1BaseProjectIdentity,
+  deriveM1WorkspaceIdentity,
+  validateM1CandidateEvidencePolicy,
+} from './candidate-evidence-policy.js';
+import { canonicalizeJson } from './canonical-json.js';
+import {
+  buildEvidenceSet,
+  createCandidateFreezeEvidenceRecord,
+  createTestResultEvidenceRecord,
+  deriveM1EvidenceEnvironmentIdentity,
+  verifyEvidenceRecordDigests,
+  verifyEvidenceSetAuthority,
+} from './evidence-factory.js';
 import {
   WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
+  attemptFailureClassForWorkerPortReasonCode,
+  attemptFailureClassForWorkerReasonCode,
   assertWorkerDispatchClaimBindsRequest,
   assertWorkerEventBindsRequest,
+  assertWorkerEventWithinResponseContract,
   createWorkerRequest,
   decodeWorkerDispatchClaim,
   decodeWorkerEvent,
@@ -98,6 +158,7 @@ import {
   type WorkerEvent,
   type WorkerEventAdmissionResult,
   type WorkerEventReceipt,
+  type WorkerPortFailureReasonCode,
   type WorkerRequest,
 } from './worker-contracts.js';
 import {
@@ -149,6 +210,10 @@ export interface AttemptContextCompilationRequest {
   >;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
+  readonly candidate?: {
+    readonly generationId: CandidateGenerationId;
+    readonly digest: Sha256Digest;
+  };
 }
 
 export interface AttemptContextFactory {
@@ -158,6 +223,13 @@ export interface AttemptContextFactory {
 export interface WorkerContextRuntimeDependencies {
   readonly identities: WorkerIdentityGenerator;
   readonly factory: AttemptContextFactory;
+  readonly policyBundleId: PolicyBundleId;
+}
+
+export interface CandidateEvidenceRuntimeDependencies {
+  readonly identities: CandidateEvidenceIdentityGenerator;
+  readonly candidateSource: CandidateSourcePort;
+  readonly verification: VerificationPort;
   readonly policyBundleId: PolicyBundleId;
 }
 
@@ -188,7 +260,17 @@ export interface ReconcileAttemptAfterRestartRequest extends WorkflowCommandRequ
 
 export interface RequestPhaseTransitionRequest extends WorkflowCommandRequest {
   readonly requestedPhase: WorkflowPhaseType;
-  readonly nextCandidateGenerationId?: CandidateGenerationId;
+  readonly reason: string;
+}
+
+export interface CompleteSourceFreezeRequest extends WorkflowCommandRequest {
+  readonly attemptId: AttemptId;
+  readonly reason: string;
+}
+
+export interface RunVerificationRequest extends WorkflowCommandRequest {
+  readonly attemptId: AttemptId;
+  readonly obligationId: VerificationObligationId;
   readonly reason: string;
 }
 
@@ -204,6 +286,7 @@ export interface PhaseGuardEvaluator {
 export interface WorkflowRuntimeKernelDependencies extends WorkflowRuntimeDependencies {
   readonly phaseGuards?: PhaseGuardEvaluator;
   readonly workerContext?: WorkerContextRuntimeDependencies;
+  readonly candidateEvidence?: CandidateEvidenceRuntimeDependencies;
 }
 
 type FinishAttemptRequest =
@@ -282,6 +365,31 @@ const unavailablePhaseGuards: PhaseGuardEvaluator = Object.freeze({
   evaluate: () => Object.freeze([]),
 });
 
+const reservedPhaseGuards = new Set<WorkflowGuard>([
+  WorkflowGuard.CANDIDATE_GENERATION_PREPARED,
+  WorkflowGuard.MUTABLE_CANDIDATE_CURRENT,
+  WorkflowGuard.WORKER_QUIESCENT,
+  WorkflowGuard.NO_WRITE_CAPABLE_WORKER,
+  WorkflowGuard.FREEZE_IDENTITY_STABLE,
+  WorkflowGuard.CHANGE_IDENTITY_RECORDED,
+  WorkflowGuard.FROZEN_DIGEST_PERSISTED,
+  WorkflowGuard.INTEGRITY_POLICY_PASSED,
+  WorkflowGuard.REQUIRED_EVIDENCE_ACCOUNTED,
+  WorkflowGuard.EVIDENCE_BINDINGS_CURRENT,
+  WorkflowGuard.CLEANUP_PROVEN,
+  WorkflowGuard.SOURCE_DIGEST_CURRENT,
+  WorkflowGuard.CURRENT_ACCEPTANCE,
+  WorkflowGuard.REJECT_REPAIRABLE_RECORDED,
+]);
+
+function isM1WorkerPhase(phase: WorkflowPhaseType): boolean {
+  return (
+    phase === WorkflowPhase.DISCOVERY ||
+    phase === WorkflowPhase.PLAN ||
+    phase === WorkflowPhase.IMPLEMENT
+  );
+}
+
 function isWorkerControlStore(store: WorkflowControlStore): store is WorkerControlStore {
   return [
     'commitContextBoundAttemptStart',
@@ -296,6 +404,34 @@ function isWorkerControlStore(store: WorkflowControlStore): store is WorkerContr
   ].every((method) => typeof Reflect.get(store, method) === 'function');
 }
 
+function isCandidateEvidenceControlStore(
+  store: WorkflowControlStore,
+): store is CandidateEvidenceControlStore {
+  return (
+    isWorkerControlStore(store) &&
+    [
+      'getCandidateForGoal',
+      'getCandidateGeneration',
+      'getCandidateAuthorityForWorkflow',
+      'nextCandidateGenerationSequence',
+      'getCheckSpecification',
+      'listCheckSpecifications',
+      'getVerificationObligation',
+      'listVerificationObligations',
+      'getEvidence',
+      'getEvidenceEligibility',
+      'listEvidenceForGeneration',
+      'getEvidenceSet',
+      'commitCandidatePreparation',
+      'commitWorkflowCandidateEvent',
+      'commitCandidateIntegrityFailure',
+      'commitCandidateAttemptOutcome',
+      'commitVerificationAttemptOutcome',
+      'commitEvidenceSetTransition',
+    ].every((method) => typeof Reflect.get(store, method) === 'function')
+  );
+}
+
 const phaseGuardResultSchema = z
   .object({
     guard: z.enum(Object.values(WorkflowGuard)),
@@ -305,6 +441,9 @@ const phaseGuardResultSchema = z
   })
   .strict();
 const phaseGuardResultsSchema = z.array(phaseGuardResultSchema);
+const evidenceAuthorityEntrySchema = z
+  .object({ record: z.unknown(), eligibility: z.unknown() })
+  .strict();
 
 const workflowCommandRequestSchema = z
   .object({
@@ -337,9 +476,12 @@ const interruptAttemptRequestSchema = recordAttemptResultRequestSchema
 const phaseTransitionRequestSchema = workflowCommandRequestSchema
   .extend({
     requestedPhase: z.enum(Object.values(WorkflowPhase)),
-    nextCandidateGenerationId: z.string().optional(),
     reason: z.string(),
   })
+  .strict();
+const completeSourceFreezeRequestSchema = recordAttemptResultRequestSchema;
+const runVerificationRequestSchema = recordAttemptResultRequestSchema
+  .extend({ obligationId: z.string() })
   .strict();
 const processedCommandViewSchema = z.discriminatedUnion('aggregateType', [
   z
@@ -459,14 +601,6 @@ function decodeInterruptAttemptRequest(value: unknown): InterruptAttemptRequest 
 }
 
 function decodePhaseTransitionRequest(value: unknown): RequestPhaseTransitionRequest {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    Object.hasOwn(value, 'nextCandidateGenerationId') &&
-    Reflect.get(value, 'nextCandidateGenerationId') === undefined
-  ) {
-    throw new TypeError('nextCandidateGenerationId must be omitted instead of undefined');
-  }
   const parsed = phaseTransitionRequestSchema.parse(value);
   return Object.freeze({
     ...decodeBeginAttemptRequest({
@@ -475,9 +609,33 @@ function decodePhaseTransitionRequest(value: unknown): RequestPhaseTransitionReq
       expectedWorkflowVersion: parsed.expectedWorkflowVersion,
     }),
     requestedPhase: parsed.requestedPhase,
-    ...(parsed.nextCandidateGenerationId === undefined
-      ? {}
-      : { nextCandidateGenerationId: candidateGenerationId(parsed.nextCandidateGenerationId) }),
+    reason: parsed.reason,
+  });
+}
+
+function decodeCompleteSourceFreezeRequest(value: unknown): CompleteSourceFreezeRequest {
+  const parsed = completeSourceFreezeRequestSchema.parse(value);
+  return Object.freeze({
+    ...decodeBeginAttemptRequest({
+      commandId: parsed.commandId,
+      workflowId: parsed.workflowId,
+      expectedWorkflowVersion: parsed.expectedWorkflowVersion,
+    }),
+    attemptId: attemptId(parsed.attemptId),
+    reason: parsed.reason,
+  });
+}
+
+function decodeRunVerificationRequest(value: unknown): RunVerificationRequest {
+  const parsed = runVerificationRequestSchema.parse(value);
+  return Object.freeze({
+    ...decodeBeginAttemptRequest({
+      commandId: parsed.commandId,
+      workflowId: parsed.workflowId,
+      expectedWorkflowVersion: parsed.expectedWorkflowVersion,
+    }),
+    attemptId: attemptId(parsed.attemptId),
+    obligationId: verificationObligationId(parsed.obligationId),
     reason: parsed.reason,
   });
 }
@@ -611,6 +769,8 @@ export class WorkflowRuntimeKernel {
   readonly #phaseGuards: PhaseGuardEvaluator;
   readonly #workerContext: WorkerContextRuntimeDependencies | undefined;
   readonly #workerStore: WorkerControlStore | undefined;
+  readonly #candidateEvidence: CandidateEvidenceRuntimeDependencies | undefined;
+  readonly #candidateEvidenceStore: CandidateEvidenceControlStore | undefined;
   readonly #preparedWorkerRequests = new Map<AttemptId, WorkerRequest>();
 
   public constructor(dependencies: WorkflowRuntimeKernelDependencies) {
@@ -620,6 +780,9 @@ export class WorkflowRuntimeKernel {
     this.#digests = dependencies.digests;
     this.#phaseGuards = dependencies.phaseGuards ?? unavailablePhaseGuards;
     this.#workerStore = isWorkerControlStore(dependencies.store) ? dependencies.store : undefined;
+    this.#candidateEvidenceStore = isCandidateEvidenceControlStore(dependencies.store)
+      ? dependencies.store
+      : undefined;
     if (dependencies.workerContext !== undefined) {
       if (this.#workerStore === undefined) {
         throw new TypeError('Worker Context requires the complete WorkerControlStore port');
@@ -631,6 +794,27 @@ export class WorkflowRuntimeKernel {
       });
     } else {
       this.#workerContext = undefined;
+    }
+    if (dependencies.candidateEvidence !== undefined) {
+      if (this.#candidateEvidenceStore === undefined) {
+        throw new TypeError(
+          'Candidate/Evidence runtime requires the complete CandidateEvidenceControlStore port',
+        );
+      }
+      if (
+        this.#workerContext !== undefined &&
+        this.#workerContext.policyBundleId !== dependencies.candidateEvidence.policyBundleId
+      ) {
+        throw new TypeError('M1 Worker and Candidate/Evidence paths must use one Policy Bundle');
+      }
+      this.#candidateEvidence = Object.freeze({
+        identities: dependencies.candidateEvidence.identities,
+        candidateSource: dependencies.candidateEvidence.candidateSource,
+        verification: dependencies.candidateEvidence.verification,
+        policyBundleId: policyBundleId(dependencies.candidateEvidence.policyBundleId),
+      });
+    } else {
+      this.#candidateEvidence = undefined;
     }
   }
 
@@ -804,6 +988,17 @@ export class WorkflowRuntimeKernel {
         status: 'REJECTED',
         reasonCode: 'MALFORMED_WORKER_EVENT',
         message: error instanceof Error ? error.message : 'Worker Event is malformed',
+        nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
+      });
+    }
+    try {
+      assertWorkerEventWithinResponseContract(event, request);
+    } catch (error) {
+      return Object.freeze({
+        status: 'REJECTED',
+        eventId: event.id,
+        reasonCode: 'WORKER_EVENT_TOO_LARGE',
+        message: error instanceof Error ? error.message : 'Worker Event exceeds its contract',
         nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
       });
     }
@@ -1063,8 +1258,8 @@ export class WorkflowRuntimeKernel {
                 workflowId: workflow.id,
                 expectedWorkflowVersion: workflow.version,
                 attemptId: currentAttempt.id,
-                failureClass: event.failureClass,
-                reason: `WORKER_FAILURE:${event.reason}`,
+                failureClass: attemptFailureClassForWorkerReasonCode(event.reasonCode),
+                reason: event.reasonCode,
                 occurredAt: receivedAt,
               });
         if (!decision.accepted || decision.events[0].type !== 'ATTEMPT_FINISHED') {
@@ -1202,10 +1397,11 @@ export class WorkflowRuntimeKernel {
 
   public recordWorkerPortFailure(
     rawRequest: WorkerRequest,
-    failureClass: AttemptFailureClass,
-    reason: string,
+    rawReasonCode: WorkerPortFailureReasonCode,
   ): RuntimeCommandResult | undefined {
     const request = decodeWorkerRequest(rawRequest);
+    const failureClass = attemptFailureClassForWorkerPortReasonCode(rawReasonCode);
+    const reasonCode = rawReasonCode;
     const operationId = this.nextWorkerCommandId();
     const workerStore = this.requireWorkerStore();
     const rawDispatchClaim = this.storeOperation(
@@ -1250,17 +1446,13 @@ export class WorkflowRuntimeKernel {
     ) {
       return undefined;
     }
-    const normalizedReason = reason.trim();
     return this.recordAttemptFailure({
       commandId: operationId,
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: attempt.id,
       failureClass,
-      reason:
-        normalizedReason.length === 0
-          ? 'Worker port terminated without a valid result'
-          : normalizedReason,
+      reason: reasonCode,
     });
   }
 
@@ -1294,9 +1486,9 @@ export class WorkflowRuntimeKernel {
           );
         }
 
-        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId);
+        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId, workflow.phase);
         const attemptIdentifier = this.nextAttemptId(input.commandId);
-        const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId);
+        const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId, workflow.phase);
         const occurredAt = this.causalNow(
           input.commandId,
           workflow.updatedAt,
@@ -1382,9 +1574,9 @@ export class WorkflowRuntimeKernel {
       missingIdentifier: input.workflowId,
       plan: ({ goal, workflow }, inputDigest) => {
         const sequence = this.nextAttemptSequence(input.commandId, input.workflowId);
-        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId);
+        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId, workflow.phase);
         const attemptIdentifier = this.nextAttemptId(input.commandId);
-        const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId);
+        const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId, workflow.phase);
         const occurredAt = this.causalNow(
           input.commandId,
           workflow.updatedAt,
@@ -1447,6 +1639,436 @@ export class WorkflowRuntimeKernel {
               }),
         };
         return plan;
+      },
+    });
+  }
+
+  public completeSourceFreeze(rawInput: CompleteSourceFreezeRequest): RuntimeCommandResult {
+    const input = decodeCompleteSourceFreezeRequest(rawInput);
+    const target = workflowTarget(input.workflowId);
+    return this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      digestInput: { schemaVersion: 1, type: 'COMPLETE_SOURCE_FREEZE', ...input },
+      missingResource: 'Workflow',
+      missingIdentifier: input.workflowId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const runtime = this.requireCandidateEvidenceRuntime();
+        const store = this.requireCandidateEvidenceStore();
+        const attempt = this.resolveRuntimeOwnedAttempt(
+          input.commandId,
+          workflow,
+          input.attemptId,
+          WorkflowPhase.SOURCE_FREEZE,
+        );
+        const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+        if (authority.generation.state !== CandidateGenerationState.FREEZING) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Source-freeze Attempt requires the current FREEZING Candidate',
+              'FREEZING_CANDIDATE_UNAVAILABLE',
+            ),
+          );
+        }
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+          input.commandId,
+          goal,
+          authority.generation,
+        );
+        const freezeCheck = candidateEvidencePolicy.freeze;
+        const freezeRequest = validateCandidateFreezeRequest({
+          schemaVersion: 1,
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          attemptId: attempt.id,
+          generation: authority.generation,
+          policyBundleId: policy.bundle.id,
+          policyBundleDigest: policy.bundle.digest,
+        });
+
+        let observation: ReturnType<typeof decodeCandidateFreezeObservation> | undefined;
+        let protocolFailure: CandidateSourceFailureCode | undefined;
+        let rawObservation: unknown;
+        try {
+          rawObservation = runtime.candidateSource.observeFreeze(freezeRequest);
+        } catch {
+          protocolFailure = CandidateSourceFailureCode.FREEZE_INVOCATION_FAILED;
+        }
+        if (protocolFailure === undefined) {
+          try {
+            observation = decodeCandidateFreezeObservation(rawObservation);
+          } catch {
+            protocolFailure = CandidateSourceFailureCode.FREEZE_OUTPUT_MALFORMED;
+          }
+        }
+        if (observation !== undefined) {
+          if (observation.generationId !== authority.generation.id) {
+            protocolFailure = CandidateSourceFailureCode.FREEZE_BINDING_MISMATCH;
+            observation = undefined;
+          }
+        }
+        const stable =
+          observation !== undefined &&
+          observation.firstSourceDigest === observation.secondSourceDigest;
+        const frozenDigest = stable ? observation?.firstSourceDigest : undefined;
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          attempt.startedAt,
+          authority.generation.updatedAt,
+          policy.installedAt,
+        );
+        const candidateDecision = decideCandidate(
+          authority.generation,
+          frozenDigest !== undefined
+            ? {
+                type: 'COMPLETE_CANDIDATE_FREEZE',
+                commandId: input.commandId,
+                candidateGenerationId: authority.generation.id,
+                expectedVersion: authority.generation.version,
+                occurredAt,
+                frozenDigest,
+              }
+            : {
+                type: 'INVALIDATE_CANDIDATE',
+                commandId: input.commandId,
+                candidateGenerationId: authority.generation.id,
+                expectedVersion: authority.generation.version,
+                occurredAt,
+                reason: protocolFailure ?? 'SOURCE_CHANGED_DURING_FREEZE',
+              },
+        );
+        if (!candidateDecision.accepted) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              candidateDecision.rejection.message,
+              candidateDecision.rejection.code,
+            ),
+          );
+        }
+        const attemptDecision = decideAttempt(
+          workflow,
+          attempt,
+          frozenDigest !== undefined
+            ? {
+                type: 'RECORD_ATTEMPT_RESULT',
+                commandId: input.commandId,
+                workflowId: workflow.id,
+                expectedWorkflowVersion: input.expectedWorkflowVersion,
+                attemptId: attempt.id,
+                occurredAt,
+                reason: input.reason,
+              }
+            : {
+                type: 'RECORD_ATTEMPT_FAILURE',
+                commandId: input.commandId,
+                workflowId: workflow.id,
+                expectedWorkflowVersion: input.expectedWorkflowVersion,
+                attemptId: attempt.id,
+                occurredAt,
+                failureClass:
+                  protocolFailure === undefined
+                    ? AttemptFailureClass.INTEGRITY_VIOLATION
+                    : AttemptFailureClass.PROTOCOL_ERROR,
+                reason: protocolFailure ?? 'SOURCE_CHANGED_DURING_FREEZE',
+              },
+        );
+        if (!attemptDecision.accepted) {
+          return this.domainRejectPlan(attemptDecision.rejection);
+        }
+        const candidateEvent = candidateDecision.events[0];
+        const event = attemptDecision.events[0];
+        const nextGeneration = applyCandidateEvent(authority.generation, candidateEvent);
+        let evidence: ReturnType<typeof createCandidateFreezeEvidenceRecord> | undefined;
+        let eligibility: ReturnType<typeof createInitialEvidenceEligibility> | undefined;
+        if (
+          frozenDigest !== undefined &&
+          observation !== undefined &&
+          nextGeneration.state === CandidateGenerationState.FROZEN
+        ) {
+          const evidenceIdentifier = this.internalOperation(
+            input.commandId,
+            'EVIDENCE_ID_GENERATION_FAILURE',
+            () => evidenceId(runtime.identities.nextEvidenceId()),
+          );
+          evidence = createCandidateFreezeEvidenceRecord(
+            {
+              id: evidenceIdentifier,
+              goalId: goal.id,
+              goalRevision: goal.revision,
+              workflowId: workflow.id,
+              attemptId: attempt.id,
+              candidateGenerationId: nextGeneration.id,
+              candidateDigest: nextGeneration.frozenDigest,
+              policyBundleId: policy.bundle.id,
+              policyBundleDigest: policy.bundle.digest,
+              checkSpec: freezeCheck,
+              startedAt: attempt.startedAt,
+              endedAt: occurredAt,
+              observation: Object.freeze({
+                schemaVersion: 1,
+                kind: EvidenceKind.CANDIDATE_FREEZE,
+                firstSourceDigest: observation.firstSourceDigest,
+                secondSourceDigest: observation.secondSourceDigest,
+                changeSetDigest: observation.changeSetDigest,
+              }),
+              recordedAt: occurredAt,
+            },
+            this.#digests,
+          );
+          eligibility = createInitialEvidenceEligibility(evidence.id, occurredAt);
+        }
+        const eligibleEvidenceCount = this.resolveGenerationEvidence(
+          input.commandId,
+          authority.generation.id,
+        ).filter(
+          ({ eligibility: current }) => current.state === EvidenceEligibilityState.ELIGIBLE,
+        ).length;
+        const payloadDigest = this.digest(
+          input.commandId,
+          {
+            event,
+            candidateEvent,
+            ...(evidence === undefined ? {} : { evidenceRecordDigest: evidence.recordDigest }),
+          },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitCandidateAttemptOutcome({
+              inputDigest,
+              target,
+              event,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              workflowAuditEventId: this.nextAuditEventId(input.commandId),
+              payloadDigest,
+              candidateEvent,
+              candidateAuditEventId: this.nextAuditEventId(input.commandId),
+              ...(evidence === undefined || eligibility === undefined
+                ? {}
+                : {
+                    evidence,
+                    initialEligibility: eligibility,
+                    evidenceAuditEventId: this.nextAuditEventId(input.commandId),
+                  }),
+              invalidatedEvidenceAuditEventIds: Object.freeze(
+                Array.from({ length: frozenDigest === undefined ? eligibleEvidenceCount : 0 }, () =>
+                  this.nextAuditEventId(input.commandId),
+                ),
+              ),
+            }),
+        };
+      },
+    });
+  }
+
+  public runVerification(rawInput: RunVerificationRequest): RuntimeCommandResult {
+    const input = decodeRunVerificationRequest(rawInput);
+    const target = workflowTarget(input.workflowId);
+    return this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      digestInput: { schemaVersion: 1, type: 'RUN_VERIFICATION', ...input },
+      missingResource: 'Workflow',
+      missingIdentifier: input.workflowId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const runtime = this.requireCandidateEvidenceRuntime();
+        const store = this.requireCandidateEvidenceStore();
+        const attempt = this.resolveRuntimeOwnedAttempt(
+          input.commandId,
+          workflow,
+          input.attemptId,
+          WorkflowPhase.EVIDENCE_BUILD,
+        );
+        const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+        if (authority.generation.state !== CandidateGenerationState.FROZEN) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Verification requires the current frozen Candidate',
+              'FROZEN_CANDIDATE_UNAVAILABLE',
+            ),
+          );
+        }
+        const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+          input.commandId,
+          goal,
+          authority.generation,
+        );
+        const obligation = candidateEvidencePolicy.obligations.find(
+          (candidate) => candidate.id === input.obligationId,
+        );
+        if (obligation === undefined) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.NOT_FOUND,
+              `Verification Obligation ${input.obligationId} does not exist`,
+              'VERIFICATION_OBLIGATION_NOT_FOUND',
+            ),
+          );
+        }
+        const checkSpec = candidateEvidencePolicy.verification;
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const environmentIdentity = this.internalOperation(
+          input.commandId,
+          'VERIFICATION_ENVIRONMENT_DIGEST_FAILURE',
+          () => deriveM1EvidenceEnvironmentIdentity(checkSpec, this.#digests),
+        );
+        const verificationRequest = decodeVerificationRequest({
+          schemaVersion: 1,
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          attemptId: attempt.id,
+          candidateGenerationId: authority.generation.id,
+          candidateDigest: authority.generation.frozenDigest,
+          policyBundleId: policy.bundle.id,
+          policyBundleDigest: policy.bundle.digest,
+          obligation,
+          checkSpec,
+          environmentIdentity,
+        });
+
+        const verificationStartedAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          attempt.startedAt,
+          policy.installedAt,
+        );
+        let rawVerificationResult: unknown;
+        let protocolFailure: VerificationResultAdmissionFailureCode | undefined;
+        try {
+          rawVerificationResult = runtime.verification.run(verificationRequest);
+        } catch {
+          protocolFailure = VerificationAdmissionFailure.RUNNER_INVOCATION_FAILED;
+        }
+        const verificationEndedAt = this.causalNow(input.commandId, verificationStartedAt);
+        let verificationResult: VerificationResult | undefined;
+        if (protocolFailure === undefined) {
+          const admission = admitVerificationResult(
+            verificationRequest,
+            rawVerificationResult,
+            Date.parse(verificationEndedAt) - Date.parse(verificationStartedAt),
+          );
+          if (admission.status === 'ADMITTED') {
+            verificationResult = admission.result;
+          } else {
+            protocolFailure = admission.failureCode;
+          }
+        }
+        if (verificationResult === undefined) {
+          const occurredAt = this.causalNow(
+            input.commandId,
+            workflow.updatedAt,
+            attempt.startedAt,
+            policy.installedAt,
+            verificationEndedAt,
+          );
+          const failure = decideAttempt(workflow, attempt, {
+            type: 'RECORD_ATTEMPT_FAILURE',
+            commandId: input.commandId,
+            workflowId: workflow.id,
+            expectedWorkflowVersion: input.expectedWorkflowVersion,
+            attemptId: attempt.id,
+            occurredAt,
+            failureClass: AttemptFailureClass.PROTOCOL_ERROR,
+            reason: protocolFailure ?? VerificationAdmissionFailure.OUTPUT_MALFORMED,
+          });
+          if (!failure.accepted) {
+            return this.domainRejectPlan(failure.rejection);
+          }
+          const event = failure.events[0];
+          const payloadDigest = this.digest(
+            input.commandId,
+            event,
+            'COMMAND_PAYLOAD_DIGEST_FAILURE',
+          );
+          return {
+            kind: 'APPLY',
+            commit: () =>
+              this.#store.commitAttemptEvent({
+                inputDigest,
+                target,
+                event,
+                auditEventId: this.nextAuditEventId(input.commandId),
+                workflowAuditEventId: this.nextAuditEventId(input.commandId),
+                payloadDigest,
+              }),
+          };
+        }
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          attempt.startedAt,
+          policy.installedAt,
+          verificationEndedAt,
+        );
+        const attemptDecision = decideAttempt(workflow, attempt, {
+          type: 'RECORD_ATTEMPT_RESULT',
+          commandId: input.commandId,
+          workflowId: workflow.id,
+          expectedWorkflowVersion: input.expectedWorkflowVersion,
+          attemptId: attempt.id,
+          occurredAt,
+          reason: input.reason,
+        });
+        if (!attemptDecision.accepted) {
+          return this.domainRejectPlan(attemptDecision.rejection);
+        }
+        const evidence = createTestResultEvidenceRecord(
+          {
+            id: this.internalOperation(input.commandId, 'EVIDENCE_ID_GENERATION_FAILURE', () =>
+              evidenceId(runtime.identities.nextEvidenceId()),
+            ),
+            goalId: goal.id,
+            goalRevision: goal.revision,
+            workflowId: workflow.id,
+            attemptId: attempt.id,
+            verificationObligationId: obligation.id,
+            candidateGenerationId: authority.generation.id,
+            candidateDigest: authority.generation.frozenDigest,
+            policyBundleId: policy.bundle.id,
+            policyBundleDigest: policy.bundle.digest,
+            checkSpec,
+            startedAt: verificationStartedAt,
+            endedAt: verificationEndedAt,
+            observation: verificationResult.observation,
+            recordedAt: occurredAt,
+          },
+          this.#digests,
+        );
+        const initialEligibility = createInitialEvidenceEligibility(evidence.id, occurredAt);
+        const event = attemptDecision.events[0];
+        const payloadDigest = this.digest(
+          input.commandId,
+          { event, evidenceRecordDigest: evidence.recordDigest, obligationId: obligation.id },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitVerificationAttemptOutcome({
+              inputDigest,
+              target,
+              event,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              workflowAuditEventId: this.nextAuditEventId(input.commandId),
+              payloadDigest,
+              obligationId: obligation.id,
+              evidence,
+              initialEligibility,
+              evidenceAuditEventId: this.nextAuditEventId(input.commandId),
+            }),
+        };
       },
     });
   }
@@ -1557,13 +2179,10 @@ export class WorkflowRuntimeKernel {
       commandId: input.commandId,
       target,
       expectedWorkflowVersion: input.expectedWorkflowVersion,
-      digestInput:
-        input.nextCandidateGenerationId === undefined
-          ? digestBase
-          : { ...digestBase, nextCandidateGenerationId: input.nextCandidateGenerationId },
+      digestInput: digestBase,
       missingResource: 'Workflow',
       missingIdentifier: input.workflowId,
-      plan: ({ workflow }, inputDigest) => {
+      plan: ({ goal, workflow }, inputDigest) => {
         if (
           workflow.phase === WorkflowPhase.FINAL_VERIFY &&
           input.requestedPhase === WorkflowPhase.CLOSEOUT
@@ -1581,49 +2200,746 @@ export class WorkflowRuntimeKernel {
           workflow,
           requestedPhase: input.requestedPhase,
         });
-        if (guardResults.some((result) => result.guard === WorkflowGuard.CURRENT_ACCEPTANCE)) {
-          return rejectPlan(
+        const reserved = guardResults.find((result) => reservedPhaseGuards.has(result.guard));
+        if (reserved !== undefined) {
+          throw new CommandExecutionFailure(
             commandError(
-              RuntimeErrorCode.DOMAIN_REJECTED,
-              'Ordinary phase guards cannot issue or substitute for Acceptance',
-              'CURRENT_ACCEPTANCE_RESERVED',
+              RuntimeErrorCode.EVALUATION_FAILURE,
+              `Generic phase evaluator returned reserved guard ${reserved.guard}`,
+              'RESERVED_PHASE_GUARD_RETURNED',
             ),
           );
         }
-        const commandBase = {
-          type: 'REQUEST_PHASE_TRANSITION' as const,
-          commandId: input.commandId,
-          workflowId: input.workflowId,
-          expectedVersion: input.expectedWorkflowVersion,
-          occurredAt: this.causalNow(input.commandId, workflow.updatedAt),
-          reason: input.reason,
-          requestedPhase: input.requestedPhase,
-          guardResults,
-        };
-        const decision = decideWorkflow(
-          workflow,
-          input.nextCandidateGenerationId === undefined
-            ? commandBase
-            : { ...commandBase, nextCandidateGenerationId: input.nextCandidateGenerationId },
-        );
-        if (!decision.accepted) {
-          return this.domainRejectPlan(decision.rejection);
-        }
-        const event = decision.events[0];
-        const auditEventId = this.nextAuditEventId(input.commandId);
-        const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
-        return {
-          kind: 'APPLY',
-          commit: () =>
-            this.#store.commitWorkflowEvent({
-              inputDigest,
-              target,
-              event,
-              auditEventId,
-              payloadDigest,
-            }),
-        };
+        return this.planPhaseTransition(input, goal, workflow, guardResults, inputDigest, target);
       },
+    });
+  }
+
+  private planPhaseTransition(
+    input: RequestPhaseTransitionRequest,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    genericGuardResults: readonly GuardResult[],
+    inputDigest: Sha256Digest,
+    target: CommandTarget,
+  ): CommandPlan {
+    if (
+      workflow.phase === WorkflowPhase.FINAL_VERIFY &&
+      input.requestedPhase === WorkflowPhase.IMPLEMENT
+    ) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'Repair generation creation is unavailable until Slice 6 records a repairable rejection',
+          'REPAIR_ACCEPTANCE_UNAVAILABLE',
+        ),
+      );
+    }
+    if (workflow.phase === WorkflowPhase.PLAN && input.requestedPhase === WorkflowPhase.IMPLEMENT) {
+      return this.planCandidatePreparation(
+        input,
+        goal,
+        workflow,
+        genericGuardResults,
+        inputDigest,
+        target,
+      );
+    }
+    if (
+      workflow.phase === WorkflowPhase.IMPLEMENT &&
+      input.requestedPhase === WorkflowPhase.SOURCE_FREEZE
+    ) {
+      return this.planCandidateFreezeStart(
+        input,
+        goal,
+        workflow,
+        genericGuardResults,
+        inputDigest,
+        target,
+      );
+    }
+    if (
+      workflow.phase === WorkflowPhase.SOURCE_FREEZE &&
+      input.requestedPhase === WorkflowPhase.EVIDENCE_BUILD
+    ) {
+      return this.planFrozenCandidateTransition(
+        input,
+        goal,
+        workflow,
+        genericGuardResults,
+        inputDigest,
+        target,
+      );
+    }
+    if (
+      workflow.phase === WorkflowPhase.EVIDENCE_BUILD &&
+      input.requestedPhase === WorkflowPhase.FINAL_VERIFY
+    ) {
+      return this.planEvidenceSetTransition(
+        input,
+        goal,
+        workflow,
+        genericGuardResults,
+        inputDigest,
+        target,
+      );
+    }
+
+    const occurredAt = this.causalNow(input.commandId, workflow.updatedAt);
+    const decision = decideWorkflow(workflow, {
+      type: 'REQUEST_PHASE_TRANSITION',
+      commandId: input.commandId,
+      workflowId: input.workflowId,
+      expectedVersion: input.expectedWorkflowVersion,
+      occurredAt,
+      reason: input.reason,
+      requestedPhase: input.requestedPhase,
+      guardResults: genericGuardResults,
+    });
+    if (!decision.accepted) {
+      return this.domainRejectPlan(decision.rejection);
+    }
+    const event = decision.events[0];
+    const auditEventId = this.nextAuditEventId(input.commandId);
+    const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
+    return {
+      kind: 'APPLY',
+      commit: () =>
+        this.#store.commitWorkflowEvent({
+          inputDigest,
+          target,
+          event,
+          auditEventId,
+          payloadDigest,
+        }),
+    };
+  }
+
+  private planCandidatePreparation(
+    input: RequestPhaseTransitionRequest,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    genericGuardResults: readonly GuardResult[],
+    inputDigest: Sha256Digest,
+    target: CommandTarget,
+  ): CommandPlan {
+    const runtime = this.requireCandidateEvidenceRuntime();
+    const store = this.requireCandidateEvidenceStore();
+    const activePolicy = this.resolveCandidateEvidencePolicy(input.commandId);
+    const occurredAt = this.causalNow(
+      input.commandId,
+      workflow.updatedAt,
+      activePolicy.installedAt,
+    );
+    const rawExistingCandidate = this.storeOperation(
+      input.commandId,
+      'CANDIDATE_ROOT_READ_FAILURE',
+      () => store.getCandidateForGoal(goal.id),
+    );
+    const existingCandidate =
+      rawExistingCandidate === undefined
+        ? undefined
+        : this.decodeStoreSnapshot(input.commandId, 'CANDIDATE_ROOT_INVALID', () =>
+            decodeCandidate(rawExistingCandidate),
+          );
+    const candidateIdentifier =
+      existingCandidate?.id ??
+      this.internalOperation(input.commandId, 'CANDIDATE_ID_GENERATION_FAILURE', () =>
+        candidateId(runtime.identities.nextCandidateId()),
+      );
+    const generationIdentifier = this.internalOperation(
+      input.commandId,
+      'CANDIDATE_GENERATION_ID_FAILURE',
+      () => candidateGenerationId(runtime.identities.nextCandidateGenerationId()),
+    );
+    const sequence =
+      existingCandidate === undefined
+        ? 1
+        : this.storeOperation(input.commandId, 'CANDIDATE_SEQUENCE_READ_FAILURE', () =>
+            store.nextCandidateGenerationSequence(existingCandidate.id),
+          );
+    if (!Number.isSafeInteger(sequence) || sequence < 1) {
+      throw new TypeError('Store returned an invalid Candidate generation sequence');
+    }
+    const preparationRequest = validateCandidatePreparationRequest({
+      schemaVersion: 1,
+      goalId: goal.id,
+      goalRevision: goal.revision,
+      workflowId: workflow.id,
+      candidateId: candidateIdentifier,
+      generationId: generationIdentifier,
+      projectPath: goal.scope.projectPath,
+    });
+    const rawPreparation = this.candidateSourceOperation(
+      CandidateSourceFailureCode.PREPARATION_INVOCATION_FAILED,
+      'Candidate Source preparation failed',
+      () => runtime.candidateSource.prepare(preparationRequest),
+    );
+    const preparation = this.candidateSourceOperation(
+      CandidateSourceFailureCode.PREPARATION_OUTPUT_MALFORMED,
+      'Candidate Source returned malformed preparation output',
+      () => decodeCandidatePreparation(rawPreparation),
+    );
+    if (
+      preparation.goalId !== goal.id ||
+      preparation.workflowId !== workflow.id ||
+      preparation.candidateId !== candidateIdentifier ||
+      preparation.generationId !== generationIdentifier
+    ) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Candidate Source preparation does not bind its request',
+          CandidateSourceFailureCode.PREPARATION_BINDING_MISMATCH,
+        ),
+      );
+    }
+    const baseProjectIdentity = this.internalOperation(
+      input.commandId,
+      'CANDIDATE_BASE_PROJECT_IDENTITY_FAILURE',
+      () => deriveM1BaseProjectIdentity(goal.scope.projectPath, this.#digests),
+    );
+    const workspaceIdentity = deriveM1WorkspaceIdentity(generationIdentifier);
+    const candidate =
+      existingCandidate ??
+      createCandidate({
+        id: candidateIdentifier,
+        goalId: goal.id,
+        baseProjectIdentity,
+      });
+    if (candidate.baseProjectIdentity !== baseProjectIdentity) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Candidate Source preparation conflicts with Candidate authority',
+          CandidateSourceFailureCode.PREPARATION_AUTHORITY_MISMATCH,
+        ),
+      );
+    }
+    const generation = createCandidateGeneration({
+      id: generationIdentifier,
+      candidateId: candidate.id,
+      sequence,
+      ...(workflow.activeCandidateGenerationId === undefined
+        ? {}
+        : { parentGenerationId: workflow.activeCandidateGenerationId }),
+      workspaceIdentity,
+      baseDigest: preparation.baseDigest,
+      createdAt: occurredAt,
+    });
+    const checkIds = Object.freeze({
+      freeze: this.internalOperation(input.commandId, 'FREEZE_CHECK_ID_GENERATION_FAILURE', () =>
+        checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
+      ),
+      verification: this.internalOperation(
+        input.commandId,
+        'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
+        () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
+      ),
+    });
+    const policy = createM1CandidateEvidencePolicy(
+      goal,
+      generation,
+      checkIds,
+      Object.freeze({
+        nextVerificationObligationId: () =>
+          this.internalOperation(input.commandId, 'VERIFICATION_OBLIGATION_ID_FAILURE', () =>
+            verificationObligationId(runtime.identities.nextVerificationObligationId()),
+          ),
+      }),
+      occurredAt,
+    );
+    const guardResults = Object.freeze([
+      ...genericGuardResults,
+      this.ownedGuard(WorkflowGuard.CANDIDATE_GENERATION_PREPARED, 'CANDIDATE_AUTHORITY_PREPARED', [
+        generation.id,
+        generation.baseDigest,
+        `${candidate.id}:${String(generation.sequence)}`,
+      ]),
+    ]);
+    const decision = decideWorkflow(workflow, {
+      type: 'REQUEST_PHASE_TRANSITION',
+      commandId: input.commandId,
+      workflowId: workflow.id,
+      expectedVersion: input.expectedWorkflowVersion,
+      occurredAt,
+      reason: input.reason,
+      requestedPhase: input.requestedPhase,
+      guardResults,
+      nextCandidateGenerationId: generation.id,
+    });
+    if (!decision.accepted) {
+      return this.domainRejectPlan(decision.rejection);
+    }
+    const event = decision.events[0];
+    const payloadDigest = this.digest(
+      input.commandId,
+      {
+        event,
+        candidate,
+        generation,
+        checkSpecifications: [policy.freeze, policy.verification],
+        obligations: policy.obligations,
+      },
+      'COMMAND_PAYLOAD_DIGEST_FAILURE',
+    );
+    return {
+      kind: 'APPLY',
+      commit: () =>
+        store.commitCandidatePreparation({
+          inputDigest,
+          target,
+          event,
+          auditEventId: this.nextAuditEventId(input.commandId),
+          payloadDigest,
+          candidate,
+          generation,
+          checkSpecifications: Object.freeze([policy.freeze, policy.verification]),
+          obligations: policy.obligations,
+          candidateAuditEventId: this.nextAuditEventId(input.commandId),
+          generationAuditEventId: this.nextAuditEventId(input.commandId),
+          checkSpecificationAuditEventIds: Object.freeze([
+            this.nextAuditEventId(input.commandId),
+            this.nextAuditEventId(input.commandId),
+          ]),
+          obligationAuditEventIds: Object.freeze(
+            policy.obligations.map(() => this.nextAuditEventId(input.commandId)),
+          ),
+        }),
+    };
+  }
+
+  private planCandidateFreezeStart(
+    input: RequestPhaseTransitionRequest,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    genericGuardResults: readonly GuardResult[],
+    inputDigest: Sha256Digest,
+    target: CommandTarget,
+  ): CommandPlan {
+    const store = this.requireCandidateEvidenceStore();
+    const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+    if (authority.generation.state !== CandidateGenerationState.MUTABLE) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'Only the current mutable Candidate may enter source freeze',
+          'MUTABLE_CANDIDATE_UNAVAILABLE',
+        ),
+      );
+    }
+    const occurredAt = this.causalNow(
+      input.commandId,
+      workflow.updatedAt,
+      authority.generation.updatedAt,
+    );
+    const guardResults = Object.freeze([
+      ...genericGuardResults,
+      this.ownedGuard(WorkflowGuard.MUTABLE_CANDIDATE_CURRENT, 'CANDIDATE_STATE_CURRENT', [
+        authority.generation.id,
+        `version:${String(authority.generation.version)}`,
+      ]),
+      this.ownedGuard(WorkflowGuard.WORKER_QUIESCENT, 'WORKFLOW_HAS_NO_ACTIVE_ATTEMPT', [
+        workflow.id,
+        `workflow-version:${String(workflow.version)}`,
+      ]),
+    ]);
+    const workflowDecision = decideWorkflow(workflow, {
+      type: 'REQUEST_PHASE_TRANSITION',
+      commandId: input.commandId,
+      workflowId: workflow.id,
+      expectedVersion: input.expectedWorkflowVersion,
+      occurredAt,
+      reason: input.reason,
+      requestedPhase: input.requestedPhase,
+      guardResults,
+    });
+    if (!workflowDecision.accepted) {
+      return this.domainRejectPlan(workflowDecision.rejection);
+    }
+    const candidateDecision = decideCandidate(authority.generation, {
+      type: 'BEGIN_CANDIDATE_FREEZE',
+      commandId: input.commandId,
+      candidateGenerationId: authority.generation.id,
+      expectedVersion: authority.generation.version,
+      occurredAt,
+    });
+    if (!candidateDecision.accepted) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          candidateDecision.rejection.message,
+          candidateDecision.rejection.code,
+        ),
+      );
+    }
+    const event = workflowDecision.events[0];
+    const candidateEvent = candidateDecision.events[0];
+    const payloadDigest = this.digest(
+      input.commandId,
+      { event, candidateEvent },
+      'COMMAND_PAYLOAD_DIGEST_FAILURE',
+    );
+    return {
+      kind: 'APPLY',
+      commit: () =>
+        store.commitWorkflowCandidateEvent({
+          inputDigest,
+          target,
+          event,
+          auditEventId: this.nextAuditEventId(input.commandId),
+          payloadDigest,
+          candidateEvent,
+          candidateAuditEventId: this.nextAuditEventId(input.commandId),
+        }),
+    };
+  }
+
+  private planFrozenCandidateTransition(
+    input: RequestPhaseTransitionRequest,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    genericGuardResults: readonly GuardResult[],
+    inputDigest: Sha256Digest,
+    target: CommandTarget,
+  ): CommandPlan {
+    const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+    if (authority.generation.state !== CandidateGenerationState.FROZEN) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'Source freeze has no current frozen Candidate identity',
+          'FROZEN_CANDIDATE_UNAVAILABLE',
+        ),
+      );
+    }
+    const evidence = this.resolveGenerationEvidence(input.commandId, authority.generation.id);
+    const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+      input.commandId,
+      goal,
+      authority.generation,
+    );
+    const expectedFreezeCheck = canonicalizeJson(candidateEvidencePolicy.freeze);
+    const freezeEntry = evidence.find(
+      ({ record, eligibility }) =>
+        record.kind === EvidenceKind.CANDIDATE_FREEZE &&
+        eligibility.state === EvidenceEligibilityState.ELIGIBLE &&
+        record.candidateDigest === authority.generation.frozenDigest &&
+        canonicalizeJson(record.checkSpec) === expectedFreezeCheck,
+    );
+    if (freezeEntry?.record.observation.kind !== EvidenceKind.CANDIDATE_FREEZE) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'Frozen Candidate has no current Candidate Manager freeze Evidence',
+          'CANDIDATE_FREEZE_EVIDENCE_MISSING',
+        ),
+      );
+    }
+    const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+    const observation = freezeEntry.record.observation;
+    const guardResults = Object.freeze([
+      ...genericGuardResults,
+      this.ownedGuard(WorkflowGuard.NO_WRITE_CAPABLE_WORKER, 'NO_ACTIVE_ATTEMPT', [
+        workflow.id,
+        `workflow-version:${String(workflow.version)}`,
+      ]),
+      this.ownedGuard(WorkflowGuard.FREEZE_IDENTITY_STABLE, 'TWO_SOURCE_DIGESTS_MATCH', [
+        observation.firstSourceDigest,
+        observation.secondSourceDigest,
+        freezeEntry.record.id,
+      ]),
+      this.ownedGuard(WorkflowGuard.CHANGE_IDENTITY_RECORDED, 'CHANGE_SET_DIGEST_RECORDED', [
+        observation.changeSetDigest,
+        freezeEntry.record.recordDigest,
+      ]),
+      this.ownedGuard(WorkflowGuard.FROZEN_DIGEST_PERSISTED, 'CANDIDATE_FROZEN', [
+        authority.generation.id,
+        authority.generation.frozenDigest,
+      ]),
+      this.ownedGuard(WorkflowGuard.INTEGRITY_POLICY_PASSED, 'FREEZE_EVIDENCE_POLICY_CURRENT', [
+        policy.bundle.id,
+        policy.bundle.digest,
+        freezeEntry.record.checkSpec.id,
+      ]),
+    ]);
+    const occurredAt = this.causalNow(
+      input.commandId,
+      workflow.updatedAt,
+      authority.generation.updatedAt,
+      freezeEntry.eligibility.changedAt,
+      policy.installedAt,
+    );
+    const decision = decideWorkflow(workflow, {
+      type: 'REQUEST_PHASE_TRANSITION',
+      commandId: input.commandId,
+      workflowId: workflow.id,
+      expectedVersion: input.expectedWorkflowVersion,
+      occurredAt,
+      reason: input.reason,
+      requestedPhase: input.requestedPhase,
+      guardResults,
+    });
+    if (!decision.accepted) {
+      return this.domainRejectPlan(decision.rejection);
+    }
+    const event = decision.events[0];
+    const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
+    return {
+      kind: 'APPLY',
+      commit: () =>
+        this.#store.commitWorkflowEvent({
+          inputDigest,
+          target,
+          event,
+          auditEventId: this.nextAuditEventId(input.commandId),
+          payloadDigest,
+        }),
+    };
+  }
+
+  private planEvidenceSetTransition(
+    input: RequestPhaseTransitionRequest,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    genericGuardResults: readonly GuardResult[],
+    inputDigest: Sha256Digest,
+    target: CommandTarget,
+  ): CommandPlan {
+    const runtime = this.requireCandidateEvidenceRuntime();
+    const store = this.requireCandidateEvidenceStore();
+    const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+    if (authority.generation.state !== CandidateGenerationState.FROZEN) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'Evidence cannot be finalized without a frozen Candidate',
+          'FROZEN_CANDIDATE_UNAVAILABLE',
+        ),
+      );
+    }
+    const expectedFrozenDigest = authority.generation.frozenDigest;
+    const integrityRequest = validateFrozenCandidateIntegrityRequest({
+      schemaVersion: 1,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      generation: authority.generation,
+    });
+    const rawObservation = this.candidateSourceOperation(
+      CandidateSourceFailureCode.INTEGRITY_INVOCATION_FAILED,
+      'Candidate Source integrity observation failed',
+      () => runtime.candidateSource.observeFrozen(integrityRequest),
+    );
+    const observation = this.candidateSourceOperation(
+      CandidateSourceFailureCode.INTEGRITY_OUTPUT_MALFORMED,
+      'Candidate Source returned malformed integrity output',
+      () => decodeFrozenCandidateIntegrityObservation(rawObservation),
+    );
+    if (observation.generationId !== authority.generation.id) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Candidate Source integrity output does not bind its request',
+          CandidateSourceFailureCode.INTEGRITY_BINDING_MISMATCH,
+        ),
+      );
+    }
+    if (observation.observedDigest !== expectedFrozenDigest) {
+      const evidence = this.resolveGenerationEvidence(input.commandId, authority.generation.id);
+      const eligibleEvidenceCount = evidence.filter(
+        ({ eligibility }) => eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+      ).length;
+      const occurredAt = this.causalNow(
+        input.commandId,
+        workflow.updatedAt,
+        authority.generation.updatedAt,
+        ...evidence.map(({ eligibility }) => eligibility.changedAt),
+      );
+      const candidateDecision = decideCandidate(authority.generation, {
+        type: 'INVALIDATE_CANDIDATE',
+        commandId: input.commandId,
+        candidateGenerationId: authority.generation.id,
+        expectedVersion: authority.generation.version,
+        occurredAt,
+        reason: 'FROZEN_CANDIDATE_DRIFT',
+      });
+      if (!candidateDecision.accepted) {
+        return rejectPlan(
+          commandError(
+            RuntimeErrorCode.DOMAIN_REJECTED,
+            candidateDecision.rejection.message,
+            candidateDecision.rejection.code,
+          ),
+        );
+      }
+      const workflowDecision = decideWorkflow(workflow, {
+        type: 'FAIL_WORKFLOW_INTEGRITY',
+        commandId: input.commandId,
+        workflowId: workflow.id,
+        expectedVersion: input.expectedWorkflowVersion,
+        occurredAt,
+        reason: `${input.reason}: frozen Candidate source changed after Evidence was recorded`,
+      });
+      if (!workflowDecision.accepted) {
+        return this.domainRejectPlan(workflowDecision.rejection);
+      }
+      const event = workflowDecision.events[0];
+      const candidateEvent = candidateDecision.events[0];
+      const payloadDigest = this.digest(
+        input.commandId,
+        {
+          event,
+          candidateEvent,
+          expectedFrozenDigest,
+          observedDigest: observation.observedDigest,
+        },
+        'COMMAND_PAYLOAD_DIGEST_FAILURE',
+      );
+      return {
+        kind: 'APPLY',
+        commit: () =>
+          store.commitCandidateIntegrityFailure({
+            inputDigest,
+            target,
+            event,
+            auditEventId: this.nextAuditEventId(input.commandId),
+            payloadDigest,
+            candidateEvent,
+            expectedFrozenDigest,
+            observedDigest: observation.observedDigest,
+            candidateAuditEventId: this.nextAuditEventId(input.commandId),
+            invalidatedEvidenceAuditEventIds: Object.freeze(
+              Array.from({ length: eligibleEvidenceCount }, () =>
+                this.nextAuditEventId(input.commandId),
+              ),
+            ),
+          }),
+      };
+    }
+    const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+      input.commandId,
+      goal,
+      authority.generation,
+    );
+    const obligations = candidateEvidencePolicy.obligations;
+    const evidence = this.resolveGenerationEvidence(input.commandId, authority.generation.id);
+    const expectedVerificationCheck = canonicalizeJson(candidateEvidencePolicy.verification);
+    if (
+      evidence.some(
+        ({ record }) =>
+          record.kind === EvidenceKind.TEST_RESULT &&
+          canonicalizeJson(record.checkSpec) !== expectedVerificationCheck,
+      )
+    ) {
+      throw new TypeError('Verification Evidence does not retain its exact M1 Check authority');
+    }
+    const evidenceSet = buildEvidenceSet(
+      {
+        goalId: goal.id,
+        goalRevision: goal.revision,
+        candidateGenerationId: authority.generation.id,
+        candidateDigest: expectedFrozenDigest,
+        obligations,
+        evidence,
+      },
+      this.#digests,
+    );
+    verifyEvidenceSetAuthority(evidenceSet, obligations, evidence, this.#digests);
+    const obligationsAccounted =
+      obligations.length > 0 &&
+      evidenceSet.obligationMappings.length === obligations.length &&
+      evidenceSet.unresolvedEvidenceRequirements.length === 0 &&
+      evidenceSet.evidenceRefs.length > 0;
+    const cleanupProven =
+      evidenceSet.evidenceRefs.length > 0 &&
+      evidenceSet.evidenceRefs.every((reference) => {
+        const entry = evidence.find(({ record }) => record.id === reference.evidenceId);
+        return entry?.record.checkSpec.cleanupPolicy === 'M1_LOGICAL_NO_EXTERNAL_RESOURCES';
+      });
+    const guardResults = Object.freeze([
+      ...genericGuardResults,
+      this.ownedGuard(
+        WorkflowGuard.REQUIRED_EVIDENCE_ACCOUNTED,
+        obligationsAccounted
+          ? 'ALL_OBLIGATIONS_MAPPED'
+          : obligations.length === 0
+            ? 'REQUIRED_OBLIGATION_SET_EMPTY'
+            : 'UNRESOLVED_EVIDENCE_REQUIREMENTS',
+        obligationsAccounted
+          ? [evidenceSet.digest]
+          : evidenceSet.unresolvedEvidenceRequirements.length > 0
+            ? [...evidenceSet.unresolvedEvidenceRequirements]
+            : ['m1:required-evidence-empty'],
+        obligationsAccounted,
+      ),
+      this.ownedGuard(WorkflowGuard.EVIDENCE_BINDINGS_CURRENT, 'EVIDENCE_SET_CURRENT', [
+        evidenceSet.digest,
+        ...evidenceSet.evidenceRefs.map((reference) => reference.evidenceRecordDigest),
+      ]),
+      this.ownedGuard(
+        WorkflowGuard.CLEANUP_PROVEN,
+        cleanupProven ? 'M1_LOGICAL_CLEANUP_PROVEN' : 'CLEANUP_POLICY_MISSING',
+        cleanupProven
+          ? evidenceSet.evidenceRefs.map((reference) => reference.evidenceId)
+          : ['m1:cleanup-unproven'],
+        cleanupProven,
+      ),
+      this.ownedGuard(WorkflowGuard.SOURCE_DIGEST_CURRENT, 'FROZEN_SOURCE_REOBSERVED', [
+        observation.observedDigest,
+        authority.generation.id,
+      ]),
+    ]);
+    const occurredAt = this.causalNow(
+      input.commandId,
+      workflow.updatedAt,
+      authority.generation.updatedAt,
+      ...evidence.map(({ eligibility }) => eligibility.changedAt),
+    );
+    const decision = decideWorkflow(workflow, {
+      type: 'REQUEST_PHASE_TRANSITION',
+      commandId: input.commandId,
+      workflowId: workflow.id,
+      expectedVersion: input.expectedWorkflowVersion,
+      occurredAt,
+      reason: input.reason,
+      requestedPhase: input.requestedPhase,
+      guardResults,
+    });
+    if (!decision.accepted) {
+      return this.domainRejectPlan(decision.rejection);
+    }
+    const event = decision.events[0];
+    const payloadDigest = this.digest(
+      input.commandId,
+      { event, evidenceSetDigest: evidenceSet.digest },
+      'COMMAND_PAYLOAD_DIGEST_FAILURE',
+    );
+    return {
+      kind: 'APPLY',
+      commit: () =>
+        store.commitEvidenceSetTransition({
+          inputDigest,
+          target,
+          event,
+          auditEventId: this.nextAuditEventId(input.commandId),
+          payloadDigest,
+          evidenceSet,
+          evidenceSetAuditEventId: this.nextAuditEventId(input.commandId),
+        }),
+    };
+  }
+
+  private ownedGuard(
+    guard: WorkflowGuard,
+    reasonCode: string,
+    supportingRefs: readonly string[],
+    passed = true,
+  ): GuardResult {
+    return Object.freeze({
+      guard,
+      outcome: passed ? GuardOutcome.PASS : GuardOutcome.FAIL,
+      reasonCode,
+      supportingRefs: Object.freeze([...supportingRefs]),
     });
   }
 
@@ -1652,6 +2968,19 @@ export class WorkflowRuntimeKernel {
               RuntimeErrorCode.NOT_FOUND,
               `Attempt ${input.attemptId} does not exist`,
               'ATTEMPT_NOT_FOUND',
+            ),
+          );
+        }
+        if (
+          input.type !== 'INTERRUPT_ATTEMPT' &&
+          (attempt.phase === WorkflowPhase.SOURCE_FREEZE ||
+            attempt.phase === WorkflowPhase.EVIDENCE_BUILD)
+        ) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'This Attempt phase must finish through its Candidate or Verification authority owner',
+              'SPECIALIZED_ATTEMPT_OUTCOME_REQUIRED',
             ),
           );
         }
@@ -1815,8 +3144,9 @@ export class WorkflowRuntimeKernel {
 
   private nextWorkerAttemptIdentity(
     commandIdentifier: CommandId,
+    phase: WorkflowPhaseType,
   ): WorkerAttemptIdentity | undefined {
-    if (this.#workerContext === undefined) {
+    if (this.#workerContext === undefined || !isM1WorkerPhase(phase)) {
       return undefined;
     }
     const workerContext = this.#workerContext;
@@ -1846,6 +3176,199 @@ export class WorkflowRuntimeKernel {
       );
     }
     return this.#workerStore;
+  }
+
+  private requireCandidateEvidenceStore(): CandidateEvidenceControlStore {
+    if (this.#candidateEvidenceStore === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Candidate/Evidence authority requires its complete control Store',
+          'CANDIDATE_EVIDENCE_STORE_UNAVAILABLE',
+        ),
+      );
+    }
+    return this.#candidateEvidenceStore;
+  }
+
+  private requireCandidateEvidenceRuntime(): CandidateEvidenceRuntimeDependencies {
+    if (this.#candidateEvidence === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Candidate/Evidence authority dependencies are unavailable',
+          'CANDIDATE_EVIDENCE_RUNTIME_UNAVAILABLE',
+        ),
+      );
+    }
+    return this.#candidateEvidence;
+  }
+
+  private resolveCandidateAuthority(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+    goal: Goal,
+  ): CandidateAuthorityView {
+    const raw = this.storeOperation(commandIdentifier, 'CANDIDATE_AUTHORITY_READ_FAILURE', () =>
+      this.requireCandidateEvidenceStore().getCandidateAuthorityForWorkflow(workflow.id),
+    );
+    if (raw === undefined) {
+      throw new TypeError(`Workflow ${workflow.id} has no active Candidate authority`);
+    }
+    const candidate = decodeCandidate(raw.candidate);
+    const generation = decodeCandidateGeneration(raw.generation);
+    if (
+      raw.workflowId !== workflow.id ||
+      candidate.goalId !== goal.id ||
+      workflow.goalId !== goal.id ||
+      generation.candidateId !== candidate.id ||
+      generation.id !== workflow.activeCandidateGenerationId
+    ) {
+      throw new TypeError('Active Candidate authority belongs to another Goal or Workflow');
+    }
+    return Object.freeze({ candidate, generation, workflowId: workflow.id });
+  }
+
+  private resolveRuntimeOwnedAttempt(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+    attemptIdentifier: AttemptId,
+    phase: typeof WorkflowPhase.SOURCE_FREEZE | typeof WorkflowPhase.EVIDENCE_BUILD,
+  ): Extract<Attempt, { readonly status: 'RUNNING' }> {
+    const rawAttempt = this.storeOperation(commandIdentifier, 'RUNTIME_ATTEMPT_READ_FAILURE', () =>
+      this.#store.getAttempt(attemptIdentifier),
+    );
+    if (rawAttempt === undefined) {
+      throw new TypeError(`Attempt ${attemptIdentifier} does not exist`);
+    }
+    const attempt = this.decodeStoreSnapshot(commandIdentifier, 'RUNTIME_ATTEMPT_INVALID', () =>
+      decodeAttemptSnapshot(rawAttempt),
+    );
+    if (
+      attempt.status !== 'RUNNING' ||
+      workflow.runStatus !== RunStatus.RUNNING ||
+      workflow.activeAttemptId !== attempt.id ||
+      attempt.workflowId !== workflow.id ||
+      attempt.phase !== phase ||
+      workflow.phase !== phase ||
+      attempt.contextManifestId !== undefined ||
+      attempt.workerSessionRef !== undefined
+    ) {
+      throw new TypeError(`${phase} Attempt is not current or is bound to a coding Worker`);
+    }
+    return attempt;
+  }
+
+  private resolveM1CandidateEvidencePolicy(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    generation: CandidateGeneration,
+  ): ReturnType<typeof validateM1CandidateEvidencePolicy> {
+    const rawSpecifications = this.storeOperation(
+      commandIdentifier,
+      'CANDIDATE_CHECK_SPECIFICATIONS_READ_FAILURE',
+      () => this.requireCandidateEvidenceStore().listCheckSpecifications(),
+    );
+    if (!Array.isArray(rawSpecifications)) {
+      throw new TypeError('Store returned malformed Check Specifications');
+    }
+    const relatedSpecifications = rawSpecifications
+      .map((specification) =>
+        this.decodeStoreSnapshot(commandIdentifier, 'CHECK_SPECIFICATION_INVALID', () =>
+          decodeCheckSpecification(specification),
+        ),
+      )
+      .filter((specification) => specification.inputRefs.includes(generation.id));
+    const freeze = relatedSpecifications.find(
+      (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+    );
+    const verification = relatedSpecifications.find(
+      (specification) => specification.kind === CheckSpecificationKind.FAKE_VERIFICATION,
+    );
+    if (relatedSpecifications.length !== 2 || freeze === undefined || verification === undefined) {
+      throw new TypeError(
+        `Candidate generation ${generation.id} does not have exactly two M1 Check Specifications`,
+      );
+    }
+    const rawObligations = this.storeOperation(
+      commandIdentifier,
+      'OBLIGATION_AUTHORITY_READ_FAILURE',
+      () => this.requireCandidateEvidenceStore().listVerificationObligations(goal.id),
+    );
+    if (!Array.isArray(rawObligations)) {
+      throw new TypeError('Store returned malformed Verification Obligations');
+    }
+    const obligations = rawObligations.map((obligation) =>
+      this.decodeStoreSnapshot(commandIdentifier, 'VERIFICATION_OBLIGATION_INVALID', () =>
+        decodeVerificationObligation(obligation),
+      ),
+    );
+    if (obligations.some((obligation) => obligation.goalId !== goal.id)) {
+      throw new TypeError('Store returned a Verification Obligation for another Goal');
+    }
+    const currentObligations = obligations.filter(
+      (obligation) =>
+        obligation.goalId === goal.id &&
+        obligation.goalRevision === goal.revision &&
+        obligation.candidateGenerationId === generation.id,
+    );
+    return this.decodeStoreSnapshot(commandIdentifier, 'CANDIDATE_EVIDENCE_POLICY_INVALID', () =>
+      validateM1CandidateEvidencePolicy(
+        goal,
+        generation,
+        { freeze, verification, obligations: currentObligations },
+        generation.createdAt,
+      ),
+    );
+  }
+
+  private resolveGenerationEvidence(
+    commandIdentifier: CommandId,
+    generationIdentifier: CandidateGenerationId,
+  ): readonly {
+    readonly record: EvidenceRecord;
+    readonly eligibility: ReturnType<typeof decodeEvidenceEligibility>;
+  }[] {
+    const raw = this.storeOperation(commandIdentifier, 'EVIDENCE_AUTHORITY_READ_FAILURE', () =>
+      this.requireCandidateEvidenceStore().listEvidenceForGeneration(generationIdentifier),
+    );
+    if (!Array.isArray(raw)) {
+      throw new TypeError('Store returned malformed Evidence authority');
+    }
+    return Object.freeze(
+      raw.map((entry) => {
+        const parsed = evidenceAuthorityEntrySchema.parse(entry);
+        return Object.freeze({
+          record: this.decodeStoreSnapshot(commandIdentifier, 'EVIDENCE_RECORD_INVALID', () =>
+            verifyEvidenceRecordDigests(parsed.record, this.#digests),
+          ),
+          eligibility: this.decodeStoreSnapshot(
+            commandIdentifier,
+            'EVIDENCE_ELIGIBILITY_INVALID',
+            () => decodeEvidenceEligibility(parsed.eligibility),
+          ),
+        });
+      }),
+    );
+  }
+
+  private resolveCandidateEvidencePolicy(commandIdentifier: CommandId): ActiveWorkerPolicy {
+    const runtime = this.requireCandidateEvidenceRuntime();
+    const rawInstalledPolicy = this.storeOperation(
+      commandIdentifier,
+      'CANDIDATE_EVIDENCE_POLICY_READ_FAILURE',
+      () => this.requireWorkerStore().getPolicyBundle(runtime.policyBundleId),
+    );
+    if (rawInstalledPolicy === undefined) {
+      throw new TypeError(`Candidate/Evidence Policy ${runtime.policyBundleId} is not installed`);
+    }
+    const parsed = installedPolicyBundleSchema.parse(rawInstalledPolicy);
+    const bundle = decodePolicyBundle(parsed.bundle);
+    const installedAt = isoTimestamp(parsed.installedAt);
+    if (bundle.id !== runtime.policyBundleId) {
+      throw new TypeError('Installed Policy does not match Candidate/Evidence authority');
+    }
+    return Object.freeze({ bundle, installedAt });
   }
 
   private resolveActiveDispatchClaim(
@@ -1948,9 +3471,12 @@ export class WorkflowRuntimeKernel {
     );
   }
 
-  private resolveActiveWorkerPolicy(commandIdentifier: CommandId): ActiveWorkerPolicy | undefined {
+  private resolveActiveWorkerPolicy(
+    commandIdentifier: CommandId,
+    phase: WorkflowPhaseType,
+  ): ActiveWorkerPolicy | undefined {
     const workerContext = this.#workerContext;
-    if (workerContext === undefined) {
+    if (workerContext === undefined || !isM1WorkerPhase(phase)) {
       return undefined;
     }
     const rawInstalledPolicy = this.storeOperation(
@@ -1984,6 +3510,16 @@ export class WorkflowRuntimeKernel {
       }
       return undefined;
     }
+    if (!isM1WorkerPhase(event.attempt.phase)) {
+      if (
+        event.attempt.contextManifestId !== undefined ||
+        event.attempt.workerSessionRef !== undefined ||
+        activePolicy !== undefined
+      ) {
+        throw new TypeError('Runtime-owned phase Attempt cannot bind coding-Worker authority');
+      }
+      return undefined;
+    }
     if (activePolicy === undefined) {
       throw new TypeError('Worker Context compilation requires an active installed Policy');
     }
@@ -1995,6 +3531,34 @@ export class WorkflowRuntimeKernel {
     if (activePolicy.installedAt > event.occurredAt) {
       throw new TypeError('Context Attempt predates its active installed Policy');
     }
+    let candidateBinding:
+      { readonly generationId: CandidateGenerationId; readonly digest: Sha256Digest } | undefined;
+    if (applied.workflow.phase === WorkflowPhase.IMPLEMENT) {
+      const candidateStore = this.requireCandidateEvidenceStore();
+      const rawAuthority = this.storeOperation(
+        commandIdentifier,
+        'CONTEXT_CANDIDATE_READ_FAILURE',
+        () => candidateStore.getCandidateAuthorityForWorkflow(applied.workflow.id),
+      );
+      if (rawAuthority === undefined) {
+        throw new TypeError('IMPLEMENT Context has no active Candidate authority');
+      }
+      const generation = decodeCandidateGeneration(rawAuthority.generation);
+      if (
+        rawAuthority.workflowId !== applied.workflow.id ||
+        rawAuthority.candidate.goalId !== goal.id ||
+        generation.id !== applied.workflow.activeCandidateGenerationId ||
+        generation.state !== CandidateGenerationState.MUTABLE
+      ) {
+        throw new TypeError('IMPLEMENT Context Candidate is stale or belongs elsewhere');
+      }
+      candidateBinding = Object.freeze({
+        generationId: generation.id,
+        digest: generation.baseDigest,
+      });
+    } else if (applied.workflow.activeCandidateGenerationId !== undefined) {
+      throw new TypeError('DISCOVERY and PLAN Context cannot bind a Candidate generation');
+    }
     const raw = workerContext.factory.compile({
       manifestId: applied.attempt.contextManifestId,
       createdAt: event.occurredAt,
@@ -2003,6 +3567,7 @@ export class WorkflowRuntimeKernel {
       attempt: applied.attempt,
       policyBundleId: installedPolicy.id,
       policyBundleDigest: installedPolicy.digest,
+      ...(candidateBinding === undefined ? {} : { candidate: candidateBinding }),
     });
     if (typeof raw !== 'object' || raw === null) {
       throw new TypeError('Context factory returned a malformed compilation');
@@ -2011,15 +3576,23 @@ export class WorkflowRuntimeKernel {
     const manifest = decodeContextManifest(Reflect.get(raw, 'manifest'));
     if (
       contextPackage.selectedEntries.length !== 0 ||
-      contextPackage.candidateGenerationId !== undefined ||
-      contextPackage.candidateDigest !== undefined ||
       manifest.omissionDecisions.length !== 0 ||
-      manifest.candidateGenerationId !== undefined ||
-      manifest.candidateDigest !== undefined ||
-      manifest.entries.some((entry) => entry.kind === ContextEntryKind.CANDIDATE)
+      (candidateBinding === undefined &&
+        (contextPackage.candidateGenerationId !== undefined ||
+          contextPackage.candidateDigest !== undefined ||
+          manifest.candidateGenerationId !== undefined ||
+          manifest.candidateDigest !== undefined ||
+          manifest.entries.some((entry) => entry.kind === ContextEntryKind.CANDIDATE))) ||
+      (candidateBinding !== undefined &&
+        (contextPackage.candidateGenerationId !== candidateBinding.generationId ||
+          contextPackage.candidateDigest !== candidateBinding.digest ||
+          manifest.candidateGenerationId !== candidateBinding.generationId ||
+          manifest.candidateDigest !== candidateBinding.digest ||
+          manifest.entries.filter((entry) => entry.kind === ContextEntryKind.CANDIDATE).length !==
+            1))
     ) {
       throw new TypeError(
-        'M1 Context cannot admit selected, omitted, or Candidate authority before its owner exists',
+        'M1 Context contains selected, omitted, or non-authoritative Candidate sources',
       );
     }
     const packageDigest = this.digest(
@@ -2105,6 +3678,8 @@ export class WorkflowRuntimeKernel {
       contextPackage.phase !== applied.workflow.phase ||
       contextPackage.attemptId !== applied.attempt.id ||
       contextPackage.candidateGenerationId !== applied.workflow.activeCandidateGenerationId ||
+      contextPackage.candidateGenerationId !== manifest.candidateGenerationId ||
+      contextPackage.candidateDigest !== manifest.candidateDigest ||
       contextPackage.policyBundleId !== manifest.policyBundleId ||
       contextPackage.policyBundleDigest !== manifest.policyBundleDigest ||
       contextPackage.policyBundleId !== installedPolicy.id ||
@@ -2541,6 +4116,24 @@ export class WorkflowRuntimeKernel {
           error instanceof Error ? error.message : `Command ${commandId} failed internally`,
           detailCode,
         ),
+        { cause: error },
+      );
+    }
+  }
+
+  private candidateSourceOperation<Value>(
+    detailCode: CandidateSourceFailureCode,
+    message: string,
+    operation: () => Value,
+  ): Value {
+    try {
+      return operation();
+    } catch (error) {
+      if (error instanceof CommandExecutionFailure) {
+        throw error;
+      }
+      throw new CommandExecutionFailure(
+        commandError(RuntimeErrorCode.INTERNAL_FAILURE, message, detailCode),
         { cause: error },
       );
     }

@@ -2,9 +2,11 @@
 
 ## Status
 
-This document defines the target evidence contract. No evidence subsystem or
-real verifier is implemented at M0. M1 implements immutable fake observations
-and the minimum eligibility lifecycle needed to prove fail-closed acceptance.
+This document defines the target evidence contract. The current M1 Slice 5
+implementation provides logical Candidate-freeze Evidence, independent fake
+verification observations, monotonic eligibility, and canonical Evidence Sets.
+It does not implement a real verifier or issue Acceptance Decisions; those are
+separate later boundaries.
 
 ## Purpose
 
@@ -37,9 +39,11 @@ EvidenceRecord
   goalRevision
   workflowId
   attemptId
+  verificationObligationId?
   candidateGenerationId
   candidateDigest
   factSnapshotDigest?
+  policyBundleId
   policyBundleDigest
   checkSpec
   environmentIdentity?
@@ -62,6 +66,19 @@ the complete semantic Evidence identity, conditions, result, observation
 digest, and payload references. Its projection is defined by
 [ADR 0006](adr/0006-canonical-serialization-and-digest-profiles.md); `id` and
 `recordedAt` remain record-envelope metadata.
+
+Current M1 `TEST_RESULT` Evidence also repeats the exact
+`verificationObligationId` in that semantic projection. It can satisfy only
+that obligation; a matching Check Specification alone is not equivalent.
+`CANDIDATE_FREEZE` Evidence MUST omit the field.
+
+M1 materializes this model as two strict variants. `CANDIDATE_FREEZE` MUST use
+the Candidate Manager producer, `OBSERVED`, no environment or Fact snapshot,
+and exactly one change-set-digest payload. `TEST_RESULT` MUST use the
+Verification Runner producer, one exact obligation, one derived logical
+environment, no Fact snapshot, and exactly one observation-digest payload.
+Fields reserved for later Evidence kinds are rejected rather than persisted as
+empty authority claims.
 
 Initial `EvidenceResultStatus` values are:
 
@@ -134,6 +151,8 @@ CheckSpec
   id
   version
   kind
+  producerType
+  producerIdentity
   argvOrOperation
   cwdIdentity
   inputRefs[]
@@ -147,6 +166,10 @@ CheckSpec
 Free-form shell text is not the canonical identity. Implementations store a
 canonical representation and digest. Secret values are referenced indirectly
 and excluded from evidence payloads.
+
+The M1 Check Specification is also the producer authorization record. Its
+`producerType` and `producerIdentity` are immutable, and a persisted Evidence
+record MUST match both. A runner response cannot override them.
 
 ## Observation Versus Result
 
@@ -205,20 +228,42 @@ EvidenceSetEntry
   eligibilityState
 ```
 
+An `EvidenceSet` MUST map at least one required Verification Obligation. An
+empty obligation collection is not proof that all required work is complete.
+Transitioning to `FINAL_VERIFY` additionally requires every mapping to resolve
+to current eligible Evidence, so the selected Evidence references are also
+non-empty.
+
 A newly built set therefore has a different digest when selected Evidence
 content or eligibility changes. Reusing an Evidence ID without its exact record
 digest and eligibility version is invalid. A newly selected acceptance set may
 include only `ELIGIBLE` entries; a previously persisted set remains immutable
 but fails currency checks if any bound eligibility version or state has changed.
 
+Historical replay and current currency are distinct. The unique
+`EVIDENCE_SET_RECORDED` audit sequence is the historical cut: reopen reconstructs
+which Evidence records and eligibility versions existed at that sequence and
+must rebuild the exact canonical set. A later valid invalidation does not make
+that immutable historical set corrupt, but the set MUST NOT satisfy a new
+acceptance evaluation against latest eligibility.
+
 Each verification obligation maps to one or more eligible Evidence records.
-File existence or a broad test command cannot satisfy an obligation unless the
-policy establishes relevant coverage.
+The mapping uses the immutable `verificationObligationId` recorded by the
+Evidence, not merely a shared check reference. File existence or a broad test
+command cannot satisfy an obligation unless the policy establishes relevant
+coverage.
 
 ## Storage
 
-Evidence metadata lives in the control store. Larger immutable payloads live in
-a CodeClosure-owned content-addressed store and are referenced by digest.
+Evidence metadata lives in the control store. In current M1, the fake verifier
+returns only a closed result status. The Runtime owns invocation timestamps,
+derives producer and Check Specification bindings, environment identity,
+result status, and payload reference from the validated request and typed
+observation, and hashes the observation as the fake payload reference.
+Runner-supplied authority fields and unknown fields are rejected.
+No separate large blob is claimed. Before real or larger runner output is
+supported, immutable payloads MUST live in a CodeClosure-owned
+content-addressed store and be referenced by digest.
 
 The worker-writable Candidate must not contain the only copy of evidence used
 for acceptance. Project-local exports may be generated for human inspection,
@@ -271,6 +316,8 @@ not make the review authoritative.
 
 - never persist raw credentials, tokens, passwords, cookies, or private keys;
 - redact bounded output before durable storage;
+- map external invocation failures and malformed output to closed Runtime-owned
+  reason codes; never persist raw adapter exception text;
 - store only the minimum environment identity needed for reproducibility;
 - make sensitive external payload retention policy explicit;
 - reject an evidence producer that cannot meet required redaction and identity
@@ -279,11 +326,14 @@ not make the review authoritative.
 ## Failure Semantics
 
 - check failed as designed -> valid failing evidence;
-- runner crashed -> an eligible `RUNNER_ERROR` observation, not a passing or
-  failing assertion;
+- runner explicitly reports `RUNNER_ERROR` -> an eligible error observation,
+  not a passing or failing assertion;
+- runner invocation throws -> no Evidence is admitted and the Attempt records a
+  closed invocation-failure reason code;
 - timeout -> an eligible `TIMEOUT` observation, normally blocking or retryable;
-- output malformed -> submission rejected as `INVALID_OBSERVATION`; no Evidence
-  record is admitted;
+- output malformed, oversized, or inconsistent with the request -> submission
+  rejected under a closed admission-failure reason code; no Evidence record is
+  admitted;
 - source changed before admission -> submission rejected as
   `CANDIDATE_MISMATCH`; source change after admission makes existing bound
   Evidence `INELIGIBLE`;
@@ -292,15 +342,24 @@ not make the review authoritative.
 
 ## M1 Boundary
 
-M1 implements:
+The current Slice 5 implementation includes:
 
 - immutable Evidence records;
 - separate monotonic Evidence eligibility;
 - a deterministic fake check producer;
-- Candidate/Goal/policy binding;
-- evidence-set digesting;
-- explicit invalidation;
-- acceptance rejection for missing/mismatched evidence.
+- exact Goal revision, Candidate generation/digest, Policy, Check
+  Specification, Attempt, producer, environment, and Verification Obligation
+  binding;
+- Runtime-owned fake-verifier invocation timestamps and payload-reference
+  digesting;
+- canonical Evidence Set construction and current-binding checks;
+- audit-sequence reconstruction of retained historical Evidence Sets;
+- explicit atomic invalidation after Candidate drift;
+- migration and reopen validation of retained authority.
+
+Slice 5 does not interpret these records as Goal acceptance. Slice 6 must
+evaluate pass/fail/error/timeout observations and issue any technical decision
+through the Acceptance Engine.
 
 M1 does not need real project test runners, containers, browsers, devices, or
 external authority adapters.
@@ -313,7 +372,8 @@ external authority adapters.
 - failing evidence remains a valid observation but blocks the relevant rule;
 - runner error cannot be interpreted as pass;
 - evidence set ordering is canonical;
-- changed Evidence eligibility invalidates the prior EvidenceSet digest;
+- changed Evidence eligibility makes a prior Evidence Set non-current without
+  rewriting its historical recording;
 - payload digest mismatch fails closed;
 - Evidence record digest mismatch fails closed;
 - Evidence creation, initial eligibility, and audit metadata persist atomically;

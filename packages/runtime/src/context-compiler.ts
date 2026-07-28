@@ -170,6 +170,7 @@ export function m1WorkerResponseContract(phase: WorkflowPhaseType): WorkerRespon
     workerEventSchemaVersion: 1,
     allowedResultKinds: Object.freeze(allowedResultKinds),
     unknownFields: 'REJECT',
+    maxEventBytes: 65_536,
   });
 }
 

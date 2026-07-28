@@ -21,6 +21,8 @@ supersedes it.
 | [0013](0013-authority-boundary-validation-closure.md) | Close authority validation across Runtime, Store, replay, and persistence | Accepted |
 | [0014](0014-context-bound-worker-dispatch-and-event-admission.md) | Bind Worker dispatch and event admission to durable Context authority | Accepted |
 | [0015](0015-close-m1-worker-authority-causality.md) | Close M1 Context, Policy, dispatch, identity, and stream causality gaps | Accepted |
+| [0016](0016-candidate-and-evidence-authority-boundary.md) | Coordinate Candidate and Evidence authority through source-bound Workflow transactions | Accepted |
+| [0017](0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md) | Derive external-boundary authority and replay Evidence Sets at their audit sequence | Accepted |
 
 ## ADR lifecycle
 

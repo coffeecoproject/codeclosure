@@ -87,6 +87,38 @@ const policyDefinition = {
   checkerVersions: [],
 } as const;
 
+void test('[I-006][I-027] a Goal requires at least one required success criterion', () => {
+  assert.throws(
+    () =>
+      createGoal({
+        id: goalId('goal_optional-only'),
+        revision: goalRevision(1),
+        objective: 'Reject a Goal with no completion boundary',
+        successCriteria: [
+          {
+            id: successCriterionId('criterion_optional-only'),
+            description: 'This criterion does not block completion',
+            required: false,
+          },
+        ],
+        scope: { projectPath: '/fixture/optional-only', allowedPaths: ['src/**'] },
+        createdAt,
+      }),
+    /at least one required success criterion/,
+  );
+  assert.throws(
+    () =>
+      decodeGoalSnapshot({
+        ...goal,
+        successCriteria: goal.successCriteria.map((criterion) => ({
+          ...criterion,
+          required: false,
+        })),
+      }),
+    /at least one required success criterion/,
+  );
+});
+
 void test('[I-006] authority codecs materialize immutable canonical snapshots', () => {
   const decodedGoal = decodeGoalSnapshot(goal);
   const decodedWorkflow = decodeWorkflowSnapshot(workflow);

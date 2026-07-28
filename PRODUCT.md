@@ -107,14 +107,20 @@ workflow stages manually.
 - bounded command execution when permitted;
 - observations, candidate results, and repair proposals.
 
-Worker output is untrusted input until CodeClosure validates and records it.
+Worker output is untrusted input until CodeClosure validates and records it. A
+Worker may report a closed failure reason; CodeClosure alone maps that reason to
+retry and recovery classification.
 
 ### Verification runner owns
 
 - executing an exact, versioned check specification;
-- recording observed output, exit status, timing, environment identity, and
-  cleanup state;
+- returning bounded observations and a check-level result under that
+  specification;
 - returning an observation rather than an acceptance decision.
+
+CodeClosure records authoritative producer, timing, environment, payload, and
+Evidence identity from the validated request and Check Specification. The
+runner does not author those bindings.
 
 ### Human Decision Gateway owns
 
@@ -139,6 +145,10 @@ The loop may return from final verification to implementation, but a frozen
 candidate is never silently mutated. Repair creates a new candidate generation.
 
 ## Completion Semantics
+
+A Goal MUST define at least one required success criterion. Optional criteria
+MAY record useful non-blocking expectations, but they cannot be the Goal's only
+criteria and do not create completion authority by themselves.
 
 A CodeClosure goal is successfully closed only when:
 

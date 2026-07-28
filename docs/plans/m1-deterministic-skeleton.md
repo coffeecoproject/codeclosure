@@ -386,21 +386,26 @@ Repair creates a child generation; no command transitions `FROZEN -> MUTABLE`.
 Each current M1 Worker Attempt receives a canonical Context Manifest containing
 schema/compiler versions, Goal/Workflow/Attempt identity, phase, capabilities,
 policy and response-contract identity, package digest, and manifest digest.
-Until the durable source resolver is implemented, selected entries and
-omissions are empty and only compiler-owned Goal and criterion entries may
-appear in the Manifest. Candidate Context remains closed until Slice 5 supplies
-a Candidate Manager authority resolver.
+Selected entries and omissions remain empty and ordinary Manifest entries are
+still limited to compiler-owned Goal and criterion entries. Slice 5 adds one
+dedicated binding for an `IMPLEMENT` Worker: the exact active `MUTABLE`
+Candidate generation and `baseDigest`, resolved through Candidate authority and
+rechecked by Runtime and Store. Non-`IMPLEMENT` M1 packages remain
+Candidate-free.
 
 ### Evidence
 
 The fake verification producer records an immutable observation bound to Goal
 revision, Candidate digest, check-spec version, policy digest, and observation
-digest. A full Evidence record digest binds those identities and the immutable
-result. Pass, fail, runner error, and timeout are immutable observed results.
-Malformed or mismatched submissions are rejected before admission. Current
-eligibility is a separate monotonic record that may move from `ELIGIBLE` to
-`INELIGIBLE` without mutating the observation; EvidenceSet entries bind both the
-record digest and eligibility version/state.
+digest. The runner returns only a closed result status; request-aware Runtime
+admission owns the producer/check binding and canonical observation. A full
+Evidence record digest binds those identities and the immutable result. Pass,
+fail, runner error, and timeout are immutable observed results. Malformed,
+mismatched, oversized, late, or exception-producing submissions admit no
+Evidence and persist only closed failure reasons. Current eligibility is a
+separate monotonic record that may move from `ELIGIBLE` to `INELIGIBLE` without
+mutating the observation; EvidenceSet entries bind both the record digest and
+eligibility version/state.
 
 ### Acceptance
 
@@ -462,7 +467,7 @@ before Slice 4 or a closeout path before Slice 6.
 
 ### Slice 4 — Context and FakeWorker
 
-Implementation status (2026-07-27): implemented and verified at the Runtime,
+Implementation status (2026-07-28): implemented and verified at the Runtime,
 domain, `FakeWorker`, and SQLite boundaries. This closes Slice 4 only; it is not
 an M1 completion claim.
 
@@ -479,7 +484,9 @@ advance authority. Empty or invalid-only streams terminate as
 admission failure is not relabelled as Worker failure. Runtime-authored stream
 failures require the same exact durable dispatch claim as event admission. Its
 claim time is the causal floor for every later result, failure, cancellation,
-or restart reconciliation.
+or restart reconciliation. Worker events are byte-bounded by their compiled
+response contract, and closed Worker reason codes map to Runtime-owned failure
+classes that Store and SQLite recheck.
 
 The proof includes fail-closed M1 Context source authority, Runtime-owned
 selection and installation identity for Policy, atomic Attempt-plus-Manifest
@@ -487,17 +494,41 @@ start, durable dispatch claims serialized against cancellation, causal Worker
 receipts, restart reads, SQLite relationship backstops, and injected rollback
 failures after each new authority write. See
 [ADR 0014](../adr/0014-context-bound-worker-dispatch-and-event-admission.md)
-and [ADR 0015](../adr/0015-close-m1-worker-authority-causality.md).
+and [ADR 0015](../adr/0015-close-m1-worker-authority-causality.md), as refined
+by
+[ADR 0017](../adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 ### Slice 5 — Candidate and evidence
+
+Implementation status (2026-07-28): implemented and verified at the Runtime,
+domain, deterministic Candidate Source/Verification Runner, Context, SQLite,
+migration, and reopen boundaries. This closes Slice 5 only; it is not an M1 or
+product completion claim. See
+[ADR 0016](../adr/0016-candidate-and-evidence-authority-boundary.md) and
+[ADR 0017](../adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 - generation reducer and fake digest;
 - irreversible freeze;
 - immutable bound Evidence observations and monotonic eligibility invalidation;
-- fake verification obligations.
+- generation-scoped fake verification obligations;
+- canonical Evidence Set persistence for Slice 6 input.
+- audit-sequence replay of immutable historical Evidence Sets, separate from
+  current eligibility.
 
 Exit: record-digest drift, eligibility changes, and cross-generation Evidence
-are rejected.
+are rejected. Source drift atomically invalidates Candidate/Evidence authority;
+Worker output cannot become privileged Evidence; exact obligation, Policy,
+check, audit, and Context bindings are revalidated on write and reopen. A Goal
+without a required criterion and an empty required-obligation/Evidence Set
+cannot advance by vacuous truth. SQLite treats missing JSON or nullable
+authority fields as invalid and preserves earlier Context-entry constraints
+when Slice 5 extends them. Runtime and Store independently require the exact
+canonical Evidence mapping, including no reuse of one Evidence record across
+obligations. Forged verifier bindings and sensitive adapter diagnostics fail
+closed without entering authoritative persistence. Candidate and Evidence
+producer identities are Runtime/Check-derived rather than accepted from source
+ports, and later invalidation preserves historical Evidence Set readability
+while making that set non-current.
 
 ### Slice 6 — Acceptance and closeout
 
