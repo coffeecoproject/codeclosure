@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 import { sha256Digest, type CandidateGenerationId, type Sha256Digest } from '@codeclosure/domain';
 import {
   decodeCandidatePreparation,
+  decodeCandidateRepairPreparation,
   validateCandidateFreezeRequest,
   validateCandidatePreparationRequest,
+  validateCandidateRepairPreparationRequest,
   validateFrozenCandidateIntegrityRequest,
   type CandidateSourcePort,
 } from '@codeclosure/runtime';
@@ -28,9 +30,14 @@ function digest(label: string): Sha256Digest {
 export class FakeCandidateSource implements CandidateSourcePort {
   readonly #fixture: FakeCandidateSourceFixture;
   readonly #frozen = new Map<CandidateGenerationId, Sha256Digest>();
+  readonly #simulatedDrift = new Set<CandidateGenerationId>();
 
   public constructor(fixture: FakeCandidateSourceFixture = FakeCandidateSourceFixture.STABLE) {
     this.#fixture = fixture;
+  }
+
+  public simulateFrozenDrift(generationId: CandidateGenerationId): void {
+    this.#simulatedDrift.add(generationId);
   }
 
   public prepare(rawRequest: Parameters<CandidateSourcePort['prepare']>[0]): unknown {
@@ -50,6 +57,25 @@ export class FakeCandidateSource implements CandidateSourcePort {
       baseDigest: digest(
         `base\u0000${request.goalId}\u0000${request.goalRevision}\u0000${request.projectPath}`,
       ),
+    });
+  }
+
+  public prepareRepair(rawRequest: Parameters<CandidateSourcePort['prepareRepair']>[0]): unknown {
+    const request = validateCandidateRepairPreparationRequest(rawRequest);
+    if (this.#fixture === FakeCandidateSourceFixture.THROW) {
+      throw new Error('Fake Candidate Source repair preparation failed');
+    }
+    if (this.#fixture === FakeCandidateSourceFixture.MALFORMED) {
+      return Object.freeze({ schemaVersion: 1, generationId: request.generationId });
+    }
+    return decodeCandidateRepairPreparation({
+      schemaVersion: 1,
+      goalId: request.goalId,
+      workflowId: request.workflowId,
+      candidateId: request.candidateId,
+      generationId: request.generationId,
+      parentGenerationId: request.parentGenerationId,
+      baseDigest: request.expectedBaseDigest,
     });
   }
 
@@ -102,7 +128,8 @@ export class FakeCandidateSource implements CandidateSourcePort {
       schemaVersion: 1,
       generationId: request.generation.id,
       observedDigest:
-        this.#fixture === FakeCandidateSourceFixture.FROZEN_DRIFT
+        this.#fixture === FakeCandidateSourceFixture.FROZEN_DRIFT ||
+        this.#simulatedDrift.has(request.generation.id)
           ? digest(`post-freeze-drift\u0000${request.generation.id}`)
           : retained,
     });

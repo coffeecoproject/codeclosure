@@ -2,11 +2,11 @@
 
 ## Status
 
-This document defines the target evidence contract. The current M1 Slice 5
+This document defines the target evidence contract. The current M1
 implementation provides logical Candidate-freeze Evidence, independent fake
 verification observations, monotonic eligibility, and canonical Evidence Sets.
-It does not implement a real verifier or issue Acceptance Decisions; those are
-separate later boundaries.
+Slice 6 consumes those records through a separate deterministic Acceptance
+Engine; Evidence still cannot approve itself. A real verifier remains M2 work.
 
 ## Purpose
 
@@ -342,7 +342,7 @@ not make the review authoritative.
 
 ## M1 Boundary
 
-The current Slice 5 implementation includes:
+The current Candidate/Evidence implementation includes:
 
 - immutable Evidence records;
 - separate monotonic Evidence eligibility;
@@ -357,9 +357,9 @@ The current Slice 5 implementation includes:
 - explicit atomic invalidation after Candidate drift;
 - migration and reopen validation of retained authority.
 
-Slice 5 does not interpret these records as Goal acceptance. Slice 6 must
-evaluate pass/fail/error/timeout observations and issue any technical decision
-through the Acceptance Engine.
+The Evidence boundary does not interpret its own records as Goal acceptance.
+The current Slice 6 Acceptance Engine separately maps pass, fail, runner-error,
+and timeout observations into a technical decision over an exact manifest.
 
 M1 does not need real project test runners, containers, browsers, devices, or
 external authority adapters.

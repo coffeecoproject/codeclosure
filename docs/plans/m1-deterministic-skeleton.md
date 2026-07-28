@@ -1,6 +1,6 @@
 # M1 Deterministic Skeleton Implementation Plan
 
-- Status: Ready for implementation after the M0 baseline commit
+- Status: In implementation; Slices 0–6 are implemented and Slice 7 is next
 - Plan date: 2026-07-27
 - Milestone: M1
 - Worker backend: `FakeWorker` only
@@ -128,20 +128,21 @@ application commands and render persisted results; they never write tables.
 `CreateGoal` atomically creates the Goal and its Workflow in
 `DISCOVERY`/`READY`; it does not dispatch a worker. `StartGoal` begins the first
 DISCOVERY Attempt and moves run status through the normal guarded command path.
-`StartGoal`, `ResumeGoal`, and `CancelGoal` are public Goal commands: they carry
-`GoalId`, expected Goal revision, and expected Workflow version. Internal
-Attempt and transition commands are not public CLI alternatives. This keeps
-persisted phase initialization distinct from execution start. Goal and owned
-Workflow resolution uses one consistent store snapshot; the write transaction
-then revalidates the Workflow version. See
+In the implemented pre-CLI slices, `StartGoal` and `CancelGoal` are public Goal
+commands: they carry `GoalId`, expected Goal revision, and expected Workflow
+version. `ResumeGoal` remains a Slice 7 recovery command. Internal Attempt and
+transition commands are not public CLI alternatives. This keeps persisted phase
+initialization distinct from execution start. Goal and owned Workflow
+resolution uses one consistent store snapshot; the write transaction then
+revalidates the Workflow version. See
 [ADR 0008](../adr/0008-goal-command-and-lifecycle-boundary.md).
 
 The Runtime package root returns a Goal application capability containing only
 those public Goal mutations. The internal control kernel is omitted from the
 package-root export surface. Internal phase requests do not accept
 caller-authored `GuardResult` values; ordinary guard evaluators are injected
-only into the internal kernel, and closeout remains unavailable until the Slice
-6 Acceptance path owns it.
+only into the internal kernel. Closeout is available only through the Slice 6
+Acceptance path; generic internal phase requests cannot invoke it.
 
 Machine output uses a versioned envelope:
 
@@ -154,8 +155,6 @@ CommandOutput
   workflowVersion?
   phase?
   runStatus?
-  acceptanceOutcome?
-  dominantBlocker?
   error?
 ```
 
@@ -168,6 +167,10 @@ is an authority record, not an additional user-facing completion surface. See
 [ADR 0011](../adr/0011-store-authored-command-outcome-semantics.md).
 
 Human output is a view over the same response.
+
+Slice 7 status and blocker views will read the immutable Acceptance Decision
+separately. They MUST NOT enrich the stored command outcome into another
+completion authority.
 
 ## 5. Domain commands and ports
 
@@ -184,6 +187,7 @@ M1 application commands include:
 - `RecordEvidence`;
 - `EvaluateAcceptance`;
 - `CloseAcceptedGoal`;
+- `BeginAcceptanceRepair`;
 - `InterruptAttempt`;
 - `ResumeGoal`;
 - `CancelGoal`.
@@ -532,13 +536,27 @@ while making that set non-current.
 
 ### Slice 6 — Acceptance and closeout
 
+Implementation status (2026-07-28): implemented and verified at the domain,
+deterministic Acceptance Engine, Workflow Runtime, SQLite transaction,
+migration, replay, and reopen boundaries. This closes Slice 6 only; it is not
+an M1 or product completion claim. See
+[ADR 0018](../adr/0018-deterministic-acceptance-and-closeout-authority.md).
+
 - canonical Acceptance Input Manifest;
 - immutable minimal Policy Bundle and checker identities;
 - pure ordered-rule evaluation;
 - immutable Acceptance Decision;
-- transactional closeout race guard.
+- transactional closeout race guard;
+- atomic repair into a fresh child Candidate generation;
+- strict Pending Issue input and empty M1 Fact/Human Decision snapshots.
 
-Exit: only a current `ACCEPT` can produce `CLOSED`/`CLOSEOUT`.
+Exit: only a current `ACCEPT` can produce `CLOSED`/`CLOSEOUT`. Evaluation does
+not mutate lifecycle state; fail/error/timeout and stale-input paths fail
+closed; repair consumes only a current `REJECT_REPAIRABLE`; evaluation,
+closeout, and repair roll back at every authority-write fault point; semantic
+replay, pre-authority terminal-state migration refusal, source drift, exact
+closeout/repair-child restart closure, and retained-history reopen are covered
+by deterministic tests.
 
 ### Slice 7 — CLI, recovery, and proof demos
 

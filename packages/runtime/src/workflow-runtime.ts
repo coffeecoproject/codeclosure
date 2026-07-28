@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  AcceptanceOutcome,
   AttemptFailureClass,
   AttemptRejectionCode,
   AttemptInterruptionReason,
@@ -14,6 +15,7 @@ import {
   WorkflowGuard,
   WorkflowPhase,
   WorkflowRejectionCode,
+  acceptanceDecisionId,
   attemptId,
   applyCandidateEvent,
   applyAttemptEvent,
@@ -28,7 +30,13 @@ import {
   decodeCandidate,
   decodeCandidateGeneration,
   decodeCheckSpecification,
+  decodeAcceptanceDecision,
+  decodeAcceptanceInputManifest,
+  decodeCloseoutRecord,
   decodeEvidenceEligibility,
+  decodeEvidenceRecord,
+  decodeEvidenceSet,
+  decodePendingIssue,
   decodeVerificationObligation,
   decodeAttemptSnapshot,
   decodeGoalSnapshot,
@@ -53,6 +61,7 @@ import {
   workerSessionId,
   verificationObligationId,
   type AttemptDecision,
+  type AcceptanceDecisionId,
   type Attempt,
   type AttemptId,
   type AttemptStarted,
@@ -95,6 +104,9 @@ import {
   type StoredCommandOutcomeEnvelope,
 } from './contracts.js';
 import type {
+  AcceptanceAuthorityView,
+  AcceptanceControlStore,
+  AcceptanceIdentityGenerator,
   CandidateAuthorityView,
   CandidateEvidenceControlStore,
   Clock,
@@ -119,12 +131,16 @@ import {
   admitVerificationResult,
   decodeCandidateFreezeObservation,
   decodeCandidatePreparation,
+  decodeCandidateRepairPreparation,
   decodeFrozenCandidateIntegrityObservation,
   decodeVerificationRequest,
   validateCandidateFreezeRequest,
   validateCandidatePreparationRequest,
+  validateCandidateRepairPreparationRequest,
   validateFrozenCandidateIntegrityRequest,
 } from './candidate-evidence-contracts.js';
+import { createM1AcceptanceEngine } from './acceptance-engine.js';
+import { compileM1AcceptanceInput } from './acceptance-policy.js';
 import {
   createM1CandidateEvidencePolicy,
   deriveM1BaseProjectIdentity,
@@ -233,6 +249,11 @@ export interface CandidateEvidenceRuntimeDependencies {
   readonly policyBundleId: PolicyBundleId;
 }
 
+export interface AcceptanceRuntimeDependencies {
+  readonly identities: AcceptanceIdentityGenerator;
+  readonly policyBundleId: PolicyBundleId;
+}
+
 export type BeginAttemptRequest = WorkflowCommandRequest;
 
 export interface RecordAttemptResultRequest extends WorkflowCommandRequest {
@@ -274,6 +295,19 @@ export interface RunVerificationRequest extends WorkflowCommandRequest {
   readonly reason: string;
 }
 
+export type EvaluateAcceptanceRequest = GoalCommandRequest;
+
+interface ConsumeAcceptanceRequest extends GoalCommandRequest {
+  readonly acceptanceDecisionId: AcceptanceDecisionId;
+  readonly acceptanceDecisionDigest: Sha256Digest;
+  readonly inputManifestDigest: Sha256Digest;
+  readonly candidateDigest: Sha256Digest;
+  readonly reason: string;
+}
+
+export type CloseAcceptedGoalRequest = ConsumeAcceptanceRequest;
+export type BeginAcceptanceRepairRequest = ConsumeAcceptanceRequest;
+
 export interface PhaseGuardEvaluationRequest {
   readonly workflow: WorkflowInstance;
   readonly requestedPhase: WorkflowPhaseType;
@@ -287,6 +321,7 @@ export interface WorkflowRuntimeKernelDependencies extends WorkflowRuntimeDepend
   readonly phaseGuards?: PhaseGuardEvaluator;
   readonly workerContext?: WorkerContextRuntimeDependencies;
   readonly candidateEvidence?: CandidateEvidenceRuntimeDependencies;
+  readonly acceptance?: AcceptanceRuntimeDependencies;
 }
 
 type FinishAttemptRequest =
@@ -335,6 +370,11 @@ interface PreparedAttemptContext {
 interface ActiveWorkerPolicy {
   readonly bundle: PolicyBundle;
   readonly installedAt: IsoTimestamp;
+}
+
+interface ResolvedAcceptanceConsumption {
+  readonly decision: ReturnType<typeof decodeAcceptanceDecision>;
+  readonly manifest: ReturnType<typeof decodeAcceptanceInputManifest>;
 }
 
 interface ExecuteCommandInput {
@@ -432,6 +472,21 @@ function isCandidateEvidenceControlStore(
   );
 }
 
+function isAcceptanceControlStore(store: WorkflowControlStore): store is AcceptanceControlStore {
+  return (
+    isCandidateEvidenceControlStore(store) &&
+    [
+      'getAcceptanceAuthorityForWorkflow',
+      'getAcceptanceInputManifest',
+      'getAcceptanceDecision',
+      'getCloseoutForWorkflow',
+      'commitAcceptanceEvaluation',
+      'commitAcceptedCloseout',
+      'commitAcceptanceRepair',
+    ].every((method) => typeof Reflect.get(store, method) === 'function')
+  );
+}
+
 const phaseGuardResultSchema = z
   .object({
     guard: z.enum(Object.values(WorkflowGuard)),
@@ -482,6 +537,15 @@ const phaseTransitionRequestSchema = workflowCommandRequestSchema
 const completeSourceFreezeRequestSchema = recordAttemptResultRequestSchema;
 const runVerificationRequestSchema = recordAttemptResultRequestSchema
   .extend({ obligationId: z.string() })
+  .strict();
+const consumeAcceptanceRequestSchema = goalCommandRequestSchema
+  .extend({
+    acceptanceDecisionId: z.string(),
+    acceptanceDecisionDigest: z.string(),
+    inputManifestDigest: z.string(),
+    candidateDigest: z.string(),
+    reason: z.string(),
+  })
   .strict();
 const processedCommandViewSchema = z.discriminatedUnion('aggregateType', [
   z
@@ -640,6 +704,27 @@ function decodeRunVerificationRequest(value: unknown): RunVerificationRequest {
   });
 }
 
+function decodeEvaluateAcceptanceRequest(value: unknown): EvaluateAcceptanceRequest {
+  return decodeStartGoalRequest(value);
+}
+
+function decodeConsumeAcceptanceRequest(value: unknown): ConsumeAcceptanceRequest {
+  const parsed = consumeAcceptanceRequestSchema.parse(value);
+  return Object.freeze({
+    ...decodeStartGoalRequest({
+      commandId: parsed.commandId,
+      goalId: parsed.goalId,
+      expectedGoalRevision: parsed.expectedGoalRevision,
+      expectedWorkflowVersion: parsed.expectedWorkflowVersion,
+    }),
+    acceptanceDecisionId: acceptanceDecisionId(parsed.acceptanceDecisionId),
+    acceptanceDecisionDigest: sha256Digest(parsed.acceptanceDecisionDigest),
+    inputManifestDigest: sha256Digest(parsed.inputManifestDigest),
+    candidateDigest: sha256Digest(parsed.candidateDigest),
+    reason: parsed.reason,
+  });
+}
+
 function decodeProcessedCommandView(
   value: unknown,
 ): NonNullable<ReturnType<WorkflowControlStore['getProcessedCommand']>> {
@@ -771,6 +856,8 @@ export class WorkflowRuntimeKernel {
   readonly #workerStore: WorkerControlStore | undefined;
   readonly #candidateEvidence: CandidateEvidenceRuntimeDependencies | undefined;
   readonly #candidateEvidenceStore: CandidateEvidenceControlStore | undefined;
+  readonly #acceptance: AcceptanceRuntimeDependencies | undefined;
+  readonly #acceptanceStore: AcceptanceControlStore | undefined;
   readonly #preparedWorkerRequests = new Map<AttemptId, WorkerRequest>();
 
   public constructor(dependencies: WorkflowRuntimeKernelDependencies) {
@@ -781,6 +868,9 @@ export class WorkflowRuntimeKernel {
     this.#phaseGuards = dependencies.phaseGuards ?? unavailablePhaseGuards;
     this.#workerStore = isWorkerControlStore(dependencies.store) ? dependencies.store : undefined;
     this.#candidateEvidenceStore = isCandidateEvidenceControlStore(dependencies.store)
+      ? dependencies.store
+      : undefined;
+    this.#acceptanceStore = isAcceptanceControlStore(dependencies.store)
       ? dependencies.store
       : undefined;
     if (dependencies.workerContext !== undefined) {
@@ -815,6 +905,25 @@ export class WorkflowRuntimeKernel {
       });
     } else {
       this.#candidateEvidence = undefined;
+    }
+    if (dependencies.acceptance !== undefined) {
+      if (this.#acceptanceStore === undefined) {
+        throw new TypeError('Acceptance runtime requires the complete AcceptanceControlStore port');
+      }
+      if (this.#candidateEvidence === undefined) {
+        throw new TypeError('Acceptance runtime requires Candidate/Evidence dependencies');
+      }
+      if (this.#candidateEvidence.policyBundleId !== dependencies.acceptance.policyBundleId) {
+        throw new TypeError(
+          'M1 Candidate/Evidence and Acceptance paths must use one Policy Bundle',
+        );
+      }
+      this.#acceptance = Object.freeze({
+        identities: dependencies.acceptance.identities,
+        policyBundleId: policyBundleId(dependencies.acceptance.policyBundleId),
+      });
+    } else {
+      this.#acceptance = undefined;
     }
   }
 
@@ -2073,6 +2182,465 @@ export class WorkflowRuntimeKernel {
     });
   }
 
+  public evaluateAcceptance(rawInput: EvaluateAcceptanceRequest): RuntimeCommandResult {
+    const input = decodeEvaluateAcceptanceRequest(rawInput);
+    const target = goalTarget(input.goalId);
+    return this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      expectedGoalRevision: input.expectedGoalRevision,
+      digestInput: { schemaVersion: 1, type: 'EVALUATE_ACCEPTANCE', ...input },
+      missingResource: 'Goal',
+      missingIdentifier: input.goalId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const runtime = this.requireAcceptanceRuntime();
+        const store = this.requireAcceptanceStore();
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const authority = this.resolveAcceptanceAuthority(
+          input.commandId,
+          goal,
+          workflow,
+          runtime.policyBundleId,
+        );
+        if (
+          workflow.phase !== WorkflowPhase.FINAL_VERIFY ||
+          workflow.runStatus !== RunStatus.READY ||
+          authority.generation.state !== CandidateGenerationState.FROZEN
+        ) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Acceptance requires the current READY Workflow in FINAL_VERIFY',
+              'ACCEPTANCE_AUTHORITY_NOT_READY',
+            ),
+          );
+        }
+        const observedDigest = this.observeFrozenCandidate(goal, workflow, authority.generation);
+        if (observedDigest !== authority.generation.frozenDigest) {
+          return this.planFrozenCandidateIntegrityFailure(
+            input.commandId,
+            goal,
+            workflow,
+            authority.generation,
+            observedDigest,
+            inputDigest,
+            target,
+            'Acceptance source reobservation found frozen Candidate drift',
+          );
+        }
+        const createdAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          authority.generation.updatedAt,
+          policy.installedAt,
+          ...authority.currentEvidence.map(({ eligibility }) => eligibility.changedAt),
+          ...authority.pendingIssues.flatMap((issue) => [
+            issue.createdAt,
+            ...(issue.resolvedAt === undefined ? [] : [issue.resolvedAt]),
+          ]),
+        );
+        const compiled = this.internalOperation(
+          input.commandId,
+          'ACCEPTANCE_INPUT_COMPILATION_FAILURE',
+          () => compileM1AcceptanceInput(authority, createdAt, this.#digests),
+        );
+        const issuedAt = this.causalNow(input.commandId, createdAt);
+        const decisionIdentifier = this.internalOperation(
+          input.commandId,
+          'ACCEPTANCE_DECISION_ID_GENERATION_FAILURE',
+          () => acceptanceDecisionId(runtime.identities.nextAcceptanceDecisionId()),
+        );
+        const decision = this.internalOperation(input.commandId, 'ACCEPTANCE_ENGINE_FAILURE', () =>
+          createM1AcceptanceEngine(this.#digests).issueDecision({
+            id: decisionIdentifier,
+            issuedAt,
+            input: compiled,
+          }),
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitAcceptanceEvaluation({
+              commandId: input.commandId,
+              inputDigest,
+              target,
+              manifest: compiled.manifest,
+              pendingIssueSet: compiled.pendingIssueSet,
+              decision,
+              manifestAuditEventId: this.nextAuditEventId(input.commandId),
+              decisionAuditEventId: this.nextAuditEventId(input.commandId),
+            }),
+        };
+      },
+    });
+  }
+
+  public closeAcceptedGoal(rawInput: CloseAcceptedGoalRequest): RuntimeCommandResult {
+    const input = decodeConsumeAcceptanceRequest(rawInput);
+    const target = goalTarget(input.goalId);
+    return this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      expectedGoalRevision: input.expectedGoalRevision,
+      digestInput: { schemaVersion: 1, type: 'CLOSE_ACCEPTED_GOAL', ...input },
+      missingResource: 'Goal',
+      missingIdentifier: input.goalId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const store = this.requireAcceptanceStore();
+        const runtime = this.requireAcceptanceRuntime();
+        const consumed = this.resolveAcceptanceConsumption(input.commandId, input);
+        if (consumed.decision.outcome !== AcceptanceOutcome.ACCEPT) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Only a current ACCEPT decision can close a Goal',
+              'ACCEPTANCE_DECISION_NOT_ACCEPTED',
+            ),
+          );
+        }
+        const authority = this.resolveAcceptanceAuthority(
+          input.commandId,
+          goal,
+          workflow,
+          runtime.policyBundleId,
+        );
+        this.assertAcceptanceConsumptionCurrent(input.commandId, consumed, authority);
+        const observedDigest = this.observeFrozenCandidate(goal, workflow, authority.generation);
+        if (observedDigest !== authority.generation.frozenDigest) {
+          return this.planFrozenCandidateIntegrityFailure(
+            input.commandId,
+            goal,
+            workflow,
+            authority.generation,
+            observedDigest,
+            inputDigest,
+            target,
+            'Closeout source reobservation found frozen Candidate drift',
+          );
+        }
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          authority.generation.updatedAt,
+          consumed.decision.issuedAt,
+        );
+        const workflowDecision = decideWorkflow(workflow, {
+          type: 'REQUEST_PHASE_TRANSITION',
+          commandId: input.commandId,
+          workflowId: workflow.id,
+          expectedVersion: input.expectedWorkflowVersion,
+          occurredAt,
+          reason: input.reason,
+          requestedPhase: WorkflowPhase.CLOSEOUT,
+          guardResults: Object.freeze([
+            this.ownedGuard(WorkflowGuard.CURRENT_ACCEPTANCE, 'CURRENT_ACCEPTANCE_DECISION', [
+              consumed.decision.id,
+              consumed.decision.decisionDigest,
+              consumed.manifest.manifestDigest,
+            ]),
+          ]),
+        });
+        if (!workflowDecision.accepted) {
+          return this.domainRejectPlan(workflowDecision.rejection);
+        }
+        const candidateDecision = decideCandidate(authority.generation, {
+          type: 'ACCEPT_CANDIDATE',
+          commandId: input.commandId,
+          candidateGenerationId: authority.generation.id,
+          expectedVersion: authority.generation.version,
+          occurredAt,
+        });
+        if (!candidateDecision.accepted) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              candidateDecision.rejection.message,
+              candidateDecision.rejection.code,
+            ),
+          );
+        }
+        const event = workflowDecision.events[0];
+        const candidateEvent = candidateDecision.events[0];
+        const closeout = decodeCloseoutRecord({
+          schemaVersion: 1,
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          workflowId: workflow.id,
+          workflowVersion: event.toVersion,
+          acceptanceDecisionId: consumed.decision.id,
+          acceptanceDecisionDigest: consumed.decision.decisionDigest,
+          inputManifestDigest: consumed.manifest.manifestDigest,
+          candidateGenerationId: authority.generation.id,
+          candidateDigest: authority.generation.frozenDigest,
+          evidenceSetDigest: consumed.manifest.evidenceSetDigest,
+          policyBundleId: consumed.manifest.policyBundleId,
+          policyBundleDigest: consumed.manifest.policyBundleDigest,
+          closedAt: occurredAt,
+        });
+        const payloadDigest = this.digest(
+          input.commandId,
+          { event, candidateEvent, closeout },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitAcceptedCloseout({
+              inputDigest,
+              target,
+              event,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              payloadDigest,
+              candidateEvent,
+              candidateAuditEventId: this.nextAuditEventId(input.commandId),
+              closeout,
+              closeoutAuditEventId: this.nextAuditEventId(input.commandId),
+            }),
+        };
+      },
+    });
+  }
+
+  public beginAcceptanceRepair(rawInput: BeginAcceptanceRepairRequest): RuntimeCommandResult {
+    const input = decodeConsumeAcceptanceRequest(rawInput);
+    const target = goalTarget(input.goalId);
+    return this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      expectedGoalRevision: input.expectedGoalRevision,
+      digestInput: { schemaVersion: 1, type: 'BEGIN_ACCEPTANCE_REPAIR', ...input },
+      missingResource: 'Goal',
+      missingIdentifier: input.goalId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const store = this.requireAcceptanceStore();
+        const acceptanceRuntime = this.requireAcceptanceRuntime();
+        const candidateRuntime = this.requireCandidateEvidenceRuntime();
+        const consumed = this.resolveAcceptanceConsumption(input.commandId, input);
+        if (consumed.decision.outcome !== AcceptanceOutcome.REJECT_REPAIRABLE) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Only a current REJECT_REPAIRABLE decision can start repair',
+              'ACCEPTANCE_DECISION_NOT_REPAIRABLE',
+            ),
+          );
+        }
+        const authority = this.resolveAcceptanceAuthority(
+          input.commandId,
+          goal,
+          workflow,
+          acceptanceRuntime.policyBundleId,
+        );
+        this.assertAcceptanceConsumptionCurrent(input.commandId, consumed, authority);
+        if (authority.generation.frozenDigest === undefined) {
+          throw new TypeError('Repair authority has no frozen Candidate digest');
+        }
+        const observedDigest = this.observeFrozenCandidate(goal, workflow, authority.generation);
+        if (observedDigest !== authority.generation.frozenDigest) {
+          return this.planFrozenCandidateIntegrityFailure(
+            input.commandId,
+            goal,
+            workflow,
+            authority.generation,
+            observedDigest,
+            inputDigest,
+            target,
+            'Repair source reobservation found frozen Candidate drift',
+          );
+        }
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const generationIdentifier = this.internalOperation(
+          input.commandId,
+          'CANDIDATE_GENERATION_ID_FAILURE',
+          () => candidateGenerationId(candidateRuntime.identities.nextCandidateGenerationId()),
+        );
+        const sequence = this.storeOperation(
+          input.commandId,
+          'CANDIDATE_SEQUENCE_READ_FAILURE',
+          () => store.nextCandidateGenerationSequence(authority.candidate.id),
+        );
+        if (!Number.isSafeInteger(sequence) || sequence < 2) {
+          throw new TypeError('Store returned an invalid repair generation sequence');
+        }
+        const preparationRequest = validateCandidateRepairPreparationRequest({
+          schemaVersion: 1,
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          workflowId: workflow.id,
+          candidateId: authority.candidate.id,
+          generationId: generationIdentifier,
+          parentGenerationId: authority.generation.id,
+          expectedBaseDigest: authority.generation.frozenDigest,
+          projectPath: goal.scope.projectPath,
+        });
+        const rawPreparation = this.candidateSourceOperation(
+          CandidateSourceFailureCode.REPAIR_INVOCATION_FAILED,
+          'Candidate Source repair preparation failed',
+          () => candidateRuntime.candidateSource.prepareRepair(preparationRequest),
+        );
+        const preparation = this.candidateSourceOperation(
+          CandidateSourceFailureCode.REPAIR_OUTPUT_MALFORMED,
+          'Candidate Source returned malformed repair preparation output',
+          () => decodeCandidateRepairPreparation(rawPreparation),
+        );
+        if (
+          preparation.goalId !== goal.id ||
+          preparation.workflowId !== workflow.id ||
+          preparation.candidateId !== authority.candidate.id ||
+          preparation.generationId !== generationIdentifier ||
+          preparation.parentGenerationId !== authority.generation.id ||
+          preparation.baseDigest !== authority.generation.frozenDigest
+        ) {
+          throw new CommandExecutionFailure(
+            commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              'Candidate Source repair preparation does not bind the rejected generation',
+              CandidateSourceFailureCode.REPAIR_BINDING_MISMATCH,
+            ),
+          );
+        }
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          authority.generation.updatedAt,
+          consumed.decision.issuedAt,
+          policy.installedAt,
+        );
+        const generation = createCandidateGeneration({
+          id: generationIdentifier,
+          candidateId: authority.candidate.id,
+          sequence,
+          parentGenerationId: authority.generation.id,
+          workspaceIdentity: deriveM1WorkspaceIdentity(generationIdentifier),
+          baseDigest: preparation.baseDigest,
+          createdAt: occurredAt,
+        });
+        const candidateDecision = decideCandidate(authority.generation, {
+          type: 'REJECT_CANDIDATE',
+          commandId: input.commandId,
+          candidateGenerationId: authority.generation.id,
+          expectedVersion: authority.generation.version,
+          occurredAt,
+          reason: `ACCEPTANCE_REPAIR:${consumed.decision.dominantReasonCode}`,
+        });
+        if (!candidateDecision.accepted) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              candidateDecision.rejection.message,
+              candidateDecision.rejection.code,
+            ),
+          );
+        }
+        const checkIds = Object.freeze({
+          freeze: this.internalOperation(
+            input.commandId,
+            'FREEZE_CHECK_ID_GENERATION_FAILURE',
+            () => checkSpecificationId(candidateRuntime.identities.nextCheckSpecificationId()),
+          ),
+          verification: this.internalOperation(
+            input.commandId,
+            'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
+            () => checkSpecificationId(candidateRuntime.identities.nextCheckSpecificationId()),
+          ),
+        });
+        const candidatePolicy = createM1CandidateEvidencePolicy(
+          goal,
+          generation,
+          checkIds,
+          Object.freeze({
+            nextVerificationObligationId: () =>
+              this.internalOperation(input.commandId, 'VERIFICATION_OBLIGATION_ID_FAILURE', () =>
+                verificationObligationId(
+                  candidateRuntime.identities.nextVerificationObligationId(),
+                ),
+              ),
+          }),
+          occurredAt,
+        );
+        const workflowDecision = decideWorkflow(workflow, {
+          type: 'REQUEST_PHASE_TRANSITION',
+          commandId: input.commandId,
+          workflowId: workflow.id,
+          expectedVersion: input.expectedWorkflowVersion,
+          occurredAt,
+          reason: input.reason,
+          requestedPhase: WorkflowPhase.IMPLEMENT,
+          guardResults: Object.freeze([
+            this.ownedGuard(
+              WorkflowGuard.REJECT_REPAIRABLE_RECORDED,
+              'CURRENT_REPAIRABLE_ACCEPTANCE_REJECTION',
+              [
+                consumed.decision.id,
+                consumed.decision.decisionDigest,
+                consumed.manifest.manifestDigest,
+              ],
+            ),
+            this.ownedGuard(
+              WorkflowGuard.CANDIDATE_GENERATION_PREPARED,
+              'REPAIR_CANDIDATE_AUTHORITY_PREPARED',
+              [generation.id, generation.baseDigest, authority.generation.id],
+            ),
+          ]),
+          nextCandidateGenerationId: generation.id,
+        });
+        if (!workflowDecision.accepted) {
+          return this.domainRejectPlan(workflowDecision.rejection);
+        }
+        const event = workflowDecision.events[0];
+        const rejectedCandidateEvent = candidateDecision.events[0];
+        const payloadDigest = this.digest(
+          input.commandId,
+          {
+            event,
+            acceptanceDecisionId: consumed.decision.id,
+            acceptanceDecisionDigest: consumed.decision.decisionDigest,
+            inputManifestDigest: consumed.manifest.manifestDigest,
+            rejectedCandidateEvent,
+            generation,
+            checkSpecifications: [candidatePolicy.freeze, candidatePolicy.verification],
+            obligations: candidatePolicy.obligations,
+          },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitAcceptanceRepair({
+              inputDigest,
+              target,
+              event,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              payloadDigest,
+              acceptanceDecisionId: consumed.decision.id,
+              acceptanceDecisionDigest: consumed.decision.decisionDigest,
+              inputManifestDigest: consumed.manifest.manifestDigest,
+              candidate: authority.candidate,
+              rejectedCandidateEvent,
+              generation,
+              checkSpecifications: Object.freeze([
+                candidatePolicy.freeze,
+                candidatePolicy.verification,
+              ]),
+              obligations: candidatePolicy.obligations,
+              rejectedCandidateAuditEventId: this.nextAuditEventId(input.commandId),
+              generationAuditEventId: this.nextAuditEventId(input.commandId),
+              checkSpecificationAuditEventIds: Object.freeze([
+                this.nextAuditEventId(input.commandId),
+                this.nextAuditEventId(input.commandId),
+              ]),
+              obligationAuditEventIds: Object.freeze(
+                candidatePolicy.obligations.map(() => this.nextAuditEventId(input.commandId)),
+              ),
+            }),
+        };
+      },
+    });
+  }
+
   public recordAttemptResult(rawInput: RecordAttemptResultRequest): RuntimeCommandResult {
     const input = decodeRecordAttemptResultRequest(rawInput);
     return this.finishAttempt({ ...input, type: 'RECORD_ATTEMPT_RESULT' });
@@ -3202,6 +3770,363 @@ export class WorkflowRuntimeKernel {
       );
     }
     return this.#candidateEvidence;
+  }
+
+  private requireAcceptanceStore(): AcceptanceControlStore {
+    if (this.#acceptanceStore === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Acceptance authority requires its complete control Store',
+          'ACCEPTANCE_STORE_UNAVAILABLE',
+        ),
+      );
+    }
+    return this.#acceptanceStore;
+  }
+
+  private requireAcceptanceRuntime(): AcceptanceRuntimeDependencies {
+    if (this.#acceptance === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Acceptance authority dependencies are unavailable',
+          'ACCEPTANCE_RUNTIME_UNAVAILABLE',
+        ),
+      );
+    }
+    return this.#acceptance;
+  }
+
+  private resolveAcceptanceAuthority(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    activePolicyBundleId: PolicyBundleId,
+  ): AcceptanceAuthorityView {
+    const raw: unknown = this.storeOperation(
+      commandIdentifier,
+      'ACCEPTANCE_AUTHORITY_READ_FAILURE',
+      () =>
+        this.requireAcceptanceStore().getAcceptanceAuthorityForWorkflow(
+          workflow.id,
+          activePolicyBundleId,
+        ),
+    );
+    if (raw === undefined || typeof raw !== 'object' || raw === null) {
+      throw new TypeError(`Workflow ${workflow.id} has no complete Acceptance authority`);
+    }
+    const decodedGoal = this.decodeStoreSnapshot(commandIdentifier, 'ACCEPTANCE_GOAL_INVALID', () =>
+      decodeGoalSnapshot(Reflect.get(raw, 'goal')),
+    );
+    const decodedWorkflow = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_WORKFLOW_INVALID',
+      () => decodeWorkflowSnapshot(Reflect.get(raw, 'workflow')),
+    );
+    const candidate = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_CANDIDATE_INVALID',
+      () => decodeCandidate(Reflect.get(raw, 'candidate')),
+    );
+    const generation = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_GENERATION_INVALID',
+      () => decodeCandidateGeneration(Reflect.get(raw, 'generation')),
+    );
+    const freezeCheck = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_FREEZE_CHECK_INVALID',
+      () => decodeCheckSpecification(Reflect.get(raw, 'freezeCheck')),
+    );
+    const verificationCheck = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_VERIFICATION_CHECK_INVALID',
+      () => decodeCheckSpecification(Reflect.get(raw, 'verificationCheck')),
+    );
+    const evidenceSet = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_EVIDENCE_SET_INVALID',
+      () => decodeEvidenceSet(Reflect.get(raw, 'evidenceSet')),
+    );
+    const policyBundle = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_POLICY_INVALID',
+      () => decodePolicyBundle(Reflect.get(raw, 'policyBundle')),
+    );
+    const rawObligations: unknown = Reflect.get(raw, 'obligations');
+    const rawEvidence: unknown = Reflect.get(raw, 'currentEvidence');
+    const rawIssues: unknown = Reflect.get(raw, 'pendingIssues');
+    if (
+      !Array.isArray(rawObligations) ||
+      !Array.isArray(rawEvidence) ||
+      !Array.isArray(rawIssues)
+    ) {
+      throw new TypeError('Acceptance authority contains malformed collections');
+    }
+    const obligations = Object.freeze(
+      rawObligations.map((obligation) => decodeVerificationObligation(obligation)),
+    );
+    const currentEvidence = Object.freeze(
+      rawEvidence.map((entry) => {
+        const parsed = evidenceAuthorityEntrySchema.parse(entry);
+        return Object.freeze({
+          record: decodeEvidenceRecord(parsed.record),
+          eligibility: decodeEvidenceEligibility(parsed.eligibility),
+        });
+      }),
+    );
+    const pendingIssues = Object.freeze(rawIssues.map((issue) => decodePendingIssue(issue)));
+    const retainedFactCount = z
+      .number()
+      .int()
+      .nonnegative()
+      .parse(Reflect.get(raw, 'retainedFactCount'));
+    const retainedDecisionCount = z
+      .number()
+      .int()
+      .nonnegative()
+      .parse(Reflect.get(raw, 'retainedDecisionCount'));
+    if (
+      decodedGoal.id !== goal.id ||
+      decodedGoal.revision !== goal.revision ||
+      !workflowsEqual(decodedWorkflow, workflow) ||
+      candidate.goalId !== goal.id ||
+      generation.candidateId !== candidate.id ||
+      generation.id !== workflow.activeCandidateGenerationId ||
+      freezeCheck.kind !== CheckSpecificationKind.CANDIDATE_FREEZE ||
+      verificationCheck.kind !== CheckSpecificationKind.FAKE_VERIFICATION ||
+      policyBundle.id !== activePolicyBundleId
+    ) {
+      throw new TypeError('Acceptance authority records do not share one current owner');
+    }
+    return Object.freeze({
+      goal: decodedGoal,
+      workflow: decodedWorkflow,
+      candidate,
+      generation,
+      freezeCheck,
+      verificationCheck,
+      obligations,
+      evidenceSet,
+      currentEvidence,
+      pendingIssues,
+      retainedFactCount,
+      retainedDecisionCount,
+      policyBundle,
+    });
+  }
+
+  private resolveAcceptanceConsumption(
+    commandIdentifier: CommandId,
+    input: ConsumeAcceptanceRequest,
+  ): ResolvedAcceptanceConsumption {
+    const store = this.requireAcceptanceStore();
+    const rawDecision = this.storeOperation(
+      commandIdentifier,
+      'ACCEPTANCE_DECISION_READ_FAILURE',
+      () => store.getAcceptanceDecision(input.acceptanceDecisionId),
+    );
+    const rawManifest = this.storeOperation(
+      commandIdentifier,
+      'ACCEPTANCE_MANIFEST_READ_FAILURE',
+      () => store.getAcceptanceInputManifest(input.inputManifestDigest),
+    );
+    if (rawDecision === undefined || rawManifest === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.NOT_FOUND,
+          'The named Acceptance Decision or Input Manifest does not exist',
+          'ACCEPTANCE_AUTHORITY_NOT_FOUND',
+        ),
+      );
+    }
+    const decision = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_DECISION_INVALID',
+      () => decodeAcceptanceDecision(rawDecision),
+    );
+    const manifest = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'ACCEPTANCE_MANIFEST_INVALID',
+      () => decodeAcceptanceInputManifest(rawManifest),
+    );
+    if (
+      decision.id !== input.acceptanceDecisionId ||
+      decision.decisionDigest !== input.acceptanceDecisionDigest ||
+      decision.inputManifestDigest !== manifest.manifestDigest ||
+      manifest.manifestDigest !== input.inputManifestDigest ||
+      manifest.goalId !== input.goalId ||
+      manifest.goalRevision !== input.expectedGoalRevision ||
+      manifest.candidateDigest !== input.candidateDigest
+    ) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'The named Acceptance records do not share the requested exact bindings',
+          'ACCEPTANCE_BINDING_MISMATCH',
+        ),
+      );
+    }
+    return Object.freeze({ decision, manifest });
+  }
+
+  private assertAcceptanceConsumptionCurrent(
+    commandIdentifier: CommandId,
+    consumed: ResolvedAcceptanceConsumption,
+    authority: AcceptanceAuthorityView,
+  ): void {
+    const compiled = this.internalOperation(
+      commandIdentifier,
+      'ACCEPTANCE_CURRENT_INPUT_COMPILATION_FAILURE',
+      () => compileM1AcceptanceInput(authority, consumed.manifest.createdAt, this.#digests),
+    );
+    const expectedDecision = this.internalOperation(
+      commandIdentifier,
+      'ACCEPTANCE_CURRENT_DECISION_VALIDATION_FAILURE',
+      () =>
+        createM1AcceptanceEngine(this.#digests).issueDecision({
+          id: consumed.decision.id,
+          issuedAt: consumed.decision.issuedAt,
+          input: compiled,
+        }),
+    );
+    if (
+      canonicalizeJson(compiled.manifest) !== canonicalizeJson(consumed.manifest) ||
+      canonicalizeJson(expectedDecision) !== canonicalizeJson(consumed.decision)
+    ) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          'Acceptance Decision is no longer current for this Goal and Candidate',
+          'ACCEPTANCE_DECISION_STALE',
+        ),
+      );
+    }
+  }
+
+  private observeFrozenCandidate(
+    goal: Goal,
+    workflow: WorkflowInstance,
+    generation: CandidateGeneration,
+  ): Sha256Digest {
+    if (generation.state !== CandidateGenerationState.FROZEN) {
+      throw new TypeError('Candidate source reobservation requires a frozen generation');
+    }
+    const request = validateFrozenCandidateIntegrityRequest({
+      schemaVersion: 1,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      generation,
+    });
+    const rawObservation = this.candidateSourceOperation(
+      CandidateSourceFailureCode.INTEGRITY_INVOCATION_FAILED,
+      'Candidate Source integrity observation failed',
+      () => this.requireCandidateEvidenceRuntime().candidateSource.observeFrozen(request),
+    );
+    const observation = this.candidateSourceOperation(
+      CandidateSourceFailureCode.INTEGRITY_OUTPUT_MALFORMED,
+      'Candidate Source returned malformed integrity output',
+      () => decodeFrozenCandidateIntegrityObservation(rawObservation),
+    );
+    if (observation.generationId !== generation.id) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Candidate Source integrity output does not bind its request',
+          CandidateSourceFailureCode.INTEGRITY_BINDING_MISMATCH,
+        ),
+      );
+    }
+    return observation.observedDigest;
+  }
+
+  private planFrozenCandidateIntegrityFailure(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    generation: CandidateGeneration,
+    observedDigest: Sha256Digest,
+    inputDigest: Sha256Digest,
+    target: CommandTarget,
+    reason: string,
+  ): CommandPlan {
+    if (workflow.goalId !== goal.id) {
+      throw new TypeError('Candidate integrity failure belongs to another Goal');
+    }
+    if (generation.state !== CandidateGenerationState.FROZEN) {
+      throw new TypeError('Candidate integrity failure requires a frozen generation');
+    }
+    const evidence = this.resolveGenerationEvidence(commandIdentifier, generation.id);
+    const eligibleEvidenceCount = evidence.filter(
+      ({ eligibility }) => eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+    ).length;
+    const occurredAt = this.causalNow(
+      commandIdentifier,
+      workflow.updatedAt,
+      generation.updatedAt,
+      ...evidence.map(({ eligibility }) => eligibility.changedAt),
+    );
+    const candidateDecision = decideCandidate(generation, {
+      type: 'INVALIDATE_CANDIDATE',
+      commandId: commandIdentifier,
+      candidateGenerationId: generation.id,
+      expectedVersion: generation.version,
+      occurredAt,
+      reason: 'FROZEN_CANDIDATE_DRIFT',
+    });
+    if (!candidateDecision.accepted) {
+      return rejectPlan(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          candidateDecision.rejection.message,
+          candidateDecision.rejection.code,
+        ),
+      );
+    }
+    const workflowDecision = decideWorkflow(workflow, {
+      type: 'FAIL_WORKFLOW_INTEGRITY',
+      commandId: commandIdentifier,
+      workflowId: workflow.id,
+      expectedVersion: workflow.version,
+      occurredAt,
+      reason,
+    });
+    if (!workflowDecision.accepted) {
+      return this.domainRejectPlan(workflowDecision.rejection);
+    }
+    const event = workflowDecision.events[0];
+    const candidateEvent = candidateDecision.events[0];
+    const payloadDigest = this.digest(
+      commandIdentifier,
+      {
+        event,
+        candidateEvent,
+        expectedFrozenDigest: generation.frozenDigest,
+        observedDigest,
+      },
+      'COMMAND_PAYLOAD_DIGEST_FAILURE',
+    );
+    return {
+      kind: 'APPLY',
+      commit: () =>
+        this.requireCandidateEvidenceStore().commitCandidateIntegrityFailure({
+          inputDigest,
+          target,
+          event,
+          auditEventId: this.nextAuditEventId(commandIdentifier),
+          payloadDigest,
+          candidateEvent,
+          expectedFrozenDigest: generation.frozenDigest,
+          observedDigest,
+          candidateAuditEventId: this.nextAuditEventId(commandIdentifier),
+          invalidatedEvidenceAuditEventIds: Object.freeze(
+            Array.from({ length: eligibleEvidenceCount }, () =>
+              this.nextAuditEventId(commandIdentifier),
+            ),
+          ),
+        }),
+    };
   }
 
   private resolveCandidateAuthority(

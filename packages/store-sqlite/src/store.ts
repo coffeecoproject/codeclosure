@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { z } from 'zod';
 
 import {
+  AcceptanceOutcome,
   AttemptFailureClass,
   AttemptStatus,
   CandidateGenerationState,
@@ -22,6 +23,9 @@ import {
   applyEvidenceEligibilityEvent,
   applyWorkflowCancellationToAttempt,
   applyWorkflowEvent,
+  acceptanceDecisionProjection,
+  acceptanceInputManifestProjection,
+  acceptanceDecisionId,
   attemptId,
   auditEventId,
   candidateGenerationId,
@@ -30,6 +34,8 @@ import {
   commandId,
   contextManifestId,
   decodeContextPackage,
+  decodeAcceptanceDecision,
+  decodeAcceptanceInputManifest,
   decodeCandidate,
   decodeCandidateEvent,
   decodeCandidateGeneration,
@@ -37,6 +43,8 @@ import {
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
   decodeEvidenceSet,
+  decodeCloseoutRecord,
+  decodePendingIssueSet,
   decodeContextManifest,
   decodeAttemptEvent,
   decodeGoalSnapshot,
@@ -60,6 +68,9 @@ import {
   verificationObligationId,
   workerEventId,
   type AppliedAttemptEvent,
+  type AcceptanceDecision,
+  type AcceptanceDecisionId,
+  type AcceptanceInputManifest,
   type Attempt,
   type AttemptEvent,
   type AttemptId,
@@ -76,6 +87,7 @@ import {
   type EvidenceId,
   type EvidenceRecord,
   type EvidenceSet,
+  type CloseoutRecord,
   type Goal,
   type GoalId,
   type IsoTimestamp,
@@ -93,6 +105,7 @@ import {
 import {
   CanonicalJsonSha256DigestProvider,
   contextManifestDigestProjection,
+  compileM1AcceptanceInput,
   createAppliedStoredCommandOutcome,
   createRejectedStoredCommandOutcome,
   canonicalizeJson,
@@ -109,20 +122,28 @@ import {
   m1PhaseObjective,
   m1WorkerResponseContract,
   validateM1CandidateEvidencePolicy,
+  verifyM1AcceptanceDecision,
   verifyEvidenceSetAuthority,
   assertStoredCommandOutcomeBinding,
   StoredCommandDisposition,
   storedCommandOutcomeToJson,
   type CommandTarget,
   type AdmittedWorkerEventReceipt,
+  type AcceptanceAuthorityView,
+  type AcceptanceControlStore,
   type ClaimWorkerDispatch,
   type CandidateAuthorityView,
-  type CandidateEvidenceControlStore,
+  type CommitAcceptanceEvaluation,
+  type CommitAcceptanceRepair,
+  type CommitAcceptedCloseout,
   type CommitCandidateAttemptOutcome,
   type CommitCandidateIntegrityFailure,
   type CommitCandidatePreparation,
   type CommitEvidenceSetTransition,
   type CommittedCandidateAttemptOutcome,
+  type CommittedAcceptanceEvaluation,
+  type CommittedAcceptanceRepair,
+  type CommittedAcceptedCloseout,
   type CommittedCandidateIntegrityFailure,
   type CommittedCandidatePreparation,
   type CommittedVerificationAttemptOutcome,
@@ -159,9 +180,12 @@ import {
 } from './migrations.js';
 import {
   decodeAttempt,
+  decodeAcceptanceDecisionRow,
+  decodeAcceptanceInputManifestRow,
   decodeAuditEvent,
   decodeCandidateGenerationRow,
   decodeCandidateRow,
+  decodeCloseoutRow,
   decodeCheckSpecificationRow,
   decodeGoal,
   decodeContextManifestRow,
@@ -169,6 +193,7 @@ import {
   decodeEvidenceEligibilityRow,
   decodeEvidenceRecordRow,
   decodeEvidenceSetRow,
+  decodePendingIssueRow,
   decodeProcessedCommand,
   decodeWorkflow,
   decodeWorkerDispatchClaimRow,
@@ -208,13 +233,28 @@ export const CandidateEvidenceTransactionStep = {
 export type CandidateEvidenceTransactionStep =
   (typeof CandidateEvidenceTransactionStep)[keyof typeof CandidateEvidenceTransactionStep];
 
+export const AcceptanceTransactionStep = {
+  AFTER_ACCEPTANCE_MANIFEST_WRITE: 'AFTER_ACCEPTANCE_MANIFEST_WRITE',
+  AFTER_ACCEPTANCE_DECISION_WRITE: 'AFTER_ACCEPTANCE_DECISION_WRITE',
+  AFTER_CLOSEOUT_WRITE: 'AFTER_CLOSEOUT_WRITE',
+  AFTER_REPAIR_GENERATION_WRITE: 'AFTER_REPAIR_GENERATION_WRITE',
+  AFTER_REPAIR_CHECK_SPECIFICATION_WRITE: 'AFTER_REPAIR_CHECK_SPECIFICATION_WRITE',
+  AFTER_REPAIR_OBLIGATION_WRITE: 'AFTER_REPAIR_OBLIGATION_WRITE',
+} as const;
+export type AcceptanceTransactionStep =
+  (typeof AcceptanceTransactionStep)[keyof typeof AcceptanceTransactionStep];
+
 export interface SqliteControlStoreOptions {
   readonly filename: string;
   readonly migrationsDirectory?: string;
   readonly busyTimeoutMilliseconds?: number;
   readonly now?: () => IsoTimestamp;
   readonly transactionProbe?: (
-    step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep,
+    step:
+      | TransactionStep
+      | WorkerTransactionStep
+      | CandidateEvidenceTransactionStep
+      | AcceptanceTransactionStep,
   ) => void;
 }
 
@@ -704,6 +744,125 @@ function validateCommitEvidenceSetTransition(
   });
 }
 
+function validateCommitAcceptanceEvaluation(
+  rawInput: CommitAcceptanceEvaluation,
+): CommitAcceptanceEvaluation {
+  const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
+  const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
+  const manifest = decodeAcceptanceInputManifest(rawInput.manifest);
+  const pendingIssueSet = decodePendingIssueSet(rawInput.pendingIssueSet);
+  const decision = decodeAcceptanceDecision(rawInput.decision);
+  const manifestAuditEventId = auditEventId(rawInput.manifestAuditEventId);
+  const decisionAuditEventId = auditEventId(rawInput.decisionAuditEventId);
+  if (
+    decision.inputManifestDigest !== manifest.manifestDigest ||
+    decision.policyBundleDigest !== manifest.policyBundleDigest ||
+    pendingIssueSet.goalId !== manifest.goalId ||
+    pendingIssueSet.goalRevision !== manifest.goalRevision ||
+    pendingIssueSet.digest !== manifest.pendingIssueSetDigest ||
+    decision.issuedAt < manifest.createdAt ||
+    manifestAuditEventId === decisionAuditEventId
+  ) {
+    throw new StoreInvariantError('Acceptance evaluation fields do not share one authority');
+  }
+  return Object.freeze({
+    commandId: commandId(rawInput.commandId),
+    inputDigest: sha256Digest(rawInput.inputDigest),
+    target: decodeCommandTarget(rawInput.target),
+    manifest,
+    pendingIssueSet,
+    decision,
+    manifestAuditEventId,
+    decisionAuditEventId,
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(causationId === undefined ? {} : { causationId }),
+  });
+}
+
+function validateCommitAcceptedCloseout(rawInput: CommitAcceptedCloseout): CommitAcceptedCloseout {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const candidateEvent = decodeCandidateEvent(rawInput.candidateEvent);
+  const closeout = decodeCloseoutRecord(rawInput.closeout);
+  if (
+    base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
+    base.event.fromPhase !== WorkflowPhase.FINAL_VERIFY ||
+    base.event.toPhase !== WorkflowPhase.CLOSEOUT ||
+    base.event.commandId !== candidateEvent.commandId ||
+    base.event.occurredAt !== candidateEvent.occurredAt ||
+    candidateEvent.fromState !== CandidateGenerationState.FROZEN ||
+    candidateEvent.toState !== CandidateGenerationState.ACCEPTED ||
+    closeout.workflowId !== base.event.workflowId ||
+    closeout.workflowVersion !== base.event.toVersion ||
+    closeout.candidateGenerationId !== candidateEvent.candidateGenerationId ||
+    closeout.closedAt !== base.event.occurredAt
+  ) {
+    throw new StoreInvariantError('Accepted closeout does not bind one compound transition');
+  }
+  return Object.freeze({
+    ...base,
+    candidateEvent,
+    candidateAuditEventId: auditEventId(rawInput.candidateAuditEventId),
+    closeout,
+    closeoutAuditEventId: auditEventId(rawInput.closeoutAuditEventId),
+  });
+}
+
+function validateCommitAcceptanceRepair(rawInput: CommitAcceptanceRepair): CommitAcceptanceRepair {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const candidate = decodeCandidate(rawInput.candidate);
+  const rejectedCandidateEvent = decodeCandidateEvent(rawInput.rejectedCandidateEvent);
+  const generation = decodeCandidateGeneration(rawInput.generation);
+  const checkSpecifications = Object.freeze(
+    rawInput.checkSpecifications.map((specification) => decodeCheckSpecification(specification)),
+  );
+  const obligations = Object.freeze(
+    rawInput.obligations.map((obligation) => decodeVerificationObligation(obligation)),
+  );
+  const checkSpecificationAuditEventIds = validateAuditIdentifiers(
+    rawInput.checkSpecificationAuditEventIds,
+    checkSpecifications.length,
+    'Repair Check Specification',
+  );
+  const obligationAuditEventIds = validateAuditIdentifiers(
+    rawInput.obligationAuditEventIds,
+    obligations.length,
+    'Repair Verification Obligation',
+  );
+  if (
+    base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
+    base.event.fromPhase !== WorkflowPhase.FINAL_VERIFY ||
+    base.event.toPhase !== WorkflowPhase.IMPLEMENT ||
+    base.event.nextCandidateGenerationId !== generation.id ||
+    base.event.commandId !== rejectedCandidateEvent.commandId ||
+    base.event.occurredAt !== rejectedCandidateEvent.occurredAt ||
+    rejectedCandidateEvent.fromState !== CandidateGenerationState.FROZEN ||
+    rejectedCandidateEvent.toState !== CandidateGenerationState.REJECTED ||
+    generation.state !== CandidateGenerationState.MUTABLE ||
+    generation.version !== 1 ||
+    generation.parentGenerationId !== rejectedCandidateEvent.candidateGenerationId ||
+    generation.candidateId !== candidate.id
+  ) {
+    throw new StoreInvariantError(
+      'Acceptance repair does not bind one child-generation transition',
+    );
+  }
+  return Object.freeze({
+    ...base,
+    acceptanceDecisionId: acceptanceDecisionId(rawInput.acceptanceDecisionId),
+    acceptanceDecisionDigest: sha256Digest(rawInput.acceptanceDecisionDigest),
+    inputManifestDigest: sha256Digest(rawInput.inputManifestDigest),
+    candidate,
+    rejectedCandidateEvent,
+    generation,
+    checkSpecifications,
+    obligations,
+    rejectedCandidateAuditEventId: auditEventId(rawInput.rejectedCandidateAuditEventId),
+    generationAuditEventId: auditEventId(rawInput.generationAuditEventId),
+    checkSpecificationAuditEventIds,
+    obligationAuditEventIds,
+  });
+}
+
 function validateAggregateLookup(value: unknown, fieldName: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new TypeError(`${fieldName} must be a non-empty string`);
@@ -711,11 +870,17 @@ function validateAggregateLookup(value: unknown, fieldName: string): string {
   return value;
 }
 
-export class SqliteControlStore implements CandidateEvidenceControlStore {
+export class SqliteControlStore implements AcceptanceControlStore {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
   readonly #transactionProbe:
-    | ((step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep) => void)
+    | ((
+        step:
+          | TransactionStep
+          | WorkerTransactionStep
+          | CandidateEvidenceTransactionStep
+          | AcceptanceTransactionStep,
+      ) => void)
     | undefined;
   #closed = false;
 
@@ -723,7 +888,13 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
     database: Database.Database,
     appliedMigrations: readonly AppliedMigration[],
     transactionProbe:
-      | ((step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep) => void)
+      | ((
+          step:
+            | TransactionStep
+            | WorkerTransactionStep
+            | CandidateEvidenceTransactionStep
+            | AcceptanceTransactionStep,
+        ) => void)
       | undefined,
   ) {
     this.#database = database;
@@ -756,6 +927,7 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
       const store = new SqliteControlStore(database, migrations, options.transactionProbe);
       store.assertRetainedWorkerAuthorityClosure();
       store.assertRetainedCandidateEvidenceAuthorityClosure();
+      store.assertRetainedAcceptanceAuthorityClosure();
       return store;
     } catch (error) {
       database.close();
@@ -1053,6 +1225,167 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
       .prepare('SELECT * FROM policy_bundles WHERE id = ?')
       .get(policyIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedPolicyBundleRow(row);
+  }
+
+  public getAcceptanceAuthorityForWorkflow(
+    rawWorkflowIdentifier: WorkflowId,
+    rawPolicyBundleIdentifier: PolicyBundleId,
+  ): AcceptanceAuthorityView | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    const policyIdentifier = policyBundleId(rawPolicyBundleIdentifier);
+    return this.runRead(() => {
+      const workflow = this.getWorkflow(workflowIdentifier);
+      if (workflow?.activeCandidateGenerationId === undefined) {
+        return undefined;
+      }
+      const goal = this.getGoal(workflow.goalId);
+      const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
+      const installedPolicy = this.getPolicyBundle(policyIdentifier);
+      if (goal === undefined || candidateAuthority === undefined || installedPolicy === undefined) {
+        return undefined;
+      }
+      const relatedSpecifications = this.listCheckSpecifications().filter((specification) =>
+        specification.inputRefs.includes(candidateAuthority.generation.id),
+      );
+      const freezeCheck = relatedSpecifications.find(
+        (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+      );
+      const verificationCheck = relatedSpecifications.find(
+        (specification) => specification.kind === CheckSpecificationKind.FAKE_VERIFICATION,
+      );
+      const obligations = this.listVerificationObligations(goal.id).filter(
+        (obligation) =>
+          obligation.goalRevision === goal.revision &&
+          obligation.candidateGenerationId === candidateAuthority.generation.id,
+      );
+      const setRows = this.#database
+        .prepare(
+          `SELECT * FROM evidence_sets
+            WHERE goal_id = ?
+              AND goal_revision = ?
+              AND candidate_generation_id = ?
+              AND candidate_digest = ?
+            ORDER BY digest`,
+        )
+        .all(
+          goal.id,
+          goal.revision,
+          candidateAuthority.generation.id,
+          candidateAuthority.generation.frozenDigest ?? '',
+        );
+      if (
+        relatedSpecifications.length !== 2 ||
+        freezeCheck === undefined ||
+        verificationCheck === undefined ||
+        setRows.length !== 1
+      ) {
+        return undefined;
+      }
+      const decodedSet = decodeEvidenceSetRow(setRows[0]);
+      const evidenceSet = this.getEvidenceSet(decodedSet.digest);
+      if (evidenceSet === undefined) {
+        throw new StoreInvariantError(`Evidence Set ${decodedSet.digest} disappeared`);
+      }
+      const currentEvidence = Object.freeze(
+        evidenceSet.evidenceRefs.map((reference) => {
+          const record = this.getEvidence(reference.evidenceId);
+          const eligibility = this.getEvidenceEligibility(reference.evidenceId);
+          if (record === undefined || eligibility === undefined) {
+            throw new StoreInvariantError(
+              `Acceptance Evidence ${reference.evidenceId} has incomplete current authority`,
+            );
+          }
+          return Object.freeze({ record, eligibility });
+        }),
+      );
+      const pendingIssues = Object.freeze(
+        this.#database
+          .prepare(
+            `SELECT * FROM pending_issues
+              WHERE goal_id = ? AND goal_revision = ?
+              ORDER BY id`,
+          )
+          .all(goal.id, goal.revision)
+          .map((row) => decodePendingIssueRow(row)),
+      );
+      const retainedFactCount = this.readCount(
+        'SELECT COUNT(*) AS count FROM facts WHERE goal_id = ?',
+        goal.id,
+      );
+      const retainedDecisionCount = this.readCount(
+        'SELECT COUNT(*) AS count FROM human_decisions WHERE goal_id = ?',
+        goal.id,
+      );
+      return Object.freeze({
+        goal,
+        workflow,
+        candidate: candidateAuthority.candidate,
+        generation: candidateAuthority.generation,
+        freezeCheck,
+        verificationCheck,
+        obligations: Object.freeze(obligations),
+        evidenceSet,
+        currentEvidence,
+        pendingIssues,
+        retainedFactCount,
+        retainedDecisionCount,
+        policyBundle: installedPolicy.bundle,
+      });
+    });
+  }
+
+  public getAcceptanceInputManifest(
+    rawManifestDigest: Sha256Digest,
+  ): AcceptanceInputManifest | undefined {
+    this.assertOpen();
+    const manifestDigest = sha256Digest(rawManifestDigest);
+    const row = this.#database
+      .prepare('SELECT * FROM acceptance_input_manifests WHERE manifest_digest = ?')
+      .get(manifestDigest);
+    if (row === undefined) {
+      return undefined;
+    }
+    const manifest = decodeAcceptanceInputManifestRow(row);
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(acceptanceInputManifestProjection(manifest)),
+    );
+    if (manifest.manifestDigest !== expectedDigest) {
+      throw new StoreInvariantError(
+        `Acceptance Input Manifest ${manifest.manifestDigest} has a false digest`,
+      );
+    }
+    return manifest;
+  }
+
+  public getAcceptanceDecision(
+    rawDecisionIdentifier: AcceptanceDecisionId,
+  ): AcceptanceDecision | undefined {
+    this.assertOpen();
+    const decisionIdentifier = acceptanceDecisionId(rawDecisionIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM acceptance_decisions WHERE id = ?')
+      .get(decisionIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const decision = decodeAcceptanceDecisionRow(row);
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(acceptanceDecisionProjection(decision)),
+    );
+    if (decision.decisionDigest !== expectedDigest) {
+      throw new StoreInvariantError(`Acceptance Decision ${decision.id} has a false digest`);
+    }
+    return decision;
+  }
+
+  public getCloseoutForWorkflow(rawWorkflowIdentifier: WorkflowId): CloseoutRecord | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM workflow_closeouts WHERE workflow_id = ?')
+      .get(workflowIdentifier);
+    return row === undefined ? undefined : decodeCloseoutRow(row);
   }
 
   public getWorkerDispatchClaim(rawAttemptIdentifier: AttemptId): WorkerDispatchClaim | undefined {
@@ -2902,6 +3235,541 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
     });
   }
 
+  public commitAcceptanceEvaluation(
+    rawInput: CommitAcceptanceEvaluation,
+  ): StoreCommandResult<CommittedAcceptanceEvaluation> {
+    this.assertOpen();
+    const input = validateCommitAcceptanceEvaluation(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.manifest.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.manifest.workflowVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const compiled = this.compileCurrentAcceptance(input.manifest);
+      if (canonicalizeJson(compiled.pendingIssueSet) !== canonicalizeJson(input.pendingIssueSet)) {
+        throw new StoreInvariantError('Pending Issue Set does not match current authority');
+      }
+      const decision = verifyM1AcceptanceDecision(
+        compiled,
+        input.decision,
+        canonicalAuthorityDigests,
+      );
+
+      const existingManifest = this.getAcceptanceInputManifest(input.manifest.manifestDigest);
+      if (existingManifest === undefined) {
+        this.insertAuditEvent({
+          id: input.manifestAuditEventId,
+          aggregateType: 'ACCEPTANCE_INPUT_MANIFEST',
+          aggregateId: input.manifest.manifestDigest,
+          eventType: 'ACCEPTANCE_INPUT_MANIFEST_RECORDED',
+          commandId: input.commandId,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.manifest.manifestDigest,
+          occurredAt: input.manifest.createdAt,
+        });
+        this.insertAcceptanceInputManifest(input.manifest);
+      } else if (
+        canonicalizeJson(acceptanceInputManifestProjection(existingManifest)) !==
+        canonicalizeJson(acceptanceInputManifestProjection(input.manifest))
+      ) {
+        throw new StoreInvariantError('Acceptance Manifest digest collides with other content');
+      }
+      this.probe(AcceptanceTransactionStep.AFTER_ACCEPTANCE_MANIFEST_WRITE);
+
+      const contradictory = this.#database
+        .prepare(
+          `SELECT decision_digest FROM acceptance_decisions
+            WHERE input_manifest_digest = ?
+              AND policy_bundle_digest = ?
+              AND engine_version = ?
+              AND decision_digest <> ?
+            LIMIT 1`,
+        )
+        .get(
+          decision.inputManifestDigest,
+          decision.policyBundleDigest,
+          decision.engineVersion,
+          decision.decisionDigest,
+        );
+      if (contradictory !== undefined) {
+        throw new StoreInvariantError(
+          'Acceptance Engine produced contradictory semantics for the same current input',
+        );
+      }
+      this.insertAuditEvent({
+        id: input.decisionAuditEventId,
+        aggregateType: 'ACCEPTANCE_DECISION',
+        aggregateId: decision.id,
+        eventType: 'ACCEPTANCE_DECISION_ISSUED',
+        commandId: input.commandId,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: decision.decisionDigest,
+        occurredAt: decision.issuedAt,
+      });
+      this.insertAcceptanceDecision(decision);
+      this.probe(AcceptanceTransactionStep.AFTER_ACCEPTANCE_DECISION_WRITE);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, current, input.commandId),
+      );
+      this.insertProcessedCommand(
+        input.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        decision.issuedAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedManifest = this.getAcceptanceInputManifest(input.manifest.manifestDigest);
+      const persistedDecision = this.getAcceptanceDecision(decision.id);
+      if (persistedManifest === undefined || persistedDecision === undefined) {
+        throw new StoreInvariantError('Acceptance evaluation did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.commandId,
+        input.inputDigest,
+        input.target,
+        current.goalId,
+        current.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        ...(existingManifest === undefined ? [input.manifestAuditEventId] : []),
+        input.decisionAuditEventId,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({ manifest: persistedManifest, decision: persistedDecision }),
+      };
+    });
+  }
+
+  public commitAcceptedCloseout(
+    rawInput: CommitAcceptedCloseout,
+  ): StoreCommandResult<CommittedAcceptedCloseout> {
+    this.assertOpen();
+    const input = validateCommitAcceptedCloseout(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const manifest = this.requireAcceptanceManifest(input.closeout.inputManifestDigest);
+      const decision = this.requireAcceptanceDecision(input.closeout.acceptanceDecisionId);
+      const compiled = this.assertCurrentAcceptanceDecision(manifest, decision);
+      const authority = compiled.authority;
+      if (input.event.type !== 'WORKFLOW_PHASE_TRANSITIONED') {
+        throw new StoreInvariantError('Closeout requires a phase transition event');
+      }
+      if (
+        decision.outcome !== AcceptanceOutcome.ACCEPT ||
+        input.event.occurredAt < decision.issuedAt ||
+        decision.decisionDigest !== input.closeout.acceptanceDecisionDigest ||
+        authority.generation.id !== input.candidateEvent.candidateGenerationId ||
+        authority.generation.frozenDigest !== input.closeout.candidateDigest ||
+        canonicalizeJson(input.event.guardResults) !==
+          canonicalizeJson([
+            {
+              guard: WorkflowGuard.CURRENT_ACCEPTANCE,
+              outcome: GuardOutcome.PASS,
+              reasonCode: 'CURRENT_ACCEPTANCE_DECISION',
+              supportingRefs: [decision.id, decision.decisionDigest, manifest.manifestDigest],
+            },
+          ])
+      ) {
+        throw new StoreInvariantError(
+          'Closeout does not consume the exact current ACCEPT decision',
+        );
+      }
+      const nextWorkflow = applyWorkflowEvent(current, input.event);
+      const nextGeneration = applyCandidateEvent(authority.generation, input.candidateEvent);
+      const expectedCloseout = decodeCloseoutRecord({
+        schemaVersion: 1,
+        goalId: current.goalId,
+        goalRevision: current.goalRevision,
+        workflowId: current.id,
+        workflowVersion: nextWorkflow.version,
+        acceptanceDecisionId: decision.id,
+        acceptanceDecisionDigest: decision.decisionDigest,
+        inputManifestDigest: manifest.manifestDigest,
+        candidateGenerationId: authority.generation.id,
+        candidateDigest: authority.generation.frozenDigest,
+        evidenceSetDigest: manifest.evidenceSetDigest,
+        policyBundleId: manifest.policyBundleId,
+        policyBundleDigest: manifest.policyBundleDigest,
+        closedAt: input.event.occurredAt,
+      });
+      if (canonicalizeJson(expectedCloseout) !== canonicalizeJson(input.closeout)) {
+        throw new StoreInvariantError('Closeout record does not match the accepted authority');
+      }
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          candidateEvent: input.candidateEvent,
+          closeout: input.closeout,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError('Closeout audit digest does not bind the compound authority');
+      }
+      const auditTrace = {
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+      };
+
+      this.insertAuditEvent({
+        id: input.candidateAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: nextGeneration.id,
+        eventType: input.candidateEvent.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.candidateEvent.fromVersion,
+        afterVersion: input.candidateEvent.toVersion,
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+        ...auditTrace,
+      });
+      this.updateCandidateGeneration(authority.generation, nextGeneration);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION);
+      this.updateWorkflow(current, nextWorkflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: current.id,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+        ...auditTrace,
+      });
+      this.insertAuditEvent({
+        id: input.closeoutAuditEventId,
+        aggregateType: 'WORKFLOW_CLOSEOUT',
+        aggregateId: current.id,
+        eventType: 'WORKFLOW_CLOSEOUT_RECORDED',
+        commandId: input.event.commandId,
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+        ...auditTrace,
+      });
+      this.insertCloseout(input.closeout);
+      this.probe(AcceptanceTransactionStep.AFTER_CLOSEOUT_WRITE);
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, nextWorkflow, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const closeout = this.getCloseoutForWorkflow(current.id);
+      const persistedAuthority = this.getCandidateAuthorityForWorkflow(current.id);
+      if (closeout === undefined || persistedAuthority === undefined) {
+        throw new StoreInvariantError('Accepted closeout did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        current.goalId,
+        current.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.candidateAuditEventId,
+        input.auditEventId,
+        input.closeoutAuditEventId,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow: this.getWorkflowInsideTransaction(current.id),
+          authority: persistedAuthority,
+          closeout,
+        }),
+      };
+    });
+  }
+
+  public commitAcceptanceRepair(
+    rawInput: CommitAcceptanceRepair,
+  ): StoreCommandResult<CommittedAcceptanceRepair> {
+    this.assertOpen();
+    const input = validateCommitAcceptanceRepair(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      const manifest = this.requireAcceptanceManifest(input.inputManifestDigest);
+      const decision = this.requireAcceptanceDecision(input.acceptanceDecisionId);
+      const compiled = this.assertCurrentAcceptanceDecision(manifest, decision);
+      const oldGeneration = compiled.authority.generation;
+      const currentCandidate = this.getCandidateForGoal(compiled.authority.goal.id);
+      if (input.event.type !== 'WORKFLOW_PHASE_TRANSITIONED') {
+        throw new StoreInvariantError('Repair requires a phase transition event');
+      }
+      if (
+        decision.outcome !== AcceptanceOutcome.REJECT_REPAIRABLE ||
+        input.event.occurredAt < decision.issuedAt ||
+        decision.decisionDigest !== input.acceptanceDecisionDigest ||
+        currentCandidate === undefined ||
+        canonicalizeJson(currentCandidate) !== canonicalizeJson(input.candidate) ||
+        oldGeneration.id !== input.rejectedCandidateEvent.candidateGenerationId ||
+        oldGeneration.frozenDigest === undefined ||
+        input.generation.createdAt !== input.event.occurredAt ||
+        input.generation.parentGenerationId !== oldGeneration.id ||
+        input.generation.baseDigest !== oldGeneration.frozenDigest ||
+        canonicalizeJson(input.event.guardResults) !==
+          canonicalizeJson([
+            {
+              guard: WorkflowGuard.REJECT_REPAIRABLE_RECORDED,
+              outcome: GuardOutcome.PASS,
+              reasonCode: 'CURRENT_REPAIRABLE_ACCEPTANCE_REJECTION',
+              supportingRefs: [decision.id, decision.decisionDigest, manifest.manifestDigest],
+            },
+            {
+              guard: WorkflowGuard.CANDIDATE_GENERATION_PREPARED,
+              outcome: GuardOutcome.PASS,
+              reasonCode: 'REPAIR_CANDIDATE_AUTHORITY_PREPARED',
+              supportingRefs: [input.generation.id, input.generation.baseDigest, oldGeneration.id],
+            },
+          ])
+      ) {
+        throw new StoreInvariantError('Repair does not consume the exact current rejection');
+      }
+      const expectedSequence = this.nextCandidateGenerationSequence(input.candidate.id);
+      if (input.generation.sequence !== expectedSequence) {
+        throw new StoreInvariantError(
+          `Repair Candidate generation sequence must be ${expectedSequence}`,
+        );
+      }
+      if (input.checkSpecifications.length !== 2) {
+        throw new StoreInvariantError('Acceptance repair requires exactly two fresh M1 Checks');
+      }
+      const freeze = input.checkSpecifications[0];
+      const verification = input.checkSpecifications[1];
+      if (freeze === undefined || verification === undefined) {
+        throw new StoreInvariantError('Acceptance repair lacks its fresh Check authority');
+      }
+      validateM1CandidateEvidencePolicy(
+        compiled.authority.goal,
+        input.generation,
+        { freeze, verification, obligations: input.obligations },
+        input.generation.createdAt,
+      );
+      const nextWorkflow = applyWorkflowEvent(current, input.event);
+      const rejectedGeneration = applyCandidateEvent(oldGeneration, input.rejectedCandidateEvent);
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          event: input.event,
+          acceptanceDecisionId: decision.id,
+          acceptanceDecisionDigest: decision.decisionDigest,
+          inputManifestDigest: manifest.manifestDigest,
+          rejectedCandidateEvent: input.rejectedCandidateEvent,
+          generation: input.generation,
+          checkSpecifications: input.checkSpecifications,
+          obligations: input.obligations,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError('Repair audit digest does not bind the compound authority');
+      }
+      const auditTrace = {
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+      };
+
+      this.insertAuditEvent({
+        id: input.rejectedCandidateAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: oldGeneration.id,
+        eventType: input.rejectedCandidateEvent.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.rejectedCandidateEvent.fromVersion,
+        afterVersion: input.rejectedCandidateEvent.toVersion,
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+        ...auditTrace,
+      });
+      this.updateCandidateGeneration(oldGeneration, rejectedGeneration);
+      this.probe(CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION);
+      this.insertAuditEvent({
+        id: input.generationAuditEventId,
+        aggregateType: 'CANDIDATE_GENERATION',
+        aggregateId: input.generation.id,
+        eventType: 'CANDIDATE_GENERATION_CREATED',
+        commandId: input.event.commandId,
+        afterVersion: input.generation.version,
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.generation.createdAt,
+        ...auditTrace,
+      });
+      this.insertCandidateGeneration(input.generation, current.id);
+      this.probe(AcceptanceTransactionStep.AFTER_REPAIR_GENERATION_WRITE);
+
+      input.checkSpecifications.forEach((specification, index) => {
+        const auditIdentifier = input.checkSpecificationAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Repair Check audit identity is missing');
+        }
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'CHECK_SPECIFICATION',
+          aggregateId: specification.id,
+          eventType: 'CHECK_SPECIFICATION_RECORDED',
+          commandId: input.event.commandId,
+          payloadDigest: input.payloadDigest,
+          occurredAt: input.event.occurredAt,
+          ...auditTrace,
+        });
+        this.#database
+          .prepare(
+            `INSERT INTO check_specifications(id, version, canonical_json)
+             VALUES (?, ?, ?)`,
+          )
+          .run(
+            specification.id,
+            specification.version,
+            serializeJson(decodeJsonValue(specification)),
+          );
+        this.probe(AcceptanceTransactionStep.AFTER_REPAIR_CHECK_SPECIFICATION_WRITE);
+      });
+      input.obligations.forEach((obligation, index) => {
+        const auditIdentifier = input.obligationAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Repair Obligation audit identity is missing');
+        }
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'VERIFICATION_OBLIGATION',
+          aggregateId: obligation.id,
+          eventType: 'VERIFICATION_OBLIGATION_RECORDED',
+          commandId: input.event.commandId,
+          payloadDigest: input.payloadDigest,
+          occurredAt: input.event.occurredAt,
+          ...auditTrace,
+        });
+        this.insertVerificationObligation(obligation);
+        this.probe(AcceptanceTransactionStep.AFTER_REPAIR_OBLIGATION_WRITE);
+      });
+      this.updateWorkflow(current, nextWorkflow);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: current.id,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+        ...auditTrace,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, nextWorkflow, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const authority = this.getCandidateAuthorityForWorkflow(current.id);
+      if (authority?.generation.id !== input.generation.id) {
+        throw new StoreInvariantError('Repair Candidate authority did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        current.goalId,
+        current.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.rejectedCandidateAuditEventId,
+        input.generationAuditEventId,
+        ...input.checkSpecificationAuditEventIds,
+        ...input.obligationAuditEventIds,
+        input.auditEventId,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow: this.getWorkflowInsideTransaction(current.id),
+          authority,
+          rejectedGeneration,
+          checkSpecifications: input.checkSpecifications,
+          obligations: input.obligations,
+        }),
+      };
+    });
+  }
+
   public recordCommandRejection(rawInput: RecordCommandRejection): StoreCommandResult<undefined> {
     this.assertOpen();
     const input = validateRecordCommandRejection(rawInput);
@@ -3042,6 +3910,62 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
         `${target.aggregateType} command target does not own Workflow ${workflow.id}`,
       );
     }
+  }
+
+  private requireAcceptanceManifest(manifestDigest: Sha256Digest): AcceptanceInputManifest {
+    const manifest = this.getAcceptanceInputManifest(manifestDigest);
+    if (manifest === undefined) {
+      throw new StoreInvariantError(`Acceptance Input Manifest ${manifestDigest} does not exist`);
+    }
+    return manifest;
+  }
+
+  private requireAcceptanceDecision(decisionIdentifier: AcceptanceDecisionId): AcceptanceDecision {
+    const decision = this.getAcceptanceDecision(decisionIdentifier);
+    if (decision === undefined) {
+      throw new StoreInvariantError(`Acceptance Decision ${decisionIdentifier} does not exist`);
+    }
+    return decision;
+  }
+
+  private compileCurrentAcceptance(manifest: AcceptanceInputManifest) {
+    const installedPolicy = this.getPolicyBundle(manifest.policyBundleId);
+    if (installedPolicy === undefined || installedPolicy.installedAt > manifest.createdAt) {
+      throw new StoreInvariantError(
+        'Acceptance Input Manifest predates its installed Policy authority',
+      );
+    }
+    const authority = this.getAcceptanceAuthorityForWorkflow(
+      manifest.workflowId,
+      manifest.policyBundleId,
+    );
+    if (authority === undefined) {
+      throw new StoreInvariantError('Current Acceptance authority is incomplete');
+    }
+    const compiled = compileM1AcceptanceInput(
+      authority,
+      manifest.createdAt,
+      canonicalAuthorityDigests,
+    );
+    if (canonicalizeJson(compiled.manifest) !== canonicalizeJson(manifest)) {
+      throw new StoreInvariantError('Acceptance Input Manifest is stale or forged');
+    }
+    return compiled;
+  }
+
+  private assertCurrentAcceptanceDecision(
+    manifest: AcceptanceInputManifest,
+    decision: AcceptanceDecision,
+  ) {
+    if (
+      decision.inputManifestDigest !== manifest.manifestDigest ||
+      decision.policyBundleDigest !== manifest.policyBundleDigest
+    ) {
+      throw new StoreInvariantError('Acceptance Decision and Manifest bindings disagree');
+    }
+    const compiled = this.compileCurrentAcceptance(manifest);
+    verifyM1AcceptanceDecision(compiled, decision, canonicalAuthorityDigests);
+    return compiled;
   }
 
   private nextCandidateSequenceForPreparation(candidateIdentifier: Candidate['id']): number {
@@ -3210,6 +4134,89 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
         serializeJson(decodeJsonValue(set.obligationMappings)),
         serializeJson(decodeJsonValue(set.evidenceRefs)),
         serializeJson(decodeJsonValue(set.unresolvedEvidenceRequirements)),
+      );
+  }
+
+  private insertAcceptanceInputManifest(manifest: AcceptanceInputManifest): void {
+    this.#database
+      .prepare(
+        `INSERT INTO acceptance_input_manifests(
+           manifest_digest, schema_version, goal_id, goal_revision, workflow_id,
+           workflow_version, phase, fact_snapshot_digest, decision_set_digest,
+           scenario_set_digest, candidate_generation_id, candidate_digest,
+           evidence_set_digest, pending_issue_set_digest, policy_bundle_id,
+           policy_bundle_digest, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        manifest.manifestDigest,
+        manifest.schemaVersion,
+        manifest.goalId,
+        manifest.goalRevision,
+        manifest.workflowId,
+        manifest.workflowVersion,
+        manifest.phase,
+        manifest.factSnapshotDigest,
+        manifest.decisionSetDigest,
+        manifest.scenarioSetDigest,
+        manifest.candidateGenerationId,
+        manifest.candidateDigest,
+        manifest.evidenceSetDigest,
+        manifest.pendingIssueSetDigest,
+        manifest.policyBundleId,
+        manifest.policyBundleDigest,
+        manifest.createdAt,
+      );
+  }
+
+  private insertAcceptanceDecision(decision: AcceptanceDecision): void {
+    this.#database
+      .prepare(
+        `INSERT INTO acceptance_decisions(
+           id, schema_version, input_manifest_digest, policy_bundle_digest,
+           outcome, dominant_reason_code, rule_results_json, engine_version,
+           issued_at, decision_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        decision.id,
+        decision.schemaVersion,
+        decision.inputManifestDigest,
+        decision.policyBundleDigest,
+        decision.outcome,
+        decision.dominantReasonCode,
+        serializeJson(decodeJsonValue(decision.ruleResults)),
+        decision.engineVersion,
+        decision.issuedAt,
+        decision.decisionDigest,
+      );
+  }
+
+  private insertCloseout(closeout: CloseoutRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO workflow_closeouts(
+           workflow_id, schema_version, goal_id, goal_revision, workflow_version,
+           acceptance_decision_id, acceptance_decision_digest, input_manifest_digest,
+           candidate_generation_id, candidate_digest, evidence_set_digest,
+           policy_bundle_id, policy_bundle_digest, closed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        closeout.workflowId,
+        closeout.schemaVersion,
+        closeout.goalId,
+        closeout.goalRevision,
+        closeout.workflowVersion,
+        closeout.acceptanceDecisionId,
+        closeout.acceptanceDecisionDigest,
+        closeout.inputManifestDigest,
+        closeout.candidateGenerationId,
+        closeout.candidateDigest,
+        closeout.evidenceSetDigest,
+        closeout.policyBundleId,
+        closeout.policyBundleDigest,
+        closeout.closedAt,
       );
   }
 
@@ -4435,12 +5442,411 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
     }
   }
 
+  private historicalAcceptanceForManifest(manifest: AcceptanceInputManifest) {
+    const goal = this.getGoal(manifest.goalId);
+    const currentWorkflow = this.getWorkflow(manifest.workflowId);
+    const candidate = this.getCandidateForGoal(manifest.goalId);
+    const currentGeneration = this.getCandidateGeneration(manifest.candidateGenerationId);
+    const installedPolicy = this.getPolicyBundle(manifest.policyBundleId);
+    const evidenceSet = this.getEvidenceSet(manifest.evidenceSetDigest);
+    if (
+      goal === undefined ||
+      currentWorkflow === undefined ||
+      candidate === undefined ||
+      currentGeneration === undefined ||
+      installedPolicy === undefined ||
+      evidenceSet === undefined ||
+      goal.revision !== manifest.goalRevision ||
+      currentWorkflow.goalId !== goal.id ||
+      currentGeneration.candidateId !== candidate.id ||
+      currentGeneration.frozenDigest !== manifest.candidateDigest ||
+      installedPolicy.bundle.digest !== manifest.policyBundleDigest ||
+      installedPolicy.installedAt > manifest.createdAt
+    ) {
+      throw new StoreInvariantError(
+        `Acceptance Input Manifest ${manifest.manifestDigest} has missing historical authority`,
+      );
+    }
+    const historicalGenerationVersion =
+      currentGeneration.state === CandidateGenerationState.FROZEN
+        ? currentGeneration.version
+        : currentGeneration.version - 1;
+    const historicalGeneration = decodeCandidateGeneration({
+      id: currentGeneration.id,
+      candidateId: currentGeneration.candidateId,
+      sequence: currentGeneration.sequence,
+      ...(currentGeneration.parentGenerationId === undefined
+        ? {}
+        : { parentGenerationId: currentGeneration.parentGenerationId }),
+      workspaceIdentity: currentGeneration.workspaceIdentity,
+      state: CandidateGenerationState.FROZEN,
+      baseDigest: currentGeneration.baseDigest,
+      frozenDigest: currentGeneration.frozenDigest,
+      version: historicalGenerationVersion,
+      createdAt: currentGeneration.createdAt,
+      updatedAt: currentGeneration.frozenAt,
+      frozenAt: currentGeneration.frozenAt,
+    });
+    const historicalWorkflow = decodeWorkflowSnapshot({
+      id: currentWorkflow.id,
+      goalId: currentWorkflow.goalId,
+      goalRevision: currentWorkflow.goalRevision,
+      phase: WorkflowPhase.FINAL_VERIFY,
+      runStatus: RunStatus.READY,
+      version: manifest.workflowVersion,
+      activeCandidateGenerationId: manifest.candidateGenerationId,
+      createdAt: currentWorkflow.createdAt,
+      updatedAt: manifest.createdAt,
+    });
+    const relatedSpecifications = this.listCheckSpecifications().filter((specification) =>
+      specification.inputRefs.includes(historicalGeneration.id),
+    );
+    const freezeCheck = relatedSpecifications.find(
+      (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+    );
+    const verificationCheck = relatedSpecifications.find(
+      (specification) => specification.kind === CheckSpecificationKind.FAKE_VERIFICATION,
+    );
+    if (
+      relatedSpecifications.length !== 2 ||
+      freezeCheck === undefined ||
+      verificationCheck === undefined
+    ) {
+      throw new StoreInvariantError(
+        `Acceptance Input Manifest ${manifest.manifestDigest} has incomplete Check authority`,
+      );
+    }
+    const obligations = Object.freeze(
+      this.listVerificationObligations(goal.id).filter(
+        (obligation) =>
+          obligation.goalRevision === goal.revision &&
+          obligation.candidateGenerationId === historicalGeneration.id,
+      ),
+    );
+    const historicalEvidence = Object.freeze(
+      evidenceSet.evidenceRefs.map((reference) => {
+        const record = this.getEvidence(reference.evidenceId);
+        const eligibilityRow = this.#database
+          .prepare(
+            `SELECT * FROM evidence_eligibility
+              WHERE evidence_id = ? AND version = ?`,
+          )
+          .get(reference.evidenceId, reference.eligibilityVersion);
+        if (record === undefined || eligibilityRow === undefined) {
+          throw new StoreInvariantError(
+            `Acceptance Evidence ${reference.evidenceId} lacks historical eligibility`,
+          );
+        }
+        return Object.freeze({
+          record,
+          eligibility: decodeEvidenceEligibilityRow(eligibilityRow),
+        });
+      }),
+    );
+    const pendingIssues = Object.freeze(
+      this.#database
+        .prepare(
+          `SELECT * FROM pending_issues
+            WHERE goal_id = ? AND goal_revision = ?
+            ORDER BY id`,
+        )
+        .all(goal.id, goal.revision)
+        .map((row) => decodePendingIssueRow(row)),
+    );
+    const compiled = compileM1AcceptanceInput(
+      Object.freeze({
+        goal,
+        workflow: historicalWorkflow,
+        candidate,
+        generation: historicalGeneration,
+        freezeCheck,
+        verificationCheck,
+        obligations,
+        evidenceSet,
+        currentEvidence: historicalEvidence,
+        pendingIssues,
+        retainedFactCount: this.readCount(
+          'SELECT COUNT(*) AS count FROM facts WHERE goal_id = ?',
+          goal.id,
+        ),
+        retainedDecisionCount: this.readCount(
+          'SELECT COUNT(*) AS count FROM human_decisions WHERE goal_id = ?',
+          goal.id,
+        ),
+        policyBundle: installedPolicy.bundle,
+      }),
+      manifest.createdAt,
+      canonicalAuthorityDigests,
+    );
+    if (canonicalizeJson(compiled.manifest) !== canonicalizeJson(manifest)) {
+      throw new StoreInvariantError(
+        `Acceptance Input Manifest ${manifest.manifestDigest} cannot be reconstructed`,
+      );
+    }
+    return compiled;
+  }
+
+  private assertRetainedAcceptanceAuthorityClosure(): void {
+    if (!this.hasTable('workflow_closeouts')) {
+      return;
+    }
+    const issueRows = this.#database.prepare('SELECT * FROM pending_issues ORDER BY id').all();
+    for (const row of issueRows) {
+      const issue = decodePendingIssueRow(row);
+      const audits = this.listAuditEvents('PENDING_ISSUE', issue.id);
+      const recordedAudits = audits.filter(
+        (audit) =>
+          audit.eventType === 'PENDING_ISSUE_RECORDED' &&
+          audit.actorType === 'RUNTIME' &&
+          audit.occurredAt === issue.createdAt,
+      );
+      const resolvedAudits = audits.filter(
+        (audit) =>
+          audit.eventType === 'PENDING_ISSUE_RESOLVED' &&
+          audit.actorType === 'RUNTIME' &&
+          audit.occurredAt === issue.resolvedAt,
+      );
+      if (
+        recordedAudits.length !== 1 ||
+        resolvedAudits.length !== (issue.resolvedAt === undefined ? 0 : 1)
+      ) {
+        throw new StoreInvariantError(`Pending Issue ${issue.id} lacks retained audit authority`);
+      }
+    }
+
+    const manifestRows = this.#database
+      .prepare('SELECT * FROM acceptance_input_manifests ORDER BY manifest_digest')
+      .all();
+    const compiledByDigest = new Map<
+      string,
+      ReturnType<SqliteControlStore['historicalAcceptanceForManifest']>
+    >();
+    for (const row of manifestRows) {
+      const decoded = decodeAcceptanceInputManifestRow(row);
+      const manifest = this.getAcceptanceInputManifest(decoded.manifestDigest);
+      const audit = this.listAuditEvents(
+        'ACCEPTANCE_INPUT_MANIFEST',
+        decoded.manifestDigest,
+      ).filter((candidate) => candidate.eventType === 'ACCEPTANCE_INPUT_MANIFEST_RECORDED');
+      if (
+        manifest === undefined ||
+        audit.length !== 1 ||
+        audit[0]?.actorType !== 'RUNTIME' ||
+        audit[0].commandId === undefined ||
+        audit[0].payloadDigest !== manifest.manifestDigest ||
+        audit[0].occurredAt !== manifest.createdAt
+      ) {
+        throw new StoreInvariantError(
+          `Acceptance Input Manifest ${decoded.manifestDigest} lacks retained audit authority`,
+        );
+      }
+      compiledByDigest.set(manifest.manifestDigest, this.historicalAcceptanceForManifest(manifest));
+    }
+
+    const semanticDigests = new Map<string, Sha256Digest>();
+    const decisionRows = this.#database
+      .prepare('SELECT * FROM acceptance_decisions ORDER BY id')
+      .all();
+    for (const row of decisionRows) {
+      const decoded = decodeAcceptanceDecisionRow(row);
+      const decision = this.getAcceptanceDecision(decoded.id);
+      const compiled = compiledByDigest.get(decoded.inputManifestDigest);
+      const audit = this.listAuditEvents('ACCEPTANCE_DECISION', decoded.id).filter(
+        (candidate) => candidate.eventType === 'ACCEPTANCE_DECISION_ISSUED',
+      );
+      if (
+        decision === undefined ||
+        compiled === undefined ||
+        audit.length !== 1 ||
+        audit[0]?.actorType !== 'RUNTIME' ||
+        audit[0].commandId === undefined ||
+        audit[0].payloadDigest !== decision.decisionDigest ||
+        audit[0].occurredAt !== decision.issuedAt
+      ) {
+        throw new StoreInvariantError(
+          `Acceptance Decision ${decoded.id} lacks retained input or audit authority`,
+        );
+      }
+      verifyM1AcceptanceDecision(compiled, decision, canonicalAuthorityDigests);
+      const semanticKey = `${decision.inputManifestDigest}\u0000${decision.policyBundleDigest}\u0000${decision.engineVersion}`;
+      const priorDigest = semanticDigests.get(semanticKey);
+      if (priorDigest !== undefined && priorDigest !== decision.decisionDigest) {
+        throw new StoreInvariantError(
+          'Retained Acceptance Decisions contradict one semantic input',
+        );
+      }
+      semanticDigests.set(semanticKey, decision.decisionDigest);
+    }
+
+    const closeoutRows = this.#database
+      .prepare('SELECT * FROM workflow_closeouts ORDER BY workflow_id')
+      .all();
+    for (const row of closeoutRows) {
+      const closeout = decodeCloseoutRow(row);
+      const workflow = this.getWorkflow(closeout.workflowId);
+      const goal = workflow === undefined ? undefined : this.getGoal(workflow.goalId);
+      const generation = this.getCandidateGeneration(closeout.candidateGenerationId);
+      const decision = this.getAcceptanceDecision(closeout.acceptanceDecisionId);
+      const manifest = this.getAcceptanceInputManifest(closeout.inputManifestDigest);
+      const audit = this.listAuditEvents('WORKFLOW_CLOSEOUT', closeout.workflowId).filter(
+        (candidate) => candidate.eventType === 'WORKFLOW_CLOSEOUT_RECORDED',
+      );
+      const candidateAudit =
+        generation === undefined
+          ? []
+          : this.listAuditEvents('CANDIDATE_GENERATION', generation.id).filter(
+              (candidate) =>
+                candidate.eventType === 'CANDIDATE_STATE_CHANGED' &&
+                candidate.beforeVersion === generation.version - 1 &&
+                candidate.afterVersion === generation.version &&
+                candidate.occurredAt === closeout.closedAt,
+            );
+      const workflowAudit =
+        workflow === undefined
+          ? []
+          : this.listAuditEvents('WORKFLOW', workflow.id).filter(
+              (candidate) =>
+                candidate.eventType === 'WORKFLOW_PHASE_TRANSITIONED' &&
+                candidate.beforeVersion === workflow.version - 1 &&
+                candidate.afterVersion === workflow.version &&
+                candidate.occurredAt === closeout.closedAt,
+            );
+      const compoundAudit = audit[0];
+      const compoundAuditMatches =
+        audit.length === 1 &&
+        candidateAudit.length === 1 &&
+        workflowAudit.length === 1 &&
+        compoundAudit?.actorType === 'RUNTIME' &&
+        compoundAudit.commandId !== undefined &&
+        [candidateAudit[0], workflowAudit[0]].every(
+          (candidate) =>
+            candidate?.actorType === 'RUNTIME' &&
+            candidate.commandId === compoundAudit.commandId &&
+            candidate.payloadDigest === compoundAudit.payloadDigest &&
+            candidate.correlationId === compoundAudit.correlationId &&
+            candidate.causationId === compoundAudit.causationId,
+        );
+      if (
+        workflow?.phase !== WorkflowPhase.CLOSEOUT ||
+        workflow.runStatus !== RunStatus.CLOSED ||
+        workflow.goalId !== closeout.goalId ||
+        workflow.goalRevision !== closeout.goalRevision ||
+        workflow.version !== closeout.workflowVersion ||
+        workflow.updatedAt !== closeout.closedAt ||
+        goal?.status !== GoalStatus.CLOSED ||
+        goal.updatedAt !== closeout.closedAt ||
+        generation?.state !== CandidateGenerationState.ACCEPTED ||
+        generation.updatedAt !== closeout.closedAt ||
+        generation.frozenDigest !== closeout.candidateDigest ||
+        decision?.outcome !== AcceptanceOutcome.ACCEPT ||
+        decision.issuedAt > closeout.closedAt ||
+        decision.decisionDigest !== closeout.acceptanceDecisionDigest ||
+        decision.policyBundleDigest !== closeout.policyBundleDigest ||
+        decision.inputManifestDigest !== manifest?.manifestDigest ||
+        manifest.goalId !== closeout.goalId ||
+        manifest.goalRevision !== closeout.goalRevision ||
+        manifest.workflowId !== closeout.workflowId ||
+        manifest.workflowVersion + 1 !== closeout.workflowVersion ||
+        manifest.candidateGenerationId !== closeout.candidateGenerationId ||
+        manifest.candidateDigest !== closeout.candidateDigest ||
+        manifest.evidenceSetDigest !== closeout.evidenceSetDigest ||
+        manifest.policyBundleId !== closeout.policyBundleId ||
+        manifest.policyBundleDigest !== closeout.policyBundleDigest ||
+        !compoundAuditMatches ||
+        compoundAudit.occurredAt !== closeout.closedAt
+      ) {
+        throw new StoreInvariantError(
+          `Workflow closeout ${closeout.workflowId} lacks exact retained authority`,
+        );
+      }
+    }
+    const closedWithoutCloseout = this.readCount(
+      `SELECT COUNT(*) AS count
+         FROM workflows AS workflow
+        WHERE workflow.run_status = 'CLOSED'
+          AND NOT EXISTS (
+            SELECT 1 FROM workflow_closeouts AS closeout
+            WHERE closeout.workflow_id = workflow.id
+          )`,
+    );
+    if (closedWithoutCloseout !== 0) {
+      throw new StoreInvariantError('A closed Workflow has no immutable closeout authority');
+    }
+    const acceptedWithoutCloseout = this.readCount(
+      `SELECT COUNT(*) AS count
+         FROM candidate_generations AS generation
+        WHERE generation.state = 'ACCEPTED'
+          AND NOT EXISTS (
+            SELECT 1 FROM workflow_closeouts AS closeout
+            WHERE closeout.candidate_generation_id = generation.id
+          )`,
+    );
+    if (acceptedWithoutCloseout !== 0) {
+      throw new StoreInvariantError(
+        'An accepted Candidate generation has no immutable closeout authority',
+      );
+    }
+    const rejectedWithoutExactRepairChild = this.readCount(
+      `SELECT COUNT(*) AS count
+         FROM candidate_generations AS rejected
+        WHERE rejected.state = 'REJECTED'
+          AND (
+            (
+              SELECT COUNT(*)
+                FROM candidate_generations AS child
+               WHERE child.parent_generation_id = rejected.id
+            ) <> 1
+            OR NOT EXISTS (
+              SELECT 1
+                FROM candidate_generations AS child
+               WHERE child.parent_generation_id = rejected.id
+                 AND child.candidate_id = rejected.candidate_id
+                 AND child.workflow_id = rejected.workflow_id
+                 AND child.sequence = rejected.sequence + 1
+                 AND child.base_digest = rejected.frozen_digest
+                 AND child.created_at = rejected.updated_at
+            )
+            OR NOT EXISTS (
+              SELECT 1
+                FROM acceptance_decisions AS decision
+                JOIN acceptance_input_manifests AS manifest
+                  ON manifest.manifest_digest = decision.input_manifest_digest
+               WHERE decision.outcome = 'REJECT_REPAIRABLE'
+                 AND decision.issued_at <= rejected.updated_at
+                 AND manifest.workflow_id = rejected.workflow_id
+                 AND manifest.candidate_generation_id = rejected.id
+                 AND manifest.candidate_digest = rejected.frozen_digest
+            )
+          )`,
+    );
+    if (rejectedWithoutExactRepairChild !== 0) {
+      throw new StoreInvariantError(
+        'A rejected Candidate generation has no exact repair child authority',
+      );
+    }
+  }
+
   private hasTable(name: string): boolean {
     return (
       this.#database
         .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
         .get(name) !== undefined
     );
+  }
+
+  private readCount(sql: string, ...parameters: readonly unknown[]): number {
+    const row = this.#database.prepare(sql).get(...parameters);
+    if (
+      typeof row !== 'object' ||
+      row === null ||
+      !('count' in row) ||
+      typeof row.count !== 'number' ||
+      !Number.isSafeInteger(row.count) ||
+      row.count < 0
+    ) {
+      throw new StoreInvariantError('SQLite count query returned malformed authority');
+    }
+    return row.count;
   }
 
   private checkWorkerEvent(
@@ -4621,7 +6027,11 @@ export class SqliteControlStore implements CandidateEvidenceControlStore {
   }
 
   private probe(
-    step: TransactionStep | WorkerTransactionStep | CandidateEvidenceTransactionStep,
+    step:
+      | TransactionStep
+      | WorkerTransactionStep
+      | CandidateEvidenceTransactionStep
+      | AcceptanceTransactionStep,
   ): void {
     this.#transactionProbe?.(step);
   }

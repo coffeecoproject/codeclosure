@@ -2,9 +2,12 @@
 
 ## Status
 
-This document defines the target Acceptance Engine contract. No engine is
-implemented at M0. M1 implements only the deterministic rule set under
-[M1 Rule Set](#m1-rule-set) with fake candidate and evidence inputs.
+This document defines the target Acceptance Engine contract. The current M1
+Slice 6 implementation provides the deterministic rule set under
+[M1 Rule Set](#m1-rule-set), strict manifest and decision codecs, immutable
+SQLite persistence, current-input replay validation, transactional closeout,
+and repair-generation coordination. It still uses only logical Candidate and
+fake Evidence inputs; real project verification remains M2 work.
 
 ## Purpose
 
@@ -29,7 +32,8 @@ The Acceptance Engine:
 - may read authoritative Goal, Fact, Decision, Workflow, Candidate, Evidence,
   and Issue records;
 - may recompute identities and execute pure/checker logic;
-- may record one immutable Acceptance Decision;
+- issues one immutable Acceptance Decision whose persistence is coordinated by
+  the Workflow Runtime and Store transaction;
 - may not edit source;
 - may not invoke an implementation worker;
 - may not mutate Workflow phase or Goal status;
@@ -250,8 +254,21 @@ closeout command therefore supplies:
 - expected Acceptance Input Manifest digest;
 - expected Candidate digest.
 
-The Workflow Runtime revalidates current bindings in the same transaction that
-enters `CLOSEOUT`. Any mismatch rejects the transition.
+The Workflow Runtime reobserves frozen source before closeout or repair and
+recomputes the current manifest and decision. The Store independently
+revalidates persisted bindings in the transaction that enters `CLOSEOUT` or
+creates a repair generation. Any mismatch rejects the requested transition;
+observed source drift uses the atomic Candidate/Evidence invalidation path.
+Manifest creation cannot predate any retained input or the installed Policy;
+closeout and repair cannot predate the decision they consume. Closeout uses one
+timestamp for Workflow, Goal, Candidate, and immutable closeout authority, and
+repair uses one timestamp for rejection and child creation.
+
+On restart, `ACCEPTED` is valid only with the exact immutable closeout binding.
+`REJECTED` is valid only with exactly one next-sequence child whose parent and
+base digest identify that rejected frozen generation. The Slice 6 migration
+likewise refuses terminal lifecycle claims written before Slice 6 authority
+existed; migration never upgrades a terminal label into proof.
 
 ## Replay and Explainability
 
@@ -279,14 +296,17 @@ Explanation is a view over the decision, not a second decision.
 M1 uses a small policy bundle that proves authority mechanics rather than
 project correctness:
 
-- workflow phase must be `FINAL_VERIFY`;
-- Goal revision must match;
-- current Candidate must be frozen;
-- Candidate digest must match;
-- at least one required fake obligation must exist;
-- every required fake obligation must have eligible passing fake evidence;
-- no required Pending Issue may remain;
-- manifest and policy digests must match;
+- Workflow phase and version must bind the `FINAL_VERIFY` input;
+- Goal revision must match the Workflow and manifest;
+- the current Candidate must be frozen;
+- Candidate and Evidence Set digests must match;
+- at least one required fake obligation must exist and every required criterion
+  must map exactly once;
+- every required fake obligation must have one or more current eligible fake
+  Evidence records; all must be `PASS`, while any `FAIL` remains repairable and
+  any runner error or timeout remains an engine error;
+- no open blocking Pending Issue may remain;
+- manifest, Policy Bundle, and checker identities must match;
 - worker Completion Request cannot satisfy any rule directly.
 
 This is enough to prove fail-closed closeout without pretending M1 validates

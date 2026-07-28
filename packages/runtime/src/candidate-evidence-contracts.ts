@@ -58,6 +58,22 @@ export interface CandidatePreparation {
   readonly baseDigest: Sha256Digest;
 }
 
+export interface CandidateRepairPreparationRequest {
+  readonly schemaVersion: 1;
+  readonly goalId: GoalId;
+  readonly goalRevision: GoalRevision;
+  readonly workflowId: WorkflowId;
+  readonly candidateId: CandidateId;
+  readonly generationId: CandidateGenerationId;
+  readonly parentGenerationId: CandidateGenerationId;
+  readonly expectedBaseDigest: Sha256Digest;
+  readonly projectPath: string;
+}
+
+export interface CandidateRepairPreparation extends CandidatePreparation {
+  readonly parentGenerationId: CandidateGenerationId;
+}
+
 export interface CandidateFreezeRequest {
   readonly schemaVersion: 1;
   readonly goalId: GoalId;
@@ -142,6 +158,9 @@ export const CandidateSourceFailureCode = {
   PREPARATION_OUTPUT_MALFORMED: 'CANDIDATE_SOURCE_PREPARATION_OUTPUT_MALFORMED',
   PREPARATION_BINDING_MISMATCH: 'CANDIDATE_SOURCE_PREPARATION_BINDING_MISMATCH',
   PREPARATION_AUTHORITY_MISMATCH: 'CANDIDATE_SOURCE_PREPARATION_AUTHORITY_MISMATCH',
+  REPAIR_INVOCATION_FAILED: 'CANDIDATE_SOURCE_REPAIR_INVOCATION_FAILED',
+  REPAIR_OUTPUT_MALFORMED: 'CANDIDATE_SOURCE_REPAIR_OUTPUT_MALFORMED',
+  REPAIR_BINDING_MISMATCH: 'CANDIDATE_SOURCE_REPAIR_BINDING_MISMATCH',
   FREEZE_INVOCATION_FAILED: 'CANDIDATE_SOURCE_FREEZE_INVOCATION_FAILED',
   FREEZE_OUTPUT_MALFORMED: 'CANDIDATE_SOURCE_FREEZE_OUTPUT_MALFORMED',
   FREEZE_BINDING_MISMATCH: 'CANDIDATE_SOURCE_FREEZE_BINDING_MISMATCH',
@@ -154,6 +173,7 @@ export type CandidateSourceFailureCode =
 
 export interface CandidateSourcePort {
   prepare(request: CandidatePreparationRequest): unknown;
+  prepareRepair(request: CandidateRepairPreparationRequest): unknown;
   observeFreeze(request: CandidateFreezeRequest): unknown;
   observeFrozen(request: FrozenCandidateIntegrityRequest): unknown;
 }
@@ -189,6 +209,31 @@ export function decodeCandidatePreparation(value: unknown): CandidatePreparation
     workflowId: workflowId(parsed.workflowId),
     candidateId: candidateId(parsed.candidateId),
     generationId: candidateGenerationId(parsed.generationId),
+    baseDigest: sha256Digest(parsed.baseDigest),
+  });
+}
+
+const repairPreparationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    goalId: z.string(),
+    workflowId: z.string(),
+    candidateId: z.string(),
+    generationId: z.string(),
+    parentGenerationId: z.string(),
+    baseDigest: z.string(),
+  })
+  .strict();
+
+export function decodeCandidateRepairPreparation(value: unknown): CandidateRepairPreparation {
+  const parsed = repairPreparationSchema.parse(value);
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    goalId: goalId(parsed.goalId),
+    workflowId: workflowId(parsed.workflowId),
+    candidateId: candidateId(parsed.candidateId),
+    generationId: candidateGenerationId(parsed.generationId),
+    parentGenerationId: candidateGenerationId(parsed.parentGenerationId),
     baseDigest: sha256Digest(parsed.baseDigest),
   });
 }
@@ -388,6 +433,29 @@ export function validateCandidatePreparationRequest(
       .refine((path) => path.trim().length > 0)
       .parse(request.projectPath),
   });
+}
+
+export function validateCandidateRepairPreparationRequest(
+  request: CandidateRepairPreparationRequest,
+): CandidateRepairPreparationRequest {
+  const validated = Object.freeze({
+    schemaVersion: z.literal(1).parse(request.schemaVersion),
+    goalId: goalId(request.goalId),
+    goalRevision: goalRevision(request.goalRevision),
+    workflowId: workflowId(request.workflowId),
+    candidateId: candidateId(request.candidateId),
+    generationId: candidateGenerationId(request.generationId),
+    parentGenerationId: candidateGenerationId(request.parentGenerationId),
+    expectedBaseDigest: sha256Digest(request.expectedBaseDigest),
+    projectPath: z
+      .string()
+      .refine((path) => path.trim().length > 0)
+      .parse(request.projectPath),
+  });
+  if (validated.generationId === validated.parentGenerationId) {
+    throw new TypeError('Candidate repair generation cannot be its own parent');
+  }
+  return validated;
 }
 
 export function validateCandidateFreezeRequest(

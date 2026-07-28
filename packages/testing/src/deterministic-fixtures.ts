@@ -1,5 +1,6 @@
 import {
   attemptId,
+  acceptanceDecisionId,
   auditEventId,
   candidateGenerationId,
   candidateId,
@@ -14,6 +15,7 @@ import {
   verificationObligationId,
   workflowId,
   type AttemptId,
+  type AcceptanceDecisionId,
   type AuditEventId,
   type CandidateGenerationId,
   type CandidateId,
@@ -75,6 +77,10 @@ export class DeterministicIds {
 
   public nextAuditEventId(): AuditEventId {
     return auditEventId(`audit_${this.nextSuffix()}`);
+  }
+
+  public nextAcceptanceDecisionId(): AcceptanceDecisionId {
+    return acceptanceDecisionId(`acceptance_${this.nextSuffix()}`);
   }
 
   public nextCandidateId(): CandidateId {

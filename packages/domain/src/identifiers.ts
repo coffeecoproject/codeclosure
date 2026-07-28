@@ -13,6 +13,7 @@ export type DecisionId = Brand<string, 'DecisionId'>;
 export type EvidenceId = Brand<string, 'EvidenceId'>;
 export type VerificationObligationId = Brand<string, 'VerificationObligationId'>;
 export type CheckSpecificationId = Brand<string, 'CheckSpecificationId'>;
+export type PendingIssueId = Brand<string, 'PendingIssueId'>;
 export type AcceptanceDecisionId = Brand<string, 'AcceptanceDecisionId'>;
 export type PolicyBundleId = Brand<string, 'PolicyBundleId'>;
 export type AuditEventId = Brand<string, 'AuditEventId'>;
@@ -74,6 +75,8 @@ export const verificationObligationId = (value: string): VerificationObligationI
   parseIdentifier('obligation', value, 'VerificationObligationId');
 export const checkSpecificationId = (value: string): CheckSpecificationId =>
   parseIdentifier('check', value, 'CheckSpecificationId');
+export const pendingIssueId = (value: string): PendingIssueId =>
+  parseIdentifier('issue', value, 'PendingIssueId');
 export const acceptanceDecisionId = (value: string): AcceptanceDecisionId =>
   parseIdentifier('acceptance', value, 'AcceptanceDecisionId');
 export const policyBundleId = (value: string): PolicyBundleId =>

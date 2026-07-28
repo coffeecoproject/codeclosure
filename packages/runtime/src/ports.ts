@@ -1,4 +1,7 @@
 import type {
+  AcceptanceDecision,
+  AcceptanceDecisionId,
+  AcceptanceInputManifest,
   AppliedAttemptEvent,
   Attempt,
   AttemptEvent,
@@ -20,7 +23,10 @@ import type {
   IsoTimestamp,
   PolicyBundle,
   PolicyBundleId,
+  PendingIssue,
+  PendingIssueSet,
   Sha256Digest,
+  CloseoutRecord,
   VerificationObligation,
   VerificationObligationId,
   WorkflowEvent,
@@ -54,6 +60,10 @@ export interface WorkerIdentityGenerator {
   nextCommandId(): CommandId;
   nextContextManifestId(): ContextManifestId;
   nextWorkerSessionId(): WorkerSessionId;
+}
+
+export interface AcceptanceIdentityGenerator {
+  nextAcceptanceDecisionId(): AcceptanceDecisionId;
 }
 
 export interface DigestProvider {
@@ -138,6 +148,77 @@ export interface CommitWorkflowCandidateEvent extends CommitWorkflowEvent {
 export interface CommittedWorkflowCandidateEvent {
   readonly workflow: WorkflowInstance;
   readonly authority: CandidateAuthorityView;
+}
+
+export interface AcceptanceEvidenceAuthority {
+  readonly record: EvidenceRecord;
+  readonly eligibility: EvidenceEligibility;
+}
+
+export interface AcceptanceAuthorityView {
+  readonly goal: Goal;
+  readonly workflow: WorkflowInstance;
+  readonly candidate: Candidate;
+  readonly generation: CandidateGeneration;
+  readonly freezeCheck: CheckSpecification;
+  readonly verificationCheck: CheckSpecification;
+  readonly obligations: readonly VerificationObligation[];
+  readonly evidenceSet: EvidenceSet;
+  readonly currentEvidence: readonly AcceptanceEvidenceAuthority[];
+  readonly pendingIssues: readonly PendingIssue[];
+  readonly retainedFactCount: number;
+  readonly retainedDecisionCount: number;
+  readonly policyBundle: PolicyBundle;
+}
+
+export interface CommitAcceptanceEvaluation {
+  readonly commandId: CommandId;
+  readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
+  readonly manifest: AcceptanceInputManifest;
+  readonly pendingIssueSet: PendingIssueSet;
+  readonly decision: AcceptanceDecision;
+  readonly manifestAuditEventId: AuditEventId;
+  readonly decisionAuditEventId: AuditEventId;
+  readonly correlationId?: string;
+  readonly causationId?: string;
+}
+
+export interface CommittedAcceptanceEvaluation {
+  readonly manifest: AcceptanceInputManifest;
+  readonly decision: AcceptanceDecision;
+}
+
+export interface CommitAcceptedCloseout extends CommitWorkflowCandidateEvent {
+  readonly closeout: CloseoutRecord;
+  readonly closeoutAuditEventId: AuditEventId;
+}
+
+export interface CommittedAcceptedCloseout extends CommittedWorkflowCandidateEvent {
+  readonly closeout: CloseoutRecord;
+}
+
+export interface CommitAcceptanceRepair extends CommitWorkflowEvent {
+  readonly acceptanceDecisionId: AcceptanceDecisionId;
+  readonly acceptanceDecisionDigest: Sha256Digest;
+  readonly inputManifestDigest: Sha256Digest;
+  readonly candidate: Candidate;
+  readonly rejectedCandidateEvent: CandidateStateChanged;
+  readonly generation: CandidateGeneration;
+  readonly checkSpecifications: readonly CheckSpecification[];
+  readonly obligations: readonly VerificationObligation[];
+  readonly rejectedCandidateAuditEventId: AuditEventId;
+  readonly generationAuditEventId: AuditEventId;
+  readonly checkSpecificationAuditEventIds: readonly AuditEventId[];
+  readonly obligationAuditEventIds: readonly AuditEventId[];
+}
+
+export interface CommittedAcceptanceRepair {
+  readonly workflow: WorkflowInstance;
+  readonly authority: CandidateAuthorityView;
+  readonly rejectedGeneration: CandidateGeneration;
+  readonly checkSpecifications: readonly CheckSpecification[];
+  readonly obligations: readonly VerificationObligation[];
 }
 
 export interface CommitCandidateIntegrityFailure extends CommitWorkflowEvent {
@@ -322,4 +403,23 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
   commitEvidenceSetTransition(
     input: CommitEvidenceSetTransition,
   ): StoreCommandResult<WorkflowInstance>;
+}
+
+export interface AcceptanceControlStore extends CandidateEvidenceControlStore {
+  getAcceptanceAuthorityForWorkflow(
+    workflowId: WorkflowId,
+    policyBundleId: PolicyBundleId,
+  ): AcceptanceAuthorityView | undefined;
+  getAcceptanceInputManifest(manifestDigest: Sha256Digest): AcceptanceInputManifest | undefined;
+  getAcceptanceDecision(acceptanceDecisionId: AcceptanceDecisionId): AcceptanceDecision | undefined;
+  getCloseoutForWorkflow(workflowId: WorkflowId): CloseoutRecord | undefined;
+  commitAcceptanceEvaluation(
+    input: CommitAcceptanceEvaluation,
+  ): StoreCommandResult<CommittedAcceptanceEvaluation>;
+  commitAcceptedCloseout(
+    input: CommitAcceptedCloseout,
+  ): StoreCommandResult<CommittedAcceptedCloseout>;
+  commitAcceptanceRepair(
+    input: CommitAcceptanceRepair,
+  ): StoreCommandResult<CommittedAcceptanceRepair>;
 }

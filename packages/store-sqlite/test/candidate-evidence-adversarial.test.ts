@@ -7,6 +7,7 @@ import test, { type TestContext } from 'node:test';
 import Database from 'better-sqlite3';
 
 import {
+  AcceptanceOutcome,
   AttemptFailureClass,
   AttemptStatus,
   CandidateGenerationState,
@@ -17,6 +18,8 @@ import {
   WorkflowGuard,
   WorkflowPhase,
   candidateGenerationId,
+  acceptanceDecisionProjection,
+  acceptanceDecisionId,
   checkSpecificationId,
   commandId,
   createCandidate,
@@ -24,6 +27,7 @@ import {
   createInitialEvidenceEligibility,
   createGoal,
   createWorkflow,
+  decodeAcceptanceDecision,
   decodeEvidenceSet,
   decodeCheckSpecification,
   decodePolicyBundle,
@@ -50,12 +54,15 @@ import {
 import {
   CanonicalJsonSha256DigestProvider,
   CandidateSourceFailureCode,
+  M1_ACCEPTANCE_RULES,
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
   VerificationResultAdmissionFailureCode,
   buildEvidenceSet,
+  compileM1AcceptanceInput,
   createTestResultEvidenceRecord,
   createM1CandidateEvidencePolicy,
+  createM1AcceptanceCheckerIdentity,
   createPolicyInstaller,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
@@ -63,6 +70,7 @@ import {
   type Clock,
 } from '@codeclosure/runtime';
 import {
+  AcceptanceTransactionStep,
   CandidateEvidenceTransactionStep,
   TransactionStep,
   defaultMigrationsDirectory,
@@ -128,6 +136,7 @@ interface Harness {
   readonly filename: string;
   readonly store: SqliteControlStore;
   readonly runtime: WorkflowRuntimeKernel;
+  readonly candidateSource: FakeCandidateSource;
   readonly ids: DeterministicIds;
   readonly goalId: ReturnType<typeof goalId>;
   readonly workflowId: ReturnType<typeof workflowId>;
@@ -157,8 +166,8 @@ function policyDefinition(name: string): PolicyBundleDefinition {
     contextRules: Object.freeze(['source-bound-candidate-context']),
     checkSpecifications: Object.freeze(['runtime-owned-check-specifications']),
     applicabilityRules: Object.freeze(['exact-candidate-and-policy']),
-    acceptanceRules: Object.freeze(['slice-6-only']),
-    checkerVersions: Object.freeze([]),
+    acceptanceRules: M1_ACCEPTANCE_RULES,
+    checkerVersions: Object.freeze([createM1AcceptanceCheckerIdentity(digests)]),
   });
 }
 
@@ -169,6 +178,7 @@ function createHarness(
     readonly sourceFixture?: FakeCandidateSourceFixture;
     readonly verificationFixture?: FakeVerificationFixture;
     readonly transactionProbe?: (step: string) => void;
+    readonly migrationsDirectory?: string;
   },
 ): Harness {
   const namespace = options.name.replaceAll('_', '-');
@@ -178,6 +188,9 @@ function createHarness(
   const store = openSqliteControlStore({
     filename,
     now: () => createdAt,
+    ...(options.migrationsDirectory === undefined
+      ? {}
+      : { migrationsDirectory: options.migrationsDirectory }),
     ...(options.transactionProbe === undefined
       ? {}
       : { transactionProbe: options.transactionProbe }),
@@ -241,6 +254,9 @@ function createHarness(
     canonicalizer: new Rfc8785Canonicalizer(),
     digests,
   });
+  const candidateSource = new FakeCandidateSource(
+    options.sourceFixture ?? FakeCandidateSourceFixture.STABLE,
+  );
   const runtime = new WorkflowRuntimeKernel({
     store,
     clock: monotonicClock(),
@@ -256,19 +272,19 @@ function createHarness(
     }),
     candidateEvidence: Object.freeze({
       identities: ids,
-      candidateSource: new FakeCandidateSource(
-        options.sourceFixture ?? FakeCandidateSourceFixture.STABLE,
-      ),
+      candidateSource,
       verification: new FakeVerificationRunner({
         fixture: options.verificationFixture ?? FakeVerificationFixture.PASS,
       }),
       policyBundleId: policy.id,
     }),
+    acceptance: Object.freeze({ identities: ids, policyBundleId: policy.id }),
   });
   return Object.freeze({
     filename,
     store,
     runtime,
+    candidateSource,
     ids,
     goalId: goalIdentifier,
     workflowId: workflowIdentifier,
@@ -284,6 +300,55 @@ function currentWorkflow(harness: Harness): WorkflowInstance {
   const workflow = harness.store.getWorkflow(harness.workflowId);
   assert.ok(workflow);
   return workflow;
+}
+
+function appendOfflineFrozenTerminalTransition(
+  filename: string,
+  generationIdentifier: CandidateGenerationId,
+  toState: typeof CandidateGenerationState.ACCEPTED | typeof CandidateGenerationState.REJECTED,
+  namespace: string,
+): void {
+  const raw = new Database(filename);
+  try {
+    const row = raw
+      .prepare('SELECT version FROM candidate_generations WHERE id = ?')
+      .get(generationIdentifier);
+    const rawVersion: unknown = Reflect.get(row ?? {}, 'version');
+    if (typeof rawVersion !== 'number') {
+      assert.fail('Candidate generation version must be retained as a number');
+    }
+    const fromVersion = rawVersion;
+    const toVersion = fromVersion + 1;
+    const occurredAt = isoTimestamp('2026-07-27T00:10:00.000Z');
+    raw.transaction(() => {
+      raw
+        .prepare(
+          `INSERT INTO audit_events(
+             id, aggregate_type, aggregate_id, event_type, actor_type, command_id,
+             before_version, after_version, payload_digest, occurred_at
+           ) VALUES (?, 'CANDIDATE_GENERATION', ?, 'CANDIDATE_STATE_CHANGED',
+                     'RUNTIME', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          `audit_${namespace}`,
+          generationIdentifier,
+          `command_${namespace}`,
+          fromVersion,
+          toVersion,
+          digests.digest({ namespace, toState }),
+          occurredAt,
+        );
+      raw
+        .prepare(
+          `UPDATE candidate_generations
+              SET state = ?, version = ?, updated_at = ?
+            WHERE id = ?`,
+        )
+        .run(toState, toVersion, occurredAt, generationIdentifier);
+    })();
+  } finally {
+    raw.close();
+  }
 }
 
 function assertSensitiveMarkerNotPersisted(harness: Harness): void {
@@ -483,6 +548,27 @@ function beginVerification(
     obligationId: obligation.id,
     completionCommandId: harnessCommand(harness, label('verification-complete')),
   });
+}
+
+function advanceToFinalVerify(harness: Harness): {
+  readonly workflow: WorkflowInstance;
+  readonly generationId: CandidateGenerationId;
+} {
+  const generationId = completeStableFreezeAndEnterEvidence(harness);
+  runVerification(harness);
+  const beforeFinal = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.requestPhaseTransition({
+      commandId: harnessCommand(harness, 'to-final-verify'),
+      workflowId: beforeFinal.id,
+      expectedWorkflowVersion: beforeFinal.version,
+      requestedPhase: WorkflowPhase.FINAL_VERIFY,
+      reason: 'canonical Evidence Set is complete',
+    }),
+  );
+  const workflow = currentWorkflow(harness);
+  assert.equal(workflow.phase, WorkflowPhase.FINAL_VERIFY);
+  return Object.freeze({ workflow, generationId });
 }
 
 void test('[I-008] Candidate preparation rolls back every authority record after its dedicated write probe', (t) => {
@@ -1315,6 +1401,165 @@ void test('[I-006][I-008] migration 0011 refuses legacy placeholder Candidate au
   inspected.close();
 });
 
+void test('[I-006][I-008] migration 0013 refuses placeholder Acceptance authority atomically', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'codeclosure-migration-0013-'));
+  const migrationsDirectory = join(directory, 'migrations');
+  const filename = join(directory, 'control.sqlite');
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  mkdirSync(migrationsDirectory);
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0013_',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+
+  const legacy = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const ids = new DeterministicIds('migration-0013');
+  const goal = createGoal({
+    id: goalId('goal_migration-0013'),
+    revision: goalRevision(1),
+    objective: 'Reject placeholder Acceptance authority',
+    successCriteria: [
+      {
+        id: successCriterionId('criterion_migration-0013'),
+        description: 'Migration fails closed',
+        required: true,
+      },
+    ],
+    scope: { projectPath: '/fixture/migration-0013', allowedPaths: ['src/**'] },
+    nonGoals: ['No placeholder authority reconstruction'],
+    createdAt,
+  });
+  const workflow = createWorkflow({
+    id: workflowId('workflow_migration-0013'),
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    createdAt,
+  });
+  assert.equal(
+    legacy.createGoalWithWorkflow({
+      commandId: commandId('command_migration-0013-create'),
+      inputDigest: digests.digest({ type: 'CREATE_MIGRATION_0013_FIXTURE' }),
+      goal,
+      workflow,
+      auditEventId: ids.nextAuditEventId(),
+      workflowAuditEventId: ids.nextAuditEventId(),
+      payloadDigest: digests.digest({ goal, workflow }),
+    }).status,
+    'APPLIED',
+  );
+  legacy.close();
+
+  const raw = new Database(filename);
+  raw
+    .prepare(
+      `INSERT INTO pending_issues(
+         id, goal_id, candidate_generation_id, classification, severity,
+         description, source_refs_json, repairability, status, created_at, resolved_at
+       ) VALUES (?, ?, NULL, 'legacy', 'legacy', ?, '[]', 'legacy', 'legacy', ?, NULL)`,
+    )
+    .run('issue_migration-0013', goal.id, 'placeholder row has no owning Runtime', createdAt);
+  raw.close();
+  copyFileSync(
+    join(sourceDirectory, '0013_acceptance_closeout_authority.sql'),
+    join(migrationsDirectory, '0013_acceptance_closeout_authority.sql'),
+  );
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt }),
+    /acceptance_migration_guard|CHECK constraint failed/,
+  );
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM schema_migrations WHERE name = '0013_acceptance_closeout_authority.sql'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(inspected.prepare('SELECT COUNT(*) FROM pending_issues').pluck().get(), 1);
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_closeouts'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  inspected.close();
+});
+
+void test('[I-006][I-008] migration 0013 refuses pre-authority terminal state atomically', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'codeclosure-migration-0013-terminal-'));
+  const migrationsDirectory = join(directory, 'migrations');
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  mkdirSync(migrationsDirectory);
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0013_',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+
+  const harness = createHarness(t, {
+    name: 'migration-0013-terminal',
+    migrationsDirectory,
+  });
+  const final = advanceToFinalVerify(harness);
+  harness.store.close();
+  appendOfflineFrozenTerminalTransition(
+    harness.filename,
+    final.generationId,
+    CandidateGenerationState.ACCEPTED,
+    'migration-0013-terminal-poison',
+  );
+  copyFileSync(
+    join(sourceDirectory, '0013_acceptance_closeout_authority.sql'),
+    join(migrationsDirectory, '0013_acceptance_closeout_authority.sql'),
+  );
+
+  assert.throws(
+    () =>
+      openSqliteControlStore({
+        filename: harness.filename,
+        migrationsDirectory,
+        now: () => createdAt,
+      }),
+    /acceptance_migration_guard|CHECK constraint failed/,
+  );
+  const inspected = new Database(harness.filename, { readonly: true, fileMustExist: true });
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM schema_migrations WHERE name = '0013_acceptance_closeout_authority.sql'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare("SELECT COUNT(*) FROM candidate_generations WHERE state = 'ACCEPTED'")
+      .pluck()
+      .get(),
+    1,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_closeouts'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  inspected.close();
+});
+
 void test('[I-006][I-008][I-027] migration 0011 refuses a retained Goal with no required criterion atomically', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'codeclosure-migration-0011-required-goal-'));
   const migrationsDirectory = join(directory, 'migrations');
@@ -2008,4 +2253,783 @@ void test('[I-005][I-006][I-009] Store rejects a self-consistent but non-canonic
     }),
   );
   assert.deepEqual(harness.store.getEvidenceSet(expectedSet.digest), expectedSet);
+});
+
+interface AcceptanceReference {
+  readonly id: ReturnType<typeof acceptanceDecisionId>;
+  readonly decisionDigest: ReturnType<typeof sha256Digest>;
+  readonly manifestDigest: ReturnType<typeof sha256Digest>;
+  readonly candidateDigest: ReturnType<typeof sha256Digest>;
+}
+
+function latestAcceptanceReference(harness: Harness): AcceptanceReference {
+  const inspected = new Database(harness.filename, { readonly: true, fileMustExist: true });
+  try {
+    const row = inspected
+      .prepare(
+        `SELECT decision.id, decision.decision_digest, decision.input_manifest_digest,
+                manifest.candidate_digest
+           FROM acceptance_decisions AS decision
+           JOIN acceptance_input_manifests AS manifest
+             ON manifest.manifest_digest = decision.input_manifest_digest
+          ORDER BY decision.issued_at DESC, decision.id DESC
+          LIMIT 1`,
+      )
+      .get();
+    assert.ok(row && typeof row === 'object');
+    assert.equal(typeof Reflect.get(row, 'id'), 'string');
+    assert.equal(typeof Reflect.get(row, 'decision_digest'), 'string');
+    assert.equal(typeof Reflect.get(row, 'input_manifest_digest'), 'string');
+    assert.equal(typeof Reflect.get(row, 'candidate_digest'), 'string');
+    return Object.freeze({
+      id: acceptanceDecisionId(String(Reflect.get(row, 'id'))),
+      decisionDigest: sha256Digest(String(Reflect.get(row, 'decision_digest'))),
+      manifestDigest: sha256Digest(String(Reflect.get(row, 'input_manifest_digest'))),
+      candidateDigest: sha256Digest(String(Reflect.get(row, 'candidate_digest'))),
+    });
+  } finally {
+    inspected.close();
+  }
+}
+
+interface AcceptanceAuthorityRowCounts {
+  readonly acceptanceDecisions: number;
+  readonly acceptanceInputManifests: number;
+  readonly auditEvents: number;
+  readonly candidateGenerations: number;
+  readonly checkSpecifications: number;
+  readonly processedCommands: number;
+  readonly verificationObligations: number;
+  readonly workflowCloseouts: number;
+}
+
+function acceptanceAuthorityRowCounts(filename: string): AcceptanceAuthorityRowCounts {
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  try {
+    const count = (table: string): number => {
+      const value = inspected.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get();
+      if (typeof value !== 'number') {
+        assert.fail(`Expected a numeric row count for ${table}`);
+      }
+      return value;
+    };
+    return Object.freeze({
+      acceptanceDecisions: count('acceptance_decisions'),
+      acceptanceInputManifests: count('acceptance_input_manifests'),
+      auditEvents: count('audit_events'),
+      candidateGenerations: count('candidate_generations'),
+      checkSpecifications: count('check_specifications'),
+      processedCommands: count('processed_commands'),
+      verificationObligations: count('verification_obligations'),
+      workflowCloseouts: count('workflow_closeouts'),
+    });
+  } finally {
+    inspected.close();
+  }
+}
+
+void test('[I-001][I-006][I-008][I-009] deterministic Acceptance closes exact authority and reopens', (t) => {
+  const harness = createHarness(t, { name: 'acceptance-closeout' });
+  const final = advanceToFinalVerify(harness);
+  const evaluationCommand = harnessCommand(harness, 'evaluate-acceptance');
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: evaluationCommand,
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const first = latestAcceptanceReference(harness);
+  assert.equal(harness.store.getAcceptanceDecision(first.id)?.outcome, AcceptanceOutcome.ACCEPT);
+  assert.deepEqual(currentWorkflow(harness), final.workflow);
+  assert.equal(harness.store.getGoal(harness.goalId)?.status, 'ACTIVE');
+  assert.equal(
+    harness.store.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.FROZEN,
+  );
+  assert.equal(
+    harness.runtime.evaluateAcceptance({
+      commandId: evaluationCommand,
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }).status,
+    'REPLAYED',
+  );
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-acceptance-again'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const inspected = new Database(harness.filename, { readonly: true, fileMustExist: true });
+  try {
+    const rows = inspected
+      .prepare('SELECT id, decision_digest FROM acceptance_decisions ORDER BY id')
+      .all();
+    assert.equal(rows.length, 2);
+    const firstRow = rows[0];
+    const secondRow = rows[1];
+    if (
+      typeof firstRow !== 'object' ||
+      firstRow === null ||
+      typeof secondRow !== 'object' ||
+      secondRow === null
+    ) {
+      assert.fail('Expected two retained Acceptance Decision rows');
+    }
+    assert.equal(
+      Reflect.get(firstRow, 'decision_digest'),
+      Reflect.get(secondRow, 'decision_digest'),
+    );
+    assert.notEqual(Reflect.get(firstRow, 'id'), Reflect.get(secondRow, 'id'));
+  } finally {
+    inspected.close();
+  }
+  const closeoutRequest = Object.freeze({
+    commandId: harnessCommand(harness, 'close-accepted-goal'),
+    goalId: harness.goalId,
+    expectedGoalRevision: goalRevision(1),
+    expectedWorkflowVersion: final.workflow.version,
+    acceptanceDecisionId: first.id,
+    acceptanceDecisionDigest: first.decisionDigest,
+    inputManifestDigest: first.manifestDigest,
+    candidateDigest: first.candidateDigest,
+    reason: 'consume the exact current technical acceptance',
+  });
+  assertApplied(harness.runtime.closeAcceptedGoal(closeoutRequest));
+  assert.equal(harness.runtime.closeAcceptedGoal(closeoutRequest).status, 'REPLAYED');
+  const closed = currentWorkflow(harness);
+  assert.equal(closed.phase, WorkflowPhase.CLOSEOUT);
+  assert.equal(closed.runStatus, RunStatus.CLOSED);
+  assert.equal(harness.store.getGoal(harness.goalId)?.status, 'CLOSED');
+  assert.equal(
+    harness.store.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.ACCEPTED,
+  );
+  assert.equal(harness.store.getCloseoutForWorkflow(closed.id)?.acceptanceDecisionId, first.id);
+
+  harness.store.close();
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(closed.id)?.runStatus, RunStatus.CLOSED);
+  assert.equal(
+    reopened.getCloseoutForWorkflow(closed.id)?.acceptanceDecisionDigest,
+    first.decisionDigest,
+  );
+});
+
+void test('[I-006][I-009] reopen rejects ACCEPTED Candidate authority without closeout', (t) => {
+  const harness = createHarness(t, { name: 'accepted-without-closeout-reopen' });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-offline-accept'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  assert.equal(
+    harness.store.getAcceptanceDecision(latestAcceptanceReference(harness).id)?.outcome,
+    AcceptanceOutcome.ACCEPT,
+  );
+  harness.store.close();
+  appendOfflineFrozenTerminalTransition(
+    harness.filename,
+    final.generationId,
+    CandidateGenerationState.ACCEPTED,
+    'accepted-without-closeout-poison',
+  );
+
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
+    /accepted Candidate generation has no immutable closeout authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009] reopen rejects closeout with a divergent Goal time', (t) => {
+  const harness = createHarness(t, { name: 'closeout-goal-time-reopen' });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-closeout-time-poison'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  assertApplied(
+    harness.runtime.closeAcceptedGoal({
+      commandId: harnessCommand(harness, 'close-before-goal-time-poison'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+      reason: 'close valid authority before retained time corruption',
+    }),
+  );
+  harness.store.close();
+  const raw = new Database(harness.filename);
+  raw
+    .prepare('UPDATE goals SET updated_at = ? WHERE id = ?')
+    .run(isoTimestamp('2026-07-27T00:20:00.000Z'), harness.goalId);
+  raw.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
+    /Workflow closeout .* lacks exact retained authority/,
+  );
+});
+
+void test('[I-005][I-008][I-009] source drift after ACCEPT invalidates authority instead of closing', (t) => {
+  const harness = createHarness(t, { name: 'acceptance-closeout-source-drift' });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-source-drift'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  assert.equal(
+    harness.store.getAcceptanceDecision(reference.id)?.outcome,
+    AcceptanceOutcome.ACCEPT,
+  );
+  harness.candidateSource.simulateFrozenDrift(final.generationId);
+
+  assertApplied(
+    harness.runtime.closeAcceptedGoal({
+      commandId: harnessCommand(harness, 'reject-closeout-after-source-drift'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+      reason: 'source reality changed after technical evaluation',
+    }),
+  );
+
+  const failed = currentWorkflow(harness);
+  assert.equal(failed.phase, WorkflowPhase.FINAL_VERIFY);
+  assert.equal(failed.runStatus, RunStatus.FAILED);
+  assert.notEqual(harness.store.getGoal(harness.goalId)?.status, 'CLOSED');
+  assert.equal(
+    harness.store.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.INVALIDATED,
+  );
+  assert.equal(harness.store.getCloseoutForWorkflow(final.workflow.id), undefined);
+  assert.ok(
+    harness.store
+      .listEvidenceForGeneration(final.generationId)
+      .every(({ eligibility }) => eligibility.state === EvidenceEligibilityState.INELIGIBLE),
+  );
+
+  harness.store.close();
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(harness.workflowId)?.runStatus, RunStatus.FAILED);
+  assert.equal(
+    reopened.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.INVALIDATED,
+  );
+  assert.equal(reopened.getAcceptanceDecision(reference.id)?.outcome, AcceptanceOutcome.ACCEPT);
+  assert.equal(reopened.getCloseoutForWorkflow(harness.workflowId), undefined);
+});
+
+void test('[I-003][I-008][I-009] closeout rejects every caller-supplied Acceptance binding mismatch', (t) => {
+  const harness = createHarness(t, { name: 'acceptance-closeout-binding-mismatch' });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-binding-mismatch'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  const mismatches = Object.freeze([
+    {
+      label: 'decision-id',
+      acceptanceDecisionId: acceptanceDecisionId('acceptance_missing-closeout-decision'),
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+    },
+    {
+      label: 'decision-digest',
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: digests.digest({ mismatch: 'decision' }),
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+    },
+    {
+      label: 'manifest-digest',
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: digests.digest({ mismatch: 'manifest' }),
+      candidateDigest: reference.candidateDigest,
+    },
+    {
+      label: 'candidate-digest',
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: digests.digest({ mismatch: 'candidate' }),
+    },
+  ]);
+  for (const mismatch of mismatches) {
+    const result = harness.runtime.closeAcceptedGoal({
+      commandId: harnessCommand(harness, `closeout-mismatch-${mismatch.label}`),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: mismatch.acceptanceDecisionId,
+      acceptanceDecisionDigest: mismatch.acceptanceDecisionDigest,
+      inputManifestDigest: mismatch.inputManifestDigest,
+      candidateDigest: mismatch.candidateDigest,
+      reason: 'a mismatched binding must never close',
+    });
+    assert.equal(result.status, 'REJECTED');
+    assert.deepEqual(currentWorkflow(harness), final.workflow);
+    assert.equal(
+      harness.store.getCandidateGeneration(final.generationId)?.state,
+      CandidateGenerationState.FROZEN,
+    );
+    assert.equal(harness.store.getCloseoutForWorkflow(final.workflow.id), undefined);
+  }
+});
+
+void test('[I-001][I-005][I-008][I-009] repairable rejection creates a fresh child generation and reopens', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-repair',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-repairable'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  assert.equal(
+    harness.store.getAcceptanceDecision(reference.id)?.outcome,
+    AcceptanceOutcome.REJECT_REPAIRABLE,
+  );
+  const oldGeneration = harness.store.getCandidateGeneration(final.generationId);
+  assert.ok(oldGeneration?.frozenDigest);
+  const repairRequest = Object.freeze({
+    commandId: harnessCommand(harness, 'begin-repair'),
+    goalId: harness.goalId,
+    expectedGoalRevision: goalRevision(1),
+    expectedWorkflowVersion: final.workflow.version,
+    acceptanceDecisionId: reference.id,
+    acceptanceDecisionDigest: reference.decisionDigest,
+    inputManifestDigest: reference.manifestDigest,
+    candidateDigest: reference.candidateDigest,
+    reason: 'repair the failed required Evidence',
+  });
+  assertApplied(harness.runtime.beginAcceptanceRepair(repairRequest));
+  assert.equal(harness.runtime.beginAcceptanceRepair(repairRequest).status, 'REPLAYED');
+  const repairedWorkflow = currentWorkflow(harness);
+  assert.equal(repairedWorkflow.phase, WorkflowPhase.IMPLEMENT);
+  assert.equal(
+    harness.store.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.REJECTED,
+  );
+  assert.ok(repairedWorkflow.activeCandidateGenerationId);
+  const child = harness.store.getCandidateGeneration(repairedWorkflow.activeCandidateGenerationId);
+  assert.ok(child);
+  assert.equal(child.state, CandidateGenerationState.MUTABLE);
+  assert.equal(child.parentGenerationId, final.generationId);
+  assert.equal(child.baseDigest, oldGeneration.frozenDigest);
+  assert.equal(
+    harness.store
+      .listCheckSpecifications()
+      .filter((specification) => specification.inputRefs.includes(child.id)).length,
+    2,
+  );
+  assert.equal(
+    harness.store
+      .listVerificationObligations(harness.goalId)
+      .filter((obligation) => obligation.candidateGenerationId === child.id).length,
+    1,
+  );
+
+  harness.store.close();
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(harness.workflowId)?.phase, WorkflowPhase.IMPLEMENT);
+  assert.equal(
+    reopened.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.REJECTED,
+  );
+  assert.equal(reopened.getCandidateGeneration(child.id)?.parentGenerationId, final.generationId);
+});
+
+void test('[I-006][I-009] reopen rejects REJECTED Candidate authority without a repair child', (t) => {
+  const harness = createHarness(t, {
+    name: 'rejected-without-repair-child-reopen',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-offline-reject'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  assert.equal(
+    harness.store.getAcceptanceDecision(latestAcceptanceReference(harness).id)?.outcome,
+    AcceptanceOutcome.REJECT_REPAIRABLE,
+  );
+  harness.store.close();
+  appendOfflineFrozenTerminalTransition(
+    harness.filename,
+    final.generationId,
+    CandidateGenerationState.REJECTED,
+    'rejected-without-repair-child-poison',
+  );
+
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
+    /rejected Candidate generation has no exact repair child authority/,
+  );
+});
+
+void test('[I-005][I-008][I-009] source drift after repairable rejection invalidates instead of branching', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-repair-source-drift',
+    verificationFixture: FakeVerificationFixture.FAIL,
+  });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-repair-source-drift'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  assert.equal(
+    harness.store.getAcceptanceDecision(reference.id)?.outcome,
+    AcceptanceOutcome.REJECT_REPAIRABLE,
+  );
+  harness.candidateSource.simulateFrozenDrift(final.generationId);
+
+  assertApplied(
+    harness.runtime.beginAcceptanceRepair({
+      commandId: harnessCommand(harness, 'reject-repair-after-source-drift'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+      reason: 'source reality changed after repairable evaluation',
+    }),
+  );
+
+  const failed = currentWorkflow(harness);
+  assert.equal(failed.phase, WorkflowPhase.FINAL_VERIFY);
+  assert.equal(failed.runStatus, RunStatus.FAILED);
+  assert.equal(
+    harness.store.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.INVALIDATED,
+  );
+  const candidate = harness.store.getCandidateForGoal(harness.goalId);
+  assert.ok(candidate);
+  assert.equal(harness.store.nextCandidateGenerationSequence(candidate.id), 2);
+  assert.equal(failed.activeCandidateGenerationId, final.generationId);
+});
+
+const acceptanceEvaluationRollbackSteps = Object.freeze([
+  AcceptanceTransactionStep.AFTER_ACCEPTANCE_MANIFEST_WRITE,
+  AcceptanceTransactionStep.AFTER_ACCEPTANCE_DECISION_WRITE,
+  TransactionStep.AFTER_COMMAND_RECORD,
+  TransactionStep.BEFORE_COMMIT,
+]);
+
+for (const [probeIndex, injectedStep] of acceptanceEvaluationRollbackSteps.entries()) {
+  void test(`[I-008] Acceptance evaluation fully rolls back at ${injectedStep}`, (t) => {
+    let armed = false;
+    const harness = createHarness(t, {
+      name: `acceptance-evaluation-rollback-${probeIndex}`,
+      transactionProbe: (step) => {
+        if (armed && step === injectedStep) {
+          throw new Error(`injected Acceptance evaluation failure at ${injectedStep}`);
+        }
+      },
+    });
+    const final = advanceToFinalVerify(harness);
+    const before = acceptanceAuthorityRowCounts(harness.filename);
+    const commandIdentifier = harnessCommand(harness, `evaluate-rollback-${probeIndex}`);
+    armed = true;
+    const result = harness.runtime.evaluateAcceptance({
+      commandId: commandIdentifier,
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    });
+    armed = false;
+    assert.equal(result.status, 'REJECTED');
+    assert.deepEqual(currentWorkflow(harness), final.workflow);
+    assert.equal(harness.store.getProcessedCommand(commandIdentifier), undefined);
+    assert.deepEqual(acceptanceAuthorityRowCounts(harness.filename), before);
+  });
+}
+
+const acceptedCloseoutRollbackSteps = Object.freeze([
+  CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION,
+  TransactionStep.AFTER_STATE_WRITE,
+  AcceptanceTransactionStep.AFTER_CLOSEOUT_WRITE,
+  TransactionStep.AFTER_AUDIT_APPEND,
+  TransactionStep.AFTER_COMMAND_RECORD,
+  TransactionStep.BEFORE_COMMIT,
+]);
+
+for (const [probeIndex, injectedStep] of acceptedCloseoutRollbackSteps.entries()) {
+  void test(`[I-008] accepted closeout fully rolls back at ${injectedStep}`, (t) => {
+    let armed = false;
+    const harness = createHarness(t, {
+      name: `acceptance-closeout-rollback-${probeIndex}`,
+      transactionProbe: (step) => {
+        if (armed && step === injectedStep) {
+          throw new Error(`injected closeout failure at ${injectedStep}`);
+        }
+      },
+    });
+    const final = advanceToFinalVerify(harness);
+    assertApplied(
+      harness.runtime.evaluateAcceptance({
+        commandId: harnessCommand(harness, `evaluate-before-closeout-rollback-${probeIndex}`),
+        goalId: harness.goalId,
+        expectedGoalRevision: goalRevision(1),
+        expectedWorkflowVersion: final.workflow.version,
+      }),
+    );
+    const reference = latestAcceptanceReference(harness);
+    const before = acceptanceAuthorityRowCounts(harness.filename);
+    const commandIdentifier = harnessCommand(harness, `closeout-rollback-${probeIndex}`);
+    armed = true;
+    const result = harness.runtime.closeAcceptedGoal({
+      commandId: commandIdentifier,
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+      reason: 'inject closeout rollback',
+    });
+    armed = false;
+    assert.equal(result.status, 'REJECTED');
+    assert.deepEqual(currentWorkflow(harness), final.workflow);
+    assert.equal(harness.store.getGoal(harness.goalId)?.status, 'ACTIVE');
+    assert.equal(
+      harness.store.getCandidateGeneration(final.generationId)?.state,
+      CandidateGenerationState.FROZEN,
+    );
+    assert.equal(harness.store.getCloseoutForWorkflow(final.workflow.id), undefined);
+    assert.equal(harness.store.getProcessedCommand(commandIdentifier), undefined);
+    assert.deepEqual(acceptanceAuthorityRowCounts(harness.filename), before);
+  });
+}
+
+const acceptanceRepairRollbackSteps = Object.freeze([
+  CandidateEvidenceTransactionStep.AFTER_CANDIDATE_TRANSITION,
+  AcceptanceTransactionStep.AFTER_REPAIR_GENERATION_WRITE,
+  AcceptanceTransactionStep.AFTER_REPAIR_CHECK_SPECIFICATION_WRITE,
+  AcceptanceTransactionStep.AFTER_REPAIR_OBLIGATION_WRITE,
+  TransactionStep.AFTER_STATE_WRITE,
+  TransactionStep.AFTER_AUDIT_APPEND,
+  TransactionStep.AFTER_COMMAND_RECORD,
+  TransactionStep.BEFORE_COMMIT,
+]);
+
+for (const [probeIndex, injectedStep] of acceptanceRepairRollbackSteps.entries()) {
+  void test(`[I-008] Acceptance repair fully rolls back at ${injectedStep}`, (t) => {
+    let armed = false;
+    const harness = createHarness(t, {
+      name: `acceptance-repair-rollback-${probeIndex}`,
+      verificationFixture: FakeVerificationFixture.FAIL,
+      transactionProbe: (step) => {
+        if (armed && step === injectedStep) {
+          throw new Error(`injected repair failure at ${injectedStep}`);
+        }
+      },
+    });
+    const final = advanceToFinalVerify(harness);
+    assertApplied(
+      harness.runtime.evaluateAcceptance({
+        commandId: harnessCommand(harness, `evaluate-before-repair-rollback-${probeIndex}`),
+        goalId: harness.goalId,
+        expectedGoalRevision: goalRevision(1),
+        expectedWorkflowVersion: final.workflow.version,
+      }),
+    );
+    const reference = latestAcceptanceReference(harness);
+    const before = acceptanceAuthorityRowCounts(harness.filename);
+    const commandIdentifier = harnessCommand(harness, `repair-rollback-${probeIndex}`);
+    armed = true;
+    const result = harness.runtime.beginAcceptanceRepair({
+      commandId: commandIdentifier,
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+      acceptanceDecisionId: reference.id,
+      acceptanceDecisionDigest: reference.decisionDigest,
+      inputManifestDigest: reference.manifestDigest,
+      candidateDigest: reference.candidateDigest,
+      reason: 'inject repair rollback',
+    });
+    armed = false;
+    assert.equal(result.status, 'REJECTED');
+    assert.deepEqual(currentWorkflow(harness), final.workflow);
+    assert.equal(
+      harness.store.getCandidateGeneration(final.generationId)?.state,
+      CandidateGenerationState.FROZEN,
+    );
+    const candidate = harness.store.getCandidateForGoal(harness.goalId);
+    assert.ok(candidate);
+    assert.equal(harness.store.nextCandidateGenerationSequence(candidate.id), 2);
+    assert.equal(harness.store.getProcessedCommand(commandIdentifier), undefined);
+    assert.deepEqual(acceptanceAuthorityRowCounts(harness.filename), before);
+  });
+}
+
+void test('[I-001][I-009] runner error produces ENGINE_ERROR and cannot be consumed as repair', (t) => {
+  const harness = createHarness(t, {
+    name: 'acceptance-engine-error',
+    verificationFixture: FakeVerificationFixture.RUNNER_ERROR,
+  });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-engine-error'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  assert.equal(
+    harness.store.getAcceptanceDecision(reference.id)?.outcome,
+    AcceptanceOutcome.ENGINE_ERROR,
+  );
+  const result = harness.runtime.beginAcceptanceRepair({
+    commandId: harnessCommand(harness, 'forbidden-engine-error-repair'),
+    goalId: harness.goalId,
+    expectedGoalRevision: goalRevision(1),
+    expectedWorkflowVersion: final.workflow.version,
+    acceptanceDecisionId: reference.id,
+    acceptanceDecisionDigest: reference.decisionDigest,
+    inputManifestDigest: reference.manifestDigest,
+    candidateDigest: reference.candidateDigest,
+    reason: 'engine errors are not repair authority',
+  });
+  assert.equal(result.status, 'REJECTED');
+  assert.deepEqual(currentWorkflow(harness), final.workflow);
+  assert.equal(
+    harness.store.getCandidateGeneration(final.generationId)?.state,
+    CandidateGenerationState.FROZEN,
+  );
+});
+
+void test('[I-001][I-006][I-008] direct Store caller cannot persist a forged Acceptance Decision', (t) => {
+  const harness = createHarness(t, { name: 'acceptance-forged-decision' });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-forgery'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  const manifest = harness.store.getAcceptanceInputManifest(reference.manifestDigest);
+  const decision = harness.store.getAcceptanceDecision(reference.id);
+  assert.ok(manifest && decision);
+  const authority = harness.store.getAcceptanceAuthorityForWorkflow(
+    final.workflow.id,
+    manifest.policyBundleId,
+  );
+  assert.ok(authority);
+  const compiled = compileM1AcceptanceInput(authority, manifest.createdAt, digests);
+  const forgedBase = Object.freeze({
+    ...decision,
+    id: harness.ids.nextAcceptanceDecisionId(),
+    ruleResults: Object.freeze(
+      decision.ruleResults.map((result, index) =>
+        index === 0 ? Object.freeze({ ...result, message: 'forged passing explanation' }) : result,
+      ),
+    ),
+  });
+  const forged = decodeAcceptanceDecision({
+    ...forgedBase,
+    decisionDigest: digests.digest(acceptanceDecisionProjection(forgedBase)),
+  });
+  const commandIdentifier = harnessCommand(harness, 'direct-forged-evaluation');
+  assert.throws(
+    () =>
+      harness.store.commitAcceptanceEvaluation({
+        commandId: commandIdentifier,
+        inputDigest: digests.digest({ type: 'DIRECT_FORGED_ACCEPTANCE' }),
+        target: { aggregateType: 'GOAL', aggregateId: harness.goalId },
+        manifest,
+        pendingIssueSet: compiled.pendingIssueSet,
+        decision: forged,
+        manifestAuditEventId: harness.ids.nextAuditEventId(),
+        decisionAuditEventId: harness.ids.nextAuditEventId(),
+      }),
+    /does not match the built-in M1 engine result/,
+  );
+  assert.equal(harness.store.getAcceptanceDecision(forged.id), undefined);
+  assert.equal(harness.store.getProcessedCommand(commandIdentifier), undefined);
+});
+
+void test('[I-006][I-009] reopen rejects a retained Acceptance Decision whose semantics were rewritten', (t) => {
+  const harness = createHarness(t, { name: 'acceptance-poisoned-reopen' });
+  const final = advanceToFinalVerify(harness);
+  assertApplied(
+    harness.runtime.evaluateAcceptance({
+      commandId: harnessCommand(harness, 'evaluate-before-poison'),
+      goalId: harness.goalId,
+      expectedGoalRevision: goalRevision(1),
+      expectedWorkflowVersion: final.workflow.version,
+    }),
+  );
+  const reference = latestAcceptanceReference(harness);
+  harness.store.close();
+  const raw = new Database(harness.filename);
+  raw.exec('DROP TRIGGER acceptance_decisions_no_update');
+  raw
+    .prepare('UPDATE acceptance_decisions SET dominant_reason_code = ? WHERE id = ?')
+    .run('FORGED_DOMINANT_REASON', reference.id);
+  raw.close();
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename, now: () => createdAt }),
+    /Acceptance dominant reason does not match Rule Results|AcceptanceDecision/,
+  );
 });

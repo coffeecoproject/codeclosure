@@ -6,9 +6,10 @@ This document defines the target workflow contract. The current M1
 implementation includes the deterministic state model, transactional Workflow
 and Attempt Runtime, the Context-bound `FakeWorker` proof path, logical
 Candidate preparation and irreversible freeze, independent fake verification,
-Evidence persistence/invalidation, and canonical Evidence Set transition into
-`FINAL_VERIFY`. Acceptance, repair-generation closeout coordination, CLI proof
-scenarios, real project editing, and Codex integration are not yet implemented.
+Evidence persistence/invalidation, canonical Evidence Set transition into
+`FINAL_VERIFY`, deterministic Acceptance evaluation, accepted closeout, and
+repair-generation coordination. CLI proof scenarios, real project editing,
+and Codex integration are not yet implemented.
 
 ## Purpose
 
@@ -109,9 +110,12 @@ the owning internal evaluators, strictly validates their complete runtime
 shape, and records valid results on the transition event. A thrown evaluator or
 malformed evaluator return is an evaluation failure and creates no command
 outcome. `CURRENT_ACCEPTANCE` is reserved for the dedicated closeout path,
-which must reload an Acceptance Engine decision and its exact bindings. Until
-Slice 6 implements that path, the application Runtime rejects `FINAL_VERIFY ->
-CLOSEOUT` as unavailable.
+which reloads an Acceptance Engine decision and its exact bindings. The Slice 6
+`CloseAcceptedGoal` command alone constructs that guard and atomically accepts
+the Candidate, closes the Workflow/Goal, and records the closeout binding.
+`BeginAcceptanceRepair` similarly owns `REJECT_REPAIRABLE_RECORDED` and creates
+a fresh child generation. Generic phase requests remain unable to construct or
+consume either proof.
 
 Slice 5 phase guards are not supplied by that generic evaluator. The Runtime
 constructs Candidate and Evidence guards only from decoded Candidate,

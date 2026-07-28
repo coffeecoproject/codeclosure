@@ -253,7 +253,9 @@ inspection.
   Candidate/Evidence contract.
 - M1 still proves only deterministic logical source and fake verification. It
   makes no claim about real filesystem isolation or real project correctness.
-- Acceptance issuance and closeout remain Slice 6 work.
+- At the time of this decision, Acceptance issuance and closeout remained
+  Slice 6 work; [ADR 0018](0018-deterministic-acceptance-and-closeout-authority.md)
+  now owns that later boundary.
 
 ## Rejected alternatives
 

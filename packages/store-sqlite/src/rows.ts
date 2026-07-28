@@ -9,12 +9,16 @@ import {
   RunStatus,
   WorkflowPhase,
   auditEventId,
+  decodeAcceptanceDecision,
+  decodeAcceptanceInputManifest,
   decodeCandidate,
   decodeCandidateGeneration,
   decodeCheckSpecification,
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
   decodeEvidenceSet,
+  decodeCloseoutRecord,
+  decodePendingIssue,
   commandId,
   decodeAttemptSnapshot,
   decodeContextManifest,
@@ -28,6 +32,8 @@ import {
   workflowId,
   type ContextManifest,
   type Attempt,
+  type AcceptanceDecision,
+  type AcceptanceInputManifest,
   type AuditEventId,
   type CommandId,
   type Candidate,
@@ -36,10 +42,12 @@ import {
   type EvidenceEligibility,
   type EvidenceRecord,
   type EvidenceSet,
+  type CloseoutRecord,
   type Goal,
   type GoalId,
   type IsoTimestamp,
   type PolicyBundle,
+  type PendingIssue,
   type Sha256Digest,
   type WorkflowInstance,
   type WorkflowId,
@@ -333,6 +341,71 @@ const evidenceSetRowSchema = z.object({
   obligation_mappings_json: z.string(),
   evidence_refs_json: z.string(),
   unresolved_requirements_json: z.string(),
+});
+
+const pendingIssueRowSchema = z.object({
+  id: z.string(),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  candidate_generation_id: z.string().nullable(),
+  classification: nonBlankStringSchema,
+  severity: nonBlankStringSchema,
+  description: nonBlankStringSchema,
+  source_refs_json: z.string(),
+  repairability: nonBlankStringSchema,
+  status: nonBlankStringSchema,
+  created_at: z.string(),
+  resolved_at: z.string().nullable(),
+});
+
+const acceptanceInputManifestRowSchema = z.object({
+  manifest_digest: z.string(),
+  schema_version: z.number().int().positive(),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version: z.number().int().positive(),
+  phase: z.literal(WorkflowPhase.FINAL_VERIFY),
+  fact_snapshot_digest: z.string(),
+  decision_set_digest: z.string(),
+  scenario_set_digest: z.string(),
+  candidate_generation_id: z.string(),
+  candidate_digest: z.string(),
+  evidence_set_digest: z.string(),
+  pending_issue_set_digest: z.string(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  created_at: z.string(),
+});
+
+const acceptanceDecisionRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int().positive(),
+  input_manifest_digest: z.string(),
+  policy_bundle_digest: z.string(),
+  outcome: nonBlankStringSchema,
+  dominant_reason_code: nonBlankStringSchema,
+  rule_results_json: z.string(),
+  engine_version: nonBlankStringSchema,
+  issued_at: z.string(),
+  decision_digest: z.string(),
+});
+
+const closeoutRowSchema = z.object({
+  workflow_id: z.string(),
+  schema_version: z.number().int().positive(),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_version: z.number().int().positive(),
+  acceptance_decision_id: z.string(),
+  acceptance_decision_digest: z.string(),
+  input_manifest_digest: z.string(),
+  candidate_generation_id: z.string(),
+  candidate_digest: z.string(),
+  evidence_set_digest: z.string(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  closed_at: z.string(),
 });
 
 function parseStringArray(value: string, recordType: string): readonly string[] {
@@ -754,6 +827,107 @@ export function decodeEvidenceSetRow(row: unknown): EvidenceSet {
       throw error;
     }
     throw new PersistenceDecodeError('EvidenceSet', { cause: error });
+  }
+}
+
+export function decodePendingIssueRow(row: unknown): PendingIssue {
+  try {
+    const parsed = pendingIssueRowSchema.parse(row);
+    return decodePendingIssue({
+      id: parsed.id,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      ...(parsed.candidate_generation_id === null
+        ? {}
+        : { candidateGenerationId: parsed.candidate_generation_id }),
+      classification: parsed.classification,
+      severity: parsed.severity,
+      description: parsed.description,
+      sourceRefs: parseJson(parsed.source_refs_json, 'PendingIssue.sourceRefs'),
+      repairability: parsed.repairability,
+      status: parsed.status,
+      createdAt: parsed.created_at,
+      ...(parsed.resolved_at === null ? {} : { resolvedAt: parsed.resolved_at }),
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('PendingIssue', { cause: error });
+  }
+}
+
+export function decodeAcceptanceInputManifestRow(row: unknown): AcceptanceInputManifest {
+  try {
+    const parsed = acceptanceInputManifestRowSchema.parse(row);
+    return decodeAcceptanceInputManifest({
+      schemaVersion: parsed.schema_version,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      workflowId: parsed.workflow_id,
+      workflowVersion: parsed.workflow_version,
+      phase: parsed.phase,
+      factSnapshotDigest: parsed.fact_snapshot_digest,
+      decisionSetDigest: parsed.decision_set_digest,
+      scenarioSetDigest: parsed.scenario_set_digest,
+      candidateGenerationId: parsed.candidate_generation_id,
+      candidateDigest: parsed.candidate_digest,
+      evidenceSetDigest: parsed.evidence_set_digest,
+      pendingIssueSetDigest: parsed.pending_issue_set_digest,
+      policyBundleId: parsed.policy_bundle_id,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      createdAt: parsed.created_at,
+      manifestDigest: parsed.manifest_digest,
+    });
+  } catch (error) {
+    throw new PersistenceDecodeError('AcceptanceInputManifest', { cause: error });
+  }
+}
+
+export function decodeAcceptanceDecisionRow(row: unknown): AcceptanceDecision {
+  try {
+    const parsed = acceptanceDecisionRowSchema.parse(row);
+    return decodeAcceptanceDecision({
+      id: parsed.id,
+      schemaVersion: parsed.schema_version,
+      inputManifestDigest: parsed.input_manifest_digest,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      outcome: parsed.outcome,
+      dominantReasonCode: parsed.dominant_reason_code,
+      ruleResults: parseJson(parsed.rule_results_json, 'AcceptanceDecision.ruleResults'),
+      engineVersion: parsed.engine_version,
+      issuedAt: parsed.issued_at,
+      decisionDigest: parsed.decision_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('AcceptanceDecision', { cause: error });
+  }
+}
+
+export function decodeCloseoutRow(row: unknown): CloseoutRecord {
+  try {
+    const parsed = closeoutRowSchema.parse(row);
+    return decodeCloseoutRecord({
+      schemaVersion: parsed.schema_version,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      workflowId: parsed.workflow_id,
+      workflowVersion: parsed.workflow_version,
+      acceptanceDecisionId: parsed.acceptance_decision_id,
+      acceptanceDecisionDigest: parsed.acceptance_decision_digest,
+      inputManifestDigest: parsed.input_manifest_digest,
+      candidateGenerationId: parsed.candidate_generation_id,
+      candidateDigest: parsed.candidate_digest,
+      evidenceSetDigest: parsed.evidence_set_digest,
+      policyBundleId: parsed.policy_bundle_id,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      closedAt: parsed.closed_at,
+    });
+  } catch (error) {
+    throw new PersistenceDecodeError('CloseoutRecord', { cause: error });
   }
 }
 

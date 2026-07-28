@@ -458,6 +458,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0010_worker_authority_closure.sql',
       '0011_candidate_evidence_authority.sql',
       '0012_worker_failure_classification_closure.sql',
+      '0013_acceptance_closeout_authority.sql',
     ],
   );
   store.close();
@@ -492,6 +493,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
     'pending_issues',
     'acceptance_input_manifests',
     'acceptance_decisions',
+    'workflow_closeouts',
     'processed_commands',
     'audit_events',
     'worker_dispatch_claims',

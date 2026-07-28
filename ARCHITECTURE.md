@@ -3,11 +3,12 @@
 ## Status
 
 This document defines the target architecture. The current M1 implementation
-has reached the Candidate/Evidence slice: deterministic domain and Workflow
+has reached the Acceptance/closeout slice: deterministic domain and Workflow
 control, SQLite persistence and audit, minimal Context compilation, typed
 `FakeWorker` dispatch and event admission, logical Candidate generations,
 stable freeze observation, independent fake verification, immutable Evidence,
-and canonical Evidence Sets exist. Acceptance, CLI proof scenarios, and
+canonical Evidence Sets, deterministic Acceptance Decisions, transactional
+closeout, and repair-generation coordination exist. CLI proof scenarios and
 complete startup orchestration remain M1 work. Real candidate isolation and
 real project verification remain M2 work. Components marked for later slices
 or milestones are architectural boundaries, not current implementation claims.
@@ -460,9 +461,9 @@ packages/workspace
 packages/adapter-codex
 ```
 
-M1 keeps its minimal Context Manifest, Evidence, and eventual Acceptance
-behavior inside `domain` and `runtime`; Slice 6 still has to implement the
-Acceptance behavior before that control exists.
+M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside
+`domain` and `runtime`. Slice 6 implements that control without introducing a
+separate package or a worker-facing completion path.
 
 Codex protocol DTOs must remain inside `adapter-codex`.
 
