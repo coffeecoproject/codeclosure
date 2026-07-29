@@ -15,6 +15,8 @@ import {
   EvidenceKind,
   GuardOutcome,
   RunStatus,
+  RecoveryReasonCode,
+  RecoveryReconciliationDisposition,
   WorkflowGuard,
   WorkflowPhase,
   candidateGenerationId,
@@ -54,6 +56,7 @@ import {
 import {
   CanonicalJsonSha256DigestProvider,
   CandidateSourceFailureCode,
+  GoalNextSafeAction,
   M1_ACCEPTANCE_RULES,
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
@@ -63,12 +66,15 @@ import {
   createTestResultEvidenceRecord,
   createM1CandidateEvidencePolicy,
   createM1AcceptanceCheckerIdentity,
+  createExecutionProfileInstaller,
+  createCodeClosureApplication,
   createPolicyInstaller,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
   verifyEvidenceSetAuthority,
   type Clock,
 } from '@codeclosure/runtime';
+import { createRecoveryCoordinator } from '@codeclosure/runtime/composition';
 import {
   AcceptanceTransactionStep,
   CandidateEvidenceTransactionStep,
@@ -81,8 +87,11 @@ import {
   DeterministicIds,
   FakeCandidateSource,
   FakeCandidateSourceFixture,
+  FakeRecoveryInspectionMode,
+  FakeRecoveryInspector,
   FakeVerificationFixture,
   FakeVerificationRunner,
+  testExecutionProfileDefinition,
 } from '@codeclosure/testing';
 import {
   WorkflowRuntimeKernel,
@@ -237,6 +246,16 @@ function createHarness(
     ...definition,
     digest: digests.digest(policyBundleProjection(definition)),
   });
+  const profileInstall = createExecutionProfileInstaller({
+    store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids,
+    digests,
+  }).installExecutionProfile(testExecutionProfileDefinition(namespace));
+  if (profileInstall.status === 'PROFILE_CONFLICT') {
+    assert.fail(profileInstall.message);
+  }
+  const profile = profileInstall.value.profile;
   const creation = store.createGoalWithWorkflow({
     commandId: commandId(`command_${namespace}-create`),
     inputDigest: digests.digest({ type: 'CREATE_ADVERSARIAL_HARNESS', name: options.name }),
@@ -265,7 +284,10 @@ function createHarness(
     phaseGuards: genericGuards,
     workerContext: Object.freeze({
       identities: ids,
+      executionProfileId: profile.id,
+      executionProfileDigest: profile.digest,
       policyBundleId: policy.id,
+      policyBundleDigest: policy.digest,
       factory: Object.freeze({
         compile: (input: AttemptContextCompilationRequest) => compiler.compile(input),
       }),
@@ -277,8 +299,13 @@ function createHarness(
         fixture: options.verificationFixture ?? FakeVerificationFixture.PASS,
       }),
       policyBundleId: policy.id,
+      policyBundleDigest: policy.digest,
     }),
-    acceptance: Object.freeze({ identities: ids, policyBundleId: policy.id }),
+    acceptance: Object.freeze({
+      identities: ids,
+      policyBundleId: policy.id,
+      policyBundleDigest: policy.digest,
+    }),
   });
   return Object.freeze({
     filename,
@@ -349,6 +376,45 @@ function appendOfflineFrozenTerminalTransition(
   } finally {
     raw.close();
   }
+}
+
+function insertLegacyTerminalCandidate(
+  filename: string,
+  toState: typeof CandidateGenerationState.ACCEPTED | typeof CandidateGenerationState.REJECTED,
+  namespace: string,
+): CandidateGenerationId {
+  const generationIdentifier = candidateGenerationId(`generation_${namespace}`);
+  const candidateIdentifier = `candidate_${namespace}`;
+  const raw = new Database(filename);
+  try {
+    raw.pragma('foreign_keys = OFF');
+    raw.exec('DROP TRIGGER candidate_generations_authority_insert_guard');
+    raw.exec('DROP TRIGGER candidate_generations_slice5_insert_guard');
+    const frozenDigest = digests.digest({ namespace, type: 'LEGACY_FROZEN_CANDIDATE' });
+    raw
+      .prepare(
+        `INSERT INTO candidate_generations(
+           id, candidate_id, workflow_id, sequence, parent_generation_id,
+           workspace_identity, state, base_digest, frozen_digest,
+           invalidation_reason, version, created_at, updated_at, frozen_at
+         ) VALUES (?, ?, ?, 1, NULL, ?, ?, ?, ?, NULL, 4, ?, ?, ?)`,
+      )
+      .run(
+        generationIdentifier,
+        candidateIdentifier,
+        `workflow_${namespace}`,
+        `m1-workspace:${generationIdentifier}`,
+        toState,
+        frozenDigest,
+        frozenDigest,
+        createdAt,
+        createdAt,
+        createdAt,
+      );
+  } finally {
+    raw.close();
+  }
+  return generationIdentifier;
 }
 
 function assertSensitiveMarkerNotPersisted(harness: Harness): void {
@@ -672,6 +738,80 @@ function advanceRepairChildToFinalVerify(
   assert.equal(workflow.phase, WorkflowPhase.FINAL_VERIFY);
   return Object.freeze({ workflow, generationId });
 }
+
+void test('[I-006][I-008][I-009] IMPLEMENT recovery binds the exact current Candidate digest', (t) => {
+  const harness = createHarness(t, { name: 'implement_recovery_candidate' });
+  let workflow = advanceToReadyPlan(harness);
+  assertApplied(
+    harness.runtime.requestPhaseTransition({
+      commandId: harnessCommand(harness, 'recovery-to-implement'),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+      requestedPhase: WorkflowPhase.IMPLEMENT,
+      reason: 'prepare a recoverable IMPLEMENT boundary',
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assert.ok(workflow.activeCandidateGenerationId);
+  assertApplied(
+    harness.runtime.beginAttempt({
+      commandId: harnessCommand(harness, 'recovery-implement-start'),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+    }),
+  );
+  const running = currentWorkflow(harness);
+  assert.equal(running.runStatus, RunStatus.RUNNING);
+  assert.ok(running.activeAttemptId);
+  const nextSequence = harness.store.nextAttemptSequence(harness.workflowId);
+
+  const inspector = new FakeRecoveryInspector([
+    FakeRecoveryInspectionMode.CANDIDATE_MISMATCH,
+    FakeRecoveryInspectionMode.EXACT,
+  ]);
+  const recovery = createRecoveryCoordinator({
+    store: harness.store,
+    clock: Object.freeze({
+      now: (() => {
+        const finalTimestamp = isoTimestamp('2026-07-27T00:00:00.901Z');
+        const timestamps = [isoTimestamp('2026-07-27T00:00:00.900Z'), finalTimestamp];
+        let index = 0;
+        return () => timestamps[index++] ?? finalTimestamp;
+      })(),
+    }),
+    ids: new DeterministicIds('implement-recovery-control'),
+    digests,
+    inspector,
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+  const startup = recovery.recoverOnStartup();
+  assert.equal(startup.reconciledCount, 1);
+  const recoveryIdentifier = startup.recoveryIds[0];
+  assert.ok(recoveryIdentifier);
+  const blockedRecord = harness.store.getRecoveryReconciliation(recoveryIdentifier);
+  assert.ok(blockedRecord);
+  assert.equal(blockedRecord.disposition, RecoveryReconciliationDisposition.BLOCKED);
+  assert.equal(blockedRecord.reasonCode, RecoveryReasonCode.CANDIDATE_DIGEST_MISMATCH);
+  assert.equal(blockedRecord.candidateGenerationId, running.activeCandidateGenerationId);
+  assert.notEqual(blockedRecord.observedCandidateDigest, blockedRecord.expectedCandidateDigest);
+  const blocked = currentWorkflow(harness);
+  assert.equal(blocked.runStatus, RunStatus.BLOCKED);
+
+  const resumed = recovery.resumeGoal({
+    commandId: commandId('command_implement-recovery-resume'),
+    goalId: harness.goalId,
+    expectedGoalRevision: goalRevision(1),
+    expectedWorkflowVersion: blocked.version,
+  });
+  assert.equal(resumed.status, 'APPLIED');
+  const ready = currentWorkflow(harness);
+  assert.equal(ready.runStatus, RunStatus.READY);
+  assert.equal(ready.phase, WorkflowPhase.IMPLEMENT);
+  assert.equal(ready.activeAttemptId, undefined);
+  assert.equal(harness.store.nextAttemptSequence(harness.workflowId), nextSequence);
+  assert.equal(inspector.requests().length, 2);
+});
 
 void test('[I-008] Candidate preparation rolls back every authority record after its dedicated write probe', (t) => {
   let armed = false;
@@ -1606,16 +1746,15 @@ void test('[I-006][I-008] migration 0013 refuses pre-authority terminal state at
   )) {
     copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
   }
-
-  const harness = createHarness(t, {
-    name: 'migration-0013-terminal',
+  const filename = join(directory, 'control.sqlite');
+  const oldStore = openSqliteControlStore({
+    filename,
     migrationsDirectory,
+    now: () => createdAt,
   });
-  const final = advanceToFinalVerify(harness);
-  harness.store.close();
-  appendOfflineFrozenTerminalTransition(
-    harness.filename,
-    final.generationId,
+  oldStore.close();
+  insertLegacyTerminalCandidate(
+    filename,
     CandidateGenerationState.ACCEPTED,
     'migration-0013-terminal-poison',
   );
@@ -1627,13 +1766,13 @@ void test('[I-006][I-008] migration 0013 refuses pre-authority terminal state at
   assert.throws(
     () =>
       openSqliteControlStore({
-        filename: harness.filename,
+        filename,
         migrationsDirectory,
         now: () => createdAt,
       }),
     /acceptance_migration_guard|CHECK constraint failed/,
   );
-  const inspected = new Database(harness.filename, { readonly: true, fileMustExist: true });
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
   assert.equal(
     inspected
       .prepare(
@@ -1673,25 +1812,15 @@ void test('[I-006][I-008] migration 0014 refuses pre-record repair history atomi
   )) {
     copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
   }
-
-  const harness = createHarness(t, {
-    name: 'migration-0014-repair',
+  const filename = join(directory, 'control.sqlite');
+  const oldStore = openSqliteControlStore({
+    filename,
     migrationsDirectory,
-    verificationFixture: FakeVerificationFixture.FAIL,
+    now: () => createdAt,
   });
-  const final = advanceToFinalVerify(harness);
-  assertApplied(
-    harness.runtime.evaluateAcceptance({
-      commandId: harnessCommand(harness, 'evaluate-before-legacy-repair'),
-      goalId: harness.goalId,
-      expectedGoalRevision: goalRevision(1),
-      expectedWorkflowVersion: final.workflow.version,
-    }),
-  );
-  harness.store.close();
-  appendOfflineFrozenTerminalTransition(
-    harness.filename,
-    final.generationId,
+  oldStore.close();
+  insertLegacyTerminalCandidate(
+    filename,
     CandidateGenerationState.REJECTED,
     'migration-0014-repair-history',
   );
@@ -1703,13 +1832,13 @@ void test('[I-006][I-008] migration 0014 refuses pre-record repair history atomi
   assert.throws(
     () =>
       openSqliteControlStore({
-        filename: harness.filename,
+        filename,
         migrationsDirectory,
         now: () => createdAt,
       }),
     /acceptance_repair_migration_guard|CHECK constraint failed/,
   );
-  const inspected = new Database(harness.filename, { readonly: true, fileMustExist: true });
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
   assert.equal(
     inspected
       .prepare(
@@ -2555,6 +2684,30 @@ void test('[I-001][I-006][I-008][I-009] deterministic Acceptance closes exact au
   );
   const first = latestAcceptanceReference(harness);
   assert.equal(harness.store.getAcceptanceDecision(first.id)?.outcome, AcceptanceOutcome.ACCEPT);
+  const readIds = new DeterministicIds('acceptance-closeout-read');
+  const reads = createCodeClosureApplication({
+    store: harness.store,
+    clock: monotonicClock(),
+    creationIds: readIds,
+    digests,
+    projectPaths: Object.freeze({
+      parseNormalizedAbsolute: (projectPath: string) => projectPath,
+    }),
+    execution: Object.freeze({
+      startGoal: () =>
+        Promise.reject(new Error('Execution is not exercised by this closeout read fixture')),
+      resumeGoal: () =>
+        Promise.reject(new Error('Execution is not exercised by this closeout read fixture')),
+      cancelGoal: () => {
+        throw new Error('Execution is not exercised by this closeout read fixture');
+      },
+    }),
+  });
+  const acceptedStatus = reads.getGoalStatus(harness.goalId);
+  assert.equal(acceptedStatus.status, 'FOUND');
+  assert.equal(acceptedStatus.view.acceptanceSummary?.outcome, AcceptanceOutcome.ACCEPT);
+  assert.equal(acceptedStatus.view.technicalCloseout, false);
+  assert.equal(acceptedStatus.view.nextSafeAction, GoalNextSafeAction.RUNTIME_CONTINUE);
   assert.deepEqual(currentWorkflow(harness), final.workflow);
   assert.equal(harness.store.getGoal(harness.goalId)?.status, 'ACTIVE');
   assert.equal(
@@ -2624,6 +2777,17 @@ void test('[I-001][I-006][I-008][I-009] deterministic Acceptance closes exact au
     CandidateGenerationState.ACCEPTED,
   );
   assert.equal(harness.store.getCloseoutForWorkflow(closed.id)?.acceptanceDecisionId, first.id);
+  const closedStatus = reads.getGoalStatus(harness.goalId);
+  assert.equal(closedStatus.status, 'FOUND');
+  assert.equal(closedStatus.view.technicalCloseout, true);
+  assert.equal(closedStatus.view.closeoutRef?.acceptanceDecisionId, first.id);
+  assert.equal(closedStatus.view.nextSafeAction, GoalNextSafeAction.NO_ACTION);
+  const closedAudit = reads.getGoalAudit(harness.goalId);
+  assert.equal(closedAudit.status, 'FOUND');
+  assert.equal(
+    closedAudit.view.events.some((event) => event.eventType === 'WORKFLOW_CLOSEOUT_RECORDED'),
+    true,
+  );
 
   harness.store.close();
   const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
@@ -2633,6 +2797,28 @@ void test('[I-001][I-006][I-008][I-009] deterministic Acceptance closes exact au
     reopened.getCloseoutForWorkflow(closed.id)?.acceptanceDecisionDigest,
     first.decisionDigest,
   );
+  const reopenedReadIds = new DeterministicIds('acceptance-closeout-reopened-read');
+  const reopenedReads = createCodeClosureApplication({
+    store: reopened,
+    clock: monotonicClock(),
+    creationIds: reopenedReadIds,
+    digests,
+    projectPaths: Object.freeze({
+      parseNormalizedAbsolute: (projectPath: string) => projectPath,
+    }),
+    execution: Object.freeze({
+      startGoal: () =>
+        Promise.reject(new Error('Execution is not exercised by this reopened read fixture')),
+      resumeGoal: () =>
+        Promise.reject(new Error('Execution is not exercised by this reopened read fixture')),
+      cancelGoal: () => {
+        throw new Error('Execution is not exercised by this reopened read fixture');
+      },
+    }),
+  });
+  const reopenedStatus = reopenedReads.getGoalStatus(harness.goalId);
+  assert.equal(reopenedStatus.status, 'FOUND');
+  assert.equal(reopenedStatus.view.technicalCloseout, true);
 });
 
 void test('[I-006][I-009] reopen rejects ACCEPTED Candidate authority without closeout', (t) => {

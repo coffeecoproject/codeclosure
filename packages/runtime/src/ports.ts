@@ -20,6 +20,9 @@ import type {
   EvidenceId,
   EvidenceRecord,
   EvidenceSet,
+  ExecutionProfile,
+  ExecutionProfileBinding,
+  ExecutionProfileId,
   Goal,
   GoalId,
   IsoTimestamp,
@@ -27,6 +30,9 @@ import type {
   PolicyBundleId,
   PendingIssue,
   PendingIssueSet,
+  RecoveryReconciliationId,
+  RecoveryReconciliationRecord,
+  RecoveryWorkflowReconciled,
   Sha256Digest,
   CloseoutRecord,
   VerificationObligation,
@@ -36,6 +42,8 @@ import type {
   WorkflowInstance,
   WorkerEventId,
   WorkerSessionId,
+  WorkflowPolicyBinding,
+  SuccessCriterionId,
 } from '@codeclosure/domain';
 
 import type { CommandTarget, DeterministicCommandError, JsonValue } from './contracts.js';
@@ -58,6 +66,13 @@ export interface IdGenerator {
   nextAuditEventId(): AuditEventId;
 }
 
+export interface GoalCreationIdentityGenerator {
+  nextGoalId(): GoalId;
+  nextWorkflowId(): WorkflowId;
+  nextSuccessCriterionId(): SuccessCriterionId;
+  nextAuditEventId(): AuditEventId;
+}
+
 export interface WorkerIdentityGenerator {
   nextCommandId(): CommandId;
   nextContextManifestId(): ContextManifestId;
@@ -66,6 +81,12 @@ export interface WorkerIdentityGenerator {
 
 export interface AcceptanceIdentityGenerator {
   nextAcceptanceDecisionId(): AcceptanceDecisionId;
+}
+
+export interface RecoveryIdentityGenerator {
+  nextCommandId(): CommandId;
+  nextRecoveryReconciliationId(): RecoveryReconciliationId;
+  nextAuditEventId(): AuditEventId;
 }
 
 export interface DigestProvider {
@@ -94,6 +115,112 @@ export interface GoalWorkflowView {
   readonly workflow: WorkflowInstance;
 }
 
+export interface CommitGoalCreation extends AuditWriteIdentity {
+  readonly commandId: CommandId;
+  readonly inputDigest: Sha256Digest;
+  readonly goal: Goal;
+  readonly workflow: WorkflowInstance;
+  readonly workflowAuditEventId: AuditEventId;
+}
+
+export interface GoalStatusAuthoritySnapshot extends GoalWorkflowView {
+  readonly policyBinding?: WorkflowPolicyBinding;
+  readonly executionProfileBinding?: ExecutionProfileBinding;
+  readonly activeAttempt?: Attempt;
+  readonly candidateAuthority?: CandidateAuthorityView;
+  readonly acceptanceAuthority?: {
+    readonly manifest: AcceptanceInputManifest;
+    readonly decision: AcceptanceDecision;
+  };
+  readonly closeout?: CloseoutRecord;
+  readonly latestRecoveryReconciliation?: RecoveryReconciliationRecord;
+}
+
+export interface WorkflowDriverAuthoritySnapshot extends GoalStatusAuthoritySnapshot {
+  readonly installedPolicyBundle?: InstalledPolicyBundle;
+  readonly installedExecutionProfile?: InstalledExecutionProfile;
+  readonly latestPhaseAttempt?: Attempt;
+  readonly latestPhaseContextManifest?: ContextManifest;
+  readonly verificationObligations: readonly VerificationObligation[];
+  readonly evidence: readonly {
+    readonly record: EvidenceRecord;
+    readonly eligibility: EvidenceEligibility;
+  }[];
+}
+
+export interface GoalAuditEventAuthority {
+  readonly id: AuditEventId;
+  readonly sequence: number;
+  readonly aggregateType: string;
+  readonly aggregateId: string;
+  readonly eventType: string;
+  readonly actorType: string;
+  readonly commandId?: CommandId;
+  readonly beforeVersion?: number;
+  readonly afterVersion?: number;
+  readonly correlationId?: string;
+  readonly causationId?: string;
+  readonly payloadDigest: Sha256Digest;
+  readonly occurredAt: IsoTimestamp;
+}
+
+export interface GoalAuditAuthoritySnapshot {
+  readonly goalId: GoalId;
+  readonly throughSequence: number;
+  readonly events: readonly GoalAuditEventAuthority[];
+}
+
+export const RecoverableBlockerKind = {
+  ACTIVE_ATTEMPT: 'ACTIVE_ATTEMPT',
+  RECOVERABLE_FAILURE: 'RECOVERABLE_FAILURE',
+  RECONCILED_BLOCKER: 'RECONCILED_BLOCKER',
+} as const;
+export type RecoverableBlockerKind =
+  (typeof RecoverableBlockerKind)[keyof typeof RecoverableBlockerKind];
+
+export interface RecoveryCatalogEntry extends GoalWorkflowView {
+  readonly blockerKind: RecoverableBlockerKind;
+  readonly sourceAttempt: Attempt;
+  readonly contextManifest?: ContextManifest;
+  readonly policyBinding: WorkflowPolicyBinding;
+  readonly executionProfileBinding: ExecutionProfileBinding;
+  readonly dispatchClaim?: WorkerDispatchClaim;
+  readonly candidateAuthority?: CandidateAuthorityView;
+  readonly lastAuditSequence: number;
+  readonly latestReconciliation?: RecoveryReconciliationRecord;
+}
+
+export interface CommitStartupRecovery extends AuditWriteIdentity {
+  readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
+  readonly event: AttemptEvent;
+  readonly workflowAuditEventId: AuditEventId;
+  readonly recovery: RecoveryReconciliationRecord;
+  readonly recoveryAuditEventId: AuditEventId;
+}
+
+export interface CommitResumeRecovery extends AuditWriteIdentity {
+  readonly commandId: CommandId;
+  readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
+  readonly event: RecoveryWorkflowReconciled;
+  readonly recovery: RecoveryReconciliationRecord;
+  readonly recoveryAuditEventId: AuditEventId;
+}
+
+export interface CommittedStartupRecovery {
+  readonly goal: Goal;
+  readonly workflow: WorkflowInstance;
+  readonly attempt: Attempt;
+  readonly recovery: RecoveryReconciliationRecord;
+}
+
+export interface CommittedResumeRecovery {
+  readonly goal: Goal;
+  readonly workflow: WorkflowInstance;
+  readonly recovery: RecoveryReconciliationRecord;
+}
+
 interface AuditWriteIdentity {
   readonly auditEventId: AuditEventId;
   readonly payloadDigest: Sha256Digest;
@@ -110,12 +237,18 @@ export interface CommitAttemptEvent extends AuditWriteIdentity {
 
 export interface CommitContextBoundAttemptStart extends CommitAttemptEvent {
   readonly contextManifest: ContextManifest;
+  readonly policyBinding: WorkflowPolicyBinding;
+  readonly policyBindingAuditEventId?: AuditEventId;
+  readonly executionProfileBinding: ExecutionProfileBinding;
+  readonly executionProfileBindingAuditEventId?: AuditEventId;
 }
 
 export interface CommittedContextAttempt {
   readonly workflow: WorkflowInstance;
   readonly attempt: Attempt;
   readonly contextManifest: ContextManifest;
+  readonly policyBinding: WorkflowPolicyBinding;
+  readonly executionProfileBinding: ExecutionProfileBinding;
 }
 
 export interface CandidateAuthorityView {
@@ -287,6 +420,16 @@ export interface InstallPolicyBundle extends AuditWriteIdentity {
   readonly installedAt: IsoTimestamp;
 }
 
+export interface InstallExecutionProfile extends AuditWriteIdentity {
+  readonly profile: ExecutionProfile;
+  readonly installedAt: IsoTimestamp;
+}
+
+export interface InstalledExecutionProfile {
+  readonly profile: ExecutionProfile;
+  readonly installedAt: IsoTimestamp;
+}
+
 export interface InstalledPolicyBundle {
   readonly bundle: PolicyBundle;
   readonly installedAt: IsoTimestamp;
@@ -330,6 +473,11 @@ export type PolicyInstallResult =
   | { readonly status: 'EXISTING'; readonly value: InstalledPolicyBundle }
   | { readonly status: 'POLICY_CONFLICT'; readonly message: string };
 
+export type ExecutionProfileInstallResult =
+  | { readonly status: 'INSTALLED'; readonly value: InstalledExecutionProfile }
+  | { readonly status: 'EXISTING'; readonly value: InstalledExecutionProfile }
+  | { readonly status: 'PROFILE_CONFLICT'; readonly message: string };
+
 export type WorkerDispatchClaimResult =
   | { readonly status: 'CLAIMED'; readonly value: WorkerDispatchClaim }
   | { readonly status: 'EXISTING'; readonly value: WorkerDispatchClaim }
@@ -350,12 +498,27 @@ export interface WorkflowControlStore {
   recordCommandRejection(input: RecordCommandRejection): StoreCommandResult<undefined>;
 }
 
+export interface GoalCreationControlStore extends WorkflowControlStore {
+  createGoalWithWorkflow(input: CommitGoalCreation): StoreCommandResult<GoalWorkflowView>;
+}
+
+export interface GoalQueryStore {
+  getGoalStatusAuthority(goalId: GoalId): GoalStatusAuthoritySnapshot | undefined;
+  getGoalAuditAuthority(goalId: GoalId): GoalAuditAuthoritySnapshot | undefined;
+}
+
 export interface WorkerControlStore extends WorkflowControlStore {
   getContextManifest(contextManifestId: ContextManifestId): ContextManifest | undefined;
   getWorkerDispatchClaim(attemptId: AttemptId): WorkerDispatchClaim | undefined;
   getWorkerEventReceipt(workerEventId: WorkerEventId): WorkerEventReceipt | undefined;
   getPolicyBundle(policyBundleId: PolicyBundleId): InstalledPolicyBundle | undefined;
+  getExecutionProfile(
+    executionProfileId: ExecutionProfileId,
+  ): InstalledExecutionProfile | undefined;
+  getExecutionProfileBinding(workflowId: WorkflowId): ExecutionProfileBinding | undefined;
+  getWorkflowPolicyBinding(workflowId: WorkflowId): WorkflowPolicyBinding | undefined;
   installPolicyBundle(input: InstallPolicyBundle): PolicyInstallResult;
+  installExecutionProfile(input: InstallExecutionProfile): ExecutionProfileInstallResult;
   claimWorkerDispatch(input: ClaimWorkerDispatch): WorkerDispatchClaimResult;
   commitContextBoundAttemptStart(
     input: CommitContextBoundAttemptStart,
@@ -365,6 +528,21 @@ export interface WorkerControlStore extends WorkflowControlStore {
   ): WorkerEventStoreResult<AppliedAttemptEvent>;
   recordIgnoredWorkerEvent(input: RecordIgnoredWorkerEvent): WorkerEventStoreResult<undefined>;
 }
+
+export interface RecoveryControlStore extends WorkerControlStore {
+  listStartupRecoveryCatalog(): readonly RecoveryCatalogEntry[];
+  getRecoveryCatalogForGoal(goalId: GoalId): RecoveryCatalogEntry | undefined;
+  getRecoveryReconciliation(
+    recoveryId: RecoveryReconciliationId,
+  ): RecoveryReconciliationRecord | undefined;
+  getLatestRecoveryReconciliation(workflowId: WorkflowId): RecoveryReconciliationRecord | undefined;
+  commitStartupRecovery(input: CommitStartupRecovery): StoreCommandResult<CommittedStartupRecovery>;
+  commitResumeRecovery(input: CommitResumeRecovery): StoreCommandResult<CommittedResumeRecovery>;
+}
+
+export type CodeClosureApplicationStore = GoalCreationControlStore &
+  GoalQueryStore &
+  RecoveryControlStore;
 
 export interface CandidateEvidenceControlStore extends WorkerControlStore {
   getCandidateForGoal(goalId: GoalId): Candidate | undefined;
@@ -427,4 +605,8 @@ export interface AcceptanceControlStore extends CandidateEvidenceControlStore {
   commitAcceptanceRepair(
     input: CommitAcceptanceRepair,
   ): StoreCommandResult<CommittedAcceptanceRepair>;
+}
+
+export interface WorkflowDriverControlStore extends AcceptanceControlStore {
+  getWorkflowDriverAuthority(goalId: GoalId): WorkflowDriverAuthoritySnapshot | undefined;
 }

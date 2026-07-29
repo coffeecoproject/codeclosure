@@ -1,24 +1,33 @@
 export * from './acceptance-engine.js';
 export * from './acceptance-policy.js';
+export * from './application.js';
 export * from './canonical-json.js';
 export * from './candidate-evidence-contracts.js';
 export * from './candidate-evidence-policy.js';
 export * from './contracts.js';
 export * from './evidence-factory.js';
+export * from './execution-profile-installer.js';
 export * from './context-compiler.js';
 export * from './ports.js';
 export * from './policy-installer.js';
+export * from './recovery-contracts.js';
 export * from './worker-contracts.js';
-export { createWorkerExecutionApplication } from './worker-execution.js';
 export type {
-  WorkerExecutionApplication,
-  WorkerExecutionDependencies,
-  WorkerExecutionResult,
-} from './worker-execution.js';
-export { createGoalApplication } from './workflow-runtime.js';
+  RecoveryCommandCapability,
+  RecoveryCoordinator,
+  RecoveryLifecycleCapability,
+  ResumeGoalRequest,
+  StartupRecoverySummary,
+} from './recovery.js';
+export { WorkflowDriveStopReason } from './workflow-driver.js';
+export type {
+  DrivenGoalCommandResult,
+  GoalExecutionCapability,
+  WorkflowDriveFinalState,
+  WorkflowDriveSummary,
+} from './workflow-driver.js';
 export type {
   CancelGoalRequest,
-  GoalApplication,
   StartGoalRequest,
   WorkflowRuntimeDependencies,
 } from './workflow-runtime.js';

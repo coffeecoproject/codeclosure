@@ -15,7 +15,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "gate:quality": "pnpm format:check && pnpm docs:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "lint": "eslint .",
+    "lint": "eslint . && node --test scripts/check-cli-boundary.test.mjs && node scripts/check-cli-boundary.mjs",
     "test": "pnpm -r --if-present test",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false"
   },

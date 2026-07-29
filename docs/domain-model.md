@@ -52,6 +52,8 @@ At minimum, M1 uses distinct opaque identifiers for:
 - `CheckSpecificationId`
 - `AcceptanceDecisionId`
 - `PolicyBundleId`
+- `ExecutionProfileId`
+- `RecoveryReconciliationId`
 - `AuditEventId`
 - `CommandId`
 - `WorkerEventId`
@@ -158,6 +160,12 @@ WorkflowInstance
 Separating phase from run status avoids inventing phases such as
 `DISCOVERY_BLOCKED` and keeps resumption explicit.
 
+Public adapters never change those fields by sequencing lower-level commands.
+The Runtime application driver reloads the current Workflow before selecting
+one next internal operation. A driver summary or status projection is not a
+Workflow event. See
+[ADR 0020](adr/0020-runtime-application-recovery-and-query-boundary.md).
+
 One domain invariant validator owns the complete Workflow snapshot rule. It is
 used for current and resulting state and by persistence decoding. `CANCELLED`
 and `CLOSED` Workflows are immutable at event application as well as command
@@ -252,6 +260,104 @@ closeout authority.
 
 See [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md) for the aggregate
 boundary and concurrency rationale.
+
+## Recovery Reconciliation
+
+```text
+RecoveryReconciliationRecord
+  id
+  schemaVersion
+  goalId
+  goalRevision
+  workflowId
+  phase
+  inspectedWorkflowVersion
+  resultingWorkflowVersion
+  sourceAttemptId?
+  dispatchClaimDigest?
+  lastAuditSequence
+  expectedProjectIdentity
+  observedProjectIdentity?
+  candidateGenerationId?
+  candidateBaseIdentity?
+  expectedCandidateDigest?
+  observedCandidateDigest?
+  executionProfileId
+  executionProfileDigest
+  purpose
+  disposition
+  safeResumePhase?
+  reasonCode
+  observationRefs[]
+  inspectorVersion
+  recoveryPolicyVersion
+  inspectedAt
+  reconciliationDigest
+```
+
+`RecoveryReconciliationPurpose` is either `STARTUP` or `RESUME`.
+`RecoveryReconciliationDisposition` is `SAFE_SAME_PHASE`,
+`SAFE_EARLIER_PHASE`, or `BLOCKED`. A safe disposition has exactly one safe
+resume phase permitted by the recovery policy; `BLOCKED` has none. Every
+record binds one inspected Workflow version and the immediately resulting
+version, so a later Workflow change makes it historical rather than reusable
+authority.
+
+Current M1 policy grants only `SAFE_SAME_PHASE` after an exact project,
+Execution Profile, and (when present) Candidate authority match.
+`SAFE_EARLIER_PHASE` remains represented for a future explicit policy but is
+not admitted or persistable through the M1 Store. Every current M1 recovery
+record also identifies one exact source Attempt. Inspector and recovery-policy
+versions are part of the digest-bound decision rather than ambient process
+configuration.
+
+Startup reconciliation of a retained `RUNNING` Attempt terminates that exact
+Attempt and leaves the Workflow `BLOCKED` in the same compound transaction as
+the record and audits. `ResumeGoal` performs a fresh inspection and commits a
+new record with either a `READY` safe phase or a concrete retained blocker.
+Replacement work is a later fresh Attempt. A retained dispatch claim, free-form
+termination reason, or previous model response cannot replace this record.
+
+The Runtime and Store independently validate the canonical record projection;
+SQLite retains immutable relationship backstops and startup recomputes the
+digest and audit closure. See
+[ADR 0020](adr/0020-runtime-application-recovery-and-query-boundary.md).
+
+## Goal Read Views
+
+```text
+GoalStatusView
+  schemaVersion
+  goalId
+  goalRevision
+  workflowId
+  workflowVersion
+  phase
+  runStatus
+  executionProfileRef?
+  activeAttemptRef?
+  activeCandidateRef?
+  acceptanceSummary?
+  dominantBlocker?
+  nextSafeAction
+  closeoutRef?
+  technicalCloseout
+
+GoalAuditView
+  schemaVersion
+  goalId
+  throughSequence
+  events[]
+```
+
+These are immutable read projections, not aggregates or command outcomes. The
+Store establishes one consistent Goal ownership view and the Runtime strictly
+decodes it before deriving blocker and next-action explanations.
+`technicalCloseout` is true only from the exact current immutable closeout
+binding. Audit events remain globally sequence-ordered and enter the Goal view
+only through a proven owning relationship. Neither view may issue Acceptance,
+change run status, or authorize resume. See
+[ADR 0020](adr/0020-runtime-application-recovery-and-query-boundary.md).
 
 ## Command and Worker Event Identity
 
@@ -516,6 +622,75 @@ recomputes the digest and persists the immutable Policy plus installation audit
 in one transaction. A Policy row without its matching audit, or whose retained
 content does not reproduce its digest, is invalid authority. See
 [ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
+
+## Workflow Policy Binding
+
+```text
+WorkflowPolicyBinding
+  schemaVersion
+  goalId
+  workflowId
+  policyBundleId
+  policyBundleVersion
+  policyBundleDigest
+  startCommandId
+  boundAt
+  bindingDigest
+```
+
+Policy installation proves canonical content; it does not choose control
+semantics for a Workflow. The first `StartGoal` atomically selects one exact
+installed Policy with this separate immutable binding. All later Runtime,
+Context, Evidence, Acceptance, recovery, repair, closeout, and driver authority
+must agree with its ID and digest. M1 does not infer or automatically upgrade
+this identity. See
+[ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
+
+## Execution Profile
+
+```text
+ExecutionProfileDefinition
+  id
+  schemaVersion
+  version
+  workerAdapter
+  workerAdapterVersion
+  candidateSource
+  candidateSourceVersion
+  verificationRunner
+  verificationRunnerVersion
+  driverVersion
+
+ExecutionProfile extends ExecutionProfileDefinition
+  digest
+
+InstalledExecutionProfile
+  profile
+  installedAt
+
+ExecutionProfileBinding
+  schemaVersion
+  goalId
+  workflowId
+  profileId
+  profileVersion
+  profileDigest
+  startCommandId
+  boundAt
+  bindingDigest
+```
+
+An Execution Profile identifies a closed, non-secret adapter composition; it
+does not persist functions, process handles, or credentials. The Runtime
+computes its canonical digest and the Store independently rechecks it before
+immutable installation and audit. The first `StartGoal` atomically binds one
+installed profile to the Workflow. That binding cannot be replaced during
+replay, later phase execution, or resume.
+
+M1 fixture names are CLI aliases for installed profiles and do not appear as
+FakeWorker enum fields on Goal or Workflow. Context, dispatch, recovery, and
+specialized Candidate/Verification operations resolve the same binding. See
+[ADR 0021](adr/0021-m1-execution-profile-and-cli-composition.md).
 
 ## Candidate and Candidate Generation
 
@@ -796,6 +971,10 @@ describes.
 | --- | --- | --- | --- |
 | Goal intent and revision | user / CLI | Goal Manager | Goal Manager through runtime transaction |
 | Goal lifecycle projection | Workflow run status | Workflow Runtime | Persistence synchronization inside the Workflow transaction |
+| Execution Profile | trusted composition definition | Runtime and Store profile validation | Runtime installer, immutable Store persistence |
+| Workflow Policy binding | selected installed Policy | Workflow Runtime and Store | First `StartGoal` compound transaction |
+| Workflow Execution Profile binding | selected installed profile | Workflow Runtime and Store | First `StartGoal` compound transaction |
+| Recovery reconciliation | Runtime inspection of external reality | Recovery policy and Store | Workflow Runtime compound transaction, immutable record |
 | Fact | user, project, runner, worker | Fact policy | Fact Store service |
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |

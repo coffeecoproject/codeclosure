@@ -17,10 +17,15 @@ import {
   decodeAttemptSnapshot,
   decodeAcceptanceRepairRecord,
   decodeCandidateGeneration,
+  decodeExecutionProfile,
+  decodeExecutionProfileBinding,
+  decodeExecutionProfileDefinition,
   decodeGoalSnapshot,
   decodePolicyBundleDefinition,
+  decodeWorkflowPolicyBinding,
   decodeWorkflowSnapshot,
   decideAttempt,
+  executionProfileId,
   goalId,
   goalRevision,
   isoTimestamp,
@@ -91,6 +96,18 @@ const policyDefinition = {
   acceptanceRules: ['acceptance-engine-only'],
   checkerVersions: [],
 } as const;
+const executionProfileDefinition = {
+  id: executionProfileId('profile_codec-contract'),
+  schemaVersion: 1,
+  version: 'codec-profile-v1',
+  workerAdapter: 'fake-worker',
+  workerAdapterVersion: 'v1',
+  candidateSource: 'fake-candidate-source',
+  candidateSourceVersion: 'v1',
+  verificationRunner: 'fake-verification-runner',
+  verificationRunnerVersion: 'v1',
+  driverVersion: 'codec-driver-v1',
+} as const;
 
 void test('[I-006][I-027] a Goal requires at least one required success criterion', () => {
   assert.throws(
@@ -130,6 +147,33 @@ void test('[I-006] authority codecs materialize immutable canonical snapshots', 
   const decodedAttempt = decodeAttemptSnapshot(attempt);
   const decodedCandidate = decodeCandidateGeneration(candidate);
   const decodedPolicyDefinition = decodePolicyBundleDefinition(policyDefinition);
+  const decodedProfileDefinition = decodeExecutionProfileDefinition(executionProfileDefinition);
+  const decodedProfile = decodeExecutionProfile({
+    ...executionProfileDefinition,
+    digest: sha256Digest(`sha256:${'7'.repeat(64)}`),
+  });
+  const decodedProfileBinding = decodeExecutionProfileBinding({
+    schemaVersion: 1,
+    goalId: goal.id,
+    workflowId: workflow.id,
+    profileId: decodedProfile.id,
+    profileVersion: decodedProfile.version,
+    profileDigest: decodedProfile.digest,
+    startCommandId: commandId('command_codec-profile-binding'),
+    boundAt: createdAt,
+    bindingDigest: sha256Digest(`sha256:${'8'.repeat(64)}`),
+  });
+  const decodedPolicyBinding = decodeWorkflowPolicyBinding({
+    schemaVersion: 1,
+    goalId: goal.id,
+    workflowId: workflow.id,
+    policyBundleId: policyDefinition.id,
+    policyBundleVersion: policyDefinition.version,
+    policyBundleDigest: sha256Digest(`sha256:${'6'.repeat(64)}`),
+    startCommandId: commandId('command_codec-policy-binding'),
+    boundAt: createdAt,
+    bindingDigest: sha256Digest(`sha256:${'5'.repeat(64)}`),
+  });
 
   assert.equal(Object.isFrozen(decodedGoal), true);
   assert.equal(Object.isFrozen(decodedGoal.successCriteria), true);
@@ -142,6 +186,10 @@ void test('[I-006] authority codecs materialize immutable canonical snapshots', 
   assert.equal(Object.isFrozen(decodedCandidate), true);
   assert.equal(Object.isFrozen(decodedPolicyDefinition), true);
   assert.equal(Object.isFrozen(decodedPolicyDefinition.transitionRules), true);
+  assert.equal(Object.isFrozen(decodedProfileDefinition), true);
+  assert.equal(Object.isFrozen(decodedProfile), true);
+  assert.equal(Object.isFrozen(decodedProfileBinding), true);
+  assert.equal(Object.isFrozen(decodedPolicyBinding), true);
 });
 
 void test('[I-006][I-013] Acceptance repair authority has one strict immutable shape', () => {
@@ -240,6 +288,47 @@ void test('[I-006][I-023] closed codecs reject poisoned scalar, enum, field, and
       value: {
         ...policyDefinition,
         transitionRules: ['workflow-runtime-only', 'workflow-runtime-only'],
+      },
+    },
+    {
+      decode: decodeExecutionProfileDefinition,
+      value: {
+        ...executionProfileDefinition,
+        digest: sha256Digest(`sha256:${'9'.repeat(64)}`),
+      },
+    },
+    {
+      decode: decodeExecutionProfileDefinition,
+      value: { ...executionProfileDefinition, workerAdapterVersion: ' ' },
+    },
+    {
+      decode: decodeExecutionProfileBinding,
+      value: {
+        schemaVersion: 1,
+        goalId: goal.id,
+        workflowId: workflow.id,
+        profileId: executionProfileDefinition.id,
+        profileVersion: executionProfileDefinition.version,
+        profileDigest: sha256Digest(`sha256:${'7'.repeat(64)}`),
+        startCommandId: commandId('command_codec-profile-poison'),
+        boundAt: createdAt,
+        bindingDigest: sha256Digest(`sha256:${'8'.repeat(64)}`),
+        unownedField: true,
+      },
+    },
+    {
+      decode: decodeWorkflowPolicyBinding,
+      value: {
+        schemaVersion: 1,
+        goalId: goal.id,
+        workflowId: workflow.id,
+        policyBundleId: policyDefinition.id,
+        policyBundleVersion: policyDefinition.version,
+        policyBundleDigest: sha256Digest(`sha256:${'6'.repeat(64)}`),
+        startCommandId: commandId('command_codec-policy-poison'),
+        boundAt: createdAt,
+        bindingDigest: sha256Digest(`sha256:${'5'.repeat(64)}`),
+        unownedField: true,
       },
     },
   ];

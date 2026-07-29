@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -57,17 +56,24 @@ import {
 import {
   RuntimeErrorCode,
   createRejectedStoredCommandOutcome,
-  createGoalApplication,
   decodeStoredCommandOutcome,
   StoredCommandDisposition,
+  CanonicalJsonSha256DigestProvider,
   storedCommandOutcomeToJson,
   type Clock,
   type CommandTarget,
-  type DigestProvider,
-  type GoalApplication,
-  type IdGenerator,
 } from '@codeclosure/runtime';
-import { assertWorkflowControlStoreContract } from '@codeclosure/testing';
+import {
+  createGoalApplication,
+  type GoalApplication,
+} from '@codeclosure/runtime/testing/workflow-runtime';
+import {
+  DeterministicIds,
+  assertWorkflowControlStoreContract,
+  createWorkflowStartAuthorityRuntime,
+  finishWorkflowAuthorityFixture,
+  startWorkflowAuthorityFixture,
+} from '@codeclosure/testing';
 
 const createdAt = isoTimestamp('2026-07-27T00:00:00.000Z');
 const transitionedAt = isoTimestamp('2026-07-27T00:00:00.001Z');
@@ -133,12 +139,7 @@ function runtimeFor(
   namespace: string,
   clockOverride?: Clock,
 ): GoalApplication {
-  let idSequence = 0;
   let timeSequence = 10;
-  const nextSuffix = (): string => {
-    idSequence += 1;
-    return `${namespace}-${String(idSequence).padStart(4, '0')}`;
-  };
   const clock: Clock =
     clockOverride ??
     Object.freeze({
@@ -150,17 +151,16 @@ function runtimeFor(
         return timestamp;
       },
     });
-  const ids: IdGenerator = {
-    nextAttemptId: () => attemptId(`attempt_${nextSuffix()}`),
-    nextAuditEventId: () => auditEventId(`audit_${nextSuffix()}`),
-  };
-  const digests: DigestProvider = {
-    digest: (value) =>
-      sha256Digest(
-        `sha256:${createHash('sha256').update(JSON.stringify({ value })).digest('hex')}`,
-      ),
-  };
-  return createGoalApplication({ store, clock, ids, digests });
+  return createWorkflowStartAuthorityRuntime({ store, namespace, clock }).kernel;
+}
+
+function cancellationRuntimeFor(store: SqliteControlStore, namespace: string): GoalApplication {
+  return createGoalApplication({
+    store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids: new DeterministicIds(namespace),
+    digests: new CanonicalJsonSha256DigestProvider(),
+  });
 }
 
 function temporaryDatabase(t: TestContext, name = 'state.sqlite'): string {
@@ -325,7 +325,11 @@ function transitionInput(workflow: WorkflowInstance, namespace: string): CommitW
   };
 }
 
-function beginAttemptInput(workflow: WorkflowInstance, namespace: string): CommitAttemptEventInput {
+function beginAttemptInput(
+  workflow: WorkflowInstance,
+  namespace: string,
+  sequence = 1,
+): CommitAttemptEventInput {
   const event = acceptedAttemptEvent(
     decideAttempt(workflow, undefined, {
       type: 'BEGIN_ATTEMPT',
@@ -333,7 +337,7 @@ function beginAttemptInput(workflow: WorkflowInstance, namespace: string): Commi
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: attemptId(`attempt_${namespace}`),
-      sequence: 1,
+      sequence,
       occurredAt: attemptStartedAt,
     }),
   );
@@ -438,6 +442,23 @@ function seed(store: SqliteControlStore, namespace: string): CreateGoalWithWorkf
   return input;
 }
 
+function seedRunning(store: SqliteControlStore, namespace: string) {
+  const creation = seed(store, namespace);
+  const authority = startWorkflowAuthorityFixture({
+    store,
+    goal: creation.goal,
+    workflow: creation.workflow,
+    namespace,
+  });
+  return Object.freeze({ creation, authority });
+}
+
+function seedReady(store: SqliteControlStore, namespace: string) {
+  const running = seedRunning(store, namespace);
+  const authority = finishWorkflowAuthorityFixture(running.authority, store);
+  return Object.freeze({ creation: running.creation, authority });
+}
+
 void test('[I-006][I-009] ordered migration creates the complete control schema and reopens', (t) => {
   const filename = temporaryDatabase(t);
   const store = openSqliteControlStore({ filename, now: () => createdAt });
@@ -460,6 +481,9 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0012_worker_failure_classification_closure.sql',
       '0013_acceptance_closeout_authority.sql',
       '0014_exact_acceptance_repair_authority.sql',
+      '0015_execution_profile_authority.sql',
+      '0016_recovery_reconciliation_authority.sql',
+      '0017_workflow_policy_binding_authority.sql',
     ],
   );
   store.close();
@@ -488,6 +512,10 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
     'facts',
     'human_decisions',
     'policy_bundles',
+    'execution_profiles',
+    'workflow_policy_bindings',
+    'workflow_execution_profile_bindings',
+    'recovery_reconciliations',
     'verification_obligations',
     'evidence_records',
     'evidence_eligibility',
@@ -509,6 +537,248 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
   const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
   t.after(() => reopened.close());
   assert.equal(reopened.appliedMigrations()[0]?.appliedAt, createdAt);
+});
+
+void test('[I-006][I-008] migration 0015 upgrades only unstarted Workflow authority', (t) => {
+  const filename = temporaryDatabase(t, 'execution-profile-unstarted-upgrade.sqlite');
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-profile-upgrade-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0015_',
+  )) {
+    writeFileSync(
+      join(migrationsDirectory, name),
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+      'utf8',
+    );
+  }
+
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const creation = seed(oldStore, 'profile-unstarted-upgrade');
+  oldStore.close();
+
+  const migrationName = '0015_execution_profile_authority.sql';
+  writeFileSync(
+    join(migrationsDirectory, migrationName),
+    readFileSync(join(sourceDirectory, migrationName), 'utf8'),
+    'utf8',
+  );
+  const upgraded = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => transitionedAt,
+  });
+  t.after(() => upgraded.close());
+
+  assert.equal(upgraded.appliedMigrations().at(-1)?.name, migrationName);
+  assert.deepEqual(upgraded.getGoal(creation.goal.id), creation.goal);
+  assert.deepEqual(upgraded.getWorkflow(creation.workflow.id), creation.workflow);
+  assert.equal(upgraded.getExecutionProfileBinding(creation.workflow.id), undefined);
+});
+
+void test('[I-006][I-008] migration 0015 atomically refuses legacy started authority', (t) => {
+  const filename = temporaryDatabase(t, 'execution-profile-started-refusal.sqlite');
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-profile-refusal-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0015_',
+  )) {
+    writeFileSync(
+      join(migrationsDirectory, name),
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+      'utf8',
+    );
+  }
+
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const creation = seed(oldStore, 'profile-started-refusal');
+  const began = oldStore.commitAttemptEvent(
+    beginAttemptInput(creation.workflow, 'profile-started-refusal'),
+  );
+  assert.equal(began.status, 'APPLIED');
+  oldStore.close();
+
+  const migrationName = '0015_execution_profile_authority.sql';
+  writeFileSync(
+    join(migrationsDirectory, migrationName),
+    readFileSync(join(sourceDirectory, migrationName), 'utf8'),
+    'utf8',
+  );
+  assert.throws(
+    () =>
+      openSqliteControlStore({
+        filename,
+        migrationsDirectory,
+        now: () => transitionedAt,
+      }),
+    /legacy-unbound-execution-authority/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'execution_profiles'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(inspected.prepare('SELECT COUNT(*) FROM attempts').pluck().get(), 1);
+});
+
+void test('[I-006][I-008] migration 0017 upgrades only unstarted Workflow authority', (t) => {
+  const filename = temporaryDatabase(t, 'workflow-policy-unstarted-upgrade.sqlite');
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-policy-binding-upgrade-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0017_',
+  )) {
+    writeFileSync(
+      join(migrationsDirectory, name),
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+      'utf8',
+    );
+  }
+
+  const oldStore = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const creation = seed(oldStore, 'policy-binding-unstarted-upgrade');
+  oldStore.close();
+
+  const migrationName = '0017_workflow_policy_binding_authority.sql';
+  writeFileSync(
+    join(migrationsDirectory, migrationName),
+    readFileSync(join(sourceDirectory, migrationName), 'utf8'),
+    'utf8',
+  );
+  const upgraded = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => transitionedAt,
+  });
+  t.after(() => upgraded.close());
+
+  assert.equal(upgraded.appliedMigrations().at(-1)?.name, migrationName);
+  assert.deepEqual(upgraded.getGoal(creation.goal.id), creation.goal);
+  assert.deepEqual(upgraded.getWorkflow(creation.workflow.id), creation.workflow);
+  assert.equal(upgraded.getWorkflowPolicyBinding(creation.workflow.id), undefined);
+});
+
+void test('[I-006][I-008][I-010] migration 0017 retains exact pre-start cancellation authority', (t) => {
+  const filename = temporaryDatabase(t, 'workflow-policy-cancelled-upgrade.sqlite');
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-policy-cancelled-upgrade-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0017_',
+  )) {
+    writeFileSync(
+      join(migrationsDirectory, name),
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+      'utf8',
+    );
+  }
+
+  const oldStore = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const creation = seed(oldStore, 'policy-binding-cancelled-upgrade');
+  const cancelled = oldStore.commitWorkflowEvent(
+    cancellationInput(creation.workflow, 'policy-binding-cancelled-upgrade'),
+  );
+  assert.equal(cancelled.status, 'APPLIED');
+  oldStore.close();
+
+  const migrationName = '0017_workflow_policy_binding_authority.sql';
+  writeFileSync(
+    join(migrationsDirectory, migrationName),
+    readFileSync(join(sourceDirectory, migrationName), 'utf8'),
+    'utf8',
+  );
+  const upgraded = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => transitionedAt,
+  });
+  t.after(() => upgraded.close());
+
+  assert.equal(upgraded.appliedMigrations().at(-1)?.name, migrationName);
+  assert.equal(upgraded.getGoal(creation.goal.id)?.status, 'CANCELLED');
+  assert.equal(upgraded.getWorkflow(creation.workflow.id)?.runStatus, RunStatus.CANCELLED);
+  assert.equal(upgraded.getWorkflowPolicyBinding(creation.workflow.id), undefined);
+  assert.equal(upgraded.getExecutionProfileBinding(creation.workflow.id), undefined);
+});
+
+void test('[I-006][I-008] migration 0017 atomically refuses legacy unbound execution', (t) => {
+  const filename = temporaryDatabase(t, 'workflow-policy-started-refusal.sqlite');
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-policy-binding-refusal-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < '0017_',
+  )) {
+    writeFileSync(
+      join(migrationsDirectory, name),
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+      'utf8',
+    );
+  }
+
+  const oldStore = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const creation = seed(oldStore, 'policy-binding-started-refusal');
+  const began = oldStore.commitAttemptEvent(
+    beginAttemptInput(creation.workflow, 'policy-binding-started-refusal'),
+  );
+  assert.equal(began.status, 'APPLIED');
+  oldStore.close();
+
+  const migrationName = '0017_workflow_policy_binding_authority.sql';
+  writeFileSync(
+    join(migrationsDirectory, migrationName),
+    readFileSync(join(sourceDirectory, migrationName), 'utf8'),
+    'utf8',
+  );
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-unbound-policy-authority/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_policy_bindings'",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(inspected.prepare('SELECT COUNT(*) FROM attempts').pluck().get(), 1);
 });
 
 void test('[I-006][I-009] reopen refuses retained authority with a missing owner', (t) => {
@@ -537,6 +807,45 @@ void test('[I-006][I-009] reopen refuses retained authority with a missing owner
   assert.throws(
     () => openSqliteControlStore({ filename, now: () => transitionedAt }),
     /foreign-key integrity check/,
+  );
+});
+
+void test('[I-003][I-006][I-009] status query and reopen share the exact start-authority closure', (t) => {
+  const filename = temporaryDatabase(t, 'query-start-authority-closure.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { creation, authority } = seedReady(store, 'query-start-authority-closure');
+  const manifestIdentifier = authority.attempt.contextManifestId;
+  if (manifestIdentifier === undefined) {
+    assert.fail('Started query fixture must retain its first Context Manifest');
+  }
+
+  const raw = new Database(filename);
+  raw.exec('DROP TRIGGER context_manifests_no_update');
+  raw
+    .prepare('UPDATE context_manifests SET compiler_version = ? WHERE id = ?')
+    .run('tampered-query-compiler-v2', manifestIdentifier);
+  raw.close();
+
+  assert.throws(
+    () => store.getGoalStatusAuthority(creation.goal.id),
+    /digest does not match its canonical projection/,
+  );
+  assert.throws(
+    () => store.getWorkflowDriverAuthority(creation.goal.id),
+    /digest does not match its canonical projection/,
+  );
+  assert.throws(
+    () => store.getRecoveryCatalogForGoal(creation.goal.id),
+    /digest does not match its canonical projection/,
+  );
+  assert.throws(
+    () => store.getAcceptanceAuthorityForWorkflow(creation.workflow.id, authority.policy.id),
+    /digest does not match its canonical projection/,
+  );
+  store.close();
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /digest does not match its canonical projection/,
   );
 });
 
@@ -999,34 +1308,34 @@ void test('[I-006][I-008] migration 0008 refuses malformed retained authority at
 void test('[I-006][I-008][I-009] Goal, Workflow, command outcome, and audit survive reopen', (t) => {
   const filename = temporaryDatabase(t);
   const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(store, 'reopen');
-  const transition = transitionInput(creation.workflow, 'reopen');
+  const { creation, authority } = seedReady(store, 'reopen');
+  const transition = transitionInput(authority.workflow, 'reopen');
   const result = store.commitWorkflowEvent(transition);
 
   assert.equal(result.status, 'APPLIED');
   assert.equal(result.value.phase, WorkflowPhase.PLAN);
-  assert.equal(result.value.version, 2);
+  assert.equal(result.value.version, authority.workflow.version + 1);
   store.close();
 
   const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
   t.after(() => reopened.close());
   assert.deepEqual(reopened.getGoal(creation.goal.id), creation.goal);
   assert.equal(reopened.getWorkflow(creation.workflow.id)?.phase, WorkflowPhase.PLAN);
-  assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, 2);
+  assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, result.value.version);
   assert.deepEqual(
     reopened.getProcessedCommand(transition.event.commandId)?.outcome,
     expectedAppliedOutcome(transition.target, transition.event.commandId, result.value),
   );
   assert.equal(reopened.listAuditEvents('GOAL', creation.goal.id).length, 1);
-  assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 2);
+  assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 4);
 });
 
 void test('[I-008] Store authors an APPLIED outcome from the committed Workflow state', (t) => {
   const filename = temporaryDatabase(t, 'store-authored-applied.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'store-authored-applied');
-  const transition = transitionInput(creation.workflow, 'store-authored-applied');
+  const { authority } = seedReady(store, 'store-authored-applied');
+  const transition = transitionInput(authority.workflow, 'store-authored-applied');
 
   const result = store.commitWorkflowEvent(transition);
 
@@ -1092,13 +1401,68 @@ void test('[I-008] Store authors a REJECTED outcome from the observed Workflow s
   assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 1);
 });
 
+void test('[I-003][I-006][I-008] unbound execution bypasses fail closed and roll back', async (t) => {
+  await t.test('a raw phase transition cannot start execution authority', (subtest) => {
+    const filename = temporaryDatabase(subtest, 'unbound-phase-bypass.sqlite');
+    const store = openSqliteControlStore({ filename, now: () => createdAt });
+    subtest.after(() => store.close());
+    const creation = seed(store, 'unbound-phase-bypass');
+    const transition = transitionInput(creation.workflow, 'unbound-phase-bypass');
+
+    assert.throws(
+      () => store.commitWorkflowEvent(transition),
+      /changed execution state without start authority/,
+    );
+    assert.deepEqual(store.getWorkflow(creation.workflow.id), creation.workflow);
+    assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 1);
+    assert.equal(store.getProcessedCommand(transition.event.commandId), undefined);
+  });
+
+  await t.test('a raw first Attempt cannot manufacture execution authority', (subtest) => {
+    const filename = temporaryDatabase(subtest, 'unbound-attempt-bypass.sqlite');
+    const store = openSqliteControlStore({ filename, now: () => createdAt });
+    subtest.after(() => store.close());
+    const creation = seed(store, 'unbound-attempt-bypass');
+    const attempt = beginAttemptInput(creation.workflow, 'unbound-attempt-bypass');
+
+    assert.throws(
+      () => store.commitAttemptEvent(attempt),
+      /Attempt history without start authority/,
+    );
+    assert.deepEqual(store.getWorkflow(creation.workflow.id), creation.workflow);
+    if (attempt.event.type !== 'ATTEMPT_STARTED') {
+      assert.fail('Unbound bypass fixture must contain ATTEMPT_STARTED');
+    }
+    assert.equal(store.getAttempt(attempt.event.attempt.id), undefined);
+    assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 1);
+    assert.equal(store.getProcessedCommand(attempt.event.commandId), undefined);
+  });
+
+  await t.test('a later Worker Attempt cannot omit its Context authority', (subtest) => {
+    const filename = temporaryDatabase(subtest, 'unbound-later-attempt-bypass.sqlite');
+    const store = openSqliteControlStore({ filename, now: () => createdAt });
+    subtest.after(() => store.close());
+    const { creation, authority } = seedReady(store, 'unbound-later-attempt-bypass');
+    const attempt = beginAttemptInput(authority.workflow, 'unbound-later-attempt-bypass', 2);
+
+    assert.throws(() => store.commitAttemptEvent(attempt), /has no Context-bound authority/);
+    assert.deepEqual(store.getWorkflow(creation.workflow.id), authority.workflow);
+    if (attempt.event.type !== 'ATTEMPT_STARTED') {
+      assert.fail('Later bypass fixture must contain ATTEMPT_STARTED');
+    }
+    assert.equal(store.getAttempt(attempt.event.attempt.id), undefined);
+    assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 3);
+    assert.equal(store.getProcessedCommand(attempt.event.commandId), undefined);
+  });
+});
+
 void test('[I-008] Store rejects a command completion time older than observed Workflow', (t) => {
   const filename = temporaryDatabase(t, 'store-rejection-causal-time.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'store-rejection-causal-time');
+  const { creation, authority } = seedReady(store, 'store-rejection-causal-time');
   const advanced = store.commitWorkflowEvent(
-    transitionInput(creation.workflow, 'store-rejection-causal-time'),
+    transitionInput(authority.workflow, 'store-rejection-causal-time'),
   );
   assert.equal(advanced.status, 'APPLIED');
   const rejectionCommandId = commandId('command_store-rejection-causal-time');
@@ -1252,7 +1616,7 @@ void test('[I-006][I-008][I-010] failed cancellation rolls back Goal projection 
     },
   });
   const cancelCommandId = commandId('command_runtime-cancel-rollback-cancel');
-  const failed = runtimeFor(failing, 'runtime-cancel-rollback-fail').cancelGoal({
+  const failed = cancellationRuntimeFor(failing, 'runtime-cancel-rollback-fail').cancelGoal({
     commandId: cancelCommandId,
     goalId: creation.goal.id,
     expectedGoalRevision: creation.goal.revision,
@@ -1275,8 +1639,8 @@ void test('[I-008] duplicate command delivery replays one outcome without replay
   const filename = temporaryDatabase(t);
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'duplicate');
-  const transition = transitionInput(creation.workflow, 'duplicate');
+  const { creation, authority } = seedReady(store, 'duplicate');
+  const transition = transitionInput(authority.workflow, 'duplicate');
 
   const first = store.commitWorkflowEvent(transition);
   const duplicate = store.commitWorkflowEvent(transition);
@@ -1284,8 +1648,8 @@ void test('[I-008] duplicate command delivery replays one outcome without replay
   assert.equal(first.status, 'APPLIED');
   assert.equal(duplicate.status, 'REPLAYED');
   assert.deepEqual(duplicate.outcome, first.outcome);
-  assert.equal(store.getWorkflow(creation.workflow.id)?.version, 2);
-  assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 2);
+  assert.equal(store.getWorkflow(creation.workflow.id)?.version, authority.workflow.version + 1);
+  assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 4);
 
   const conflict = store.commitWorkflowEvent({ ...transition, inputDigest: digest('e') });
   assert.equal(conflict.status, 'COMMAND_CONFLICT');
@@ -1295,32 +1659,35 @@ void test('[I-008] a stale workflow event writes no state, audit, or command out
   const filename = temporaryDatabase(t);
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'stale');
-  const first = transitionInput(creation.workflow, 'stale-first');
+  const { creation, authority } = seedReady(store, 'stale');
+  const first = transitionInput(authority.workflow, 'stale-first');
   store.commitWorkflowEvent(first);
 
-  const stale = transitionInput(creation.workflow, 'stale-second');
+  const stale = transitionInput(authority.workflow, 'stale-second');
   assert.equal(store.commitWorkflowEvent(stale).status, 'VERSION_CONFLICT');
 
-  assert.equal(store.getWorkflow(creation.workflow.id)?.version, 2);
-  assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 2);
+  assert.equal(store.getWorkflow(creation.workflow.id)?.version, authority.workflow.version + 1);
+  assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 4);
   assert.equal(store.getProcessedCommand(stale.event.commandId), undefined);
 });
 
 void test('[I-008] two SQLite connections expose a shared-version race as a typed conflict', (t) => {
   const filename = temporaryDatabase(t, 'two-connection-race.sqlite');
   const firstStore = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(firstStore, 'two-connection-race');
+  const { creation, authority } = seedReady(firstStore, 'two-connection-race');
   const secondStore = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => firstStore.close());
   t.after(() => secondStore.close());
 
-  const first = transitionInput(creation.workflow, 'two-connection-first');
-  const second = transitionInput(creation.workflow, 'two-connection-second');
+  const first = transitionInput(authority.workflow, 'two-connection-first');
+  const second = transitionInput(authority.workflow, 'two-connection-second');
 
   assert.equal(firstStore.commitWorkflowEvent(first).status, 'APPLIED');
   assert.equal(secondStore.commitWorkflowEvent(second).status, 'VERSION_CONFLICT');
-  assert.equal(secondStore.getWorkflow(creation.workflow.id)?.version, 2);
+  assert.equal(
+    secondStore.getWorkflow(creation.workflow.id)?.version,
+    authority.workflow.version + 1,
+  );
   assert.equal(secondStore.getProcessedCommand(second.event.commandId), undefined);
 });
 
@@ -1563,8 +1930,8 @@ void test('[I-006][I-008] Store write boundaries reject malformed branded and ne
     const filename = temporaryDatabase(subtest, 'malformed-attempt-input.sqlite');
     const store = openSqliteControlStore({ filename, now: () => createdAt });
     subtest.after(() => store.close());
-    const creation = seed(store, 'malformed-attempt-input');
-    const input = beginAttemptInput(creation.workflow, 'malformed-attempt-input');
+    const { creation, authority } = seedReady(store, 'malformed-attempt-input');
+    const input = beginAttemptInput(authority.workflow, 'malformed-attempt-input', 2);
     if (input.event.type !== 'ATTEMPT_STARTED') {
       assert.fail('Begin fixture must emit ATTEMPT_STARTED');
     }
@@ -1581,7 +1948,7 @@ void test('[I-006][I-008] Store write boundaries reject malformed branded and ne
 
     assert.throws(() => store.commitAttemptEvent(poisoned));
     assert.equal(store.getAttempt(input.event.attempt.id), undefined);
-    assert.equal(store.getWorkflow(creation.workflow.id)?.version, creation.workflow.version);
+    assert.equal(store.getWorkflow(creation.workflow.id)?.version, authority.workflow.version);
     assert.equal(store.getProcessedCommand(input.event.commandId), undefined);
   });
 });
@@ -1589,8 +1956,8 @@ void test('[I-006][I-008] Store write boundaries reject malformed branded and ne
 void test('[I-006][I-008][I-009] SQLite Store passes the shared contract and reopens', (t) => {
   const filename = temporaryDatabase(t, 'sqlite-store-contract.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(store, 'sqlite-store-contract');
-  const input = beginAttemptInput(creation.workflow, 'sqlite-store-contract');
+  const { creation, authority } = seedReady(store, 'sqlite-store-contract');
+  const input = transitionInput(authority.workflow, 'sqlite-store-contract');
   const invalidCommandIdentifier = commandId('command_sqlite-store-contract-invalid');
 
   assertWorkflowControlStoreContract({
@@ -1601,8 +1968,8 @@ void test('[I-006][I-008][I-009] SQLite Store passes the shared contract and reo
     invalidCommandId: invalidCommandIdentifier,
     inputDigest: input.inputDigest,
     target: input.target,
-    apply: () => store.commitAttemptEvent(input),
-    conflict: () => store.commitAttemptEvent({ ...input, inputDigest: digest('e') }),
+    apply: () => store.commitWorkflowEvent(input),
+    conflict: () => store.commitWorkflowEvent({ ...input, inputDigest: digest('e') }),
     invalid: () => {
       const current = store.getWorkflow(creation.workflow.id);
       if (current === undefined) {
@@ -1625,15 +1992,14 @@ void test('[I-006][I-008][I-009] SQLite Store passes the shared contract and reo
     },
   });
 
-  const attemptIdentifier =
-    input.event.type === 'ATTEMPT_STARTED' ? input.event.attempt.id : input.event.attemptId;
+  const attemptIdentifier = authority.attempt.id;
   store.close();
   const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
   t.after(() => reopened.close());
   assert.notEqual(reopened.getAttempt(attemptIdentifier), undefined);
   assert.notEqual(reopened.getProcessedCommand(input.event.commandId), undefined);
-  assert.equal(reopened.listAuditEvents('ATTEMPT', attemptIdentifier).length, 1);
-  assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 2);
+  assert.equal(reopened.listAuditEvents('ATTEMPT', attemptIdentifier).length, 2);
+  assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 4);
 });
 
 void test('[I-008] injected failure after every transaction step rolls back all writes', async (t) => {
@@ -1645,9 +2011,12 @@ void test('[I-008] injected failure after every transaction step rolls back all 
     await t.test(step, (subtest) => {
       const filename = temporaryDatabase(subtest, `${step.toLowerCase()}.sqlite`);
       const baseline = openSqliteControlStore({ filename, now: () => createdAt });
-      const creation = seed(baseline, `atomic-${step.toLowerCase().replaceAll('_', '-')}`);
+      const { creation, authority } = seedReady(
+        baseline,
+        `atomic-${step.toLowerCase().replaceAll('_', '-')}`,
+      );
       const transition = transitionInput(
-        creation.workflow,
+        authority.workflow,
         `atomic-${step.toLowerCase().replaceAll('_', '-')}`,
       );
       baseline.close();
@@ -1667,8 +2036,8 @@ void test('[I-008] injected failure after every transaction step rolls back all 
       const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
       subtest.after(() => reopened.close());
       assert.equal(reopened.getWorkflow(creation.workflow.id)?.phase, WorkflowPhase.DISCOVERY);
-      assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, 1);
-      assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 1);
+      assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, authority.workflow.version);
+      assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 3);
       assert.equal(reopened.getProcessedCommand(transition.event.commandId), undefined);
     });
   }
@@ -1748,9 +2117,10 @@ void test('[I-006] persistence decoding rejects corrupt authoritative rows', (t)
     .run('IMPOSSIBLE', creation.workflow.id);
   database.close();
 
-  const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
-  t.after(() => reopened.close());
-  assert.throws(() => reopened.getWorkflow(creation.workflow.id), PersistenceDecodeError);
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    PersistenceDecodeError,
+  );
 });
 
 void test('[I-006] database triggers keep audit history immutable', (t) => {
@@ -1801,11 +2171,8 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
   const filename = temporaryDatabase(t, 'authority-boundary-triggers.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   const first = seed(store, 'authority-boundary-first');
-  const second = seed(store, 'authority-boundary-second');
-  const began = store.commitAttemptEvent(
-    beginAttemptInput(second.workflow, 'authority-boundary-worker-session'),
-  );
-  assert.equal(began.status, 'APPLIED');
+  const second = seedRunning(store, 'authority-boundary-second');
+  const began = second.authority;
   store.close();
 
   const database = new Database(filename);
@@ -1816,7 +2183,7 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
     () =>
       database
         .prepare('UPDATE attempts SET worker_session_ref = ? WHERE id = ?')
-        .run('WORKER_not-canonical', began.value.attempt.id),
+        .run('WORKER_not-canonical', began.attempt.id),
     /Attempt Context and Worker bindings are immutable/,
   );
   assert.throws(
@@ -1939,7 +2306,7 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
       insertCandidate.run(
         'generation_authority-boundary-cross-owner',
         candidateIdentifier,
-        second.workflow.id,
+        second.creation.workflow.id,
         2,
         null,
         'fixture://candidate/cross-owner',
@@ -1958,7 +2325,7 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
     () =>
       database
         .prepare('UPDATE workflows SET active_candidate_generation_id = ? WHERE id = ?')
-        .run(generationIdentifier, second.workflow.id),
+        .run(generationIdentifier, second.creation.workflow.id),
     /Workflow authority representation is invalid|FOREIGN KEY constraint failed/,
   );
 
@@ -1986,9 +2353,9 @@ void test('[I-004][I-006][I-008][I-012] SQLite rejects binding rewrites, malform
 void test('[I-006][I-008] SQLite enforces causal time and terminal Workflow backstops', (t) => {
   const filename = temporaryDatabase(t, 'causal-time-triggers.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(store, 'causal-time-triggers');
+  const { creation, authority } = seedReady(store, 'causal-time-triggers');
   const transition = store.commitWorkflowEvent(
-    transitionInput(creation.workflow, 'causal-time-triggers'),
+    transitionInput(authority.workflow, 'causal-time-triggers'),
   );
   assert.equal(transition.status, 'APPLIED');
   store.close();
@@ -2053,11 +2420,7 @@ void test('[I-006][I-008] SQLite enforces causal time and terminal Workflow back
 void test('[I-006][I-008] SQLite rejects an Attempt end before current Workflow state', (t) => {
   const filename = temporaryDatabase(t, 'attempt-causal-end.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(store, 'attempt-causal-end');
-  const began = store.commitAttemptEvent(
-    beginAttemptInput(creation.workflow, 'attempt-causal-end'),
-  );
-  assert.equal(began.status, 'APPLIED');
+  const { creation, authority } = seedRunning(store, 'attempt-causal-end');
   store.close();
 
   const database = new Database(filename);
@@ -2077,16 +2440,15 @@ void test('[I-006][I-008] SQLite rejects an Attempt end before current Workflow 
         .run(
           'forged completion before current Workflow state',
           attemptStartedAt,
-          began.value.attempt.id,
+          authority.attempt.id,
         ),
     /Attempt cannot end before current Workflow state/,
   );
   assert.equal(
     z
       .object({ status: z.string() })
-      .parse(
-        database.prepare('SELECT status FROM attempts WHERE id = ?').get(began.value.attempt.id),
-      ).status,
+      .parse(database.prepare('SELECT status FROM attempts WHERE id = ?').get(authority.attempt.id))
+      .status,
     AttemptStatus.RUNNING,
   );
 });
@@ -2095,9 +2457,9 @@ void test('[I-008] stored transition state equals the pure domain event result',
   const filename = temporaryDatabase(t, 'reducer.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'reducer-store');
-  const transition = transitionInput(creation.workflow, 'reducer-store');
-  const expected = applyWorkflowEvent(creation.workflow, transition.event);
+  const { creation, authority } = seedReady(store, 'reducer-store');
+  const transition = transitionInput(authority.workflow, 'reducer-store');
+  const expected = applyWorkflowEvent(authority.workflow, transition.event);
 
   store.commitWorkflowEvent(transition);
 
@@ -2107,20 +2469,13 @@ void test('[I-008] stored transition state equals the pure domain event result',
 void test('[I-006][I-008][I-009] Attempt start and result survive restart as one Workflow history', (t) => {
   const filename = temporaryDatabase(t, 'attempt-reopen.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(store, 'attempt-reopen');
-  const beginInput = beginAttemptInput(creation.workflow, 'attempt-reopen');
-  const began = store.commitAttemptEvent(beginInput);
-  assert.equal(began.status, 'APPLIED');
-  assert.equal(began.value.workflow.runStatus, RunStatus.RUNNING);
-  assert.equal(began.value.workflow.version, 2);
-  assert.equal(began.value.attempt.status, AttemptStatus.RUNNING);
+  const { creation, authority } = seedRunning(store, 'attempt-reopen');
+  assert.equal(authority.workflow.runStatus, RunStatus.RUNNING);
+  assert.equal(authority.workflow.version, 2);
+  assert.equal(authority.attempt.status, AttemptStatus.RUNNING);
 
-  const resultInput = resultAttemptInput(
-    began.value.workflow,
-    began.value.attempt,
-    'attempt-reopen',
-  );
-  const expected = applyAttemptEvent(began.value.workflow, began.value.attempt, resultInput.event);
+  const resultInput = resultAttemptInput(authority.workflow, authority.attempt, 'attempt-reopen');
+  const expected = applyAttemptEvent(authority.workflow, authority.attempt, resultInput.event);
   const finished = store.commitAttemptEvent(resultInput);
   assert.equal(finished.status, 'APPLIED');
   assert.deepEqual(finished.value, expected);
@@ -2141,17 +2496,13 @@ void test('[I-006][I-008][I-009] Attempt start and result survive restart as one
 void test('[I-008] a reopened persisted RUNNING Attempt can be explicitly reconciled', (t) => {
   const filename = temporaryDatabase(t, 'attempt-recovery.sqlite');
   const initial = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(initial, 'attempt-recovery');
-  const began = initial.commitAttemptEvent(
-    beginAttemptInput(creation.workflow, 'attempt-recovery'),
-  );
-  assert.equal(began.status, 'APPLIED');
+  const { creation, authority } = seedRunning(initial, 'attempt-recovery');
   initial.close();
 
   const recovered = openSqliteControlStore({ filename, now: () => attemptFinishedAt });
   t.after(() => recovered.close());
   const runningWorkflow = recovered.getWorkflow(creation.workflow.id);
-  const runningAttempt = recovered.getAttempt(began.value.attempt.id);
+  const runningAttempt = recovered.getAttempt(authority.attempt.id);
   if (runningWorkflow === undefined || runningAttempt === undefined) {
     assert.fail('Restart must recover the persisted Workflow and Attempt');
   }
@@ -2169,17 +2520,15 @@ void test('[I-008] a reopened persisted RUNNING Attempt can be explicitly reconc
   assert.equal(reconciled.value.workflow.runStatus, RunStatus.BLOCKED);
   assert.equal(reconciled.value.workflow.activeAttemptId, undefined);
   assert.equal(reconciled.value.attempt.status, AttemptStatus.INTERRUPTED);
-  assert.equal(reconciled.value.workflow.version, 3);
+  assert.equal(reconciled.value.workflow.version, authority.workflow.version + 1);
 });
 
 void test('[I-008][I-010] cancellation atomically interrupts the active Attempt without closing', (t) => {
   const filename = temporaryDatabase(t, 'attempt-cancel.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'attempt-cancel');
-  const began = store.commitAttemptEvent(beginAttemptInput(creation.workflow, 'attempt-cancel'));
-  assert.equal(began.status, 'APPLIED');
-  const cancellation = cancellationInput(began.value.workflow, 'attempt-cancel');
+  const { creation, authority } = seedRunning(store, 'attempt-cancel');
+  const cancellation = cancellationInput(authority.workflow, 'attempt-cancel');
 
   const cancelled = store.commitWorkflowEvent(cancellation);
 
@@ -2188,11 +2537,11 @@ void test('[I-008][I-010] cancellation atomically interrupts the active Attempt 
   assert.notEqual(cancelled.value.runStatus, RunStatus.CLOSED);
   assert.equal(cancelled.value.activeAttemptId, undefined);
   assert.equal(store.getGoal(creation.goal.id)?.status, 'CANCELLED');
-  const attempt = store.getAttempt(began.value.attempt.id);
+  const attempt = store.getAttempt(authority.attempt.id);
   assert.equal(attempt?.status, AttemptStatus.INTERRUPTED);
   assert.match(attempt.terminationReason, /^WORKFLOW_CANCELLED:/);
   assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 3);
-  assert.equal(store.listAuditEvents('ATTEMPT', began.value.attempt.id).length, 2);
+  assert.equal(store.listAuditEvents('ATTEMPT', authority.attempt.id).length, 2);
 });
 
 void test('[I-008] Store rejects a fresh-version event against a terminal Workflow', (t) => {
@@ -2236,12 +2585,8 @@ void test('[I-008] active cancellation requires both Workflow and Attempt audit 
   const filename = temporaryDatabase(t, 'cancel-audit-required.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   t.after(() => store.close());
-  const creation = seed(store, 'cancel-audit-required');
-  const began = store.commitAttemptEvent(
-    beginAttemptInput(creation.workflow, 'cancel-audit-required'),
-  );
-  assert.equal(began.status, 'APPLIED');
-  const cancellation = cancellationInput(began.value.workflow, 'cancel-audit-required');
+  const { creation, authority } = seedRunning(store, 'cancel-audit-required');
+  const cancellation = cancellationInput(authority.workflow, 'cancel-audit-required');
   const missingAttemptAudit: CommitWorkflowEventInput = {
     inputDigest: cancellation.inputDigest,
     target: cancellation.target,
@@ -2255,7 +2600,7 @@ void test('[I-008] active cancellation requires both Workflow and Attempt audit 
     /requires an Attempt audit event ID/,
   );
   assert.equal(store.getWorkflow(creation.workflow.id)?.runStatus, RunStatus.RUNNING);
-  assert.equal(store.getAttempt(began.value.attempt.id)?.status, AttemptStatus.RUNNING);
+  assert.equal(store.getAttempt(authority.attempt.id)?.status, AttemptStatus.RUNNING);
   assert.equal(store.getProcessedCommand(cancellation.event.commandId), undefined);
 });
 
@@ -2264,46 +2609,36 @@ void test('[I-008] result/cancellation races persist exactly one winner at a sha
     const filename = temporaryDatabase(subtest, 'result-wins.sqlite');
     const store = openSqliteControlStore({ filename, now: () => createdAt });
     subtest.after(() => store.close());
-    const creation = seed(store, 'result-wins');
-    const began = store.commitAttemptEvent(beginAttemptInput(creation.workflow, 'result-wins'));
-    assert.equal(began.status, 'APPLIED');
-    const result = resultAttemptInput(began.value.workflow, began.value.attempt, 'result-wins');
-    const cancellation = cancellationInput(began.value.workflow, 'result-wins');
+    const { creation, authority } = seedRunning(store, 'result-wins');
+    const result = resultAttemptInput(authority.workflow, authority.attempt, 'result-wins');
+    const cancellation = cancellationInput(authority.workflow, 'result-wins');
 
     store.commitAttemptEvent(result);
     assert.equal(store.commitWorkflowEvent(cancellation).status, 'VERSION_CONFLICT');
 
     assert.equal(store.getWorkflow(creation.workflow.id)?.runStatus, RunStatus.READY);
-    assert.equal(store.getAttempt(began.value.attempt.id)?.status, AttemptStatus.RESULT_RECORDED);
+    assert.equal(store.getAttempt(authority.attempt.id)?.status, AttemptStatus.RESULT_RECORDED);
     assert.equal(store.getProcessedCommand(cancellation.event.commandId), undefined);
     assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 3);
-    assert.equal(store.listAuditEvents('ATTEMPT', began.value.attempt.id).length, 2);
+    assert.equal(store.listAuditEvents('ATTEMPT', authority.attempt.id).length, 2);
   });
 
   await t.test('cancellation wins', (subtest) => {
     const filename = temporaryDatabase(subtest, 'cancellation-wins.sqlite');
     const store = openSqliteControlStore({ filename, now: () => createdAt });
     subtest.after(() => store.close());
-    const creation = seed(store, 'cancellation-wins');
-    const began = store.commitAttemptEvent(
-      beginAttemptInput(creation.workflow, 'cancellation-wins'),
-    );
-    assert.equal(began.status, 'APPLIED');
-    const result = resultAttemptInput(
-      began.value.workflow,
-      began.value.attempt,
-      'cancellation-wins',
-    );
-    const cancellation = cancellationInput(began.value.workflow, 'cancellation-wins');
+    const { creation, authority } = seedRunning(store, 'cancellation-wins');
+    const result = resultAttemptInput(authority.workflow, authority.attempt, 'cancellation-wins');
+    const cancellation = cancellationInput(authority.workflow, 'cancellation-wins');
 
     store.commitWorkflowEvent(cancellation);
     assert.equal(store.commitAttemptEvent(result).status, 'VERSION_CONFLICT');
 
     assert.equal(store.getWorkflow(creation.workflow.id)?.runStatus, RunStatus.CANCELLED);
-    assert.equal(store.getAttempt(began.value.attempt.id)?.status, AttemptStatus.INTERRUPTED);
+    assert.equal(store.getAttempt(authority.attempt.id)?.status, AttemptStatus.INTERRUPTED);
     assert.equal(store.getProcessedCommand(result.event.commandId), undefined);
     assert.equal(store.listAuditEvents('WORKFLOW', creation.workflow.id).length, 3);
-    assert.equal(store.listAuditEvents('ATTEMPT', began.value.attempt.id).length, 2);
+    assert.equal(store.listAuditEvents('ATTEMPT', authority.attempt.id).length, 2);
   });
 });
 
@@ -2315,10 +2650,8 @@ void test('[I-008] injected failure rolls back Attempt, Workflow, audit, and com
       const suffix = `attempt-atomic-${step.toLowerCase().replaceAll('_', '-')}`;
       const filename = temporaryDatabase(subtest, `${suffix}.sqlite`);
       const baseline = openSqliteControlStore({ filename, now: () => createdAt });
-      const creation = seed(baseline, suffix);
-      const began = baseline.commitAttemptEvent(beginAttemptInput(creation.workflow, suffix));
-      assert.equal(began.status, 'APPLIED');
-      const result = resultAttemptInput(began.value.workflow, began.value.attempt, suffix);
+      const { creation, authority } = seedRunning(baseline, suffix);
+      const result = resultAttemptInput(authority.workflow, authority.attempt, suffix);
       baseline.close();
 
       const failing = openSqliteControlStore({
@@ -2336,10 +2669,10 @@ void test('[I-008] injected failure rolls back Attempt, Workflow, audit, and com
       const reopened = openSqliteControlStore({ filename, now: () => attemptFinishedAt });
       subtest.after(() => reopened.close());
       assert.equal(reopened.getWorkflow(creation.workflow.id)?.runStatus, RunStatus.RUNNING);
-      assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, 2);
-      assert.equal(reopened.getAttempt(began.value.attempt.id)?.status, AttemptStatus.RUNNING);
+      assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, authority.workflow.version);
+      assert.equal(reopened.getAttempt(authority.attempt.id)?.status, AttemptStatus.RUNNING);
       assert.equal(reopened.listAuditEvents('WORKFLOW', creation.workflow.id).length, 2);
-      assert.equal(reopened.listAuditEvents('ATTEMPT', began.value.attempt.id).length, 1);
+      assert.equal(reopened.listAuditEvents('ATTEMPT', authority.attempt.id).length, 1);
       assert.equal(reopened.getProcessedCommand(result.event.commandId), undefined);
     });
   }
@@ -2348,10 +2681,8 @@ void test('[I-008] injected failure rolls back Attempt, Workflow, audit, and com
 void test('[I-006][I-008] database rejects Attempt deletion, a second running Attempt, and terminal rewrites', (t) => {
   const filename = temporaryDatabase(t, 'attempt-db-guards.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const creation = seed(store, 'attempt-db-guards');
-  const began = store.commitAttemptEvent(beginAttemptInput(creation.workflow, 'attempt-db-guards'));
-  assert.equal(began.status, 'APPLIED');
-  const result = resultAttemptInput(began.value.workflow, began.value.attempt, 'attempt-db-guards');
+  const { authority } = seedRunning(store, 'attempt-db-guards');
+  const result = resultAttemptInput(authority.workflow, authority.attempt, 'attempt-db-guards');
   store.commitAttemptEvent(result);
   store.close();
 
@@ -2361,11 +2692,11 @@ void test('[I-006][I-008] database rejects Attempt deletion, a second running At
     () =>
       database
         .prepare('UPDATE attempts SET termination_reason = ? WHERE id = ?')
-        .run('rewritten history', began.value.attempt.id),
+        .run('rewritten history', authority.attempt.id),
     /terminal Attempt is immutable/,
   );
   assert.throws(
-    () => database.prepare('DELETE FROM attempts WHERE id = ?').run(began.value.attempt.id),
+    () => database.prepare('DELETE FROM attempts WHERE id = ?').run(authority.attempt.id),
     /Attempt records cannot be deleted/,
   );
 
@@ -2380,7 +2711,7 @@ void test('[I-006][I-008] database rejects Attempt deletion, a second running At
       WHERE id = ?`,
   );
   const runningAttemptId = attemptId('attempt_db-guard-running-1');
-  insertRunning.run(runningAttemptId, 2, attemptFinishedAt, began.value.attempt.id);
+  insertRunning.run(runningAttemptId, 2, attemptFinishedAt, authority.attempt.id);
   for (const [column, value] of [
     ['failure_class', AttemptFailureClass.UNKNOWN],
     ['termination_reason', 'fabricated terminal reason'],
@@ -2400,7 +2731,7 @@ void test('[I-006][I-008] database rejects Attempt deletion, a second running At
         attemptId('attempt_db-guard-running-2'),
         3,
         attemptFinishedAt,
-        began.value.attempt.id,
+        authority.attempt.id,
       ),
     /UNIQUE constraint failed: attempts.workflow_id/,
   );

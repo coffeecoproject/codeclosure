@@ -10,6 +10,8 @@ import {
   goalId,
   evidenceId,
   isoTimestamp,
+  recoveryReconciliationId,
+  successCriterionId,
   workerEventId,
   workerSessionId,
   verificationObligationId,
@@ -25,6 +27,8 @@ import {
   type GoalId,
   type EvidenceId,
   type IsoTimestamp,
+  type RecoveryReconciliationId,
+  type SuccessCriterionId,
   type WorkerEventId,
   type WorkerSessionId,
   type VerificationObligationId,
@@ -69,6 +73,14 @@ export class DeterministicIds {
 
   public nextWorkflowId(): WorkflowId {
     return workflowId(`workflow_${this.nextSuffix()}`);
+  }
+
+  public nextSuccessCriterionId(): SuccessCriterionId {
+    return successCriterionId(`criterion_${this.nextSuffix()}`);
+  }
+
+  public nextRecoveryReconciliationId(): RecoveryReconciliationId {
+    return recoveryReconciliationId(`recovery_${this.nextSuffix()}`);
   }
 
   public nextAttemptId(): AttemptId {

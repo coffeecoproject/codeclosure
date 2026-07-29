@@ -16,6 +16,8 @@ export type CheckSpecificationId = Brand<string, 'CheckSpecificationId'>;
 export type PendingIssueId = Brand<string, 'PendingIssueId'>;
 export type AcceptanceDecisionId = Brand<string, 'AcceptanceDecisionId'>;
 export type PolicyBundleId = Brand<string, 'PolicyBundleId'>;
+export type ExecutionProfileId = Brand<string, 'ExecutionProfileId'>;
+export type RecoveryReconciliationId = Brand<string, 'RecoveryReconciliationId'>;
 export type AuditEventId = Brand<string, 'AuditEventId'>;
 export type WorkerSessionId = Brand<string, 'WorkerSessionId'>;
 export type ContextManifestId = Brand<string, 'ContextManifestId'>;
@@ -81,6 +83,10 @@ export const acceptanceDecisionId = (value: string): AcceptanceDecisionId =>
   parseIdentifier('acceptance', value, 'AcceptanceDecisionId');
 export const policyBundleId = (value: string): PolicyBundleId =>
   parseIdentifier('policy', value, 'PolicyBundleId');
+export const executionProfileId = (value: string): ExecutionProfileId =>
+  parseIdentifier('profile', value, 'ExecutionProfileId');
+export const recoveryReconciliationId = (value: string): RecoveryReconciliationId =>
+  parseIdentifier('recovery', value, 'RecoveryReconciliationId');
 export const auditEventId = (value: string): AuditEventId =>
   parseIdentifier('audit', value, 'AuditEventId');
 export const workerSessionId = (value: string): WorkerSessionId =>

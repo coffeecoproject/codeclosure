@@ -68,6 +68,11 @@ AcceptanceInputManifest
 The engine first verifies the manifest is current. It must not evaluate a
 partially resolved or internally inconsistent manifest.
 
+For a started Workflow, `policyBundleId` and `policyBundleDigest` MUST equal
+its immutable `WorkflowPolicyBinding`. The currently configured or most
+recently installed Policy is not a substitute. See
+[ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
+
 `manifestDigest` is computed over the semantic fields from `schemaVersion`
 through `policyBundleDigest`. It excludes `createdAt` and `manifestDigest`
 itself. The exact serialization and digest representation are defined by
@@ -317,7 +322,11 @@ The user-facing explanation shows:
 - evidence links;
 - next safe action.
 
-Explanation is a view over the decision, not a second decision.
+Explanation is a view over the decision, not a second decision. The implemented
+Slice 7 Goal status view compiles that explanation inside the Runtime; CLI
+handlers do not join or reinterpret Acceptance rows. A technical-closeout label
+additionally requires the current immutable closeout binding. See
+[ADR 0020](adr/0020-runtime-application-recovery-and-query-boundary.md).
 
 ## M1 Rule Set
 

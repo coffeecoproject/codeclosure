@@ -60,9 +60,10 @@ execution.
 ### Interaction Plane
 
 The CLI or future App presents goals, progress, blockers, decisions, and
-evidence summaries. It sends typed commands to the runtime. It does not write
-the control database directly and does not infer successful completion from a
-worker transcript.
+evidence summaries. It sends typed Goal commands to the Runtime application
+facade and renders Runtime-owned read views. It does not write or query the
+control database directly, sequence internal Workflow commands, or infer
+successful completion from a worker transcript.
 
 ### Control Plane
 
@@ -134,6 +135,26 @@ requires a separate gateway and policy.
 
 ## Logical Components
 
+### Runtime Application Coordinator
+
+The implemented Slice 7 application facade creates Goals, invokes public
+start/resume/cancel commands, owns startup-recovery and query capabilities, and
+returns schema-versioned Goal status/audit views. It receives narrow Store and
+external-inspection ports; adapters receive neither those ports nor the
+Workflow kernel.
+
+The implemented Slice 7 driver reloads authoritative state before each
+internal operation and stops at a terminal, waiting, blocked, failed,
+decision, or typed infrastructure boundary. Each internal phase operation is
+its own audited transaction so process restart can re-enter from the last
+committed boundary. Public `StartGoal` and `ResumeGoal` await that drive and
+return the exact stored public-command result separately from an informational
+drive summary. The summary and the existing dominant-blocker explanation are
+derived views, not Acceptance or closeout authority. A retained active Attempt
+is never adopted or redispatched; startup reconciliation and a fresh
+`ResumeGoal` must authorize replacement work. See
+[ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md).
+
 ### Goal Manager
 
 Owns Goal creation, revision, activation, cancellation, and successful closure
@@ -190,12 +211,17 @@ that relationship; nearby rows or an opaque audit label cannot substitute for
 it. See
 [ADR 0019](docs/adr/0019-exact-acceptance-repair-authority.md).
 
-The M1 package root exposes a narrow Goal application capability for public
-adapters. That capability contains only public Goal commands; the internal
-Workflow control kernel and its Attempt/phase commands are not package-root
-exports. The trusted composition root may construct the store and kernel, but
-CLI handlers, worker adapters, and other callers receive neither the control
-store mutation port nor the internal kernel object.
+The current M1 package root exposes the narrow create/start/resume/cancel and
+query application capabilities for public adapters. Public mutations operate
+only by Goal identity. Startup recovery remains a separate trusted lifecycle
+capability and is not a handler command. The internal Workflow control kernel
+and its Attempt/phase commands remain unavailable as package-root adapter
+capabilities. The remaining trusted composition root may construct the Store,
+kernel, driver, installed Execution Profiles, and recovery inspector, but CLI
+handlers, worker adapters, and other callers receive neither the control Store
+mutation port nor the internal kernel object. See
+[ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md)
+and [ADR 0021](docs/adr/0021-m1-execution-profile-and-cli-composition.md).
 
 ### Context Compiler
 
@@ -208,14 +234,19 @@ transcript excerpt as non-authoritative working context, but it never depends
 on that excerpt for goal identity or acceptance.
 
 The M1 compiler emits a disposable canonical Context Package and a durable
-Manifest. Runtime configuration selects an installed active Policy before
-compilation; the compiler cannot substitute that authority. The Runtime then
+Manifest. The first Start binds one exact installed Policy to the Workflow;
+later Runtime configuration must match that immutable identity before
+compilation, and the compiler cannot substitute it. Slice 7 separately binds
+the Workflow's immutable installed Execution Profile. The Runtime then
 cross-checks package and Manifest against the exact Goal, resulting
-Workflow/Attempt, phase policy, Candidate/Policy bindings, authority labels,
-and entry projection before the Store commits them with Attempt start. Dispatch
-consumes an immutable version-fenced claim; Worker event receipts use an
-identity domain separate from application commands. See
-[ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+Workflow/Attempt, phase policy, Candidate, Execution Profile, Policy bindings,
+authority labels, and entry projection before the Store commits them with
+Attempt start. Dispatch consumes an immutable version-fenced claim bound to the
+same profile; Worker event receipts use an identity domain separate from
+application commands. See
+[ADR 0014](docs/adr/0014-context-bound-worker-dispatch-and-event-admission.md)
+and [ADR 0021](docs/adr/0021-m1-execution-profile-and-cli-composition.md) plus
+[ADR 0022](docs/adr/0022-immutable-workflow-policy-binding.md).
 
 M1 does not yet have a durable resolver for selected Fact, Human Decision, or
 project-source authority. Those selected entries and all omission decisions
@@ -289,6 +320,7 @@ Platform application data (CodeClosure-owned)
   audit/                append-only exported audit segments
   evidence/             immutable evidence payloads
   policies/             installed/versioned policy bundles
+  profiles/             installed/versioned execution profiles
   workspaces/           managed candidate generations
 
 Target source repository
@@ -300,10 +332,15 @@ Candidate workspace
   run-owned outputs     bounded and phase-specific
 ```
 
-The exact platform path is resolved by the application; documentation uses
-`CODECLOSURE_HOME` as a conceptual name. The runtime must not rely on a shell
-environment variable being set, and it must never persist authority inside a
-worker-writable candidate.
+The Slice 7 application MUST resolve a platform data home: macOS uses
+`$HOME/Library/Application Support/CodeClosure`, Linux uses
+`${XDG_DATA_HOME:-$HOME/.local/share}/codeclosure`, and Windows uses
+`%LOCALAPPDATA%\CodeClosure`. An absolute `CODECLOSURE_HOME` is an optional
+operator/test override, not a required environment variable. The resolved home
+must not be the target repository, be nested beneath it, or be inside a
+worker-writable candidate. Tests and proof demos inject isolated temporary
+homes. See
+[ADR 0021](docs/adr/0021-m1-execution-profile-and-cli-composition.md).
 
 ## State Persistence Model
 
@@ -381,6 +418,13 @@ claims, terminal Attempt time, and every Worker receipt's causal link to its
 claim. SQLite triggers protect normal writes; startup checks detect authority
 data changed while the Store was offline.
 
+Installation does not select a Policy for a Workflow. The first successful
+Start atomically records a separate immutable Workflow Policy binding. Runtime,
+Store, recovery, driver, Context, Evidence, Acceptance, repair, and closeout
+must resolve that exact ID and digest; an incompatible process fails before
+continuation. See
+[ADR 0022](docs/adr/0022-immutable-workflow-policy-binding.md).
+
 Retained Evidence Sets use their unique recording audit sequence as a temporal
 cut. Startup reconstructs which Evidence and eligibility version existed at
 that cut and rebuilds the canonical set. Later invalidation preserves that
@@ -431,6 +475,8 @@ and Worker receipt transaction are specified by
 The M1 source closure, Policy installation authority, receipt causality, and
 stream termination rules are specified by
 [ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md).
+Workflow-lifetime Policy selection is specified separately by
+[ADR 0022](docs/adr/0022-immutable-workflow-policy-binding.md).
 
 ## Dependency Direction
 
@@ -512,14 +558,31 @@ remains interruption. Worker non-admission results distinguish untrusted
 delivery from control-plane failure, so a Store or Runtime failure is never
 relabelled as a Worker protocol defect simply because no event committed.
 
-On restart, the runtime:
+The implemented Slice 7 startup-recovery capability:
 
 1. opens and migrates the control store;
-2. detects non-terminal goals and incomplete attempts;
-3. reconciles candidate and repository identities;
-4. invalidates unverifiable in-flight effects;
-5. resumes from a safe phase or records a concrete blocker;
-6. never treats the previous worker's absence as success.
+2. uses a narrow recovery catalog to detect non-terminal Goals and incomplete
+   Attempts;
+3. treats every retained dispatch claim as consumed history, never redispatch
+   permission;
+4. inspects Candidate, base, and repository identity through the closed
+   `RecoveryInspector` port;
+5. atomically interrupts unverifiable in-flight work, advances the Workflow,
+   persists an exact `RecoveryReconciliationRecord`, audits the decision, and
+   leaves startup-recovered work `BLOCKED`;
+6. lets an explicit `ResumeGoal` persist a fresh safe-or-blocked reconciliation
+   before any replacement Attempt; and
+7. creates fresh Context, Worker Session, and dispatch authority only after a
+   safe resume commit.
+
+Recovery and the deterministic Workflow driver belong to the Runtime
+application boundary. The CLI never chooses a safe phase, and an execution
+profile bound at first start cannot be replaced during resume. Status and audit
+views explain the resulting authority but cannot resume it. See
+[ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md).
+
+The remaining trusted composition work MUST invoke this recovery capability
+after opening/migrating the Store and before publishing any handler capability.
 
 ## Initial Deployment Model
 

@@ -8,6 +8,7 @@ import {
   contextManifestId,
   decodeContextPackage,
   deriveCapabilityGrant,
+  executionProfileId,
   goalId,
   goalRevision,
   policyBundleId,
@@ -37,7 +38,7 @@ const manifestDigest = sha256Digest(`sha256:${'b'.repeat(64)}`);
 
 function request(): WorkerRequest {
   const contextPackage = decodeContextPackage({
-    schemaVersion: 1,
+    schemaVersion: 2,
     goalId: goalId('goal_worker-fixture'),
     goalRevision: goalRevision(1),
     workflowId: workflowId('workflow_worker-fixture'),
@@ -59,6 +60,8 @@ function request(): WorkerRequest {
       nonGoals: ['No closeout authority'],
     },
     selectedEntries: [],
+    executionProfileId: executionProfileId('profile_worker-fixture'),
+    executionProfileDigest: sha256Digest(`sha256:${'d'.repeat(64)}`),
     policyBundleId: policyBundleId('policy_m1'),
     policyBundleDigest: sha256Digest(`sha256:${'c'.repeat(64)}`),
     responseContract: {

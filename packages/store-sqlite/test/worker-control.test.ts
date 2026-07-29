@@ -12,24 +12,34 @@ import {
   ContextAuthorityClass,
   ContextEntryKind,
   RunStatus,
+  RecoveryReasonCode,
+  RecoveryReconciliationDisposition,
+  RecoveryReconciliationPurpose,
   candidateGenerationId,
   commandId,
+  contextManifestId,
   createGoal,
   createWorkflow,
   decideAttempt,
   decodeContextManifest,
   decodeContextPackage,
+  decodeExecutionProfile,
   decodeGoalSnapshot,
   decodePolicyBundle,
+  deriveCapabilityGrant,
+  executionProfileProjection,
   goalId,
   goalRevision,
   isoTimestamp,
   policyBundleId,
   policyBundleProjection,
   successCriterionId,
+  workerSessionId,
   workflowId,
   workflowVersion,
+  type AttemptId,
   type Goal,
+  type ExecutionProfile,
   type PolicyBundle,
   type PolicyBundleDefinition,
   type WorkflowInstance,
@@ -37,29 +47,45 @@ import {
 import {
   CanonicalJsonSha256DigestProvider,
   MinimalContextCompiler,
+  GoalNextSafeAction,
+  RecoverableBlockerKind,
   Rfc8785Canonicalizer,
   RuntimeErrorCode,
   WorkerFailureReasonCode,
   WorkerEventNonAdmissionClass,
   WorkerPortFailureReasonCode,
   contextManifestDigestProjection,
+  createCodeClosureApplication,
+  createExecutionProfileInstaller,
   createPolicyInstaller,
-  createWorkerExecutionApplication,
   decodeWorkerEvent,
   decodeWorkerEventReceipt,
   deriveContextManifestEntries,
   type Clock,
-  type WorkerExecutionDependencies,
+  type ResumeGoalRequest,
   type WorkerPort,
   type WorkerRequest,
 } from '@codeclosure/runtime';
+import { createRecoveryCoordinator } from '@codeclosure/runtime/composition';
+import {
+  createWorkerExecutionApplication,
+  type WorkerExecutionDependencies,
+} from '@codeclosure/runtime/testing/worker-execution';
 import {
   WorkerTransactionStep,
+  RecoveryTransactionStep,
   defaultMigrationsDirectory,
   openSqliteControlStore,
   type SqliteControlStore,
 } from '@codeclosure/store-sqlite';
-import { DeterministicIds, FakeWorker, FakeWorkerFixture } from '@codeclosure/testing';
+import {
+  DeterministicIds,
+  FakeRecoveryInspectionMode,
+  FakeRecoveryInspector,
+  FakeWorker,
+  FakeWorkerFixture,
+  testExecutionProfileDefinition,
+} from '@codeclosure/testing';
 import {
   WorkflowRuntimeKernel,
   type AttemptContextCompilationRequest,
@@ -72,6 +98,7 @@ interface SeededAuthority {
   readonly goal: Goal;
   readonly workflow: WorkflowInstance;
   readonly policy: PolicyBundle;
+  readonly profile: ExecutionProfile;
 }
 
 type ContextFactoryOverride = (
@@ -113,6 +140,7 @@ function seedAuthority(
   store: SqliteControlStore,
   namespace: string,
   policyInstalledAt: ReturnType<typeof isoTimestamp> = createdAt,
+  installProfile = true,
 ): SeededAuthority {
   const goal = createGoal({
     id: goalId(`goal_${namespace}`),
@@ -148,6 +176,24 @@ function seedAuthority(
     assert.fail(policyInstall.message);
   }
   const policy = policyInstall.value.bundle;
+  const profileDefinition = testExecutionProfileDefinition(namespace);
+  const profile = installProfile
+    ? (() => {
+        const profileInstall = createExecutionProfileInstaller({
+          store,
+          clock: Object.freeze({ now: () => policyInstalledAt }),
+          ids: new DeterministicIds(`profile-${namespace}`),
+          digests,
+        }).installExecutionProfile(profileDefinition);
+        if (profileInstall.status === 'PROFILE_CONFLICT') {
+          assert.fail(profileInstall.message);
+        }
+        return profileInstall.value.profile;
+      })()
+    : decodeExecutionProfile({
+        ...profileDefinition,
+        digest: digests.digest(executionProfileProjection(profileDefinition)),
+      });
   const creation = store.createGoalWithWorkflow({
     commandId: commandId(`command_create-${namespace}`),
     inputDigest: digests.digest({ schemaVersion: 1, type: 'CREATE_FIXTURE', namespace }),
@@ -158,7 +204,142 @@ function seedAuthority(
     payloadDigest: digests.digest({ schemaVersion: 1, goal, workflow }),
   });
   assert.equal(creation.status, 'APPLIED');
-  return Object.freeze({ goal, workflow, policy });
+  return Object.freeze({ goal, workflow, policy, profile });
+}
+
+interface LegacyWorkerAuthority {
+  readonly authority: SeededAuthority;
+  readonly attemptId: AttemptId;
+  readonly contextManifestId: ReturnType<typeof contextManifestId>;
+  readonly workerSessionId: ReturnType<typeof workerSessionId>;
+  readonly contextManifestDigest: ReturnType<typeof digests.digest>;
+  readonly packageDigest: ReturnType<typeof digests.digest>;
+  readonly claimedAt?: ReturnType<typeof isoTimestamp>;
+}
+
+function seedLegacyWorkerAuthority(
+  store: SqliteControlStore,
+  filename: string,
+  namespace: string,
+  includeDispatchClaim = false,
+): LegacyWorkerAuthority {
+  const authority = seedAuthority(store, namespace, createdAt, false);
+  const attemptIdentifier = new DeterministicIds(`legacy-attempt-${namespace}`).nextAttemptId();
+  const contextIdentifier = contextManifestId(`context_legacy-${namespace}`);
+  const workerIdentifier = workerSessionId(`worker_legacy-${namespace}`);
+  const startedAt = isoTimestamp('2026-07-27T00:00:00.010Z');
+  const decision = decideAttempt(authority.workflow, undefined, {
+    type: 'BEGIN_ATTEMPT',
+    commandId: commandId(`command_legacy-start-${namespace}`),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: authority.workflow.version,
+    attemptId: attemptIdentifier,
+    sequence: 1,
+    occurredAt: startedAt,
+  });
+  if (!decision.accepted || decision.events[0].type !== 'ATTEMPT_STARTED') {
+    assert.fail('Legacy Worker fixture could not start its Attempt');
+  }
+  const event = decision.events[0];
+  const commitIds = new DeterministicIds(`legacy-commit-${namespace}`);
+  const committed = store.commitAttemptEvent({
+    inputDigest: digests.digest({ schemaVersion: 1, namespace, type: 'LEGACY_START' }),
+    target: Object.freeze({ aggregateType: 'GOAL', aggregateId: authority.goal.id }),
+    event,
+    auditEventId: commitIds.nextAuditEventId(),
+    workflowAuditEventId: commitIds.nextAuditEventId(),
+    payloadDigest: digests.digest(event),
+  });
+  assert.equal(committed.status, 'APPLIED');
+  const contextManifestDigest = digests.digest({ namespace, type: 'LEGACY_MANIFEST' });
+  const packageDigest = digests.digest({ namespace, type: 'LEGACY_PACKAGE' });
+  const database = new Database(filename);
+  database.pragma('foreign_keys = ON');
+  database.exec('BEGIN IMMEDIATE');
+  database.exec('DROP TRIGGER attempts_worker_context_update_guard');
+  database
+    .prepare(
+      `UPDATE attempts
+          SET context_manifest_id = ?, worker_session_ref = ?
+        WHERE id = ?`,
+    )
+    .run(contextIdentifier, workerIdentifier, attemptIdentifier);
+  database
+    .prepare(
+      `INSERT INTO context_manifests(
+         id, schema_version, compiler_version, created_at, goal_id, goal_revision,
+         workflow_id, workflow_version, phase, attempt_id, candidate_generation_id,
+         candidate_digest, policy_bundle_id, policy_bundle_digest,
+         capability_grant_digest, response_contract_digest, entries_json,
+         omission_decisions_json, package_digest, manifest_digest
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 'DISCOVERY', ?, NULL, NULL, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+    )
+    .run(
+      contextIdentifier,
+      'legacy-context-compiler-v1',
+      startedAt,
+      authority.goal.id,
+      authority.goal.revision,
+      authority.workflow.id,
+      workflowVersion(2),
+      attemptIdentifier,
+      authority.policy.id,
+      authority.policy.digest,
+      digests.digest({ capabilityGrant: deriveCapabilityGrant('DISCOVERY') }),
+      digests.digest({ responseContract: 'legacy-worker-v1' }),
+      JSON.stringify([
+        {
+          kind: ContextEntryKind.GOAL,
+          sourceRef: authority.goal.id,
+          sourceRevision: String(authority.goal.revision),
+          authorityClass: ContextAuthorityClass.GOAL_AUTHORITY,
+          renderedDigest: digests.digest(authority.goal.objective),
+        },
+      ]),
+      packageDigest,
+      contextManifestDigest,
+    );
+  let claimedAt: ReturnType<typeof isoTimestamp> | undefined;
+  if (includeDispatchClaim) {
+    claimedAt = isoTimestamp('2026-07-27T00:00:00.100Z');
+    database
+      .prepare(
+        `INSERT INTO worker_dispatch_claims(
+           attempt_id, schema_version, workflow_id, workflow_version, worker_session_id,
+           context_manifest_id, context_manifest_digest, package_digest, claimed_at
+         ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        attemptIdentifier,
+        authority.workflow.id,
+        workflowVersion(2),
+        workerIdentifier,
+        contextIdentifier,
+        contextManifestDigest,
+        packageDigest,
+        claimedAt,
+      );
+  }
+  database.exec(`
+    CREATE TRIGGER attempts_worker_context_update_guard
+    BEFORE UPDATE OF context_manifest_id, worker_session_ref ON attempts
+    WHEN NEW.context_manifest_id IS NOT OLD.context_manifest_id
+      OR NEW.worker_session_ref IS NOT OLD.worker_session_ref
+    BEGIN
+      SELECT RAISE(ABORT, 'Attempt Context and Worker bindings are immutable');
+    END;
+  `);
+  database.exec('COMMIT');
+  database.close();
+  return Object.freeze({
+    authority,
+    attemptId: attemptIdentifier,
+    contextManifestId: contextIdentifier,
+    workerSessionId: workerIdentifier,
+    contextManifestDigest,
+    packageDigest,
+    ...(claimedAt === undefined ? {} : { claimedAt }),
+  });
 }
 
 function monotonicClock(): Clock {
@@ -209,7 +390,10 @@ function runtimeDependencies(
     digests,
     workerContext: Object.freeze({
       identities,
+      executionProfileId: authority.profile.id,
+      executionProfileDigest: authority.profile.digest,
       policyBundleId: authority.policy.id,
+      policyBundleDigest: authority.policy.digest,
       factory: Object.freeze({
         compile: (input: AttemptContextCompilationRequest) =>
           contextFactoryOverride === undefined
@@ -308,6 +492,18 @@ void test('[I-004][I-006][I-008][I-009][I-019] Context-bound dispatch and admitt
     reopened.getPolicyBundle(authority.policy.id)?.bundle.digest,
     authority.policy.digest,
   );
+  assert.equal(
+    reopened.getExecutionProfile(authority.profile.id)?.profile.digest,
+    authority.profile.digest,
+  );
+  assert.equal(
+    reopened.getWorkflowPolicyBinding(authority.workflow.id)?.policyBundleDigest,
+    authority.policy.digest,
+  );
+  assert.equal(
+    reopened.getExecutionProfileBinding(authority.workflow.id)?.profileDigest,
+    authority.profile.digest,
+  );
   const policyAudits = reopened.listAuditEvents('POLICY', authority.policy.id);
   assert.equal(policyAudits.length, 1);
   const policyAudit = policyAudits[0];
@@ -316,6 +512,24 @@ void test('[I-004][I-006][I-008][I-009][I-019] Context-bound dispatch and admitt
   }
   assert.equal(policyAudit.eventType, 'POLICY_BUNDLE_INSTALLED');
   assert.equal(policyAudit.payloadDigest, authority.policy.digest);
+  const profileAudits = reopened.listAuditEvents('EXECUTION_PROFILE', authority.profile.id);
+  assert.equal(profileAudits.length, 1);
+  const profileAudit = profileAudits[0];
+  assert.ok(profileAudit);
+  assert.equal(profileAudit.eventType, 'EXECUTION_PROFILE_INSTALLED');
+  assert.equal(profileAudit.payloadDigest, authority.profile.digest);
+  const policyBindingAudits = reopened.listAuditEvents(
+    'WORKFLOW_POLICY_BINDING',
+    authority.workflow.id,
+  );
+  assert.equal(policyBindingAudits.length, 1);
+  assert.equal(policyBindingAudits[0]?.eventType, 'WORKFLOW_POLICY_BOUND');
+  const bindingAudits = reopened.listAuditEvents(
+    'EXECUTION_PROFILE_BINDING',
+    authority.workflow.id,
+  );
+  assert.equal(bindingAudits.length, 1);
+  assert.equal(bindingAudits[0]?.eventType, 'EXECUTION_PROFILE_BOUND');
   assert.equal(rowCount(filename, 'acceptance_decisions'), 0);
 });
 
@@ -345,6 +559,158 @@ void test('[I-006][I-008] Worker Attempt time includes the active Policy causal 
   assert.equal(execution.dispatch?.status, 'CLAIMED');
   const manifest = store.getContextManifest(execution.dispatch.claim.contextManifestId);
   assert.equal(manifest?.createdAt, policyInstalledAt);
+});
+
+void test('[I-006][I-008][I-019] a started Workflow cannot replay or continue with another Execution Profile', (t) => {
+  const filename = temporaryDatabase(t, 'execution-profile-rebinding.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'profile-rebinding');
+  const originalKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      authority,
+      'profile-rebinding-original',
+    ),
+  );
+  const request = startRequest(authority, 'profile-rebinding');
+  assert.equal(originalKernel.startGoal(request).status, 'APPLIED');
+  const originalBinding = store.getExecutionProfileBinding(authority.workflow.id);
+  assert.ok(originalBinding);
+
+  const replacementInstall = createExecutionProfileInstaller({
+    store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids: new DeterministicIds('profile-rebinding-replacement-install'),
+    digests,
+  }).installExecutionProfile(testExecutionProfileDefinition('profile-rebinding-replacement'));
+  if (replacementInstall.status === 'PROFILE_CONFLICT') {
+    assert.fail(replacementInstall.message);
+  }
+  const replacementAuthority: SeededAuthority = Object.freeze({
+    ...authority,
+    profile: replacementInstall.value.profile,
+  });
+  const replacementKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      replacementAuthority,
+      'profile-rebinding-replacement',
+    ),
+  );
+
+  assert.equal(replacementKernel.startGoal(request).status, 'REJECTED');
+  assert.deepEqual(store.getExecutionProfileBinding(authority.workflow.id), originalBinding);
+
+  const running = store.getWorkflow(authority.workflow.id);
+  assert.ok(running?.activeAttemptId);
+  assert.equal(
+    originalKernel.recordAttemptResult({
+      commandId: commandId('command_profile-rebinding-result'),
+      workflowId: running.id,
+      expectedWorkflowVersion: running.version,
+      attemptId: running.activeAttemptId,
+      reason: 'finish the original profile attempt',
+    }).status,
+    'APPLIED',
+  );
+  const ready = store.getWorkflow(authority.workflow.id);
+  assert.ok(ready);
+  const attemptCount = rowCount(filename, 'attempts');
+  assert.equal(
+    replacementKernel.beginAttempt({
+      commandId: commandId('command_profile-rebinding-retry'),
+      workflowId: ready.id,
+      expectedWorkflowVersion: ready.version,
+    }).status,
+    'REJECTED',
+  );
+  assert.deepEqual(store.getWorkflow(authority.workflow.id), ready);
+  assert.equal(rowCount(filename, 'attempts'), attemptCount);
+  assert.deepEqual(store.getExecutionProfileBinding(authority.workflow.id), originalBinding);
+});
+
+void test('[I-006][I-008][I-019][I-031] Policy substitution cannot replay, claim, or admit Worker authority', async (t) => {
+  const filename = temporaryDatabase(t, 'workflow-policy-substitution.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'workflow-policy-substitution');
+  const originalWorker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const originalKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, originalWorker, authority, 'workflow-policy-substitution-original'),
+  );
+  const request = startRequest(authority, 'workflow-policy-substitution');
+  assert.equal(originalKernel.startGoal(request).status, 'APPLIED');
+  const workerRequest = originalKernel.takePreparedWorkerRequest(
+    store.getWorkflow(authority.workflow.id)?.activeAttemptId ??
+      assert.fail('Policy substitution fixture has no active Attempt'),
+  );
+  if (workerRequest === undefined) {
+    assert.fail('Policy substitution fixture has no prepared Worker Request');
+  }
+  const originalBinding = store.getWorkflowPolicyBinding(authority.workflow.id);
+  assert.ok(originalBinding);
+
+  const policyBDefinition = Object.freeze({
+    ...policyBundleDefinition(),
+    id: policyBundleId('policy_m1-worker-b'),
+    version: 'm1-worker-b-v1',
+    transitionRules: Object.freeze(['workflow-runtime-only', 'policy-b-marker']),
+  });
+  const policyBInstall = createPolicyInstaller({
+    store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids: new DeterministicIds('workflow-policy-substitution-b-install'),
+    digests,
+  }).installPolicyBundle(policyBDefinition);
+  if (policyBInstall.status === 'POLICY_CONFLICT') {
+    assert.fail(policyBInstall.message);
+  }
+  const policyBAuthority: SeededAuthority = Object.freeze({
+    ...authority,
+    policy: policyBInstall.value.bundle,
+  });
+  const policyBKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      policyBAuthority,
+      'workflow-policy-substitution-b',
+    ),
+  );
+
+  const replayUnderPolicyB = policyBKernel.startGoal(request);
+  assert.equal(replayUnderPolicyB.status, 'REJECTED');
+  assert.equal(replayUnderPolicyB.output.error.code, RuntimeErrorCode.COMMAND_ID_CONFLICT);
+  assert.deepEqual(store.getWorkflowPolicyBinding(authority.workflow.id), originalBinding);
+
+  const claimUnderPolicyB = policyBKernel.claimWorkerDispatch(workerRequest);
+  assert.equal(claimUnderPolicyB.status, 'FAILED');
+  assert.equal(claimUnderPolicyB.reasonCode, 'WORKER_DISPATCH_INTERNAL_FAILURE');
+  assert.equal(store.getWorkerDispatchClaim(workerRequest.attemptId), undefined);
+
+  const originalClaim = originalKernel.claimWorkerDispatch(workerRequest);
+  assert.equal(originalClaim.status, 'CLAIMED');
+  const emitted: unknown[] = [];
+  for await (const event of originalWorker.run(workerRequest, new AbortController().signal)) {
+    emitted.push(event);
+  }
+  const event = decodeWorkerEvent(emitted[0]);
+  const beforeAdmission = store.getWorkflow(authority.workflow.id);
+  assert.ok(beforeAdmission);
+
+  const admissionUnderPolicyB = policyBKernel.admitWorkerEvent(event, workerRequest);
+  assert.equal(admissionUnderPolicyB.status, 'REJECTED');
+  assert.equal(admissionUnderPolicyB.reasonCode, 'WORKER_EVENT_INTERNAL_FAILURE');
+  assert.deepEqual(store.getWorkflow(authority.workflow.id), beforeAdmission);
+  assert.equal(store.getWorkerEventReceipt(event.id), undefined);
+
+  const originalAdmission = originalKernel.admitWorkerEvent(event, workerRequest);
+  assert.equal(originalAdmission.status, 'ADMITTED');
+  assert.equal(store.getWorkerEventReceipt(event.id)?.disposition, 'ADMITTED');
+  assert.deepEqual(store.getWorkflowPolicyBinding(authority.workflow.id), originalBinding);
 });
 
 void test('[I-002][I-004][I-009] duplicate WorkerEventId delivery mutates authority exactly once', async (t) => {
@@ -833,38 +1199,155 @@ void test('[I-006][I-008][I-009] restart reconciliation cannot predate a retaine
   assert.equal(workflow.updatedAt, dispatch.claim.claimedAt);
 });
 
-void test('[I-006][I-008] failure after Context Manifest write rolls back the entire Attempt start', (t) => {
-  const filename = temporaryDatabase(t, 'context-rollback.sqlite');
-  const store = openSqliteControlStore({
-    filename,
-    now: () => createdAt,
-    transactionProbe: (step) => {
-      if (step === WorkerTransactionStep.AFTER_CONTEXT_MANIFEST_WRITE) {
-        throw new Error('injected Context Manifest failure');
-      }
-    },
+void test('[I-006][I-008] Policy/Profile bindings, Context, and Attempt start roll back together', async (t) => {
+  for (const failureStep of [
+    WorkerTransactionStep.AFTER_WORKFLOW_POLICY_BINDING_AUDIT_WRITE,
+    WorkerTransactionStep.AFTER_WORKFLOW_POLICY_BINDING_WRITE,
+    WorkerTransactionStep.AFTER_EXECUTION_PROFILE_BINDING_AUDIT_WRITE,
+    WorkerTransactionStep.AFTER_EXECUTION_PROFILE_BINDING_WRITE,
+    WorkerTransactionStep.AFTER_CONTEXT_MANIFEST_WRITE,
+  ]) {
+    await t.test(failureStep, (caseTest) => {
+      const failureNamespace = failureStep.toLowerCase().replaceAll('_', '-');
+      const filename = temporaryDatabase(caseTest, `${failureNamespace}.sqlite`);
+      const store = openSqliteControlStore({
+        filename,
+        now: () => createdAt,
+        transactionProbe: (step) => {
+          if (step === failureStep) {
+            throw new Error(`injected ${failureStep}`);
+          }
+        },
+      });
+      const authority = seedAuthority(store, `binding-${failureNamespace}`);
+      const kernel = new WorkflowRuntimeKernel(
+        runtimeDependencies(
+          store,
+          new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+          authority,
+          `binding-${failureNamespace}`,
+        ),
+      );
+
+      const result = kernel.startGoal(startRequest(authority, `binding-${failureNamespace}`));
+
+      assert.equal(result.status, 'REJECTED');
+      store.close();
+      const reopened = openSqliteControlStore({ filename, now: () => createdAt });
+      caseTest.after(() => reopened.close());
+      assert.equal(reopened.getWorkflow(authority.workflow.id)?.version, workflowVersion(1));
+      assert.equal(reopened.getWorkflowPolicyBinding(authority.workflow.id), undefined);
+      assert.equal(reopened.getExecutionProfileBinding(authority.workflow.id), undefined);
+      assert.equal(rowCount(filename, 'attempts'), 0);
+      assert.equal(rowCount(filename, 'context_manifests'), 0);
+      assert.equal(rowCount(filename, 'processed_commands'), 1);
+      assert.equal(rowCount(filename, 'audit_events'), 4);
+    });
+  }
+});
+
+void test('[I-006][I-008] Execution Profile installation is exact, idempotent, and audited once', (t) => {
+  const filename = temporaryDatabase(t, 'execution-profile-install.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const definition = testExecutionProfileDefinition('exact-install');
+  const first = createExecutionProfileInstaller({
+    store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids: new DeterministicIds('profile-first-install'),
+    digests,
+  }).installExecutionProfile(definition);
+  assert.equal(first.status, 'INSTALLED');
+
+  const replayed = createExecutionProfileInstaller({
+    store,
+    clock: Object.freeze({ now: () => isoTimestamp('2026-07-27T00:00:00.100Z') }),
+    ids: new DeterministicIds('profile-replayed-install'),
+    digests,
+  }).installExecutionProfile(definition);
+  assert.equal(replayed.status, 'EXISTING');
+  assert.deepEqual(replayed.value, first.value);
+
+  const conflict = createExecutionProfileInstaller({
+    store,
+    clock: Object.freeze({ now: () => isoTimestamp('2026-07-27T00:00:00.200Z') }),
+    ids: new DeterministicIds('profile-conflicting-install'),
+    digests,
+  }).installExecutionProfile({
+    ...definition,
+    workerAdapterVersion: 'different-worker-v2',
   });
-  const authority = seedAuthority(store, 'contextrollback');
-  const kernel = new WorkflowRuntimeKernel(
-    runtimeDependencies(
-      store,
-      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
-      authority,
-      'contextrollback',
-    ),
+  assert.equal(conflict.status, 'PROFILE_CONFLICT');
+  assert.equal(
+    store
+      .listAuditEvents('EXECUTION_PROFILE', definition.id)
+      .filter((event) => event.eventType === 'EXECUTION_PROFILE_INSTALLED').length,
+    1,
   );
+});
 
-  const result = kernel.startGoal(startRequest(authority, 'contextrollback'));
+void test('[I-006][I-008] Execution Profile installation and audit roll back together', async (t) => {
+  for (const failureStep of [
+    WorkerTransactionStep.AFTER_EXECUTION_PROFILE_AUDIT_WRITE,
+    WorkerTransactionStep.AFTER_EXECUTION_PROFILE_WRITE,
+  ]) {
+    await t.test(failureStep, (caseTest) => {
+      const failureNamespace = failureStep.toLowerCase().replaceAll('_', '-');
+      const filename = temporaryDatabase(caseTest, `${failureNamespace}.sqlite`);
+      const store = openSqliteControlStore({
+        filename,
+        now: () => createdAt,
+        transactionProbe: (step) => {
+          if (step === failureStep) {
+            throw new Error(`injected ${failureStep}`);
+          }
+        },
+      });
+      caseTest.after(() => store.close());
+      const definition = testExecutionProfileDefinition(`rollback-${failureNamespace}`);
+      assert.throws(
+        () =>
+          createExecutionProfileInstaller({
+            store,
+            clock: Object.freeze({ now: () => createdAt }),
+            ids: new DeterministicIds(`profile-${failureNamespace}`),
+            digests,
+          }).installExecutionProfile(definition),
+        new RegExp(`injected ${failureStep}`),
+      );
+      assert.equal(store.getExecutionProfile(definition.id), undefined);
+      assert.equal(store.listAuditEvents('EXECUTION_PROFILE', definition.id).length, 0);
+    });
+  }
+});
 
-  assert.equal(result.status, 'REJECTED');
-  store.close();
-  const reopened = openSqliteControlStore({ filename, now: () => createdAt });
-  t.after(() => reopened.close());
-  assert.equal(reopened.getWorkflow(authority.workflow.id)?.version, workflowVersion(1));
-  assert.equal(rowCount(filename, 'attempts'), 0);
-  assert.equal(rowCount(filename, 'context_manifests'), 0);
-  assert.equal(rowCount(filename, 'processed_commands'), 1);
-  assert.equal(rowCount(filename, 'audit_events'), 3);
+void test('[I-005][I-006] Execution Profile installer strictly decodes Store results', async (t) => {
+  for (const fixture of [
+    {
+      name: 'extra-result-field',
+      value: { status: 'PROFILE_CONFLICT', message: 'conflict', unexpected: true },
+    },
+    {
+      name: 'extra-installed-field',
+      value: {
+        status: 'INSTALLED',
+        value: { profile: {}, installedAt: createdAt, unexpected: true },
+      },
+    },
+  ]) {
+    await t.test(fixture.name, () => {
+      const installer = createExecutionProfileInstaller({
+        store: Object.freeze({ installExecutionProfile: () => fixture.value as never }),
+        clock: Object.freeze({ now: () => createdAt }),
+        ids: new DeterministicIds(`strict-${fixture.name}`),
+        digests,
+      });
+      assert.throws(
+        () => installer.installExecutionProfile(testExecutionProfileDefinition('strict-result')),
+        /unrecognized|Unrecognized|invalid/i,
+      );
+    });
+  }
 });
 
 void test('[I-006][I-008] Policy authority and its audit roll back as one transaction', async (t) => {
@@ -1182,6 +1665,22 @@ void test('[I-006][I-008][I-009] SQLite backstops reject forged dispatch and imm
     () =>
       database
         .prepare(
+          'UPDATE workflow_policy_bindings SET policy_bundle_digest = ? WHERE workflow_id = ?',
+        )
+        .run(digests.digest({ forged: 'policy' }), workflow.id),
+    /Workflow Policy bindings are immutable/,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare('DELETE FROM workflow_policy_bindings WHERE workflow_id = ?')
+        .run(workflow.id),
+    /Workflow Policy bindings cannot be deleted/,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare(
           'UPDATE attempts SET context_manifest_id = NULL, worker_session_ref = NULL WHERE id = ?',
         )
         .run(request.attemptId),
@@ -1386,18 +1885,36 @@ void test('[I-004][I-006][I-008] migration 0009 refuses a retained Worker Sessio
     migrationsDirectory,
     now: () => createdAt,
   });
-  const authority = seedAuthority(oldStore, 'poisonedworkerbinding');
-  const ids = new DeterministicIds('poisoned-worker-binding');
-  const runtime = new WorkflowRuntimeKernel({
-    store: oldStore,
-    clock: monotonicClock(),
-    ids,
-    digests,
+  const authority = seedAuthority(oldStore, 'poisonedworkerbinding', createdAt, false);
+  const attemptIdentifier = new DeterministicIds('poisoned-worker-binding-attempt').nextAttemptId();
+  const startedAt = isoTimestamp('2026-07-27T00:00:00.010Z');
+  const decision = decideAttempt(authority.workflow, undefined, {
+    type: 'BEGIN_ATTEMPT',
+    commandId: commandId('command_poisoned-worker-binding-start'),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: authority.workflow.version,
+    attemptId: attemptIdentifier,
+    sequence: 1,
+    occurredAt: startedAt,
   });
-  assert.equal(
-    runtime.startGoal(startRequest(authority, 'poisonedworkerbinding')).status,
-    'APPLIED',
-  );
+  if (!decision.accepted || decision.events[0].type !== 'ATTEMPT_STARTED') {
+    assert.fail('Pre-migration fixture could not construct its legacy Attempt');
+  }
+  const event = decision.events[0];
+  const commitIds = new DeterministicIds('poisoned-worker-binding-commit');
+  const committed = oldStore.commitAttemptEvent({
+    inputDigest: digests.digest({
+      schemaVersion: 1,
+      type: 'LEGACY_START',
+      namespace: 'poisonedworkerbinding',
+    }),
+    target: Object.freeze({ aggregateType: 'GOAL', aggregateId: authority.goal.id }),
+    event,
+    auditEventId: commitIds.nextAuditEventId(),
+    workflowAuditEventId: commitIds.nextAuditEventId(),
+    payloadDigest: digests.digest(event),
+  });
+  assert.equal(committed.status, 'APPLIED');
   const running = oldStore.getWorkflow(authority.workflow.id);
   if (running?.activeAttemptId === undefined) {
     assert.fail('Pre-migration fixture must contain a running Attempt');
@@ -1530,16 +2047,7 @@ void test('[I-005][I-006][I-008] migration 0010 refuses unresolved retained Cont
     migrationsDirectory,
     now: () => createdAt,
   });
-  const authority = seedAuthority(oldStore, 'unresolvedcontext');
-  const kernel = new WorkflowRuntimeKernel(
-    runtimeDependencies(
-      oldStore,
-      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
-      authority,
-      'unresolvedcontext',
-    ),
-  );
-  assert.equal(kernel.startGoal(startRequest(authority, 'unresolvedcontext')).status, 'APPLIED');
+  seedLegacyWorkerAuthority(oldStore, filename, 'unresolvedcontext');
   oldStore.close();
   const raw = new Database(filename);
   raw.exec('DROP TRIGGER context_manifests_no_update');
@@ -1598,19 +2106,7 @@ void test('[I-004][I-006][I-008] migration 0010 refuses retained Candidate Conte
     migrationsDirectory,
     now: () => createdAt,
   });
-  const authority = seedAuthority(oldStore, 'candidatecontextmigration');
-  const kernel = new WorkflowRuntimeKernel(
-    runtimeDependencies(
-      oldStore,
-      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
-      authority,
-      'candidatecontextmigration',
-    ),
-  );
-  assert.equal(
-    kernel.startGoal(startRequest(authority, 'candidatecontextmigration')).status,
-    'APPLIED',
-  );
+  seedLegacyWorkerAuthority(oldStore, filename, 'candidatecontextmigration');
   oldStore.close();
   const raw = new Database(filename);
   raw.pragma('foreign_keys = OFF');
@@ -1647,7 +2143,7 @@ void test('[I-004][I-006][I-008] migration 0010 refuses retained Candidate Conte
   );
 });
 
-void test('[I-006][I-008][I-010] migration 0010 refuses a retained receipt without dispatch causality', async (t) => {
+void test('[I-006][I-008][I-010] migration 0010 refuses a retained receipt without dispatch causality', (t) => {
   const filename = temporaryDatabase(t, 'orphaned-worker-receipt-migration.sqlite');
   const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-dispatch-closure-'));
   t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
@@ -1662,21 +2158,33 @@ void test('[I-006][I-008][I-010] migration 0010 refuses a retained receipt witho
     migrationsDirectory,
     now: () => createdAt,
   });
-  const authority = seedAuthority(oldStore, 'orphanedreceipt');
-  const execution = await createWorkerExecutionApplication(
-    runtimeDependencies(
-      oldStore,
-      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
-      authority,
-      'orphanedreceipt',
-    ),
-  ).startGoal(startRequest(authority, 'orphanedreceipt'));
-  assert.equal(execution.admissions[0]?.status, 'ADMITTED');
-  oldStore.close();
+  const legacy = seedLegacyWorkerAuthority(oldStore, filename, 'orphanedreceipt');
   const raw = new Database(filename);
-  raw.exec('DROP TRIGGER worker_dispatch_claims_no_delete');
-  raw.prepare('DELETE FROM worker_dispatch_claims').run();
+  raw.pragma('foreign_keys = ON');
+  raw
+    .prepare(
+      `INSERT INTO worker_event_receipts(
+         event_id, schema_version, payload_digest, worker_session_id, workflow_id,
+         observed_workflow_version, attempt_id, context_manifest_id,
+         context_manifest_digest, package_digest, disposition, internal_command_id,
+         reason_code, received_at
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'IGNORED', NULL, ?, ?)`,
+    )
+    .run(
+      'worker-event_legacy-orphanedreceipt',
+      digests.digest({ type: 'LEGACY_ORPHANED_RECEIPT' }),
+      legacy.workerSessionId,
+      legacy.authority.workflow.id,
+      workflowVersion(2),
+      legacy.attemptId,
+      legacy.contextManifestId,
+      legacy.contextManifestDigest,
+      legacy.packageDigest,
+      'LEGACY_MISSING_DISPATCH',
+      isoTimestamp('2026-07-27T00:00:00.200Z'),
+    );
   raw.close();
+  oldStore.close();
   copyFileSync(
     join(sourceDirectory, '0010_worker_authority_closure.sql'),
     join(migrationsDirectory, '0010_worker_authority_closure.sql'),
@@ -1717,32 +2225,12 @@ void test('[I-006][I-008][I-010] migration 0010 refuses an Attempt ended before 
     migrationsDirectory,
     now: () => createdAt,
   });
-  const authority = seedAuthority(oldStore, 'attemptbeforedispatchmigration');
-  const kernel = new WorkflowRuntimeKernel(
-    runtimeDependencies(
-      oldStore,
-      new CountingWorker(),
-      authority,
-      'attemptbeforedispatchmigration',
-      undefined,
-      sequenceClock(
-        isoTimestamp('2026-07-27T00:00:00.010Z'),
-        isoTimestamp('2026-07-27T00:00:00.100Z'),
-      ),
-    ),
+  const legacy = seedLegacyWorkerAuthority(
+    oldStore,
+    filename,
+    'attemptbeforedispatchmigration',
+    true,
   );
-  assert.equal(
-    kernel.startGoal(startRequest(authority, 'attemptbeforedispatchmigration')).status,
-    'APPLIED',
-  );
-  const running = oldStore.getWorkflow(authority.workflow.id);
-  if (running?.activeAttemptId === undefined) {
-    assert.fail('Attempt dispatch migration fixture must have an active Attempt');
-  }
-  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
-  if (request === undefined || kernel.claimWorkerDispatch(request).status !== 'CLAIMED') {
-    assert.fail('Attempt dispatch migration fixture must retain a claim');
-  }
   oldStore.close();
   const raw = new Database(filename);
   raw
@@ -1753,7 +2241,7 @@ void test('[I-006][I-008][I-010] migration 0010 refuses an Attempt ended before 
               ended_at = '2026-07-27T00:00:00.050Z'
         WHERE id = ?`,
     )
-    .run(request.attemptId);
+    .run(legacy.attemptId);
   raw.close();
   copyFileSync(
     join(sourceDirectory, '0010_worker_authority_closure.sql'),
@@ -1798,22 +2286,12 @@ void test('[I-006][I-008] migration 0012 refuses a retained Worker failure class
     migrationsDirectory,
     now: () => createdAt,
   });
-  const authority = seedAuthority(oldStore, 'workerclassificationmigration');
-  const kernel = new WorkflowRuntimeKernel(
-    runtimeDependencies(oldStore, new CountingWorker(), authority, 'workerclassificationmigration'),
+  const legacy = seedLegacyWorkerAuthority(
+    oldStore,
+    filename,
+    'workerclassificationmigration',
+    true,
   );
-  assert.equal(
-    kernel.startGoal(startRequest(authority, 'workerclassificationmigration')).status,
-    'APPLIED',
-  );
-  const running = oldStore.getWorkflow(authority.workflow.id);
-  if (running?.activeAttemptId === undefined) {
-    assert.fail('Worker classification migration fixture must have an active Attempt');
-  }
-  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
-  if (request === undefined || kernel.claimWorkerDispatch(request).status !== 'CLAIMED') {
-    assert.fail('Worker classification migration fixture must retain a dispatch claim');
-  }
   oldStore.close();
 
   const raw = new Database(filename);
@@ -1825,7 +2303,7 @@ void test('[I-006][I-008] migration 0012 refuses a retained Worker failure class
               ended_at = '2026-07-27T00:00:00.100Z'
         WHERE id = ?`,
     )
-    .run(request.attemptId);
+    .run(legacy.attemptId);
   raw.close();
   copyFileSync(
     join(sourceDirectory, '0012_worker_failure_classification_closure.sql'),
@@ -2002,6 +2480,41 @@ void test('[I-006][I-008][I-009] reopen revalidates retained Policy audit author
   );
 });
 
+void test('[I-006][I-008][I-009][I-031] reopen rejects a forged Workflow Policy binding', (t) => {
+  const filename = temporaryDatabase(t, 'reopen-workflow-policy-binding.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const authority = seedAuthority(store, 'reopenworkflowpolicybinding');
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      authority,
+      'reopenworkflowpolicybinding',
+    ),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'reopenworkflowpolicybinding')).status,
+    'APPLIED',
+  );
+  store.close();
+
+  const raw = new Database(filename);
+  raw.exec('DROP TRIGGER workflow_policy_bindings_no_update');
+  raw
+    .prepare(
+      `UPDATE workflow_policy_bindings
+          SET binding_digest = ?
+        WHERE workflow_id = ?`,
+    )
+    .run(digests.digest({ forgedWorkflowPolicyBinding: true }), authority.workflow.id);
+  raw.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => createdAt }),
+    /incomplete Policy binding authority/,
+  );
+});
+
 void test('[I-006][I-008][I-009][I-010] reopen revalidates retained Worker receipt causality', async (t) => {
   const filename = temporaryDatabase(t, 'reopen-worker-causality.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
@@ -2064,5 +2577,407 @@ void test('[I-006][I-008][I-009] reopen rejects an Attempt corrupted before its 
   assert.throws(
     () => openSqliteControlStore({ filename, now: () => createdAt }),
     /ended before its retained dispatch claim/,
+  );
+});
+
+void test('[I-006][I-008][I-009] startup recovery blocks the old dispatch and ResumeGoal only grants a fresh boundary', async (t) => {
+  const filename = temporaryDatabase(t, 'startup-recovery-resume.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'startuprecovery');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.DELAYED_RESULT });
+  const workerExecution = createWorkerExecutionApplication(
+    runtimeDependencies(store, worker, authority, 'startuprecovery'),
+  );
+  const pendingExecution = workerExecution.startGoal(startRequest(authority, 'startuprecovery'));
+  await worker.waitUntilStarted();
+  const running = store.getWorkflow(authority.workflow.id);
+  assert.ok(running);
+  assert.equal(running.runStatus, RunStatus.RUNNING);
+  const originalAttemptId = running.activeAttemptId;
+  assert.ok(originalAttemptId);
+  const originalClaim = store.getWorkerDispatchClaim(originalAttemptId);
+  assert.ok(originalClaim);
+
+  const inspector = new FakeRecoveryInspector([
+    FakeRecoveryInspectionMode.EXACT,
+    FakeRecoveryInspectionMode.EXACT,
+  ]);
+  const recoveryIds = new DeterministicIds('startup-recovery-control');
+  const recovery = createRecoveryCoordinator({
+    store,
+    clock: sequenceClock(
+      isoTimestamp('2026-07-27T00:00:00.200Z'),
+      isoTimestamp('2026-07-27T00:00:00.300Z'),
+    ),
+    ids: recoveryIds,
+    digests,
+    inspector,
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+
+  const startup = recovery.recoverOnStartup();
+  assert.equal(startup.scannedCount, 1);
+  assert.equal(startup.reconciledCount, 1);
+  assert.equal(inspector.requests().length, 1);
+  const startupRecoveryId = startup.recoveryIds[0];
+  assert.ok(startupRecoveryId);
+  const startupRecord = store.getRecoveryReconciliation(startupRecoveryId);
+  assert.ok(startupRecord);
+  assert.equal(startupRecord.purpose, RecoveryReconciliationPurpose.STARTUP);
+  assert.equal(startupRecord.disposition, RecoveryReconciliationDisposition.SAFE_SAME_PHASE);
+  assert.equal(startupRecord.reasonCode, RecoveryReasonCode.EXACT_AUTHORITY_MATCH);
+  assert.equal(store.getAttempt(originalAttemptId)?.status, AttemptStatus.INTERRUPTED);
+  const blocked = store.getWorkflow(authority.workflow.id);
+  assert.ok(blocked);
+  assert.equal(blocked.runStatus, RunStatus.BLOCKED);
+  assert.equal(blocked.activeAttemptId, undefined);
+  assert.equal(recovery.recoverOnStartup().scannedCount, 0);
+  assert.equal(inspector.requests().length, 1);
+
+  const publicIds = new DeterministicIds('startup-recovery-public');
+  const publicApplication = createCodeClosureApplication({
+    store,
+    clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.400Z')),
+    creationIds: publicIds,
+    digests,
+    projectPaths: Object.freeze({
+      parseNormalizedAbsolute: (projectPath: string) => projectPath,
+    }),
+    execution: Object.freeze({
+      startGoal: () =>
+        Promise.reject(new Error('StartGoal is not exercised by this recovery boundary fixture')),
+      resumeGoal: (input: ResumeGoalRequest) =>
+        Promise.resolve(Object.freeze({ command: recovery.resumeGoal(input) })),
+      cancelGoal: () => {
+        throw new Error('CancelGoal is not exercised by this recovery boundary fixture');
+      },
+    }),
+  });
+  const blockedStatus = publicApplication.getGoalStatus(authority.goal.id);
+  assert.equal(blockedStatus.status, 'FOUND');
+  assert.equal(blockedStatus.view.nextSafeAction, GoalNextSafeAction.RESUME_GOAL);
+
+  worker.release();
+  await pendingExecution;
+  const resumeCommand = commandId('command_resume-startup-recovery');
+  const resumed = await publicApplication.resumeGoal({
+    commandId: resumeCommand,
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: blocked.version,
+  });
+  assert.equal(resumed.command.status, 'APPLIED');
+  const ready = store.getWorkflow(authority.workflow.id);
+  assert.ok(ready);
+  assert.equal(ready.runStatus, RunStatus.READY);
+  assert.equal(ready.activeAttemptId, undefined);
+  assert.equal(store.nextAttemptSequence(authority.workflow.id), 2);
+  assert.equal(rowCount(filename, 'attempts'), 1);
+  assert.equal(rowCount(filename, 'recovery_reconciliations'), 2);
+  assert.deepEqual(store.getWorkerDispatchClaim(originalAttemptId), originalClaim);
+  assert.equal(inspector.requests().length, 2);
+  assert.equal(
+    (
+      await publicApplication.resumeGoal({
+        commandId: resumeCommand,
+        goalId: authority.goal.id,
+        expectedGoalRevision: authority.goal.revision,
+        expectedWorkflowVersion: blocked.version,
+      })
+    ).command.status,
+    'REPLAYED',
+  );
+  assert.equal(inspector.requests().length, 2);
+
+  store.close();
+  const reopened = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.READY);
+  assert.equal(reopened.getRecoveryReconciliation(startupRecoveryId)?.id, startupRecord.id);
+});
+
+void test('[I-006][I-009] startup recovery refuses a malformed Store outcome after the atomic reconciliation', async (t) => {
+  const filename = temporaryDatabase(t, 'startup-recovery-malformed-outcome.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'startuprecoverymalformed');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.DELAYED_RESULT });
+  const pendingExecution = createWorkerExecutionApplication(
+    runtimeDependencies(store, worker, authority, 'startuprecoverymalformed'),
+  ).startGoal(startRequest(authority, 'startuprecoverymalformed'));
+  await worker.waitUntilStarted();
+
+  const malformedStore = new Proxy(store, {
+    get(target, property) {
+      if (property === 'commitStartupRecovery') {
+        return (input: Parameters<SqliteControlStore['commitStartupRecovery']>[0]) => {
+          const result = target.commitStartupRecovery(input);
+          assert.equal(result.status, 'APPLIED');
+          return Object.freeze({ ...result, outcome: null });
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function'
+        ? (...args: readonly unknown[]): unknown => Reflect.apply(value, target, args) as unknown
+        : value;
+    },
+  });
+  const recovery = createRecoveryCoordinator({
+    store: malformedStore,
+    clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.250Z')),
+    ids: new DeterministicIds('startup-recovery-malformed-outcome-control'),
+    digests,
+    inspector: new FakeRecoveryInspector([FakeRecoveryInspectionMode.EXACT]),
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+
+  assert.throws(
+    () => recovery.recoverOnStartup(),
+    /Startup recovery returned an invalid stored command outcome/,
+  );
+  assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+  assert.equal(rowCount(filename, 'recovery_reconciliations'), 1);
+
+  worker.release();
+  await pendingExecution;
+});
+
+void test('[I-006][I-008][I-009] recoverable closed failure is freshly inspected and mismatch remains BLOCKED', async (t) => {
+  const filename = temporaryDatabase(t, 'closed-failure-recovery.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'closedfailurerecovery');
+  const execution = await createWorkerExecutionApplication(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.ABRUPT_TERMINATION }),
+      authority,
+      'closedfailurerecovery',
+    ),
+  ).startGoal(startRequest(authority, 'closedfailurerecovery'));
+  assert.equal(execution.workerFailure?.status, 'APPLIED');
+  const blocked = store.getWorkflow(authority.workflow.id);
+  assert.ok(blocked);
+  assert.equal(blocked.runStatus, RunStatus.BLOCKED);
+  assert.equal(
+    store.getRecoveryCatalogForGoal(authority.goal.id)?.blockerKind,
+    RecoverableBlockerKind.RECOVERABLE_FAILURE,
+  );
+
+  const inspector = new FakeRecoveryInspector([FakeRecoveryInspectionMode.PROJECT_MISMATCH]);
+  const ids = new DeterministicIds('closed-failure-recovery-control');
+  const recovery = createRecoveryCoordinator({
+    store,
+    clock: sequenceClock(
+      isoTimestamp('2026-07-27T00:00:00.250Z'),
+      isoTimestamp('2026-07-27T00:00:00.300Z'),
+    ),
+    ids,
+    digests,
+    inspector,
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+  const persistenceInspector = new FakeRecoveryInspector([FakeRecoveryInspectionMode.EXACT]);
+  const failingCatalogStore = new Proxy(store, {
+    get(target, property) {
+      if (property === 'getRecoveryCatalogForGoal') {
+        return () => {
+          throw new Error('injected recovery catalog read failure');
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function'
+        ? (...args: readonly unknown[]): unknown => Reflect.apply(value, target, args) as unknown
+        : value;
+    },
+  });
+  const persistenceFailure = createRecoveryCoordinator({
+    store: failingCatalogStore,
+    clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.200Z')),
+    ids: new DeterministicIds('closed-failure-persistence-control'),
+    digests,
+    inspector: persistenceInspector,
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  }).resumeGoal({
+    commandId: commandId('command_resume-closed-failure-persistence'),
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: blocked.version,
+  });
+  assert.equal(persistenceFailure.status, 'REJECTED');
+  assert.equal(persistenceFailure.output.error.code, RuntimeErrorCode.PERSISTENCE_FAILURE);
+  assert.equal(
+    persistenceFailure.output.error.detailCode,
+    'RESUME_GOAL_RECOVERY_CATALOG_READ_FAILURE',
+  );
+  assert.equal(persistenceInspector.requests().length, 0);
+
+  const stale = recovery.resumeGoal({
+    commandId: commandId('command_resume-closed-failure-stale'),
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: workflowVersion(blocked.version - 1),
+  });
+  assert.equal(stale.status, 'REJECTED');
+  assert.equal(stale.output.error.code, RuntimeErrorCode.STALE_WORKFLOW_VERSION);
+  assert.equal(inspector.requests().length, 0);
+  const request = Object.freeze({
+    commandId: commandId('command_resume-closed-failure'),
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: blocked.version,
+  });
+  const result = recovery.resumeGoal(request);
+  assert.equal(result.status, 'APPLIED');
+  const stillBlocked = store.getWorkflow(authority.workflow.id);
+  assert.ok(stillBlocked);
+  assert.equal(stillBlocked.runStatus, RunStatus.BLOCKED);
+  assert.equal(stillBlocked.version, blocked.version + 1);
+  const record = store.getLatestRecoveryReconciliation(authority.workflow.id);
+  assert.ok(record);
+  assert.equal(record.purpose, RecoveryReconciliationPurpose.RESUME);
+  assert.equal(record.disposition, RecoveryReconciliationDisposition.BLOCKED);
+  assert.equal(record.reasonCode, RecoveryReasonCode.PROJECT_IDENTITY_MISMATCH);
+  assert.equal(inspector.requests().length, 1);
+  assert.equal(recovery.resumeGoal(request).status, 'REPLAYED');
+  assert.equal(inspector.requests().length, 1);
+
+  const failingInspector = new FakeRecoveryInspector([FakeRecoveryInspectionMode.THROW]);
+  const failedInspectionRecovery = createRecoveryCoordinator({
+    store,
+    clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.350Z')),
+    ids: new DeterministicIds('closed-failure-inspector-error'),
+    digests,
+    inspector: failingInspector,
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+  assert.equal(
+    failedInspectionRecovery.resumeGoal({
+      commandId: commandId('command_resume-inspector-error'),
+      goalId: authority.goal.id,
+      expectedGoalRevision: authority.goal.revision,
+      expectedWorkflowVersion: stillBlocked.version,
+    }).status,
+    'APPLIED',
+  );
+  assert.equal(
+    store.getLatestRecoveryReconciliation(authority.workflow.id)?.reasonCode,
+    RecoveryReasonCode.INSPECTOR_FAILURE,
+  );
+  assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+
+  store.close();
+  const reopened = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+  assert.equal(
+    reopened.getLatestRecoveryReconciliation(authority.workflow.id)?.reasonCode,
+    RecoveryReasonCode.INSPECTOR_FAILURE,
+  );
+});
+
+void test('[I-006][I-009] every recovery write boundary rolls back record, state, and audits together', async (t) => {
+  for (const [index, failureStep] of Object.values(RecoveryTransactionStep).entries()) {
+    await t.test(failureStep, async (child) => {
+      const filename = temporaryDatabase(child, `recovery-rollback-${String(index)}.sqlite`);
+      let injectFailure = false;
+      const store = openSqliteControlStore({
+        filename,
+        now: () => createdAt,
+        transactionProbe: (step) => {
+          if (injectFailure && step === failureStep) {
+            throw new Error(`injected recovery rollback at ${failureStep}`);
+          }
+        },
+      });
+      child.after(() => store.close());
+      const namespace = `recoveryrollback${String(index)}`;
+      const authority = seedAuthority(store, namespace);
+      const worker = new FakeWorker({ fixture: FakeWorkerFixture.DELAYED_RESULT });
+      const pendingExecution = createWorkerExecutionApplication(
+        runtimeDependencies(store, worker, authority, namespace),
+      ).startGoal(startRequest(authority, namespace));
+      await worker.waitUntilStarted();
+      const running = store.getWorkflow(authority.workflow.id);
+      if (running?.activeAttemptId === undefined) {
+        assert.fail('Recovery rollback fixture requires one RUNNING Attempt');
+      }
+      const coordinator = createRecoveryCoordinator({
+        store,
+        clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.300Z')),
+        ids: new DeterministicIds(`recovery-rollback-${String(index)}`),
+        digests,
+        inspector: new FakeRecoveryInspector([FakeRecoveryInspectionMode.EXACT]),
+        inspectorVersion: 'fake-recovery-inspector-v1',
+        recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+      });
+      injectFailure = true;
+      assert.throws(
+        () => coordinator.recoverOnStartup(),
+        new RegExp(`injected recovery rollback at ${failureStep}`),
+      );
+      injectFailure = false;
+      assert.equal(rowCount(filename, 'recovery_reconciliations'), 0);
+      assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.RUNNING);
+      assert.equal(store.getAttempt(running.activeAttemptId)?.status, AttemptStatus.RUNNING);
+      assert.equal(
+        store.listAuditEvents('RECOVERY_RECONCILIATION', authority.workflow.id).length,
+        0,
+      );
+      worker.release();
+      await pendingExecution;
+    });
+  }
+});
+
+void test('[I-006][I-009] reopen rejects a self-consistent row whose Recovery digest was not recomputed', async (t) => {
+  const filename = temporaryDatabase(t, 'recovery-reopen-tamper.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const authority = seedAuthority(store, 'recoveryreopentamper');
+  await createWorkerExecutionApplication(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.ABRUPT_TERMINATION }),
+      authority,
+      'recoveryreopentamper',
+    ),
+  ).startGoal(startRequest(authority, 'recoveryreopentamper'));
+  const blocked = store.getWorkflow(authority.workflow.id);
+  assert.ok(blocked);
+  assert.equal(blocked.runStatus, RunStatus.BLOCKED);
+  const recovery = createRecoveryCoordinator({
+    store,
+    clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.300Z')),
+    ids: new DeterministicIds('recovery-reopen-tamper-control'),
+    digests,
+    inspector: new FakeRecoveryInspector([FakeRecoveryInspectionMode.EXACT]),
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+  assert.equal(
+    recovery.resumeGoal({
+      commandId: commandId('command_recovery-reopen-tamper-resume'),
+      goalId: authority.goal.id,
+      expectedGoalRevision: authority.goal.revision,
+      expectedWorkflowVersion: blocked.version,
+    }).status,
+    'APPLIED',
+  );
+  store.close();
+
+  const raw = new Database(filename);
+  raw.exec('DROP TRIGGER recovery_reconciliations_no_update');
+  raw.prepare("UPDATE recovery_reconciliations SET inspector_version = 'tampered-v2'").run();
+  raw.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => createdAt }),
+    /Recovery reconciliation .* digest does not match its canonical projection/,
   );
 });

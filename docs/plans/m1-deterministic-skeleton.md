@@ -1,6 +1,8 @@
 # M1 Deterministic Skeleton Implementation Plan
 
-- Status: In implementation; Slices 0–6 are implemented and Slice 7 is next
+- Status: In implementation; Slices 0–6 and the Slice 7 profile, application,
+  query, recovery, and deterministic driver are implemented; local
+  composition, CLI, and demos remain
 - Plan date: 2026-07-27
 - Milestone: M1
 - Worker backend: `FakeWorker` only
@@ -90,6 +92,14 @@ The CLI composition root may construct `FakeWorker` from `packages/testing` for
 M1 `demo run` and `--fixture` commands. Neither `domain` nor `runtime` imports
 `packages/testing`; M2 replaces this composition edge with a real adapter.
 
+The remaining Slice 7 work MUST add this trusted composition module. It will
+install the exact built-in M1 Policy and Execution Profiles, resolve the
+application-data home, open and migrate SQLite, construct production
+clock/identity providers, run startup reconciliation, and only then publish
+narrow handler capabilities. See
+[ADR 0020](../adr/0020-runtime-application-recovery-and-query-boundary.md) and
+[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md).
+
 During Slice 3 the still-empty CLI package depends only on the public Runtime
 surface, so it cannot import the SQLite mutation adapter or internal test
 fixtures. Slice 7 may add those dependencies only through a named trusted
@@ -97,12 +107,22 @@ composition module that constructs the application and hands CLI handlers the
 narrow Goal capability and read views; handler modules MUST NOT receive or
 import the raw store.
 
+The implemented source boundary gate reserves `apps/cli/src/composition/` for
+that trusted composition code. Only `apps/cli/src/index.ts` may invoke it;
+ordinary CLI handlers may import only an explicit allowlist of facade and view
+contracts from the Runtime package root. Trusted composition MUST use static
+named package exports, MUST NOT reach through repository-internal paths, and
+MUST NOT re-export imported Store, Runtime composition, or testing
+capabilities. This dependency gate prevents accidental capability routing; it
+does not replace Runtime and Store authority validation.
+
 ## 4. M1 command surface
 
 The CLI is intentionally small:
 
 ```text
-codeclosure goal create --objective <text> --project <path> [--json]
+codeclosure goal create --objective <text> --project <path> \
+  --criterion <text> [--criterion <text> ...] [--json]
 codeclosure goal start <goal-id> [--fixture <name>] [--json]
 codeclosure goal status <goal-id> [--json]
 codeclosure goal resume <goal-id> [--json]
@@ -125,17 +145,35 @@ codeclosure demo run <scenario> [--json]
 There is no public “set phase” or “mark complete” command. CLI handlers submit
 application commands and render persisted results; they never write tables.
 
+At least one non-blank `--criterion` is required and every M1 CLI criterion is
+required. The objective is never copied into an implicit criterion. M1 records
+an empty allowed-path set because it performs no real source writes; that is no
+authorization to edit the whole project. A relative `--project` operand is
+resolved once against the invoking process's working directory, and Runtime
+persists only the normalized absolute path.
+
 `CreateGoal` atomically creates the Goal and its Workflow in
 `DISCOVERY`/`READY`; it does not dispatch a worker. `StartGoal` begins the first
 DISCOVERY Attempt and moves run status through the normal guarded command path.
-In the implemented pre-CLI slices, `StartGoal` and `CancelGoal` are public Goal
-commands: they carry `GoalId`, expected Goal revision, and expected Workflow
-version. `ResumeGoal` remains a Slice 7 recovery command. Internal Attempt and
-transition commands are not public CLI alternatives. This keeps persisted phase
+The application coordinator invokes the Goal Manager and Workflow Runtime's
+separate creation rules and does not become another mutation owner.
+`StartGoal`, `ResumeGoal`, and `CancelGoal` are public Goal commands: they carry
+`GoalId`, expected Goal revision, and expected Workflow version. `ResumeGoal`
+is implemented through the narrow recovery capability; it is not a lower-level
+Attempt command. Internal Attempt and transition commands are not public CLI
+alternatives. This keeps persisted phase
 initialization distinct from execution start. Goal and owned Workflow
 resolution uses one consistent store snapshot; the write transaction then
 revalidates the Workflow version. See
 [ADR 0008](../adr/0008-goal-command-and-lifecycle-boundary.md).
+
+`StartGoal` also resolves the installed M1 Policy and named Execution Profile
+and binds both identities separately and immutably in the first Context-bound
+Attempt transaction. Omitted `--fixture`
+selects the versioned `happy-path` profile. `ResumeGoal` loads that exact
+binding and offers no profile override. Startup reconciliation leaves recovered
+work blocked; a safe resume commits a fresh exact recovery record before the
+Runtime driver creates replacement work.
 
 The Runtime package root returns a Goal application capability containing only
 those public Goal mutations. The internal control kernel is omitted from the
@@ -168,9 +206,18 @@ is an authority record, not an additional user-facing completion surface. See
 
 Human output is a view over the same response.
 
-Slice 7 status and blocker views will read the immutable Acceptance Decision
+Slice 7 status and blocker views read the immutable Acceptance Decision
 separately. They MUST NOT enrich the stored command outcome into another
 completion authority.
+
+JSON mode writes one versioned document to stdout and diagnostics to stderr.
+Exit `0` means the CLI operation or expected adversarial-demo assertion
+succeeded, `2` is usage/unadmitted validation, `3` is deterministic command
+rejection or conflict, `4` is governed waiting/blocking/failure before requested
+progress, and `5` is infrastructure or internal failure. Status/audit reads of
+a blocked Goal and an applied cancellation return `0` while still rendering
+their non-success lifecycle explicitly. See
+[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md).
 
 ## 5. Domain commands and ports
 
@@ -189,6 +236,7 @@ M1 application commands include:
 - `CloseAcceptedGoal`;
 - `BeginAcceptanceRepair`;
 - `InterruptAttempt`;
+- `ReconcileRecovery` (trusted internal lifecycle command);
 - `ResumeGoal`;
 - `CancelGoal`.
 
@@ -223,8 +271,12 @@ CandidateRepository
 EvidenceRepository
 AcceptanceRepository
 AuditRepository
+ExecutionProfileRepository
 WorkerPort
+RecoveryCatalog
 RecoveryInspector
+GoalStatusReader
+GoalAuditReader
 ```
 
 Slice 4 introduces `WorkerPort` together with the Context Manifest and Worker
@@ -240,6 +292,9 @@ The first schema contains normalized tables for:
 - `goals` and `goal_criteria`;
 - `workflows`;
 - `attempts`;
+- immutable installed `execution_profiles` and one
+  `workflow_execution_profile_binding` per started Workflow;
+- immutable `recovery_reconciliations`;
 - `candidate_generations`;
 - `context_manifests`;
 - `facts` and `human_decisions` at M1 minimum fidelity;
@@ -327,9 +382,14 @@ bounded busy timeout. Migration application is itself transactional where
 SQLite permits it, and every migration has a forward test from an empty store
 plus a reopen test.
 
-M1 state lives under a test- or application-owned data directory, never under a
-FakeWorker candidate path. Tests use a fresh temporary directory or an explicit
-in-memory adapter where persistence behavior is not under test.
+M1 state lives under the platform application-data home fixed by
+[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md), never
+under the target project or a FakeWorker candidate path. An absolute
+`CODECLOSURE_HOME` is an optional override; the CLI does not depend on it.
+Tests and demos use a fresh explicit temporary home or an in-memory adapter only
+where persistence and restart behavior are not claimed. Isolation checks use
+resolved filesystem identity and ancestry, not textual path prefixes; ambiguous
+or symlink-mediated overlap fails closed.
 
 ## 7. Pure control model
 
@@ -389,7 +449,8 @@ Repair creates a child generation; no command transitions `FROZEN -> MUTABLE`.
 
 Each current M1 Worker Attempt receives a canonical Context Manifest containing
 schema/compiler versions, Goal/Workflow/Attempt identity, phase, capabilities,
-policy and response-contract identity, package digest, and manifest digest.
+bound Execution Profile, policy and response-contract identity, package
+digest, and manifest digest.
 Selected entries and omissions remain empty and ordinary Manifest entries are
 still limited to compiler-owned Goal and criterion entries. Slice 5 adds one
 dedicated binding for an `IMPLEMENT` Worker: the exact active `MUTABLE`
@@ -421,6 +482,26 @@ The minimal M1 Policy Bundle is installed and persisted by the runtime before it
 is referenced; it is never loaded from a FakeWorker-writable path. Composition
 supplies an undigested definition, while Runtime and Store independently bind
 its canonical identity and persist its installation audit atomically.
+
+Built-in M1 Execution Profiles follow the same immutable installation rule.
+The Workflow binding selects adapters and driver version without persisting
+functions or secrets. Context, dispatch, specialized fake operations, recovery,
+and resume must resolve the same profile digest. An exact existing definition
+is reused with its original installation authority; an identity/content
+conflict fails closed.
+
+Policy installation is not Workflow selection. First Start creates a separate
+immutable Workflow Policy binding, and every later transition, Context,
+Evidence, Acceptance, repair, recovery, closeout, and driver operation resolves
+that exact ID and digest. Resume checks compatibility before recovery writes;
+M1 never silently upgrades a started Workflow to another installed Policy.
+
+The profile migration upgrades only legacy databases whose Workflows have never
+started. Any retained Attempt or later execution authority without a profile
+binding makes migration fail atomically; it is neither assigned a guessed
+profile nor deleted. Because M1 is not released, operators preserve such a
+development database separately and use a new application home rather than
+introducing a second legacy execution model.
 
 ## 10. Build slices
 
@@ -565,13 +646,41 @@ than inferring its consumed decision or granted child authority.
 
 ### Slice 7 — CLI, recovery, and proof demos
 
-- command surface and JSON envelope;
-- startup reconciliation;
-- status, blocker, and audit views;
-- all named demo scenarios.
+Implementation status (2026-07-29): ADR 0020 through ADR 0022 are accepted. The
+immutable Execution Profile installation/binding, public application
+create/resume/cancel and read boundary, exact startup/resume recovery closure,
+SQLite migrations, reopen validation, and adversarial recovery tests are
+implemented. Public `StartGoal` and `ResumeGoal` now delegate to the
+Runtime-owned deterministic driver, which reloads authority at every committed
+boundary, closes the passing path, stops on repairable rejection, and never
+redispatches retained claims. Workflow Policy binding, pre-recovery
+compatibility checks, and fresh stop summaries are implemented and covered by
+reverse boundary/concurrency gates. Production local composition, CLI
+rendering/exit mapping, and proof demos remain. Slice 7 and M1 are therefore
+not complete.
+
+- Runtime application facade for create/start/resume/cancel and read queries;
+- Runtime-owned deterministic workflow driver with one persisted operation per
+  re-entry boundary;
+- built-in Policy and installed Execution Profile composition, separate
+  immutable first-start bindings, production clock/identity providers, and platform data-home
+  resolution;
+- command surface, strict JSON/human rendering, and fixed exit
+  classifications;
+- narrow recovery catalog and `RecoveryInspector`;
+- exact immutable recovery reconciliation, startup interruption without
+  redispatch, and fresh-Attempt `ResumeGoal`;
+- status, dominant-blocker, next-action, technical-closeout, and Goal-owned
+  audit views;
+- all named isolated demo scenarios.
 
 Exit: a new process safely resumes an interrupted fixture and all demos have
-asserted exit codes and final state.
+asserted exit codes and exact final authority. CLI handlers have no Store or
+kernel capability; every profile/recovery/view record survives strict reopen;
+an old dispatch is never repeated; and `technicalCloseout` is impossible
+without current immutable closeout authority. See
+[ADR 0020](../adr/0020-runtime-application-recovery-and-query-boundary.md) and
+[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md).
 
 ### Slice 8 — M1 audit
 
@@ -596,6 +705,7 @@ visible and block the corresponding claim.
 | I-022 | explicit scenario-reference contract test; graph traversal remains M3 |
 | I-023–I-026 | capability-policy tests in Slice 3; typed dispatch/frozen verification, promotion non-command, and decision-type tests in later owning slices |
 | I-027–I-030 | unknown/error fail-closed, retry budget, recovery reconcile, and proof-label tests |
+| I-031 | immutable Workflow Policy binding, substitution refusal, migration, and resume-preflight tests |
 
 Test names carry invariant metadata such as `[I-003]`. Slice 8 checks that every
 invariant has at least one executable test. Where M1 uses a logical fake instead

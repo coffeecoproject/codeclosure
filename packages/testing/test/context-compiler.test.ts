@@ -13,6 +13,7 @@ import {
   createGoal,
   decodeAttemptSnapshot,
   deriveCapabilityGrant,
+  executionProfileId,
   goalId,
   goalRevision,
   isoTimestamp,
@@ -35,6 +36,10 @@ import {
 
 const digestA = sha256Digest(`sha256:${'a'.repeat(64)}`);
 const digestB = sha256Digest(`sha256:${'b'.repeat(64)}`);
+const executionProfileAuthority = Object.freeze({
+  executionProfileId: executionProfileId('profile_context-compiler'),
+  executionProfileDigest: sha256Digest(`sha256:${'c'.repeat(64)}`),
+});
 
 interface CompilerFixture {
   readonly compiler: MinimalContextCompiler;
@@ -110,6 +115,7 @@ function compile(input: CompilerFixture, policyDigest = digestA) {
     goal: input.goal,
     workflow: input.workflow,
     attempt: input.attempt,
+    ...executionProfileAuthority,
     policyBundleId: policyBundleId('policy_m1'),
     policyBundleDigest: policyDigest,
     selectedEntries: [
@@ -150,6 +156,7 @@ void test('[I-019][I-021] Context digest excludes envelope identity but binds au
       goal: second.goal,
       workflow: second.workflow,
       attempt: second.attempt,
+      ...executionProfileAuthority,
       policyBundleId: policyBundleId('policy_m1'),
       policyBundleDigest: digestA,
     },
@@ -187,6 +194,7 @@ void test('[I-019][I-020] lower-authority context remains labelled and cannot re
     goal: proposedFact.goal,
     workflow: proposedFact.workflow,
     attempt: proposedFact.attempt,
+    ...executionProfileAuthority,
     policyBundleId: policyBundleId('policy_m1'),
     policyBundleDigest: digestA,
     selectedEntries: [
@@ -215,6 +223,7 @@ void test('[I-005][I-020] Context entries cannot launder authority or duplicate 
         goal: authorityInput.goal,
         workflow: authorityInput.workflow,
         attempt: authorityInput.attempt,
+        ...executionProfileAuthority,
         policyBundleId: policyBundleId('policy_m1'),
         policyBundleDigest: digestA,
         selectedEntries: [
@@ -239,6 +248,7 @@ void test('[I-005][I-020] Context entries cannot launder authority or duplicate 
         goal: omissionInput.goal,
         workflow: omissionInput.workflow,
         attempt: omissionInput.attempt,
+        ...executionProfileAuthority,
         policyBundleId: policyBundleId('policy_m1'),
         policyBundleDigest: digestA,
         omissionDecisions: [
@@ -268,6 +278,7 @@ void test('[I-019] a Context source cannot be both selected and recorded as omit
         goal: input.goal,
         workflow: input.workflow,
         attempt: input.attempt,
+        ...executionProfileAuthority,
         policyBundleId: policyBundleId('policy_m1'),
         policyBundleDigest: digestA,
         selectedEntries: [
@@ -308,6 +319,7 @@ void test('[I-019][I-027] required Context content fails explicitly when it exce
         goal: input.goal,
         workflow: input.workflow,
         attempt: input.attempt,
+        ...executionProfileAuthority,
         policyBundleId: policyBundleId('policy_m1'),
         policyBundleDigest: digestA,
       }),

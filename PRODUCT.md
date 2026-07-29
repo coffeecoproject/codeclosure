@@ -66,6 +66,7 @@ authority to the model.
 The user should be able to state a goal in natural language and see:
 
 - the active goal;
+- its explicit required success criteria;
 - the current phase;
 - covered and uncovered business paths;
 - the candidate generation under evaluation;
@@ -96,7 +97,8 @@ workflow stages manually.
 - candidate identity, generations, and freeze state;
 - evidence identity and invalidation;
 - acceptance evaluation;
-- crash recovery and audit history;
+- immutable Workflow Policy and Execution Profile bindings, crash recovery,
+  and audit history;
 - the final technical closeout decision.
 
 ### Worker owns
@@ -131,7 +133,7 @@ runner does not author those bindings.
 ## Core User Loop
 
 ```text
-state a goal
+state a goal and required success criteria
   -> inspect and compile relevant facts
   -> plan the bounded change
   -> build an isolated candidate

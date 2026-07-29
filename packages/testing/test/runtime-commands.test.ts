@@ -17,13 +17,22 @@ import {
   commandId,
   createGoal,
   createWorkflow,
+  decodeExecutionProfile,
+  decodeExecutionProfileBinding,
+  decodePolicyBundle,
+  decodeWorkflowPolicyBinding,
   decodeAttemptEvent,
   decodeWorkflowEvent,
-  decideAttempt,
+  decideWorkflow,
   deriveGoalStatus,
   goalId,
   goalRevision,
   isoTimestamp,
+  executionProfileProjection,
+  executionProfileBindingProjection,
+  policyBundleId,
+  policyBundleProjection,
+  workflowPolicyBindingProjection,
   requiredGuardsForTransition,
   sha256Digest,
   successCriterionId,
@@ -33,6 +42,9 @@ import {
   type Attempt,
   type AttemptId,
   type CommandId,
+  type ContextManifest,
+  type ContextManifestId,
+  type ExecutionProfileBinding,
   type Goal,
   type GoalId,
   type GuardResult,
@@ -40,13 +52,17 @@ import {
   type Sha256Digest,
   type WorkflowId,
   type WorkflowInstance,
+  type WorkflowPolicyBinding,
 } from '@codeclosure/domain';
 import {
+  M1_ACCEPTANCE_RULES,
+  MinimalContextCompiler,
+  Rfc8785Canonicalizer,
   RuntimeErrorCode,
   StoredCommandDisposition,
   createAppliedStoredCommandOutcome,
-  createGoalApplication,
   createRejectedStoredCommandOutcome,
+  createM1AcceptanceCheckerIdentity,
   decodeCommandTarget,
   decodeDeterministicCommandError,
   decodeJsonValue,
@@ -56,23 +72,27 @@ import {
   type CommandTarget,
   type Clock,
   type DigestProvider,
-  type GoalApplication,
   type GoalWorkflowView,
   type IdGenerator,
+  type InstalledExecutionProfile,
+  type InstalledPolicyBundle,
   type JsonValue,
   type ProcessedCommandView,
   type RecordCommandRejection,
   type StoreCommandResult,
-  type WorkflowControlStore,
+  type WorkerControlStore,
 } from '@codeclosure/runtime';
 import * as publicRuntimeApi from '@codeclosure/runtime';
 import {
+  createGoalApplication,
   WorkflowRuntimeKernel,
+  type GoalApplication,
   type PhaseGuardEvaluator,
 } from '@codeclosure/runtime/testing/workflow-runtime';
 
 import { DeterministicClock, DeterministicIds } from '../src/deterministic-fixtures.ts';
 import { assertWorkflowControlStoreContract } from '../src/control-store-contract.ts';
+import { testExecutionProfileDefinition } from '../src/execution-profile-fixture.ts';
 
 void test('[I-006] JSON authority decoding preserves exact keys and rejects non-JSON shapes', () => {
   const source: unknown = JSON.parse(
@@ -110,11 +130,16 @@ class FixtureDigestProvider implements DigestProvider {
   }
 }
 
-class InMemoryWorkflowStore implements WorkflowControlStore {
+class InMemoryWorkflowStore implements WorkerControlStore {
   #goal: Goal;
   #workflow: WorkflowInstance;
   readonly #attempts = new Map<string, Attempt>();
   readonly #processed = new Map<string, ProcessedCommandView>();
+  readonly #contextManifests = new Map<ContextManifestId, ContextManifest>();
+  #installedPolicy: InstalledPolicyBundle | undefined;
+  #installedProfile: InstalledExecutionProfile | undefined;
+  #policyBinding: WorkflowPolicyBinding | undefined;
+  #profileBinding: ExecutionProfileBinding | undefined;
   #advanceVersionOnNextWrite = false;
   #authorityOverride: GoalWorkflowView | undefined;
   #nextSequenceOverride: number | undefined;
@@ -176,6 +201,126 @@ class InMemoryWorkflowStore implements WorkflowControlStore {
 
   public injectNextAttemptSequence(sequence: number): void {
     this.#nextSequenceOverride = sequence;
+  }
+
+  public seedWorkerAuthority(
+    installedPolicy: InstalledPolicyBundle,
+    installedProfile: InstalledExecutionProfile,
+  ): void {
+    this.#installedPolicy = installedPolicy;
+    this.#installedProfile = installedProfile;
+  }
+
+  public seedWorkflowBindings(
+    policyBinding: WorkflowPolicyBinding,
+    profileBinding: ExecutionProfileBinding,
+  ): void {
+    this.#policyBinding = policyBinding;
+    this.#profileBinding = profileBinding;
+  }
+
+  public removeInstalledPolicy(): void {
+    this.#installedPolicy = undefined;
+  }
+
+  public removeInstalledExecutionProfile(): void {
+    this.#installedProfile = undefined;
+  }
+
+  public getContextManifest(identifier: ContextManifestId): ContextManifest | undefined {
+    return this.#contextManifests.get(identifier);
+  }
+
+  public getWorkerDispatchClaim(): ReturnType<WorkerControlStore['getWorkerDispatchClaim']> {
+    return undefined;
+  }
+
+  public getWorkerEventReceipt(): ReturnType<WorkerControlStore['getWorkerEventReceipt']> {
+    return undefined;
+  }
+
+  public getPolicyBundle(
+    identifier: Parameters<WorkerControlStore['getPolicyBundle']>[0],
+  ): InstalledPolicyBundle | undefined {
+    return this.#installedPolicy?.bundle.id === identifier ? this.#installedPolicy : undefined;
+  }
+
+  public getExecutionProfile(
+    identifier: Parameters<WorkerControlStore['getExecutionProfile']>[0],
+  ): InstalledExecutionProfile | undefined {
+    return this.#installedProfile?.profile.id === identifier ? this.#installedProfile : undefined;
+  }
+
+  public getExecutionProfileBinding(identifier: WorkflowId): ExecutionProfileBinding | undefined {
+    return this.#profileBinding?.workflowId === identifier ? this.#profileBinding : undefined;
+  }
+
+  public getWorkflowPolicyBinding(identifier: WorkflowId): WorkflowPolicyBinding | undefined {
+    return this.#policyBinding?.workflowId === identifier ? this.#policyBinding : undefined;
+  }
+
+  public installPolicyBundle(
+    input: Parameters<WorkerControlStore['installPolicyBundle']>[0],
+  ): ReturnType<WorkerControlStore['installPolicyBundle']> {
+    if (this.#installedPolicy === undefined) {
+      this.#installedPolicy = Object.freeze({
+        bundle: input.bundle,
+        installedAt: input.installedAt,
+      });
+      return { status: 'INSTALLED', value: this.#installedPolicy };
+    }
+    return JSON.stringify(this.#installedPolicy.bundle) === JSON.stringify(input.bundle)
+      ? { status: 'EXISTING', value: this.#installedPolicy }
+      : { status: 'POLICY_CONFLICT', message: 'Policy fixture conflict' };
+  }
+
+  public installExecutionProfile(
+    input: Parameters<WorkerControlStore['installExecutionProfile']>[0],
+  ): ReturnType<WorkerControlStore['installExecutionProfile']> {
+    if (this.#installedProfile === undefined) {
+      this.#installedProfile = Object.freeze({
+        profile: input.profile,
+        installedAt: input.installedAt,
+      });
+      return { status: 'INSTALLED', value: this.#installedProfile };
+    }
+    return JSON.stringify(this.#installedProfile.profile) === JSON.stringify(input.profile)
+      ? { status: 'EXISTING', value: this.#installedProfile }
+      : { status: 'PROFILE_CONFLICT', message: 'Execution Profile fixture conflict' };
+  }
+
+  public claimWorkerDispatch(): ReturnType<WorkerControlStore['claimWorkerDispatch']> {
+    throw new TypeError('Worker dispatch is outside the Runtime command fixture');
+  }
+
+  public commitContextBoundAttemptStart(
+    input: Parameters<WorkerControlStore['commitContextBoundAttemptStart']>[0],
+  ): ReturnType<WorkerControlStore['commitContextBoundAttemptStart']> {
+    const result = this.commitAttemptEvent(input);
+    if (result.status !== 'APPLIED') {
+      return result;
+    }
+    this.#contextManifests.set(input.contextManifest.id, input.contextManifest);
+    this.#policyBinding = input.policyBinding;
+    this.#profileBinding = input.executionProfileBinding;
+    return {
+      status: 'APPLIED',
+      outcome: result.outcome,
+      value: Object.freeze({
+        ...result.value,
+        contextManifest: input.contextManifest,
+        policyBinding: input.policyBinding,
+        executionProfileBinding: input.executionProfileBinding,
+      }),
+    };
+  }
+
+  public commitWorkerAttemptEvent(): ReturnType<WorkerControlStore['commitWorkerAttemptEvent']> {
+    throw new TypeError('Worker event admission is outside the Runtime command fixture');
+  }
+
+  public recordIgnoredWorkerEvent(): ReturnType<WorkerControlStore['recordIgnoredWorkerEvent']> {
+    throw new TypeError('Worker event admission is outside the Runtime command fixture');
   }
 
   public commitAttemptEvent(input: CommitAttemptEvent): StoreCommandResult<AppliedAttemptEvent> {
@@ -403,6 +548,38 @@ class InMemoryWorkflowStore implements WorkflowControlStore {
   }
 }
 
+function fixtureWorkerAuthority(installedAt: IsoTimestamp): {
+  readonly policy: InstalledPolicyBundle;
+  readonly profile: InstalledExecutionProfile;
+} {
+  const digests = new FixtureDigestProvider();
+  const policyDefinition = Object.freeze({
+    id: policyBundleId('policy_runtime-commands'),
+    schemaVersion: 1 as const,
+    version: 'm1-runtime-command-policy-v1',
+    transitionRules: Object.freeze(['workflow-runtime-only']),
+    capabilityRules: Object.freeze(['phase-derived-capabilities']),
+    contextRules: Object.freeze(['execution-profile-bound-context']),
+    checkSpecifications: Object.freeze(['runtime-owned-check-specifications']),
+    applicabilityRules: Object.freeze(['exact-candidate-and-policy']),
+    acceptanceRules: M1_ACCEPTANCE_RULES,
+    checkerVersions: Object.freeze([createM1AcceptanceCheckerIdentity(digests)]),
+  });
+  const policy = decodePolicyBundle({
+    ...policyDefinition,
+    digest: digests.digest(policyBundleProjection(policyDefinition)),
+  });
+  const profileDefinition = testExecutionProfileDefinition('runtime-commands');
+  const profile = decodeExecutionProfile({
+    ...profileDefinition,
+    digest: digests.digest(executionProfileProjection(profileDefinition)),
+  });
+  return Object.freeze({
+    policy: Object.freeze({ bundle: policy, installedAt }),
+    profile: Object.freeze({ profile, installedAt }),
+  });
+}
+
 interface FixtureOptions {
   readonly workflow?: (created: WorkflowInstance) => WorkflowInstance;
   readonly phaseGuards?: PhaseGuardEvaluator;
@@ -422,10 +599,10 @@ function fixture(options: FixtureOptions = {}): {
   const clock =
     options.clock ??
     new DeterministicClock([
-      '2026-07-27T02:00:00.001Z',
-      '2026-07-27T02:00:00.002Z',
-      '2026-07-27T02:00:00.003Z',
-      '2026-07-27T02:00:00.004Z',
+      ...Array.from(
+        { length: 32 },
+        (_, index) => `2026-07-27T02:00:00.${String(index + 1).padStart(3, '0')}Z`,
+      ),
     ]);
   const goal = createGoal({
     id: goalId('goal_runtime-commands'),
@@ -449,22 +626,141 @@ function fixture(options: FixtureOptions = {}): {
   });
   const workflow = options.workflow?.(createdWorkflow) ?? createdWorkflow;
   const store = new InMemoryWorkflowStore(goal, workflow);
+  const runtimeIds = options.ids ?? new DeterministicIds('runtime');
+  const workerIds = new DeterministicIds('runtime-worker');
+  const runtimeDigests = options.digests ?? new FixtureDigestProvider();
+  const authority = fixtureWorkerAuthority(createdWorkflow.createdAt);
+  store.seedWorkerAuthority(authority.policy, authority.profile);
+  if (workflow.version > 1) {
+    const bindingDigests = new FixtureDigestProvider();
+    const startCommandId = commandId('command_runtime-fixture-start');
+    const policyFields = Object.freeze({
+      schemaVersion: 1 as const,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      policyBundleId: authority.policy.bundle.id,
+      policyBundleVersion: authority.policy.bundle.version,
+      policyBundleDigest: authority.policy.bundle.digest,
+      startCommandId,
+      boundAt: workflow.createdAt,
+    });
+    const profileFields = Object.freeze({
+      schemaVersion: 1 as const,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      profileId: authority.profile.profile.id,
+      profileVersion: authority.profile.profile.version,
+      profileDigest: authority.profile.profile.digest,
+      startCommandId,
+      boundAt: workflow.createdAt,
+    });
+    store.seedWorkflowBindings(
+      decodeWorkflowPolicyBinding({
+        ...policyFields,
+        bindingDigest: bindingDigests.digest(workflowPolicyBindingProjection(policyFields)),
+      }),
+      decodeExecutionProfileBinding({
+        ...profileFields,
+        bindingDigest: bindingDigests.digest(executionProfileBindingProjection(profileFields)),
+      }),
+    );
+  }
+  const compiler = new MinimalContextCompiler({
+    compilerVersion: 'm1-context-compiler-v1',
+    maxPackageBytes: 64 * 1024,
+    canonicalizer: new Rfc8785Canonicalizer(),
+    digests: runtimeDigests,
+  });
   const dependencies = {
     store,
     clock,
-    ids: options.ids ?? new DeterministicIds('runtime'),
-    digests: options.digests ?? new FixtureDigestProvider(),
+    ids: runtimeIds,
+    digests: runtimeDigests,
   };
+  const runtime = new WorkflowRuntimeKernel({
+    ...dependencies,
+    phaseGuards: options.phaseGuards ?? passingPhaseGuardEvaluator,
+    workerContext: Object.freeze({
+      identities: Object.freeze({
+        nextCommandId: () => workerIds.nextCommandId(),
+        nextAttemptId: () => runtimeIds.nextAttemptId(),
+        nextAuditEventId: () => runtimeIds.nextAuditEventId(),
+        nextContextManifestId: () => workerIds.nextContextManifestId(),
+        nextWorkerSessionId: () => workerIds.nextWorkerSessionId(),
+      }),
+      factory: Object.freeze({
+        compile: (input: Parameters<MinimalContextCompiler['compile']>[0]) =>
+          compiler.compile(input),
+      }),
+      executionProfileId: authority.profile.profile.id,
+      executionProfileDigest: authority.profile.profile.digest,
+      policyBundleId: authority.policy.bundle.id,
+      policyBundleDigest: authority.policy.bundle.digest,
+    }),
+  });
   return {
     goal,
     workflow,
     store,
-    application: createGoalApplication(dependencies),
-    runtime: new WorkflowRuntimeKernel({
-      ...dependencies,
-      phaseGuards: options.phaseGuards ?? passingPhaseGuardEvaluator,
+    application: Object.freeze({
+      startGoal: (input: Parameters<GoalApplication['startGoal']>[0]) => runtime.startGoal(input),
+      cancelGoal: (input: Parameters<GoalApplication['cancelGoal']>[0]) =>
+        runtime.cancelGoal(input),
     }),
+    runtime,
   };
+}
+
+function startFixtureExecution(
+  fixtureValue: {
+    readonly runtime: WorkflowRuntimeKernel;
+    readonly store: InMemoryWorkflowStore;
+    readonly goal: Goal;
+    readonly workflow: WorkflowInstance;
+  },
+  namespace: string,
+): { readonly workflow: WorkflowInstance; readonly attempt: Attempt } {
+  const result = fixtureValue.runtime.startGoal({
+    commandId: commandId(`command_${namespace}-start`),
+    goalId: fixtureValue.goal.id,
+    expectedGoalRevision: fixtureValue.goal.revision,
+    expectedWorkflowVersion: fixtureValue.workflow.version,
+  });
+  assert.equal(result.status, 'APPLIED', JSON.stringify(result));
+  const workflow = fixtureValue.store.getWorkflow(fixtureValue.workflow.id);
+  if (workflow?.activeAttemptId === undefined) {
+    assert.fail('Fixture StartGoal must retain an active Attempt');
+  }
+  const attempt = fixtureValue.store.getAttempt(workflow.activeAttemptId);
+  if (attempt === undefined) {
+    assert.fail('Fixture StartGoal must retain its child Attempt');
+  }
+  return Object.freeze({ workflow, attempt });
+}
+
+function readyFixtureExecution(
+  fixtureValue: {
+    readonly runtime: WorkflowRuntimeKernel;
+    readonly store: InMemoryWorkflowStore;
+    readonly goal: Goal;
+    readonly workflow: WorkflowInstance;
+  },
+  namespace: string,
+): WorkflowInstance {
+  const running = startFixtureExecution(fixtureValue, namespace);
+  const result = fixtureValue.runtime.recordAttemptResult({
+    commandId: commandId(`command_${namespace}-first-result`),
+    workflowId: running.workflow.id,
+    expectedWorkflowVersion: running.workflow.version,
+    attemptId: running.attempt.id,
+    reason: 'Fixture completed the first Context-bound Attempt',
+  });
+  assert.equal(result.status, 'APPLIED', JSON.stringify(result));
+  const workflow = fixtureValue.store.getWorkflow(running.workflow.id);
+  if (workflow === undefined) {
+    assert.fail('Fixture completion must retain its Workflow');
+  }
+  return workflow;
 }
 
 function clockTimestamp(value: string): ReturnType<DeterministicClock['now']> {
@@ -489,30 +785,32 @@ const passingPhaseGuardEvaluator: PhaseGuardEvaluator = {
 };
 
 void test('[I-006][I-008] in-memory Store passes the shared control-store contract', () => {
-  const { store, goal, workflow } = fixture();
+  const fixtureValue = fixture();
+  const { store, goal, workflow } = fixtureValue;
+  const ready = readyFixtureExecution(fixtureValue, 'in-memory-store-contract-authority');
   const commandIdentifier = commandId('command_in-memory-store-contract');
   const invalidCommandIdentifier = commandId('command_in-memory-store-contract-invalid');
-  const decision = decideAttempt(workflow, undefined, {
-    type: 'BEGIN_ATTEMPT',
+  const decision = decideWorkflow(ready, {
+    type: 'REQUEST_PHASE_TRANSITION',
     commandId: commandIdentifier,
     workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
-    attemptId: attemptId('attempt_in-memory-store-contract'),
-    sequence: 1,
-    occurredAt: workflow.updatedAt,
+    expectedVersion: ready.version,
+    occurredAt: ready.updatedAt,
+    reason: 'The shared Store contract advances established authority',
+    requestedPhase: WorkflowPhase.PLAN,
+    guardResults: passingGuards(ready.phase, WorkflowPhase.PLAN),
   });
   if (!decision.accepted) {
-    assert.fail('Store contract fixture must begin an Attempt');
+    assert.fail('Store contract fixture must advance a started Workflow');
   }
   const event = decision.events[0];
   const target = { aggregateType: 'WORKFLOW' as const, aggregateId: workflow.id };
   const inputDigest = new FixtureDigestProvider().digest({ contract: 'in-memory' });
-  const input: CommitAttemptEvent = {
+  const input: CommitWorkflowEvent = {
     inputDigest,
     target,
     event,
-    auditEventId: auditEventId('audit_in-memory-store-contract-attempt'),
-    workflowAuditEventId: auditEventId('audit_in-memory-store-contract-workflow'),
+    auditEventId: auditEventId('audit_in-memory-store-contract-workflow'),
     payloadDigest: new FixtureDigestProvider().digest(event),
   };
 
@@ -524,9 +822,9 @@ void test('[I-006][I-008] in-memory Store passes the shared control-store contra
     invalidCommandId: invalidCommandIdentifier,
     inputDigest,
     target,
-    apply: () => store.commitAttemptEvent(input),
+    apply: () => store.commitWorkflowEvent(input),
     conflict: () =>
-      store.commitAttemptEvent({
+      store.commitWorkflowEvent({
         ...input,
         inputDigest: new FixtureDigestProvider().digest({ contract: 'conflict' }),
       }),
@@ -588,6 +886,99 @@ void test('[I-008] deterministic rejection completion also uses the Workflow cau
 
   assert.equal(result.status, 'REJECTED');
   assert.equal(store.lastRejectionCompletedAt, workflow.updatedAt);
+});
+
+void test('[I-003][I-019][I-031] StartGoal refuses incomplete Runtime composition before mutation', async (t) => {
+  await t.test('missing complete composition', () => {
+    const { store, goal, workflow } = fixture();
+    const application = createGoalApplication({
+      store,
+      clock: new DeterministicClock(['2026-07-27T02:00:00.001Z']),
+      ids: new DeterministicIds('unconfigured-start'),
+      digests: new FixtureDigestProvider(),
+    });
+    const commandIdentifier = commandId('command_unconfigured-start');
+
+    const result = application.startGoal({
+      commandId: commandIdentifier,
+      goalId: goal.id,
+      expectedGoalRevision: goal.revision,
+      expectedWorkflowVersion: workflow.version,
+    });
+
+    assert.equal(result.status, 'REJECTED');
+    assert.equal(result.output.error.code, RuntimeErrorCode.INTERNAL_FAILURE);
+    assert.equal(result.output.error.detailCode, 'START_GOAL_RUNTIME_COMPOSITION_UNAVAILABLE');
+    assert.equal(store.attemptCommits, 0);
+    assert.equal(store.getProcessedCommand(commandIdentifier), undefined);
+  });
+
+  await t.test('missing installed Policy', () => {
+    const fixtureValue = fixture();
+    fixtureValue.store.removeInstalledPolicy();
+    const commandIdentifier = commandId('command_missing-start-policy');
+
+    const result = fixtureValue.application.startGoal({
+      commandId: commandIdentifier,
+      goalId: fixtureValue.goal.id,
+      expectedGoalRevision: fixtureValue.goal.revision,
+      expectedWorkflowVersion: fixtureValue.workflow.version,
+    });
+
+    assert.equal(result.status, 'REJECTED');
+    assert.equal(result.output.error.detailCode, 'START_GOAL_POLICY_UNAVAILABLE');
+    assert.equal(fixtureValue.store.attemptCommits, 0);
+    assert.equal(fixtureValue.store.getProcessedCommand(commandIdentifier), undefined);
+  });
+
+  await t.test('missing installed Execution Profile', () => {
+    const fixtureValue = fixture();
+    fixtureValue.store.removeInstalledExecutionProfile();
+    const commandIdentifier = commandId('command_missing-start-profile');
+
+    const result = fixtureValue.application.startGoal({
+      commandId: commandIdentifier,
+      goalId: fixtureValue.goal.id,
+      expectedGoalRevision: fixtureValue.goal.revision,
+      expectedWorkflowVersion: fixtureValue.workflow.version,
+    });
+
+    assert.equal(result.status, 'REJECTED');
+    assert.equal(result.output.error.detailCode, 'START_GOAL_EXECUTION_PROFILE_UNAVAILABLE');
+    assert.equal(fixtureValue.store.attemptCommits, 0);
+    assert.equal(fixtureValue.store.getProcessedCommand(commandIdentifier), undefined);
+  });
+});
+
+void test('[I-003][I-008] internal Runtime commands cannot manufacture first-start authority', async (t) => {
+  for (const operation of ['ATTEMPT', 'PHASE'] as const) {
+    await t.test(operation, () => {
+      const { runtime, store, workflow } = fixture();
+      const commandIdentifier = commandId(`command_unstarted-${operation.toLowerCase()}`);
+      const result =
+        operation === 'ATTEMPT'
+          ? runtime.beginAttempt({
+              commandId: commandIdentifier,
+              workflowId: workflow.id,
+              expectedWorkflowVersion: workflow.version,
+            })
+          : runtime.requestPhaseTransition({
+              commandId: commandIdentifier,
+              workflowId: workflow.id,
+              expectedWorkflowVersion: workflow.version,
+              requestedPhase: WorkflowPhase.PLAN,
+              reason: 'An internal command must not replace StartGoal',
+            });
+
+      assert.equal(result.status, 'REJECTED');
+      assert.equal(result.output.error.code, RuntimeErrorCode.DOMAIN_REJECTED);
+      assert.equal(result.output.error.detailCode, 'WORKFLOW_START_AUTHORITY_MISSING');
+      assert.deepEqual(store.getWorkflow(workflow.id), workflow);
+      assert.equal(store.getProcessedCommand(commandIdentifier), undefined);
+      assert.equal(store.attemptCommits, 0);
+      assert.equal(store.workflowCommits, 0);
+    });
+  }
 });
 
 void test('[I-027] malformed Runtime clock output is internal failure and is not persisted', () => {
@@ -692,13 +1083,9 @@ void test('[I-008] runtime handlers start, replay, route a result, and advance b
 });
 
 void test('[I-008][I-010] runtime cancellation interrupts the active Attempt', () => {
-  const { application, runtime, store, goal, workflow } = fixture();
-  const began = runtime.beginAttempt({
-    commandId: commandId('command_runtime-cancel-begin'),
-    workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
-  });
-  assert.equal(began.status, 'APPLIED');
+  const fixtureValue = fixture();
+  const { application, store, goal, workflow } = fixtureValue;
+  startFixtureExecution(fixtureValue, 'runtime-cancel');
   const running = store.getWorkflow(workflow.id);
   if (running?.activeAttemptId === undefined) {
     assert.fail('Workflow must have an active Attempt');
@@ -719,13 +1106,9 @@ void test('[I-008][I-010] runtime cancellation interrupts the active Attempt', (
 });
 
 void test('[I-008] reconciliation primitive blocks replacement work until explicit resume', () => {
-  const { runtime, store, workflow } = fixture();
-  const began = runtime.beginAttempt({
-    commandId: commandId('command_runtime-recovery-begin'),
-    workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
-  });
-  assert.equal(began.status, 'APPLIED');
+  const fixtureValue = fixture();
+  const { runtime, store, workflow } = fixtureValue;
+  startFixtureExecution(fixtureValue, 'runtime-recovery');
   const running = store.getWorkflow(workflow.id);
   if (running?.activeAttemptId === undefined) {
     assert.fail('Workflow must have an active Attempt');
@@ -752,12 +1135,14 @@ void test('[I-008] reconciliation primitive blocks replacement work until explic
 });
 
 void test('[I-008] runtime returns typed stale and command-conflict errors without state mutation', () => {
-  const { runtime, store, workflow } = fixture();
+  const fixtureValue = fixture();
+  const { runtime, store, workflow } = fixtureValue;
+  const ready = readyFixtureExecution(fixtureValue, 'runtime-conflict-authority');
   const command = commandId('command_runtime-conflict');
   const began = runtime.beginAttempt({
     commandId: command,
     workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
+    expectedWorkflowVersion: ready.version,
   });
   assert.equal(began.status, 'APPLIED');
 
@@ -768,7 +1153,7 @@ void test('[I-008] runtime returns typed stale and command-conflict errors witho
   });
   assert.equal(conflict.status, 'REJECTED');
   assert.equal(conflict.output.error.code, RuntimeErrorCode.COMMAND_ID_CONFLICT);
-  assert.equal(store.attemptCommits, 1);
+  assert.equal(store.attemptCommits, 3);
 
   const stale = runtime.recordAttemptResult({
     commandId: commandId('command_runtime-stale'),
@@ -779,17 +1164,13 @@ void test('[I-008] runtime returns typed stale and command-conflict errors witho
   });
   assert.equal(stale.status, 'REJECTED');
   assert.equal(stale.output.error.code, RuntimeErrorCode.STALE_WORKFLOW_VERSION);
-  assert.equal(store.attemptCommits, 1);
+  assert.equal(store.attemptCommits, 3);
 });
 
 void test('[I-008] deterministic rejection replays after Workflow state changes', () => {
-  const { runtime, store, workflow } = fixture();
-  const began = runtime.beginAttempt({
-    commandId: commandId('command_rejection-replay-begin'),
-    workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
-  });
-  assert.equal(began.status, 'APPLIED');
+  const fixtureValue = fixture();
+  const { runtime, store, workflow } = fixtureValue;
+  startFixtureExecution(fixtureValue, 'rejection-replay');
   const running = store.getWorkflow(workflow.id);
   if (running?.activeAttemptId === undefined) {
     assert.fail('Workflow must have an active Attempt');
@@ -819,13 +1200,9 @@ void test('[I-008] deterministic rejection replays after Workflow state changes'
 });
 
 void test('[I-008] missing child Attempt is a stored deterministic rejection', () => {
-  const { runtime, store, workflow } = fixture();
-  const began = runtime.beginAttempt({
-    commandId: commandId('command_missing-attempt-begin'),
-    workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
-  });
-  assert.equal(began.status, 'APPLIED');
+  const fixtureValue = fixture();
+  const { runtime, store, workflow } = fixtureValue;
+  startFixtureExecution(fixtureValue, 'missing-attempt');
 
   const running = store.getWorkflow(workflow.id);
   if (running === undefined) {
@@ -851,11 +1228,13 @@ void test('[I-008] missing child Attempt is a stored deterministic rejection', (
 });
 
 void test('[I-008] Workflow freshness is checked before a missing child Attempt', () => {
-  const { runtime, store, workflow } = fixture();
+  const fixtureValue = fixture();
+  const { runtime, store, workflow } = fixtureValue;
+  const running = startFixtureExecution(fixtureValue, 'stale-before-missing');
   const request = {
     commandId: commandId('command_stale-before-missing-attempt'),
     workflowId: workflow.id,
-    expectedWorkflowVersion: workflowVersion(workflow.version + 1),
+    expectedWorkflowVersion: workflowVersion(running.workflow.version + 1),
     attemptId: attemptId('attempt_stale-before-missing'),
     reason: 'late result must not be diagnosed against newer state',
   };
@@ -872,11 +1251,13 @@ void test('[I-008] Workflow freshness is checked before a missing child Attempt'
 });
 
 void test('[I-008] typed version conflict reloads, reevaluates, persists, and replays', () => {
-  const { runtime, store, workflow } = fixture();
+  const fixtureValue = fixture();
+  const { runtime, store, workflow } = fixtureValue;
+  const ready = readyFixtureExecution(fixtureValue, 'runtime-version-retry-authority');
   const request = {
     commandId: commandId('command_runtime-version-retry'),
     workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
+    expectedWorkflowVersion: ready.version,
   };
   store.injectConcurrentVersionAdvance();
 
@@ -888,7 +1269,7 @@ void test('[I-008] typed version conflict reloads, reevaluates, persists, and re
   assert.equal(first.output.error.detailCode, 'STALE_WORKFLOW_VERSION');
   assert.equal(replayed.status, 'REPLAYED');
   assert.deepEqual(replayed.output, first.output);
-  assert.equal(store.attemptCommits, 0);
+  assert.equal(store.attemptCommits, 2);
   assert.equal(store.getProcessedCommand(request.commandId)?.aggregateId, workflow.id);
 });
 
@@ -968,19 +1349,21 @@ void test('[I-008] stale phase requests run no guard or closeout-specific evalua
 });
 
 void test('[I-027] guard evaluator crashes are not mislabeled or persisted as database failures', () => {
-  const { runtime, store, workflow } = fixture({
+  const fixtureValue = fixture({
     phaseGuards: {
       evaluate: () => {
         throw new Error('guard evaluator crashed');
       },
     },
   });
+  const { runtime, store, workflow } = fixtureValue;
+  const ready = readyFixtureExecution(fixtureValue, 'guard-evaluation-crash');
   const commandIdentifier = commandId('command_guard-evaluation-crash');
 
   const result = runtime.requestPhaseTransition({
     commandId: commandIdentifier,
     workflowId: workflow.id,
-    expectedWorkflowVersion: workflow.version,
+    expectedWorkflowVersion: ready.version,
     requestedPhase: WorkflowPhase.PLAN,
     reason: 'exercise evaluator failure taxonomy',
   });
@@ -989,7 +1372,7 @@ void test('[I-027] guard evaluator crashes are not mislabeled or persisted as da
   assert.equal(result.output.error.code, RuntimeErrorCode.EVALUATION_FAILURE);
   assert.equal(result.output.error.detailCode, 'PHASE_GUARD_EVALUATION_FAILURE');
   assert.equal(store.getProcessedCommand(commandIdentifier), undefined);
-  assert.equal(store.getWorkflow(workflow.id)?.version, workflow.version);
+  assert.equal(store.getWorkflow(workflow.id)?.version, ready.version);
 });
 
 void test('[I-027] malformed guard evaluator returns remain evaluation failures', async (t) => {
@@ -1023,15 +1406,17 @@ void test('[I-027] malformed guard evaluator returns remain evaluation failures'
 
   for (const [index, malformed] of malformedResults.entries()) {
     await t.test(malformed.name, () => {
-      const { runtime, store, workflow } = fixture({
+      const fixtureValue = fixture({
         phaseGuards: { evaluate: () => malformed.value },
       });
+      const { runtime, store, workflow } = fixtureValue;
+      const ready = readyFixtureExecution(fixtureValue, `malformed-guard-${index}`);
       const commandIdentifier = commandId(`command_malformed-guard-${index}`);
 
       const result = runtime.requestPhaseTransition({
         commandId: commandIdentifier,
         workflowId: workflow.id,
-        expectedWorkflowVersion: workflow.version,
+        expectedWorkflowVersion: ready.version,
         requestedPhase: WorkflowPhase.PLAN,
         reason: 'malformed evaluator output must fail at its boundary',
       });
@@ -1040,7 +1425,7 @@ void test('[I-027] malformed guard evaluator returns remain evaluation failures'
       assert.equal(result.output.error.code, RuntimeErrorCode.EVALUATION_FAILURE);
       assert.equal(result.output.error.detailCode, 'PHASE_GUARD_EVALUATION_FAILURE');
       assert.equal(store.getProcessedCommand(commandIdentifier), undefined);
-      assert.equal(store.getWorkflow(workflow.id)?.version, workflow.version);
+      assert.equal(store.getWorkflow(workflow.id)?.version, ready.version);
     });
   }
 });
@@ -1090,7 +1475,7 @@ void test('[I-006][I-027] malformed digest and ID port outputs fail before Store
 
   await t.test('Attempt ID output', () => {
     const validIds = new DeterministicIds('malformed-attempt-id');
-    const { runtime, store, workflow } = fixture({
+    const { application, store, goal, workflow } = fixture({
       ids: {
         nextAttemptId: () => 'not-an-attempt-id' as never,
         nextAuditEventId: () => validIds.nextAuditEventId(),
@@ -1098,9 +1483,10 @@ void test('[I-006][I-027] malformed digest and ID port outputs fail before Store
     });
     const commandIdentifier = commandId('command_malformed-attempt-id-output');
 
-    const result = runtime.beginAttempt({
+    const result = application.startGoal({
       commandId: commandIdentifier,
-      workflowId: workflow.id,
+      goalId: goal.id,
+      expectedGoalRevision: goal.revision,
       expectedWorkflowVersion: workflow.version,
     });
 
@@ -1112,7 +1498,7 @@ void test('[I-006][I-027] malformed digest and ID port outputs fail before Store
 
   await t.test('audit ID output', () => {
     const validIds = new DeterministicIds('malformed-audit-id');
-    const { runtime, store, workflow } = fixture({
+    const { application, store, goal, workflow } = fixture({
       ids: {
         nextAttemptId: () => validIds.nextAttemptId(),
         nextAuditEventId: () => 'not-an-audit-id' as never,
@@ -1120,9 +1506,10 @@ void test('[I-006][I-027] malformed digest and ID port outputs fail before Store
     });
     const commandIdentifier = commandId('command_malformed-audit-id-output');
 
-    const result = runtime.beginAttempt({
+    const result = application.startGoal({
       commandId: commandIdentifier,
-      workflowId: workflow.id,
+      goalId: goal.id,
+      expectedGoalRevision: goal.revision,
       expectedWorkflowVersion: workflow.version,
     });
 
@@ -1157,13 +1544,14 @@ void test('[I-006] public command requests are decoded as closed authority recor
 });
 
 void test('[I-006][I-027] malformed Store sequence is persistence failure, not domain rejection', () => {
-  const { runtime, store, workflow } = fixture();
+  const { application, store, goal, workflow } = fixture();
   store.injectNextAttemptSequence(0);
   const commandIdentifier = commandId('command_malformed-store-sequence');
 
-  const result = runtime.beginAttempt({
+  const result = application.startGoal({
     commandId: commandIdentifier,
-    workflowId: workflow.id,
+    goalId: goal.id,
+    expectedGoalRevision: goal.revision,
     expectedWorkflowVersion: workflow.version,
   });
 
@@ -1364,6 +1752,7 @@ void test('[I-008][I-027] replay rejects infrastructure failures as command outc
 
 void test('[I-006][I-009][I-027] Goal replay reloads authority and rejects a dangling target', () => {
   const { application, store, workflow } = fixture();
+  const authority = fixtureWorkerAuthority(workflow.createdAt);
   const missingGoalId = goalId('goal_missing-replay-authority');
   const missingWorkflowId = workflowId('workflow_missing-replay-authority');
   const request = {
@@ -1379,6 +1768,10 @@ void test('[I-006][I-009][I-027] Goal replay reloads authority and rejects a dan
     goalId: request.goalId,
     expectedGoalRevision: request.expectedGoalRevision,
     expectedWorkflowVersion: request.expectedWorkflowVersion,
+    executionProfileId: authority.profile.profile.id,
+    executionProfileDigest: authority.profile.profile.digest,
+    policyBundleId: authority.policy.bundle.id,
+    policyBundleDigest: authority.policy.bundle.digest,
   });
   store.injectProcessedCommand({
     commandId: request.commandId,
@@ -1454,23 +1847,17 @@ void test('[I-003][I-008] StartGoal checks Workflow freshness before first-Attem
   assert.equal(store.attemptCommits, 0);
 });
 
-void test('[I-003][I-023] package root exposes only the public Goal mutation capability', async () => {
-  const { application } = fixture();
-
+void test('[I-003][I-023] package root hides legacy and internal mutation coordinators', async () => {
   assert.equal('WorkflowRuntimeKernel' in publicRuntimeApi, false);
   assert.equal('WorkerExecutionCoordinator' in publicRuntimeApi, false);
-  assert.deepEqual(Object.keys(application).sort(), ['cancelGoal', 'startGoal']);
-  for (const internalOperation of [
-    'beginAttempt',
-    'recordAttemptResult',
-    'recordAttemptFailure',
-    'interruptAttempt',
-    'reconcileAttemptAfterRestart',
-    'requestPhaseTransition',
-    'executeAuthorizedEffect',
-  ]) {
-    assert.equal(internalOperation in application, false);
-  }
+  assert.equal('createGoalApplication' in publicRuntimeApi, false);
+  assert.equal('createWorkerExecutionApplication' in publicRuntimeApi, false);
+  assert.equal('createRecoveryCoordinator' in publicRuntimeApi, false);
+  assert.equal('createWorkflowDriver' in publicRuntimeApi, false);
+  assert.equal('createCodeClosureApplication' in publicRuntimeApi, true);
+  const trustedCompositionApi = await import('@codeclosure/runtime/composition');
+  assert.equal('createRecoveryCoordinator' in trustedCompositionApi, true);
+  assert.equal('createWorkflowDriver' in trustedCompositionApi, true);
   const internalPackageSubpath = '@codeclosure/runtime/workflow-runtime';
   await assert.rejects(import(internalPackageSubpath), /Package subpath/);
 });

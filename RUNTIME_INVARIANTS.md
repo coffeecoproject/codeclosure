@@ -41,9 +41,10 @@ authorities.
 
 ### I-006 — Authoritative state is outside the conversation
 
-Goals, facts, decisions, workflow state, candidate identities, evidence,
-acceptance decisions, and blockers are persisted by CodeClosure. Chat history,
-Codex threads, model memory, and compacted summaries are non-authoritative.
+Goals, facts, decisions, workflow state, execution-profile bindings, recovery
+records, candidate identities, evidence, acceptance decisions, and blockers are
+persisted by CodeClosure. Chat history, Codex threads, model memory, and
+compacted summaries are non-authoritative.
 
 ### I-007 — Authoritative state is outside the worker-writable candidate
 
@@ -66,6 +67,12 @@ Every phase or terminal-status mutation must:
 After interruption or restart, CodeClosure reconstructs the active goal from
 its store and reconciles external reality. It must not infer the current phase
 from the last assistant message.
+
+A consumed dispatch claim MUST NOT authorize redispatch. Recovery MUST persist
+an exact reconciliation result before replacement work, and `ResumeGoal` may
+return the Workflow to an executable state only from current inspected
+authority. Missing, stale, mismatched, or unknown recovery input remains
+blocked.
 
 ### I-010 — Cancellation is not success
 
@@ -220,3 +227,16 @@ reality.
 CodeClosure reports only what current evidence establishes. A simulated,
 partial, local, or candidate-only result must not be described as production
 proof or universal correctness.
+
+### I-031 — A started Workflow has one immutable Policy identity
+
+The first successful `StartGoal` MUST atomically bind the Workflow to the exact
+installed Policy ID, version, and canonical digest. Every later transition,
+Context, Worker dispatch, Worker event admission, Evidence, Acceptance,
+recovery, repair, closeout, and resume MUST resolve that same binding. Process
+restart, configuration changes, Policy installation, or command replay MUST
+NOT silently replace it.
+
+A missing, unavailable, malformed, or incompatible binding fails closed before
+continuation mutates Workflow authority. M1 has no automatic Policy upgrade for
+an existing Workflow; a future upgrade requires explicit versioned authority.

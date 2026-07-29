@@ -25,6 +25,9 @@ supersedes it.
 | [0017](0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md) | Derive external-boundary authority and replay Evidence Sets at their audit sequence | Accepted |
 | [0018](0018-deterministic-acceptance-and-closeout-authority.md) | Close deterministic Acceptance, replay, closeout, and repair authority | Accepted |
 | [0019](0019-exact-acceptance-repair-authority.md) | Retain exact Acceptance repair authority across commit and restart | Accepted |
+| [0020](0020-runtime-application-recovery-and-query-boundary.md) | Own orchestration, recovery, and queries in the Runtime application boundary | Accepted |
+| [0021](0021-m1-execution-profile-and-cli-composition.md) | Bind M1 execution profiles and define local CLI composition | Accepted |
+| [0022](0022-immutable-workflow-policy-binding.md) | Bind one immutable Policy identity to each started Workflow | Accepted |
 
 ## ADR lifecycle
 

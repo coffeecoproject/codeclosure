@@ -8,8 +8,10 @@ and Attempt Runtime, the Context-bound `FakeWorker` proof path, logical
 Candidate preparation and irreversible freeze, independent fake verification,
 Evidence persistence/invalidation, canonical Evidence Set transition into
 `FINAL_VERIFY`, deterministic Acceptance evaluation, accepted closeout, and
-repair-generation coordination. CLI proof scenarios, real project editing,
-and Codex integration are not yet implemented.
+repair-generation coordination. The Slice 7 Runtime application facade,
+execution-profile binding, recovery, read views, and deterministic application
+driver are also implemented. Local production composition, CLI proof
+scenarios, real project editing, and Codex integration are not yet implemented.
 
 ## Purpose
 
@@ -36,6 +38,12 @@ The public product boundary operates by `GoalId`. `StartGoal`, `ResumeGoal`,
 and `CancelGoal` resolve the Goal's M1 Workflow and carry both the expected Goal
 revision and expected Workflow version. Users and CLI adapters do not start,
 interrupt, or mutate Attempts directly.
+
+The implemented Slice 7 application facade exposes `CreateGoal` as a Runtime
+operation. It requires explicit success criteria and atomically creates one
+Goal plus its unique `DISCOVERY`/`READY` Workflow; it does not dispatch work.
+The first Context-bound `StartGoal` transaction binds one installed Execution
+Profile. Resume cannot select another profile.
 
 `BeginAttempt`, worker-result admission, interruption, recovery reconciliation,
 and phase transitions are internal runtime commands. Their
@@ -97,6 +105,41 @@ returning the nested public output. A valid-looking response produced for
 another or nonexistent aggregate fails closed. See
 [ADR 0010](adr/0010-command-admission-and-outcome-binding.md) and
 [ADR 0011](adr/0011-store-authored-command-outcome-semantics.md).
+
+## Runtime Application Driver
+
+The implemented Slice 7 Runtime application driver selects the next
+deterministic internal operation after a successful public start or resume;
+the CLI cannot sequence those operations. It reloads the current
+authoritative view before every phase transition, Attempt, Candidate, Evidence,
+Acceptance, explicitly authorized repair, or closeout action. Each action
+commits as its own
+command and recovery boundary.
+
+The first Start also records the Workflow's exact immutable Policy ID and
+digest. Every later driver operation and Resume preflight compares trusted
+composition with that binding before recovery, Worker dispatch, Worker event
+admission, or planning can write. Installing another Policy does not upgrade an
+existing Workflow. See
+[ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
+
+Re-entry after a public command replay may continue from a current safe
+boundary, but it never repeats an existing Attempt or redispatches a retained
+claim. The driver stops at terminal, waiting, blocked, failed, decision, or
+infrastructure-failure boundaries. Its process summary is informational; only
+the persisted Workflow and Acceptance/closeout records authorize lifecycle
+meaning. After an operation limit or concurrent command rejection, the driver
+reloads persisted authority so a newly committed terminal or decision boundary
+wins over its local stop reason. See
+[ADR 0020](adr/0020-runtime-application-recovery-and-query-boundary.md).
+
+Public `StartGoal` and `ResumeGoal` are asynchronous because the caller waits
+until this safe stop boundary. Their result keeps the exact persisted public
+command outcome under `command` and the non-authoritative process observation
+under optional `drive`. `CreateGoal`, `CancelGoal`, and read queries remain
+synchronous. A current `REJECT_REPAIRABLE` stops as
+`ACCEPTANCE_REPAIR_REQUIRED`; the M1 driver does not invent user authorization
+or an unbounded retry policy.
 
 Normal Goal commands, normal Workflow commands, and replay use one authority
 resolver. It validates the complete Goal and Workflow snapshots, their owner
@@ -470,21 +513,43 @@ to exactly one class, and Store/SQLite reject a conflicting direct write.
 
 For a non-terminal workflow, startup recovery must:
 
-1. load current state and last committed audit sequence;
-2. identify attempts left `RUNNING`;
-3. mark unverifiable live worker state interrupted;
-4. inspect current candidate generation and digest;
-5. reconcile repository/base identity;
-6. choose the same phase, a safe earlier phase, or `BLOCKED` based on explicit
-   recovery rules;
-7. persist the recovery decision before dispatching more work.
+1. load a consistent recovery catalog with current state and last committed
+   audit sequence;
+2. identify Attempts left `RUNNING` and recoverable closed failures;
+3. treat any retained dispatch claim as consumed history rather than
+   redispatch permission;
+4. inspect current Candidate generation/digest and repository/base identity
+   through the closed `RecoveryInspector` port;
+5. choose the same phase, a safe earlier phase, or `BLOCKED` through explicit
+   Runtime recovery policy;
+6. atomically interrupt a retained active Attempt, advance the Workflow, leave
+   it `BLOCKED`, and persist an exact immutable
+   `RecoveryReconciliationRecord` plus audits; and
+7. dispatch no replacement work during startup.
+
+`ResumeGoal` then performs a fresh inspection against the current bound
+Execution Profile. Its transaction records a new exact reconciliation and
+either moves the Workflow to a permitted `READY` safe phase or retains a
+concrete `BLOCKED` reason. A new Attempt may begin only after that transaction
+commits. The old Attempt, Context, Worker Session, and dispatch claim are never
+reused.
+
+Current M1 recovery policy permits only an exact same-phase resume. The domain
+models `SAFE_EARLIER_PHASE` so a later accepted policy can add a conservative
+rewind without changing record shape, but the M1 Runtime never issues it and
+the M1 Store rejects it. Startup reconciliation itself never makes a Workflow
+`READY`, even when inspection finds an exact match.
 
 The last model response is never the recovery algorithm.
 
 Attempt lifecycle ownership and its single-version concurrency rule are defined
 by [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md). The public Goal
 boundary and lifecycle projection are defined by
-[ADR 0008](adr/0008-goal-command-and-lifecycle-boundary.md).
+[ADR 0008](adr/0008-goal-command-and-lifecycle-boundary.md). Exact Runtime
+application, recovery-record, and resume ownership are defined by
+[ADR 0020](adr/0020-runtime-application-recovery-and-query-boundary.md); profile
+binding is defined by
+[ADR 0021](adr/0021-m1-execution-profile-and-cli-composition.md).
 
 ## M1 Required State-Machine Proof
 

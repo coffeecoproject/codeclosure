@@ -7,6 +7,7 @@ import {
   commandId,
   contextManifestId,
   decodeContextPackage,
+  executionProfileId,
   isoTimestamp,
   sha256Digest,
   workerEventId,
@@ -16,6 +17,7 @@ import {
   type AttemptId,
   type ContextManifestId,
   type ContextPackage,
+  type ExecutionProfileId,
   type CommandId,
   type IsoTimestamp,
   type Sha256Digest,
@@ -28,12 +30,14 @@ import {
 import { canonicalizeJson } from './canonical-json.js';
 
 export interface WorkerRequest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly workerSessionId: WorkerSessionId;
   readonly attemptId: AttemptId;
   readonly contextManifestId: ContextManifestId;
   readonly contextManifestDigest: Sha256Digest;
   readonly packageDigest: Sha256Digest;
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly contextPackage: ContextPackage;
 }
 
@@ -138,7 +142,7 @@ export interface IgnoredWorkerEventReceipt extends WorkerEventReceiptBase {
 export type WorkerEventReceipt = AdmittedWorkerEventReceipt | IgnoredWorkerEventReceipt;
 
 export interface WorkerDispatchClaim {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly workflowId: WorkflowId;
   readonly workflowVersion: WorkflowVersion;
   readonly attemptId: AttemptId;
@@ -146,6 +150,8 @@ export interface WorkerDispatchClaim {
   readonly contextManifestId: ContextManifestId;
   readonly contextManifestDigest: Sha256Digest;
   readonly packageDigest: Sha256Digest;
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly claimedAt: IsoTimestamp;
 }
 
@@ -196,12 +202,14 @@ const workerPortFailureReasonCodeSchema = z.enum(Object.values(WorkerPortFailure
 
 const workerRequestSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     workerSessionId: z.string(),
     attemptId: z.string(),
     contextManifestId: z.string(),
     contextManifestDigest: z.string(),
     packageDigest: z.string(),
+    executionProfileId: z.string(),
+    executionProfileDigest: z.string(),
     contextPackage: z.unknown(),
   })
   .strict();
@@ -296,7 +304,7 @@ const workerEventReceiptSchema = z.discriminatedUnion('disposition', [
 
 const workerDispatchClaimSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     workflowId: z.string(),
     workflowVersion: z.number().int().positive(),
     attemptId: z.string(),
@@ -304,6 +312,8 @@ const workerDispatchClaimSchema = z
     contextManifestId: z.string(),
     contextManifestDigest: z.string(),
     packageDigest: z.string(),
+    executionProfileId: z.string(),
+    executionProfileDigest: z.string(),
     claimedAt: z.string(),
   })
   .strict();
@@ -318,9 +328,15 @@ export function decodeWorkerRequest(value: unknown): WorkerRequest {
     contextManifestId: contextManifestId(parsed.contextManifestId),
     contextManifestDigest: sha256Digest(parsed.contextManifestDigest),
     packageDigest: sha256Digest(parsed.packageDigest),
+    executionProfileId: executionProfileId(parsed.executionProfileId),
+    executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     contextPackage,
   });
-  if (request.attemptId !== contextPackage.attemptId) {
+  if (
+    request.attemptId !== contextPackage.attemptId ||
+    request.executionProfileId !== contextPackage.executionProfileId ||
+    request.executionProfileDigest !== contextPackage.executionProfileDigest
+  ) {
     throw new TypeError('Worker Request identity is internally inconsistent');
   }
   return request;
@@ -464,8 +480,27 @@ export function decodeWorkerDispatchClaim(value: unknown): WorkerDispatchClaim {
     contextManifestId: contextManifestId(parsed.contextManifestId),
     contextManifestDigest: sha256Digest(parsed.contextManifestDigest),
     packageDigest: sha256Digest(parsed.packageDigest),
+    executionProfileId: executionProfileId(parsed.executionProfileId),
+    executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     claimedAt: isoTimestamp(parsed.claimedAt),
   });
+}
+
+export function workerDispatchClaimProjection(claim: WorkerDispatchClaim): unknown {
+  const decoded = decodeWorkerDispatchClaim(claim);
+  return {
+    schemaVersion: decoded.schemaVersion,
+    workflowId: decoded.workflowId,
+    workflowVersion: decoded.workflowVersion,
+    attemptId: decoded.attemptId,
+    workerSessionId: decoded.workerSessionId,
+    contextManifestId: decoded.contextManifestId,
+    contextManifestDigest: decoded.contextManifestDigest,
+    packageDigest: decoded.packageDigest,
+    executionProfileId: decoded.executionProfileId,
+    executionProfileDigest: decoded.executionProfileDigest,
+    claimedAt: decoded.claimedAt,
+  };
 }
 
 export function assertWorkerEventBindsRequest(event: WorkerEvent, request: WorkerRequest): void {
@@ -497,7 +532,9 @@ export function assertWorkerDispatchClaimBindsRequest(
     claim.workerSessionId !== request.workerSessionId ||
     claim.contextManifestId !== request.contextManifestId ||
     claim.contextManifestDigest !== request.contextManifestDigest ||
-    claim.packageDigest !== request.packageDigest
+    claim.packageDigest !== request.packageDigest ||
+    claim.executionProfileId !== request.executionProfileId ||
+    claim.executionProfileDigest !== request.executionProfileDigest
   ) {
     throw new TypeError('Worker dispatch claim does not bind the Worker Request');
   }
@@ -511,12 +548,14 @@ export function createWorkerRequest(
   contextPackage: ContextPackage,
 ): WorkerRequest {
   return decodeWorkerRequest({
-    schemaVersion: 1,
+    schemaVersion: 2,
     workerSessionId: workerSessionIdentifier,
     attemptId: contextPackage.attemptId,
     contextManifestId: contextManifestIdentifier,
     contextManifestDigest,
     packageDigest,
+    executionProfileId: contextPackage.executionProfileId,
+    executionProfileDigest: contextPackage.executionProfileDigest,
     contextPackage,
   });
 }

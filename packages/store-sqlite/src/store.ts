@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import {
   AcceptanceOutcome,
+  AttemptInterruptionReason,
   AttemptFailureClass,
   AttemptStatus,
   CandidateGenerationState,
@@ -15,10 +16,13 @@ import {
   EvidenceKind,
   GoalStatus,
   GuardOutcome,
+  RecoveryReconciliationDisposition,
+  RecoveryReconciliationPurpose,
   RunStatus,
   WorkflowGuard,
   WorkflowPhase,
   applyAttemptEvent,
+  applyRecoveryWorkflowEvent,
   applyCandidateEvent,
   applyEvidenceEligibilityEvent,
   applyWorkflowCancellationToAttempt,
@@ -45,6 +49,10 @@ import {
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
   decodeEvidenceSet,
+  decodeExecutionProfile,
+  decodeExecutionProfileBinding,
+  decodeRecoveryReconciliationRecord,
+  decodeRecoveryWorkflowEvent,
   decodeCloseoutRecord,
   decodePendingIssueSet,
   decodeContextManifest,
@@ -53,6 +61,7 @@ import {
   decodeWorkflowEvent,
   decodeWorkflowSnapshot,
   decodePolicyBundle,
+  decodeWorkflowPolicyBinding,
   decodeVerificationObligation,
   decideEvidenceInvalidation,
   assertWorkflowInvariant,
@@ -61,9 +70,15 @@ import {
   goalRevision,
   evidenceId,
   evidenceSetDigestProjection,
+  executionProfileBindingProjection,
+  executionProfileId,
+  executionProfileProjection,
   isoTimestamp,
   policyBundleId,
   policyBundleProjection,
+  workflowPolicyBindingProjection,
+  recoveryReconciliationId,
+  recoveryReconciliationProjection,
   sha256Digest,
   workflowId,
   workflowVersion,
@@ -90,6 +105,11 @@ import {
   type EvidenceId,
   type EvidenceRecord,
   type EvidenceSet,
+  type ExecutionProfile,
+  type ExecutionProfileBinding,
+  type ExecutionProfileId,
+  type RecoveryReconciliationId,
+  type RecoveryReconciliationRecord,
   type CloseoutRecord,
   type Goal,
   type GoalId,
@@ -101,6 +121,7 @@ import {
   type WorkflowId,
   type WorkflowInstance,
   type WorkflowVersion,
+  type WorkflowPolicyBinding,
   type VerificationObligation,
   type VerificationObligationId,
   type WorkerEventId,
@@ -121,6 +142,7 @@ import {
   deriveContextManifestEntries,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
+  workerDispatchClaimProjection,
   attemptFailureClassForKnownWorkerReasonCode,
   m1PhaseObjective,
   m1WorkerResponseContract,
@@ -154,15 +176,30 @@ import {
   type CommitVerificationAttemptOutcome,
   type CommitWorkflowCandidateEvent,
   type CommitContextBoundAttemptStart,
+  type CommitGoalCreation,
+  type CommitResumeRecovery,
+  type CommitStartupRecovery,
   type CommittedContextAttempt,
+  type CommittedResumeRecovery,
+  type CommittedStartupRecovery,
   type CommitWorkerAttemptEvent,
   type GoalWorkflowView,
+  type GoalAuditAuthoritySnapshot,
+  type GoalStatusAuthoritySnapshot,
+  type WorkflowDriverAuthoritySnapshot,
+  type WorkflowDriverControlStore,
   type InstallPolicyBundle,
+  type InstallExecutionProfile,
+  type InstalledExecutionProfile,
   type InstalledPolicyBundle,
+  type ExecutionProfileInstallResult,
   type PolicyInstallResult,
   type RecordIgnoredWorkerEvent,
+  RecoverableBlockerKind,
+  type RecoveryCatalogEntry,
   type RecordCommandRejection,
   type StoreCommandResult,
+  type CodeClosureApplicationStore,
   type WorkerDispatchClaim,
   type WorkerDispatchClaimResult,
   type WorkerEventReceipt,
@@ -193,6 +230,10 @@ import {
   decodeCheckSpecificationRow,
   decodeGoal,
   decodeContextManifestRow,
+  decodeExecutionProfileBindingRow,
+  decodeExecutionProfileRow,
+  decodeWorkflowPolicyBindingRow,
+  decodeRecoveryReconciliationRow,
   decodePolicyBundleRow,
   decodeEvidenceEligibilityRow,
   decodeEvidenceRecordRow,
@@ -223,6 +264,12 @@ export const WorkerTransactionStep = {
   AFTER_WORKER_RECEIPT_WRITE: 'AFTER_WORKER_RECEIPT_WRITE',
   AFTER_POLICY_AUDIT_WRITE: 'AFTER_POLICY_AUDIT_WRITE',
   AFTER_POLICY_WRITE: 'AFTER_POLICY_WRITE',
+  AFTER_EXECUTION_PROFILE_AUDIT_WRITE: 'AFTER_EXECUTION_PROFILE_AUDIT_WRITE',
+  AFTER_EXECUTION_PROFILE_WRITE: 'AFTER_EXECUTION_PROFILE_WRITE',
+  AFTER_EXECUTION_PROFILE_BINDING_AUDIT_WRITE: 'AFTER_EXECUTION_PROFILE_BINDING_AUDIT_WRITE',
+  AFTER_EXECUTION_PROFILE_BINDING_WRITE: 'AFTER_EXECUTION_PROFILE_BINDING_WRITE',
+  AFTER_WORKFLOW_POLICY_BINDING_AUDIT_WRITE: 'AFTER_WORKFLOW_POLICY_BINDING_AUDIT_WRITE',
+  AFTER_WORKFLOW_POLICY_BINDING_WRITE: 'AFTER_WORKFLOW_POLICY_BINDING_WRITE',
 } as const;
 export type WorkerTransactionStep =
   (typeof WorkerTransactionStep)[keyof typeof WorkerTransactionStep];
@@ -249,6 +296,14 @@ export const AcceptanceTransactionStep = {
 export type AcceptanceTransactionStep =
   (typeof AcceptanceTransactionStep)[keyof typeof AcceptanceTransactionStep];
 
+export const RecoveryTransactionStep = {
+  AFTER_RECOVERY_RECORD_WRITE: 'AFTER_RECOVERY_RECORD_WRITE',
+  AFTER_RECOVERY_STATE_WRITE: 'AFTER_RECOVERY_STATE_WRITE',
+  AFTER_RECOVERY_AUDIT_WRITE: 'AFTER_RECOVERY_AUDIT_WRITE',
+} as const;
+export type RecoveryTransactionStep =
+  (typeof RecoveryTransactionStep)[keyof typeof RecoveryTransactionStep];
+
 export interface SqliteControlStoreOptions {
   readonly filename: string;
   readonly migrationsDirectory?: string;
@@ -259,7 +314,8 @@ export interface SqliteControlStoreOptions {
       | TransactionStep
       | WorkerTransactionStep
       | CandidateEvidenceTransactionStep
-      | AcceptanceTransactionStep,
+      | AcceptanceTransactionStep
+      | RecoveryTransactionStep,
   ) => void;
 }
 
@@ -278,13 +334,19 @@ const evidenceIdentifierRowsSchema = z.array(
     .strict(),
 );
 
-export interface CreateGoalWithWorkflowInput extends AuditWriteIdentity {
-  readonly commandId: CommandId;
-  readonly inputDigest: Sha256Digest;
-  readonly goal: Goal;
-  readonly workflow: WorkflowInstance;
-  readonly workflowAuditEventId: AuditEventId;
-}
+const authorityIdentifierRowSchema = z
+  .object({
+    id: z.string(),
+  })
+  .strict();
+
+const auditSequenceWatermarkRowSchema = z
+  .object({
+    through_sequence: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type CreateGoalWithWorkflowInput = CommitGoalCreation;
 
 export interface CommitWorkflowEventInput extends AuditWriteIdentity {
   readonly inputDigest: Sha256Digest;
@@ -404,6 +466,88 @@ function validateCommitAttemptEventInput(
   return input;
 }
 
+function validateRecoveryDigest(record: RecoveryReconciliationRecord): void {
+  const expected = sha256Digest(
+    canonicalAuthorityDigests.digest(recoveryReconciliationProjection(record)),
+  );
+  if (record.reconciliationDigest !== expected) {
+    throw new StoreInvariantError(
+      `Recovery reconciliation ${record.id} has a false canonical digest`,
+    );
+  }
+}
+
+type ValidatedCommitStartupRecovery = Omit<CommitStartupRecovery, 'event' | 'recovery'> & {
+  readonly event: Extract<AttemptEvent, { readonly type: 'ATTEMPT_FINISHED' }>;
+  readonly recovery: RecoveryReconciliationRecord;
+};
+
+function validateCommitStartupRecovery(
+  rawInput: CommitStartupRecovery,
+): ValidatedCommitStartupRecovery {
+  const base = validateCommitAttemptEventInput(rawInput);
+  const event = base.event;
+  const recovery = decodeRecoveryReconciliationRecord(rawInput.recovery);
+  const recoveryAuditEventId = auditEventId(rawInput.recoveryAuditEventId);
+  validateRecoveryDigest(recovery);
+  if (
+    event.type !== 'ATTEMPT_FINISHED' ||
+    event.toStatus !== AttemptStatus.INTERRUPTED ||
+    event.resultingRunStatus !== RunStatus.BLOCKED ||
+    !event.terminationReason.startsWith(`${AttemptInterruptionReason.RECOVERY_RECONCILIATION}:`) ||
+    recovery.purpose !== RecoveryReconciliationPurpose.STARTUP ||
+    recovery.workflowId !== event.workflowId ||
+    recovery.phase !== event.phase ||
+    recovery.sourceAttemptId !== event.attemptId ||
+    recovery.inspectedWorkflowVersion !== event.fromWorkflowVersion ||
+    recovery.resultingWorkflowVersion !== event.toWorkflowVersion ||
+    recovery.inspectedAt !== event.occurredAt ||
+    recoveryAuditEventId === base.auditEventId ||
+    recoveryAuditEventId === base.workflowAuditEventId
+  ) {
+    throw new StoreInvariantError(
+      'Startup recovery does not bind one exact interrupted Attempt transition',
+    );
+  }
+  return Object.freeze({ ...base, event, recovery, recoveryAuditEventId });
+}
+
+function validateCommitResumeRecovery(rawInput: CommitResumeRecovery): CommitResumeRecovery {
+  const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
+  const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
+  const input = Object.freeze({
+    commandId: commandId(rawInput.commandId),
+    inputDigest: sha256Digest(rawInput.inputDigest),
+    target: decodeCommandTarget(rawInput.target),
+    event: decodeRecoveryWorkflowEvent(rawInput.event),
+    recovery: decodeRecoveryReconciliationRecord(rawInput.recovery),
+    recoveryAuditEventId: auditEventId(rawInput.recoveryAuditEventId),
+    auditEventId: auditEventId(rawInput.auditEventId),
+    payloadDigest: sha256Digest(rawInput.payloadDigest),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(causationId === undefined ? {} : { causationId }),
+  });
+  validateRecoveryDigest(input.recovery);
+  if (
+    input.commandId !== input.event.commandId ||
+    input.recovery.purpose !== RecoveryReconciliationPurpose.RESUME ||
+    input.recovery.disposition === RecoveryReconciliationDisposition.SAFE_EARLIER_PHASE ||
+    input.recovery.workflowId !== input.event.workflowId ||
+    input.recovery.phase !== input.event.fromPhase ||
+    input.recovery.inspectedWorkflowVersion !== input.event.fromVersion ||
+    input.recovery.resultingWorkflowVersion !== input.event.toVersion ||
+    input.recovery.id !== input.event.reconciliationId ||
+    input.recovery.reconciliationDigest !== input.event.reconciliationDigest ||
+    input.recovery.inspectedAt !== input.event.occurredAt ||
+    input.recoveryAuditEventId === input.auditEventId
+  ) {
+    throw new StoreInvariantError(
+      'Resume recovery does not bind one exact M1 Workflow reconciliation transition',
+    );
+  }
+  return input;
+}
+
 function assertKnownWorkerFailureClassification(event: AttemptEvent): void {
   if (event.type !== 'ATTEMPT_FINISHED') {
     return;
@@ -467,6 +611,16 @@ function validateCommitContextBoundAttemptStart(
 ): CommitContextBoundAttemptStart {
   const input = validateCommitAttemptEventInput(rawInput);
   const contextManifest = decodeContextManifest(rawInput.contextManifest);
+  const policyBinding = decodeWorkflowPolicyBinding(rawInput.policyBinding);
+  const policyBindingAuditEventId =
+    rawInput.policyBindingAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.policyBindingAuditEventId);
+  const executionProfileBinding = decodeExecutionProfileBinding(rawInput.executionProfileBinding);
+  const executionProfileBindingAuditEventId =
+    rawInput.executionProfileBindingAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.executionProfileBindingAuditEventId);
   if (
     input.event.type !== 'ATTEMPT_STARTED' ||
     input.event.attempt.contextManifestId !== contextManifest.id ||
@@ -474,11 +628,39 @@ function validateCommitContextBoundAttemptStart(
     contextManifest.attemptId !== input.event.attempt.id ||
     contextManifest.workflowId !== input.event.workflowId ||
     contextManifest.workflowVersion !== input.event.toWorkflowVersion ||
-    contextManifest.phase !== input.event.attempt.phase
+    contextManifest.phase !== input.event.attempt.phase ||
+    policyBinding.goalId !== contextManifest.goalId ||
+    policyBinding.workflowId !== contextManifest.workflowId ||
+    policyBinding.policyBundleId !== contextManifest.policyBundleId ||
+    policyBinding.policyBundleDigest !== contextManifest.policyBundleDigest ||
+    policyBinding.boundAt > contextManifest.createdAt ||
+    executionProfileBinding.goalId !== contextManifest.goalId ||
+    executionProfileBinding.workflowId !== contextManifest.workflowId ||
+    executionProfileBinding.profileId !== contextManifest.executionProfileId ||
+    executionProfileBinding.profileDigest !== contextManifest.executionProfileDigest ||
+    executionProfileBinding.boundAt > contextManifest.createdAt ||
+    (input.event.attempt.sequence === 1) !== (policyBindingAuditEventId !== undefined) ||
+    (input.event.attempt.sequence === 1) !== (executionProfileBindingAuditEventId !== undefined) ||
+    (input.event.attempt.sequence === 1 &&
+      (policyBinding.startCommandId !== input.event.commandId ||
+        policyBinding.boundAt !== input.event.occurredAt ||
+        executionProfileBinding.startCommandId !== input.event.commandId ||
+        executionProfileBinding.boundAt !== input.event.occurredAt))
   ) {
-    throw new StoreInvariantError('Context Manifest does not bind the started Worker Attempt');
+    throw new StoreInvariantError(
+      'Context Manifest, Workflow Policy, or Execution Profile does not bind the started Worker Attempt',
+    );
   }
-  return Object.freeze({ ...input, contextManifest });
+  return Object.freeze({
+    ...input,
+    contextManifest,
+    policyBinding,
+    ...(policyBindingAuditEventId === undefined ? {} : { policyBindingAuditEventId }),
+    executionProfileBinding,
+    ...(executionProfileBindingAuditEventId === undefined
+      ? {}
+      : { executionProfileBindingAuditEventId }),
+  });
 }
 
 function validateCommitWorkerAttemptEvent(
@@ -512,6 +694,21 @@ function validateInstallPolicyBundle(rawInput: InstallPolicyBundle): InstallPoli
   const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
   return Object.freeze({
     bundle: decodePolicyBundle(rawInput.bundle),
+    installedAt: isoTimestamp(rawInput.installedAt),
+    auditEventId: auditEventId(rawInput.auditEventId),
+    payloadDigest: sha256Digest(rawInput.payloadDigest),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(causationId === undefined ? {} : { causationId }),
+  });
+}
+
+function validateInstallExecutionProfile(
+  rawInput: InstallExecutionProfile,
+): InstallExecutionProfile {
+  const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
+  const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
+  return Object.freeze({
+    profile: decodeExecutionProfile(rawInput.profile),
     installedAt: isoTimestamp(rawInput.installedAt),
     auditEventId: auditEventId(rawInput.auditEventId),
     payloadDigest: sha256Digest(rawInput.payloadDigest),
@@ -908,7 +1105,36 @@ function validateAggregateLookup(value: unknown, fieldName: string): string {
   return value;
 }
 
-export class SqliteControlStore implements AcceptanceControlStore {
+type WorkflowStartAuthorityClosure =
+  | {
+      readonly state: 'UNSTARTED';
+      readonly workflow: WorkflowInstance;
+    }
+  | {
+      readonly state: 'CANCELLED_BEFORE_START';
+      readonly workflow: WorkflowInstance;
+      readonly cancellationAudit: AuditEventRecord;
+    }
+  | {
+      readonly state: 'STARTED';
+      readonly workflow: WorkflowInstance;
+      readonly firstAttempt: Attempt;
+      readonly contextManifest: ContextManifest;
+      readonly policyBinding: WorkflowPolicyBinding;
+      readonly executionProfileBinding: ExecutionProfileBinding;
+    };
+
+function isM1CodingWorkerPhase(phase: WorkflowPhase): boolean {
+  return (
+    phase === WorkflowPhase.DISCOVERY ||
+    phase === WorkflowPhase.PLAN ||
+    phase === WorkflowPhase.IMPLEMENT
+  );
+}
+
+export class SqliteControlStore
+  implements AcceptanceControlStore, CodeClosureApplicationStore, WorkflowDriverControlStore
+{
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
   readonly #transactionProbe:
@@ -917,7 +1143,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
           | TransactionStep
           | WorkerTransactionStep
           | CandidateEvidenceTransactionStep
-          | AcceptanceTransactionStep,
+          | AcceptanceTransactionStep
+          | RecoveryTransactionStep,
       ) => void)
     | undefined;
   #closed = false;
@@ -931,7 +1158,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
             | TransactionStep
             | WorkerTransactionStep
             | CandidateEvidenceTransactionStep
-            | AcceptanceTransactionStep,
+            | AcceptanceTransactionStep
+            | RecoveryTransactionStep,
         ) => void)
       | undefined,
   ) {
@@ -963,8 +1191,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
         options.now ?? systemNow,
       );
       const store = new SqliteControlStore(database, migrations, options.transactionProbe);
+      store.assertRetainedWorkflowStartAuthorityClosure();
       store.assertRetainedWorkerAuthorityClosure();
       store.assertRetainedCandidateEvidenceAuthorityClosure();
+      store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
       return store;
     } catch (error) {
@@ -1019,6 +1249,273 @@ export class SqliteControlStore implements AcceptanceControlStore {
         );
       }
       return Object.freeze({ goal, workflow });
+    });
+  }
+
+  public getGoalStatusAuthority(
+    rawGoalIdentifier: GoalId,
+  ): GoalStatusAuthoritySnapshot | undefined {
+    this.assertOpen();
+    const goalIdentifier = goalId(rawGoalIdentifier);
+    return this.runRead(() => {
+      const owner = this.getGoalWithWorkflow(goalIdentifier);
+      if (owner === undefined) {
+        return undefined;
+      }
+      const { goal, workflow } = owner;
+      const startAuthority = this.resolveWorkflowStartAuthorityClosure(workflow);
+      const policyBinding =
+        startAuthority.state === 'STARTED' ? startAuthority.policyBinding : undefined;
+      const executionProfileBinding =
+        startAuthority.state === 'STARTED' ? startAuthority.executionProfileBinding : undefined;
+      const activeAttempt =
+        workflow.activeAttemptId === undefined
+          ? undefined
+          : this.getAttempt(workflow.activeAttemptId);
+      if (workflow.activeAttemptId !== undefined && activeAttempt === undefined) {
+        throw new StoreInvariantError(
+          `Workflow ${workflow.id} has no readable active Attempt authority`,
+        );
+      }
+      const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
+      const closeout = this.getCloseoutForWorkflow(workflow.id);
+      const latestRecoveryReconciliation = this.getLatestRecoveryReconciliation(workflow.id);
+
+      let decisionIdentifier: AcceptanceDecisionId | undefined;
+      if (closeout !== undefined) {
+        decisionIdentifier = closeout.acceptanceDecisionId;
+      } else if (workflow.activeCandidateGenerationId !== undefined) {
+        const row = this.#database
+          .prepare(
+            `SELECT decision.id
+               FROM acceptance_decisions AS decision
+               JOIN acceptance_input_manifests AS manifest
+                 ON manifest.manifest_digest = decision.input_manifest_digest
+               JOIN audit_events AS audit
+                 ON audit.aggregate_type = 'ACCEPTANCE_DECISION'
+                AND audit.aggregate_id = decision.id
+                AND audit.event_type = 'ACCEPTANCE_DECISION_ISSUED'
+              WHERE manifest.goal_id = ?
+                AND manifest.goal_revision = ?
+                AND manifest.workflow_id = ?
+                AND manifest.workflow_version = ?
+                AND manifest.candidate_generation_id = ?
+              ORDER BY audit.sequence DESC
+              LIMIT 1`,
+          )
+          .get(
+            goal.id,
+            goal.revision,
+            workflow.id,
+            workflow.version,
+            workflow.activeCandidateGenerationId,
+          );
+        if (row !== undefined) {
+          decisionIdentifier = acceptanceDecisionId(authorityIdentifierRowSchema.parse(row).id);
+        }
+      }
+
+      const decision =
+        decisionIdentifier === undefined
+          ? undefined
+          : this.getAcceptanceDecision(decisionIdentifier);
+      const manifest =
+        decision === undefined
+          ? undefined
+          : this.getAcceptanceInputManifest(decision.inputManifestDigest);
+      if ((decision === undefined) !== (manifest === undefined)) {
+        throw new StoreInvariantError(
+          `Workflow ${workflow.id} has incomplete Acceptance query authority`,
+        );
+      }
+
+      return Object.freeze({
+        goal,
+        workflow,
+        ...(policyBinding === undefined ? {} : { policyBinding }),
+        ...(executionProfileBinding === undefined ? {} : { executionProfileBinding }),
+        ...(activeAttempt === undefined ? {} : { activeAttempt }),
+        ...(candidateAuthority === undefined ? {} : { candidateAuthority }),
+        ...(decision === undefined || manifest === undefined
+          ? {}
+          : {
+              acceptanceAuthority: Object.freeze({ manifest, decision }),
+            }),
+        ...(closeout === undefined ? {} : { closeout }),
+        ...(latestRecoveryReconciliation === undefined ? {} : { latestRecoveryReconciliation }),
+      });
+    });
+  }
+
+  public getWorkflowDriverAuthority(
+    rawGoalIdentifier: GoalId,
+  ): WorkflowDriverAuthoritySnapshot | undefined {
+    this.assertOpen();
+    const goalIdentifier = goalId(rawGoalIdentifier);
+    return this.runRead(() => {
+      const status = this.getGoalStatusAuthority(goalIdentifier);
+      if (status === undefined) {
+        return undefined;
+      }
+      const policyBinding = status.policyBinding;
+      const installedPolicyBundle =
+        policyBinding === undefined
+          ? undefined
+          : this.getPolicyBundle(policyBinding.policyBundleId);
+      const installedPolicy = installedPolicyBundle?.bundle;
+      if (
+        policyBinding !== undefined &&
+        (installedPolicy?.id !== policyBinding.policyBundleId ||
+          installedPolicy.version !== policyBinding.policyBundleVersion ||
+          installedPolicy.digest !== policyBinding.policyBundleDigest)
+      ) {
+        throw new StoreInvariantError(
+          `Workflow ${status.workflow.id} has no exact installed Policy Bundle`,
+        );
+      }
+      const binding = status.executionProfileBinding;
+      const installedExecutionProfile =
+        binding === undefined ? undefined : this.getExecutionProfile(binding.profileId);
+      const installedProfile = installedExecutionProfile?.profile;
+      if (
+        binding !== undefined &&
+        (installedProfile?.id !== binding.profileId ||
+          installedProfile.version !== binding.profileVersion ||
+          installedProfile.digest !== binding.profileDigest)
+      ) {
+        throw new StoreInvariantError(
+          `Workflow ${status.workflow.id} has no exact installed Execution Profile`,
+        );
+      }
+
+      const latestAttemptRow = this.#database
+        .prepare(
+          `SELECT *
+             FROM attempts
+            WHERE workflow_id = ?
+              AND phase = ?
+            ORDER BY sequence DESC
+            LIMIT 1`,
+        )
+        .get(status.workflow.id, status.workflow.phase);
+      const latestPhaseAttempt =
+        latestAttemptRow === undefined ? undefined : decodeAttempt(latestAttemptRow);
+      if (
+        status.activeAttempt !== undefined &&
+        latestPhaseAttempt?.id !== status.activeAttempt.id
+      ) {
+        throw new StoreInvariantError(
+          `Workflow ${status.workflow.id} active Attempt is not its latest phase Attempt`,
+        );
+      }
+      const latestPhaseContextManifest =
+        latestPhaseAttempt?.contextManifestId === undefined
+          ? undefined
+          : this.getContextManifest(latestPhaseAttempt.contextManifestId);
+      if (
+        latestPhaseAttempt?.contextManifestId !== undefined &&
+        latestPhaseContextManifest === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Driver Attempt ${latestPhaseAttempt.id} has no retained Context Manifest`,
+        );
+      }
+
+      const generationId = status.workflow.activeCandidateGenerationId;
+      const verificationObligations = Object.freeze(
+        generationId === undefined
+          ? []
+          : this.listVerificationObligations(status.goal.id).filter(
+              (obligation) => obligation.candidateGenerationId === generationId,
+            ),
+      );
+      const evidence = Object.freeze(
+        generationId === undefined ? [] : this.listEvidenceForGeneration(generationId),
+      );
+
+      return Object.freeze({
+        ...status,
+        ...(installedPolicyBundle === undefined ? {} : { installedPolicyBundle }),
+        ...(installedExecutionProfile === undefined ? {} : { installedExecutionProfile }),
+        ...(latestPhaseAttempt === undefined ? {} : { latestPhaseAttempt }),
+        ...(latestPhaseContextManifest === undefined ? {} : { latestPhaseContextManifest }),
+        verificationObligations,
+        evidence,
+      });
+    });
+  }
+
+  public getGoalAuditAuthority(rawGoalIdentifier: GoalId): GoalAuditAuthoritySnapshot | undefined {
+    this.assertOpen();
+    const goalIdentifier = goalId(rawGoalIdentifier);
+    return this.runRead(() => {
+      const owner = this.getGoalWithWorkflow(goalIdentifier);
+      if (owner === undefined) {
+        return undefined;
+      }
+      const watermark = auditSequenceWatermarkRowSchema.parse(
+        this.#database
+          .prepare('SELECT COALESCE(MAX(sequence), 0) AS through_sequence FROM audit_events')
+          .get(),
+      ).through_sequence;
+      const events = Object.freeze(
+        this.#database
+          .prepare(
+            `SELECT audit.id, audit.sequence, audit.aggregate_type, audit.aggregate_id,
+                    audit.event_type, audit.actor_type, audit.command_id,
+                    audit.before_version, audit.after_version, audit.correlation_id,
+                    audit.causation_id, audit.payload_digest, audit.occurred_at
+               FROM audit_events AS audit
+              WHERE (
+                      audit.aggregate_type = 'GOAL'
+                  AND audit.aggregate_id = ?
+                    )
+                 OR (
+                      audit.aggregate_type IN (
+                        'WORKFLOW',
+                        'WORKFLOW_CLOSEOUT',
+                        'WORKFLOW_POLICY_BINDING',
+                        'EXECUTION_PROFILE_BINDING'
+                      )
+                  AND audit.aggregate_id = ?
+                    )
+                 OR (
+                      audit.aggregate_type = 'ATTEMPT'
+                  AND EXISTS (
+                        SELECT 1
+                          FROM attempts AS attempt
+                         WHERE attempt.id = audit.aggregate_id
+                           AND attempt.workflow_id = ?
+                      )
+                    )
+                 OR EXISTS (
+                      SELECT 1
+                        FROM processed_commands AS processed
+                        LEFT JOIN workflows AS owned_workflow
+                          ON processed.aggregate_type = 'WORKFLOW'
+                         AND owned_workflow.id = processed.aggregate_id
+                       WHERE processed.command_id = audit.command_id
+                         AND (
+                              (
+                                processed.aggregate_type = 'GOAL'
+                                AND processed.aggregate_id = ?
+                              )
+                              OR (
+                                processed.aggregate_type = 'WORKFLOW'
+                                AND owned_workflow.goal_id = ?
+                              )
+                         )
+                    )
+              ORDER BY audit.sequence`,
+          )
+          .all(goalIdentifier, owner.workflow.id, owner.workflow.id, goalIdentifier, goalIdentifier)
+          .map((row) => decodeAuditEvent(row)),
+      );
+      return Object.freeze({
+        goalId: goalIdentifier,
+        throughSequence: watermark,
+        events,
+      });
     });
   }
 
@@ -1265,6 +1762,224 @@ export class SqliteControlStore implements AcceptanceControlStore {
     return row === undefined ? undefined : this.decodeVerifiedPolicyBundleRow(row);
   }
 
+  public getExecutionProfile(
+    rawProfileIdentifier: ExecutionProfileId,
+  ): InstalledExecutionProfile | undefined {
+    this.assertOpen();
+    const profileIdentifier = executionProfileId(rawProfileIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM execution_profiles WHERE id = ?')
+      .get(profileIdentifier);
+    return row === undefined ? undefined : this.decodeVerifiedExecutionProfileRow(row);
+  }
+
+  public getExecutionProfileBinding(
+    rawWorkflowIdentifier: WorkflowId,
+  ): ExecutionProfileBinding | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM workflow_execution_profile_bindings WHERE workflow_id = ?')
+      .get(workflowIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const binding = decodeExecutionProfileBindingRow(row);
+    this.assertExecutionProfileBindingClosure(binding);
+    return binding;
+  }
+
+  public getWorkflowPolicyBinding(
+    rawWorkflowIdentifier: WorkflowId,
+  ): WorkflowPolicyBinding | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM workflow_policy_bindings WHERE workflow_id = ?')
+      .get(workflowIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const binding = decodeWorkflowPolicyBindingRow(row);
+    this.assertWorkflowPolicyBindingClosure(binding);
+    return binding;
+  }
+
+  public getRecoveryReconciliation(
+    rawRecoveryIdentifier: RecoveryReconciliationId,
+  ): RecoveryReconciliationRecord | undefined {
+    this.assertOpen();
+    const recoveryIdentifier = recoveryReconciliationId(rawRecoveryIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM recovery_reconciliations WHERE id = ?')
+      .get(recoveryIdentifier);
+    return row === undefined ? undefined : this.decodeVerifiedRecoveryReconciliationRow(row);
+  }
+
+  public getLatestRecoveryReconciliation(
+    rawWorkflowIdentifier: WorkflowId,
+  ): RecoveryReconciliationRecord | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    const row = this.#database
+      .prepare(
+        `SELECT *
+           FROM recovery_reconciliations
+          WHERE workflow_id = ?
+          ORDER BY resulting_workflow_version DESC, id DESC
+          LIMIT 1`,
+      )
+      .get(workflowIdentifier);
+    return row === undefined ? undefined : this.decodeVerifiedRecoveryReconciliationRow(row);
+  }
+
+  public listStartupRecoveryCatalog(): readonly RecoveryCatalogEntry[] {
+    this.assertOpen();
+    return this.runRead(() => {
+      const rows = this.#database
+        .prepare(
+          `SELECT workflow.goal_id AS id
+             FROM workflows AS workflow
+             JOIN attempts AS attempt ON attempt.id = workflow.active_attempt_id
+            WHERE workflow.run_status = 'RUNNING'
+              AND attempt.status = 'RUNNING'
+            ORDER BY workflow.id`,
+        )
+        .all();
+      return Object.freeze(
+        rows.map((row) => {
+          const identifier = goalId(authorityIdentifierRowSchema.parse(row).id);
+          const entry = this.getRecoveryCatalogForGoal(identifier);
+          if (entry?.blockerKind !== RecoverableBlockerKind.ACTIVE_ATTEMPT) {
+            throw new StoreInvariantError(
+              `Running Goal ${identifier} has no exact startup recovery catalog entry`,
+            );
+          }
+          return entry;
+        }),
+      );
+    });
+  }
+
+  public getRecoveryCatalogForGoal(rawGoalIdentifier: GoalId): RecoveryCatalogEntry | undefined {
+    this.assertOpen();
+    const goalIdentifier = goalId(rawGoalIdentifier);
+    return this.runRead(() => {
+      const owner = this.getGoalWithWorkflow(goalIdentifier);
+      if (owner === undefined) {
+        return undefined;
+      }
+      const { goal, workflow } = owner;
+      const startAuthority = this.resolveWorkflowStartAuthorityClosure(workflow);
+      const latestReconciliation = this.getLatestRecoveryReconciliation(workflow.id);
+      let blockerKind: RecoveryCatalogEntry['blockerKind'];
+      let sourceAttempt: Attempt | undefined;
+
+      if (workflow.runStatus === RunStatus.RUNNING && workflow.activeAttemptId !== undefined) {
+        blockerKind = RecoverableBlockerKind.ACTIVE_ATTEMPT;
+        sourceAttempt = this.getAttempt(workflow.activeAttemptId);
+        if (sourceAttempt?.status !== AttemptStatus.RUNNING) {
+          throw new StoreInvariantError(
+            `Running Workflow ${workflow.id} has no exact active RUNNING Attempt`,
+          );
+        }
+      } else if (
+        workflow.runStatus === RunStatus.BLOCKED &&
+        workflow.activeAttemptId === undefined &&
+        latestReconciliation?.resultingWorkflowVersion === workflow.version
+      ) {
+        blockerKind = RecoverableBlockerKind.RECONCILED_BLOCKER;
+        sourceAttempt =
+          latestReconciliation.sourceAttemptId === undefined
+            ? undefined
+            : this.getAttempt(latestReconciliation.sourceAttemptId);
+        if (sourceAttempt === undefined || sourceAttempt.status === AttemptStatus.RUNNING) {
+          throw new StoreInvariantError(
+            `Recovery ${latestReconciliation.id} has no terminal source Attempt`,
+          );
+        }
+      } else if (
+        workflow.runStatus === RunStatus.BLOCKED &&
+        workflow.activeAttemptId === undefined
+      ) {
+        const row = this.#database
+          .prepare(
+            `SELECT *
+               FROM attempts
+              WHERE workflow_id = ?
+                AND status = 'FAILED'
+                AND failure_class IN ('TIMEOUT', 'ABRUPT_TERMINATION')
+              ORDER BY sequence DESC
+              LIMIT 1`,
+          )
+          .get(workflow.id);
+        sourceAttempt = row === undefined ? undefined : decodeAttempt(row);
+        if (sourceAttempt?.endedAt !== workflow.updatedAt) {
+          return undefined;
+        }
+        blockerKind = RecoverableBlockerKind.RECOVERABLE_FAILURE;
+      } else {
+        return undefined;
+      }
+
+      if (startAuthority.state !== 'STARTED') {
+        throw new StoreInvariantError(
+          `Recoverable Workflow ${workflow.id} has no exact Policy/Profile binding`,
+        );
+      }
+      const { policyBinding, executionProfileBinding } = startAuthority;
+      const contextManifest =
+        sourceAttempt.contextManifestId === undefined
+          ? undefined
+          : this.getContextManifest(sourceAttempt.contextManifestId);
+      if (sourceAttempt.contextManifestId !== undefined && contextManifest === undefined) {
+        throw new StoreInvariantError(
+          `Recovery source Attempt ${sourceAttempt.id} has no Context Manifest`,
+        );
+      }
+      if (
+        contextManifest !== undefined &&
+        (contextManifest.goalId !== goal.id ||
+          contextManifest.goalRevision !== goal.revision ||
+          contextManifest.workflowId !== workflow.id ||
+          contextManifest.attemptId !== sourceAttempt.id ||
+          contextManifest.policyBundleId !== policyBinding.policyBundleId ||
+          contextManifest.policyBundleDigest !== policyBinding.policyBundleDigest ||
+          contextManifest.executionProfileId !== executionProfileBinding.profileId ||
+          contextManifest.executionProfileDigest !== executionProfileBinding.profileDigest)
+      ) {
+        throw new StoreInvariantError(
+          `Recovery source Attempt ${sourceAttempt.id} has mismatched Context authority`,
+        );
+      }
+      const dispatchClaim = this.getWorkerDispatchClaim(sourceAttempt.id);
+      const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
+      const watermark = auditSequenceWatermarkRowSchema.parse(
+        this.#database
+          .prepare('SELECT COALESCE(MAX(sequence), 0) AS through_sequence FROM audit_events')
+          .get(),
+      ).through_sequence;
+      if (watermark < 1) {
+        throw new StoreInvariantError(
+          `Recovery catalog for Workflow ${workflow.id} has no Audit authority`,
+        );
+      }
+      return Object.freeze({
+        goal,
+        workflow,
+        blockerKind,
+        sourceAttempt,
+        ...(contextManifest === undefined ? {} : { contextManifest }),
+        policyBinding,
+        executionProfileBinding,
+        ...(dispatchClaim === undefined ? {} : { dispatchClaim }),
+        ...(candidateAuthority === undefined ? {} : { candidateAuthority }),
+        lastAuditSequence: watermark,
+        ...(latestReconciliation === undefined ? {} : { latestReconciliation }),
+      });
+    });
+  }
+
   public getAcceptanceAuthorityForWorkflow(
     rawWorkflowIdentifier: WorkflowId,
     rawPolicyBundleIdentifier: PolicyBundleId,
@@ -1274,13 +1989,32 @@ export class SqliteControlStore implements AcceptanceControlStore {
     const policyIdentifier = policyBundleId(rawPolicyBundleIdentifier);
     return this.runRead(() => {
       const workflow = this.getWorkflow(workflowIdentifier);
-      if (workflow?.activeCandidateGenerationId === undefined) {
+      if (workflow === undefined) {
         return undefined;
+      }
+      const startAuthority = this.resolveWorkflowStartAuthorityClosure(workflow);
+      if (workflow.activeCandidateGenerationId === undefined) {
+        return undefined;
+      }
+      if (startAuthority.state !== 'STARTED') {
+        throw new StoreInvariantError(
+          `Acceptance Workflow ${workflow.id} has no exact start authority`,
+        );
+      }
+      if (startAuthority.policyBinding.policyBundleId !== policyIdentifier) {
+        throw new StoreInvariantError(
+          `Acceptance Workflow ${workflow.id} requested a Policy other than its binding`,
+        );
       }
       const goal = this.getGoal(workflow.goalId);
       const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
       const installedPolicy = this.getPolicyBundle(policyIdentifier);
-      if (goal === undefined || candidateAuthority === undefined || installedPolicy === undefined) {
+      if (
+        goal === undefined ||
+        candidateAuthority === undefined ||
+        installedPolicy?.bundle.version !== startAuthority.policyBinding.policyBundleVersion ||
+        installedPolicy.bundle.digest !== startAuthority.policyBinding.policyBundleDigest
+      ) {
         return undefined;
       }
       const relatedSpecifications = this.listCheckSpecifications().filter((specification) =>
@@ -1563,6 +2297,73 @@ export class SqliteControlStore implements AcceptanceControlStore {
     });
   }
 
+  public installExecutionProfile(rawInput: InstallExecutionProfile): ExecutionProfileInstallResult {
+    this.assertOpen();
+    const input = validateInstallExecutionProfile(rawInput);
+    const expectedDigest = this.executionProfileDigest(input.profile);
+    if (input.profile.digest !== expectedDigest || input.payloadDigest !== expectedDigest) {
+      throw new StoreInvariantError(
+        'Execution Profile digest does not match its canonical projection',
+      );
+    }
+    const canonicalContent = canonicalizeJson(executionProfileProjection(input.profile));
+
+    return this.runImmediate(() => {
+      const existingRow = this.#database
+        .prepare('SELECT * FROM execution_profiles WHERE id = ? OR profile_digest = ?')
+        .get(input.profile.id, input.profile.digest);
+      if (existingRow !== undefined) {
+        const existing = this.decodeVerifiedExecutionProfileRow(existingRow);
+        const same =
+          existing.profile.id === input.profile.id &&
+          existing.profile.digest === input.profile.digest &&
+          canonicalizeJson(executionProfileProjection(existing.profile)) === canonicalContent;
+        return same
+          ? { status: 'EXISTING', value: existing }
+          : {
+              status: 'PROFILE_CONFLICT',
+              message: `Execution Profile ${input.profile.id} conflicts with installed authority`,
+            };
+      }
+
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'EXECUTION_PROFILE',
+        aggregateId: input.profile.id,
+        eventType: 'EXECUTION_PROFILE_INSTALLED',
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: expectedDigest,
+        occurredAt: input.installedAt,
+      });
+      this.probe(WorkerTransactionStep.AFTER_EXECUTION_PROFILE_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO execution_profiles(
+             id, schema_version, profile_version, canonical_content_json,
+             profile_digest, installed_at
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.profile.id,
+          input.profile.schemaVersion,
+          input.profile.version,
+          canonicalContent,
+          input.profile.digest,
+          input.installedAt,
+        );
+      this.probe(WorkerTransactionStep.AFTER_EXECUTION_PROFILE_WRITE);
+      const installed = this.getExecutionProfile(input.profile.id);
+      if (installed === undefined) {
+        throw new StoreInvariantError(
+          `Execution Profile ${input.profile.id} was not persisted readably`,
+        );
+      }
+      this.assertAuditEventsReadable([input.auditEventId]);
+      return { status: 'INSTALLED', value: installed };
+    });
+  }
+
   public claimWorkerDispatch(rawInput: ClaimWorkerDispatch): WorkerDispatchClaimResult {
     this.assertOpen();
     const input = validateClaimWorkerDispatch(rawInput);
@@ -1582,7 +2383,9 @@ export class SqliteControlStore implements AcceptanceControlStore {
           existing.workerSessionId === claim.workerSessionId &&
           existing.contextManifestId === claim.contextManifestId &&
           existing.contextManifestDigest === claim.contextManifestDigest &&
-          existing.packageDigest === claim.packageDigest;
+          existing.packageDigest === claim.packageDigest &&
+          existing.executionProfileId === claim.executionProfileId &&
+          existing.executionProfileDigest === claim.executionProfileDigest;
         return same
           ? { status: 'EXISTING', value: existing }
           : {
@@ -1600,6 +2403,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
       }
       const attempt = this.getAttemptInsideTransaction(claim.attemptId);
       const manifest = this.getContextManifest(claim.contextManifestId);
+      const profileBinding = this.getExecutionProfileBinding(claim.workflowId);
       if (
         workflow.runStatus !== RunStatus.RUNNING ||
         workflow.activeAttemptId !== attempt.id ||
@@ -1612,6 +2416,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
         manifest.attemptId !== attempt.id ||
         manifest.manifestDigest !== claim.contextManifestDigest ||
         manifest.packageDigest !== claim.packageDigest ||
+        manifest.executionProfileId !== claim.executionProfileId ||
+        manifest.executionProfileDigest !== claim.executionProfileDigest ||
+        profileBinding?.profileId !== claim.executionProfileId ||
+        profileBinding.profileDigest !== claim.executionProfileDigest ||
         claim.claimedAt < workflow.updatedAt
       ) {
         return {
@@ -1624,8 +2432,9 @@ export class SqliteControlStore implements AcceptanceControlStore {
         .prepare(
           `INSERT INTO worker_dispatch_claims(
              attempt_id, schema_version, workflow_id, workflow_version, worker_session_id,
-             context_manifest_id, context_manifest_digest, package_digest, claimed_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             context_manifest_id, context_manifest_digest, package_digest,
+             execution_profile_id, execution_profile_digest, claimed_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           claim.attemptId,
@@ -1636,6 +2445,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
           claim.contextManifestId,
           claim.contextManifestDigest,
           claim.packageDigest,
+          claim.executionProfileId,
+          claim.executionProfileDigest,
           claim.claimedAt,
         );
       this.insertAuditEvent({
@@ -1671,9 +2482,16 @@ export class SqliteControlStore implements AcceptanceControlStore {
     const nonGoals = serializeJson(input.goal.nonGoals);
 
     return this.runCommandImmediate(() => {
-      const replay = this.checkCommand(input.commandId, input.inputDigest, 'GOAL', input.goal.id);
-      if (replay !== undefined) {
-        return { status: 'REPLAYED', outcome: replay.outcome };
+      const existingRow = this.#database
+        .prepare('SELECT * FROM processed_commands WHERE command_id = ?')
+        .get(input.commandId);
+      if (existingRow !== undefined) {
+        const existing = decodeProcessedCommand(existingRow);
+        this.validateProcessedCommandRecord(existing);
+        if (existing.inputDigest !== input.inputDigest || existing.aggregateType !== 'GOAL') {
+          throw new CommandIdConflictError(input.commandId);
+        }
+        return { status: 'REPLAYED', outcome: existing.outcome };
       }
       this.probe(TransactionStep.AFTER_COMMAND_CHECK);
 
@@ -1817,19 +2635,83 @@ export class SqliteControlStore implements AcceptanceControlStore {
   ): StoreCommandResult<CommittedContextAttempt> {
     this.assertOpen();
     const input = validateCommitContextBoundAttemptStart(rawInput);
+    if (input.event.type !== 'ATTEMPT_STARTED') {
+      throw new StoreInvariantError('Context-bound commit requires an Attempt start event');
+    }
+    const startEvent = input.event;
     return this.runCommandImmediate(() => {
       const result = this.commitAttemptEventInsideTransaction(input);
       if (result.status === 'REPLAYED') {
         const existing = this.getContextManifest(input.contextManifest.id);
-        if (existing?.attemptId !== input.contextManifest.attemptId) {
+        const existingPolicyBinding = this.getWorkflowPolicyBinding(input.policyBinding.workflowId);
+        const existingBinding = this.getExecutionProfileBinding(
+          input.executionProfileBinding.workflowId,
+        );
+        if (
+          existing?.attemptId !== input.contextManifest.attemptId ||
+          existingPolicyBinding === undefined ||
+          canonicalizeJson(existingPolicyBinding) !== canonicalizeJson(input.policyBinding) ||
+          existingBinding === undefined ||
+          canonicalizeJson(existingBinding) !== canonicalizeJson(input.executionProfileBinding)
+        ) {
           throw new StoreInvariantError(
-            `Replayed Attempt ${input.contextManifest.attemptId} has no bound Context Manifest`,
+            `Replayed Attempt ${input.contextManifest.attemptId} has no exact Context/Policy/Profile binding`,
           );
         }
         return result;
       }
       if (result.status !== 'APPLIED') {
         return result;
+      }
+
+      let persistedPolicyBinding: WorkflowPolicyBinding;
+      let persistedBinding: ExecutionProfileBinding;
+      if (startEvent.attempt.sequence === 1) {
+        if (input.policyBindingAuditEventId === undefined) {
+          throw new StoreInvariantError('First Worker Attempt has no Policy binding audit');
+        }
+        if (input.executionProfileBindingAuditEventId === undefined) {
+          throw new StoreInvariantError('First Worker Attempt has no Profile binding audit');
+        }
+        this.insertWorkflowPolicyBinding(
+          input.policyBinding,
+          input.policyBindingAuditEventId,
+          input.correlationId,
+          input.causationId,
+        );
+        const insertedPolicy = this.getWorkflowPolicyBinding(input.policyBinding.workflowId);
+        if (insertedPolicy === undefined) {
+          throw new StoreInvariantError('Workflow Policy binding was not persisted readably');
+        }
+        persistedPolicyBinding = insertedPolicy;
+        this.insertExecutionProfileBinding(
+          input.executionProfileBinding,
+          input.executionProfileBindingAuditEventId,
+          input.correlationId,
+          input.causationId,
+        );
+        const inserted = this.getExecutionProfileBinding(input.executionProfileBinding.workflowId);
+        if (inserted === undefined) {
+          throw new StoreInvariantError('Execution Profile binding was not persisted readably');
+        }
+        persistedBinding = inserted;
+      } else {
+        const existingPolicy = this.getWorkflowPolicyBinding(input.policyBinding.workflowId);
+        if (
+          existingPolicy === undefined ||
+          canonicalizeJson(existingPolicy) !== canonicalizeJson(input.policyBinding)
+        ) {
+          throw new StoreInvariantError('Later Worker Attempt changed its Workflow Policy');
+        }
+        persistedPolicyBinding = existingPolicy;
+        const existing = this.getExecutionProfileBinding(input.executionProfileBinding.workflowId);
+        if (
+          existing === undefined ||
+          canonicalizeJson(existing) !== canonicalizeJson(input.executionProfileBinding)
+        ) {
+          throw new StoreInvariantError('Later Worker Attempt changed its Execution Profile');
+        }
+        persistedBinding = existing;
       }
 
       this.insertContextManifest(input.contextManifest);
@@ -1848,6 +2730,207 @@ export class SqliteControlStore implements AcceptanceControlStore {
         value: Object.freeze({
           ...result.value,
           contextManifest: persistedManifest,
+          policyBinding: persistedPolicyBinding,
+          executionProfileBinding: persistedBinding,
+        }),
+      };
+    });
+  }
+
+  public commitStartupRecovery(
+    rawInput: CommitStartupRecovery,
+  ): StoreCommandResult<CommittedStartupRecovery> {
+    this.assertOpen();
+    const input = validateCommitStartupRecovery(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const currentWorkflow = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, currentWorkflow);
+      if (currentWorkflow.version !== input.event.fromWorkflowVersion) {
+        throw new OptimisticConcurrencyError('Workflow', currentWorkflow.id);
+      }
+      const currentAttempt = this.getAttemptInsideTransaction(input.event.attemptId);
+      this.assertAttemptControlEventAfterDispatchClaim(
+        currentAttempt,
+        currentWorkflow.id,
+        currentWorkflow.version,
+        input.event.occurredAt,
+      );
+      const applied = applyAttemptEvent(currentWorkflow, currentAttempt, input.event);
+      this.assertRecoveryMatchesCurrentAuthority(input.recovery, currentWorkflow, currentAttempt);
+      this.insertRecoveryReconciliation(input.recovery);
+      this.probe(RecoveryTransactionStep.AFTER_RECOVERY_RECORD_WRITE);
+
+      this.updateTerminalAttempt(currentAttempt, applied.attempt);
+      this.updateWorkflow(currentWorkflow, applied.workflow);
+      this.probe(RecoveryTransactionStep.AFTER_RECOVERY_STATE_WRITE);
+
+      this.insertAttemptAndWorkflowAudits(input, applied);
+      this.insertRecoveryAudit(
+        input.recovery,
+        input.recoveryAuditEventId,
+        input.event.commandId,
+        input.correlationId,
+        input.causationId,
+      );
+      this.probe(RecoveryTransactionStep.AFTER_RECOVERY_AUDIT_WRITE);
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, applied.workflow, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedOwner = this.getGoalWithWorkflow(applied.workflow.goalId);
+      const persistedAttempt = this.getAttempt(applied.attempt.id);
+      const persistedRecovery = this.getRecoveryReconciliation(input.recovery.id);
+      if (
+        persistedOwner === undefined ||
+        persistedAttempt === undefined ||
+        persistedRecovery === undefined
+      ) {
+        throw new StoreInvariantError('Startup recovery did not round-trip exact authority');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        persistedOwner.goal.id,
+        persistedOwner.workflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.auditEventId,
+        input.workflowAuditEventId,
+        input.recoveryAuditEventId,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          goal: persistedOwner.goal,
+          workflow: persistedOwner.workflow,
+          attempt: persistedAttempt,
+          recovery: persistedRecovery,
+        }),
+      };
+    });
+  }
+
+  public commitResumeRecovery(
+    rawInput: CommitResumeRecovery,
+  ): StoreCommandResult<CommittedResumeRecovery> {
+    this.assertOpen();
+    const input = validateCommitResumeRecovery(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const currentWorkflow = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, currentWorkflow);
+      if (currentWorkflow.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', currentWorkflow.id);
+      }
+      const sourceAttempt =
+        input.recovery.sourceAttemptId === undefined
+          ? undefined
+          : this.getAttemptInsideTransaction(input.recovery.sourceAttemptId);
+      if (sourceAttempt === undefined) {
+        throw new StoreInvariantError('Resume recovery requires one exact source Attempt');
+      }
+      const nextWorkflow = applyRecoveryWorkflowEvent(currentWorkflow, input.event);
+      this.assertRecoveryMatchesCurrentAuthority(input.recovery, currentWorkflow, sourceAttempt);
+      this.insertRecoveryReconciliation(input.recovery);
+      this.probe(RecoveryTransactionStep.AFTER_RECOVERY_RECORD_WRITE);
+
+      this.updateWorkflow(currentWorkflow, nextWorkflow);
+      this.probe(RecoveryTransactionStep.AFTER_RECOVERY_STATE_WRITE);
+
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: currentWorkflow.id,
+        eventType: input.event.type,
+        commandId: input.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.insertRecoveryAudit(
+        input.recovery,
+        input.recoveryAuditEventId,
+        input.commandId,
+        input.correlationId,
+        input.causationId,
+      );
+      this.probe(RecoveryTransactionStep.AFTER_RECOVERY_AUDIT_WRITE);
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, nextWorkflow, input.commandId),
+      );
+      this.insertProcessedCommand(
+        input.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedOwner = this.getGoalWithWorkflow(nextWorkflow.goalId);
+      const persistedRecovery = this.getRecoveryReconciliation(input.recovery.id);
+      if (persistedOwner === undefined || persistedRecovery === undefined) {
+        throw new StoreInvariantError('Resume recovery did not round-trip exact authority');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.commandId,
+        input.inputDigest,
+        input.target,
+        persistedOwner.goal.id,
+        persistedOwner.workflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([input.auditEventId, input.recoveryAuditEventId]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          goal: persistedOwner.goal,
+          workflow: persistedOwner.workflow,
+          recovery: persistedRecovery,
         }),
       };
     });
@@ -4523,6 +5606,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
       .get(record.candidateGenerationId);
     const attempt = this.getAttempt(record.attemptId);
     const workflow = this.getWorkflow(record.workflowId);
+    const policyBinding = this.getWorkflowPolicyBinding(record.workflowId);
     const policy = this.getPolicyBundle(record.policyBundleId);
     const specification = this.getCheckSpecification(record.checkSpec.id);
     if (generationRow === undefined) {
@@ -4543,6 +5627,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
     if (
       attempt === undefined ||
       workflow === undefined ||
+      policyBinding === undefined ||
       policy === undefined ||
       specification === undefined ||
       candidate === undefined ||
@@ -4561,6 +5646,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
       record.recordedAt !== attempt.endedAt ||
       decodedGeneration.generation.frozenDigest !== record.candidateDigest ||
       !record.checkSpec.inputRefs.includes(decodedGeneration.generation.id) ||
+      policyBinding.goalId !== record.goalId ||
+      policyBinding.policyBundleId !== record.policyBundleId ||
+      policyBinding.policyBundleDigest !== record.policyBundleDigest ||
+      policyBinding.boundAt > record.recordedAt ||
       policy.bundle.digest !== record.policyBundleDigest ||
       policy.installedAt > record.startedAt ||
       (record.kind === EvidenceKind.TEST_RESULT && !matchingObligation) ||
@@ -5042,10 +6131,11 @@ export class SqliteControlStore implements AcceptanceControlStore {
         `INSERT INTO context_manifests(
            id, schema_version, compiler_version, created_at, goal_id, goal_revision,
            workflow_id, workflow_version, phase, attempt_id, candidate_generation_id,
-           candidate_digest, policy_bundle_id, policy_bundle_digest,
+           candidate_digest, execution_profile_id, execution_profile_digest,
+           policy_bundle_id, policy_bundle_digest,
            capability_grant_digest, response_contract_digest, entries_json,
            omission_decisions_json, package_digest, manifest_digest
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         manifest.id,
@@ -5060,6 +6150,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
         manifest.attemptId,
         manifest.candidateGenerationId ?? null,
         manifest.candidateDigest ?? null,
+        manifest.executionProfileId,
+        manifest.executionProfileDigest,
         manifest.policyBundleId,
         manifest.policyBundleDigest,
         manifest.capabilityGrantDigest,
@@ -5071,8 +6163,693 @@ export class SqliteControlStore implements AcceptanceControlStore {
       );
   }
 
+  private assertRecoveryMatchesCurrentAuthority(
+    recovery: RecoveryReconciliationRecord,
+    workflow: WorkflowInstance,
+    sourceAttempt: Attempt,
+  ): void {
+    const owner = this.getGoalWithWorkflow(workflow.goalId);
+    const binding = this.getExecutionProfileBinding(workflow.id);
+    const claim = this.getWorkerDispatchClaim(sourceAttempt.id);
+    const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
+    const watermark = auditSequenceWatermarkRowSchema.parse(
+      this.#database
+        .prepare('SELECT COALESCE(MAX(sequence), 0) AS through_sequence FROM audit_events')
+        .get(),
+    ).through_sequence;
+    const expectedProjectIdentity =
+      owner === undefined
+        ? undefined
+        : deriveM1BaseProjectIdentity(owner.goal.scope.projectPath, canonicalAuthorityDigests);
+    const expectedClaimDigest =
+      claim === undefined
+        ? undefined
+        : sha256Digest(canonicalAuthorityDigests.digest(workerDispatchClaimProjection(claim)));
+    const expectedCandidateDigest =
+      candidateAuthority?.generation.frozenDigest ?? candidateAuthority?.generation.baseDigest;
+
+    if (
+      owner === undefined ||
+      binding === undefined ||
+      owner.workflow.id !== workflow.id ||
+      owner.workflow.version !== workflow.version ||
+      recovery.goalId !== owner.goal.id ||
+      recovery.goalRevision !== owner.goal.revision ||
+      recovery.workflowId !== workflow.id ||
+      recovery.phase !== workflow.phase ||
+      recovery.inspectedWorkflowVersion !== workflow.version ||
+      recovery.sourceAttemptId !== sourceAttempt.id ||
+      sourceAttempt.workflowId !== workflow.id ||
+      sourceAttempt.phase !== workflow.phase ||
+      recovery.lastAuditSequence !== watermark ||
+      recovery.expectedProjectIdentity !== expectedProjectIdentity ||
+      recovery.executionProfileId !== binding.profileId ||
+      recovery.executionProfileDigest !== binding.profileDigest ||
+      recovery.dispatchClaimDigest !== expectedClaimDigest ||
+      recovery.inspectedAt < workflow.updatedAt ||
+      recovery.inspectedAt < sourceAttempt.startedAt
+    ) {
+      throw new StoreInvariantError(
+        `Recovery reconciliation ${recovery.id} does not match current control authority`,
+      );
+    }
+
+    if (candidateAuthority === undefined) {
+      if (
+        recovery.candidateGenerationId !== undefined ||
+        recovery.candidateBaseIdentity !== undefined ||
+        recovery.expectedCandidateDigest !== undefined ||
+        recovery.observedCandidateDigest !== undefined
+      ) {
+        throw new StoreInvariantError(
+          `Recovery reconciliation ${recovery.id} invents Candidate authority`,
+        );
+      }
+    } else if (
+      expectedCandidateDigest === undefined ||
+      recovery.candidateGenerationId !== candidateAuthority.generation.id ||
+      recovery.candidateBaseIdentity !== candidateAuthority.candidate.baseProjectIdentity ||
+      recovery.expectedCandidateDigest !== expectedCandidateDigest
+    ) {
+      throw new StoreInvariantError(
+        `Recovery reconciliation ${recovery.id} does not bind the current Candidate`,
+      );
+    }
+
+    if (recovery.purpose === RecoveryReconciliationPurpose.STARTUP) {
+      if (
+        workflow.runStatus !== RunStatus.RUNNING ||
+        workflow.activeAttemptId !== sourceAttempt.id ||
+        sourceAttempt.status !== AttemptStatus.RUNNING
+      ) {
+        throw new StoreInvariantError('Startup recovery source is not the active RUNNING Attempt');
+      }
+      return;
+    }
+
+    const latest = this.getLatestRecoveryReconciliation(workflow.id);
+    const followsCurrentReconciliation =
+      latest?.resultingWorkflowVersion === workflow.version &&
+      latest.sourceAttemptId === sourceAttempt.id;
+    const followsRecoverableFailure =
+      sourceAttempt.status === AttemptStatus.FAILED &&
+      (sourceAttempt.failureClass === AttemptFailureClass.TIMEOUT ||
+        sourceAttempt.failureClass === AttemptFailureClass.ABRUPT_TERMINATION) &&
+      sourceAttempt.endedAt === workflow.updatedAt;
+    if (
+      workflow.runStatus !== RunStatus.BLOCKED ||
+      workflow.activeAttemptId !== undefined ||
+      (!followsCurrentReconciliation && !followsRecoverableFailure)
+    ) {
+      throw new StoreInvariantError(
+        'Resume recovery source is not the current recoverable blocker',
+      );
+    }
+  }
+
+  private insertRecoveryReconciliation(recovery: RecoveryReconciliationRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO recovery_reconciliations(
+           id, schema_version, goal_id, goal_revision, workflow_id, phase,
+           inspected_workflow_version, resulting_workflow_version, source_attempt_id,
+           dispatch_claim_digest, last_audit_sequence, expected_project_identity,
+           observed_project_identity, candidate_generation_id, candidate_base_identity,
+           expected_candidate_digest, observed_candidate_digest, execution_profile_id,
+           execution_profile_digest, purpose, disposition, safe_resume_phase, reason_code,
+           observation_refs_json, inspector_version, recovery_policy_version, inspected_at,
+           reconciliation_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        recovery.id,
+        recovery.schemaVersion,
+        recovery.goalId,
+        recovery.goalRevision,
+        recovery.workflowId,
+        recovery.phase,
+        recovery.inspectedWorkflowVersion,
+        recovery.resultingWorkflowVersion,
+        recovery.sourceAttemptId ?? null,
+        recovery.dispatchClaimDigest ?? null,
+        recovery.lastAuditSequence,
+        recovery.expectedProjectIdentity,
+        recovery.observedProjectIdentity ?? null,
+        recovery.candidateGenerationId ?? null,
+        recovery.candidateBaseIdentity ?? null,
+        recovery.expectedCandidateDigest ?? null,
+        recovery.observedCandidateDigest ?? null,
+        recovery.executionProfileId,
+        recovery.executionProfileDigest,
+        recovery.purpose,
+        recovery.disposition,
+        recovery.safeResumePhase ?? null,
+        recovery.reasonCode,
+        serializeJson(decodeJsonValue(recovery.observationRefs)),
+        recovery.inspectorVersion,
+        recovery.recoveryPolicyVersion,
+        recovery.inspectedAt,
+        recovery.reconciliationDigest,
+      );
+  }
+
+  private insertRecoveryAudit(
+    recovery: RecoveryReconciliationRecord,
+    auditIdentifier: AuditEventId,
+    commandIdentifier: CommandId,
+    correlationId?: string,
+    causationId?: string,
+  ): void {
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'RECOVERY_RECONCILIATION',
+      aggregateId: recovery.id,
+      eventType: 'RECOVERY_RECONCILIATION_RECORDED',
+      commandId: commandIdentifier,
+      beforeVersion: recovery.inspectedWorkflowVersion,
+      afterVersion: recovery.resultingWorkflowVersion,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(causationId === undefined ? {} : { causationId }),
+      payloadDigest: recovery.reconciliationDigest,
+      occurredAt: recovery.inspectedAt,
+    });
+  }
+
   private policyDigest(bundle: PolicyBundle): Sha256Digest {
     return sha256Digest(canonicalAuthorityDigests.digest(policyBundleProjection(bundle)));
+  }
+
+  private executionProfileDigest(profile: ExecutionProfile): Sha256Digest {
+    return sha256Digest(canonicalAuthorityDigests.digest(executionProfileProjection(profile)));
+  }
+
+  private decodeVerifiedExecutionProfileRow(row: unknown): InstalledExecutionProfile {
+    const installed = decodeExecutionProfileRow(row);
+    if (installed.profile.digest !== this.executionProfileDigest(installed.profile)) {
+      throw new StoreInvariantError(
+        `Execution Profile ${installed.profile.id} digest does not match its canonical projection`,
+      );
+    }
+    return installed;
+  }
+
+  private decodeVerifiedRecoveryReconciliationRow(row: unknown): RecoveryReconciliationRecord {
+    const recovery = decodeRecoveryReconciliationRow(row);
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(recoveryReconciliationProjection(recovery)),
+    );
+    if (recovery.reconciliationDigest !== expectedDigest) {
+      throw new StoreInvariantError(
+        `Recovery reconciliation ${recovery.id} digest does not match its canonical projection`,
+      );
+    }
+    return recovery;
+  }
+
+  private insertWorkflowPolicyBinding(
+    binding: WorkflowPolicyBinding,
+    auditIdentifier: AuditEventId,
+    correlationId?: string,
+    causationId?: string,
+  ): void {
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(workflowPolicyBindingProjection(binding)),
+    );
+    if (binding.bindingDigest !== expectedDigest) {
+      throw new StoreInvariantError(
+        `Workflow Policy binding for ${binding.workflowId} has a false digest`,
+      );
+    }
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'WORKFLOW_POLICY_BINDING',
+      aggregateId: binding.workflowId,
+      eventType: 'WORKFLOW_POLICY_BOUND',
+      commandId: binding.startCommandId,
+      beforeVersion: 1,
+      afterVersion: 2,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(causationId === undefined ? {} : { causationId }),
+      payloadDigest: binding.bindingDigest,
+      occurredAt: binding.boundAt,
+    });
+    this.probe(WorkerTransactionStep.AFTER_WORKFLOW_POLICY_BINDING_AUDIT_WRITE);
+    this.#database
+      .prepare(
+        `INSERT INTO workflow_policy_bindings(
+           workflow_id, schema_version, goal_id, policy_bundle_id,
+           policy_bundle_version, policy_bundle_digest, start_command_id,
+           bound_at, binding_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        binding.workflowId,
+        binding.schemaVersion,
+        binding.goalId,
+        binding.policyBundleId,
+        binding.policyBundleVersion,
+        binding.policyBundleDigest,
+        binding.startCommandId,
+        binding.boundAt,
+        binding.bindingDigest,
+      );
+    this.probe(WorkerTransactionStep.AFTER_WORKFLOW_POLICY_BINDING_WRITE);
+  }
+
+  private assertWorkflowPolicyBindingClosure(binding: WorkflowPolicyBinding): void {
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(workflowPolicyBindingProjection(binding)),
+    );
+    const workflow = this.getWorkflow(binding.workflowId);
+    const policy = this.getPolicyBundle(binding.policyBundleId);
+    const command = this.getProcessedCommand(binding.startCommandId);
+    const audits = this.listAuditEvents('WORKFLOW_POLICY_BINDING', binding.workflowId).filter(
+      (audit) => audit.eventType === 'WORKFLOW_POLICY_BOUND',
+    );
+    const audit = audits[0];
+    if (
+      binding.bindingDigest !== expectedDigest ||
+      workflow?.goalId !== binding.goalId ||
+      workflow.version < 2 ||
+      workflow.updatedAt < binding.boundAt ||
+      policy?.bundle.version !== binding.policyBundleVersion ||
+      policy.bundle.digest !== binding.policyBundleDigest ||
+      policy.installedAt > binding.boundAt ||
+      command?.aggregateType !== 'GOAL' ||
+      command.aggregateId !== binding.goalId ||
+      command.completedAt !== binding.boundAt ||
+      audits.length !== 1 ||
+      audit?.actorType !== 'RUNTIME' ||
+      audit.commandId !== binding.startCommandId ||
+      audit.beforeVersion !== 1 ||
+      audit.afterVersion !== 2 ||
+      audit.payloadDigest !== binding.bindingDigest ||
+      audit.occurredAt !== binding.boundAt
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${binding.workflowId} has incomplete Policy binding authority`,
+      );
+    }
+  }
+
+  private insertExecutionProfileBinding(
+    binding: ExecutionProfileBinding,
+    auditIdentifier: AuditEventId,
+    correlationId?: string,
+    causationId?: string,
+  ): void {
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(executionProfileBindingProjection(binding)),
+    );
+    if (binding.bindingDigest !== expectedDigest) {
+      throw new StoreInvariantError(
+        `Execution Profile binding for ${binding.workflowId} has a false digest`,
+      );
+    }
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'EXECUTION_PROFILE_BINDING',
+      aggregateId: binding.workflowId,
+      eventType: 'EXECUTION_PROFILE_BOUND',
+      commandId: binding.startCommandId,
+      beforeVersion: 1,
+      afterVersion: 2,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(causationId === undefined ? {} : { causationId }),
+      payloadDigest: binding.bindingDigest,
+      occurredAt: binding.boundAt,
+    });
+    this.probe(WorkerTransactionStep.AFTER_EXECUTION_PROFILE_BINDING_AUDIT_WRITE);
+    this.#database
+      .prepare(
+        `INSERT INTO workflow_execution_profile_bindings(
+           workflow_id, schema_version, goal_id, profile_id, profile_version,
+           profile_digest, start_command_id, bound_at, binding_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        binding.workflowId,
+        binding.schemaVersion,
+        binding.goalId,
+        binding.profileId,
+        binding.profileVersion,
+        binding.profileDigest,
+        binding.startCommandId,
+        binding.boundAt,
+        binding.bindingDigest,
+      );
+    this.probe(WorkerTransactionStep.AFTER_EXECUTION_PROFILE_BINDING_WRITE);
+  }
+
+  private assertExecutionProfileBindingClosure(binding: ExecutionProfileBinding): void {
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(executionProfileBindingProjection(binding)),
+    );
+    const workflow = this.getWorkflow(binding.workflowId);
+    const profile = this.getExecutionProfile(binding.profileId);
+    const command = this.getProcessedCommand(binding.startCommandId);
+    const audits = this.listAuditEvents('EXECUTION_PROFILE_BINDING', binding.workflowId).filter(
+      (audit) => audit.eventType === 'EXECUTION_PROFILE_BOUND',
+    );
+    const audit = audits[0];
+    if (
+      binding.bindingDigest !== expectedDigest ||
+      workflow?.goalId !== binding.goalId ||
+      workflow.version < 2 ||
+      workflow.updatedAt < binding.boundAt ||
+      profile?.profile.version !== binding.profileVersion ||
+      profile.profile.digest !== binding.profileDigest ||
+      profile.installedAt > binding.boundAt ||
+      command?.aggregateType !== 'GOAL' ||
+      command.aggregateId !== binding.goalId ||
+      command.completedAt !== binding.boundAt ||
+      audits.length !== 1 ||
+      audit?.actorType !== 'RUNTIME' ||
+      audit.commandId !== binding.startCommandId ||
+      audit.beforeVersion !== 1 ||
+      audit.afterVersion !== 2 ||
+      audit.payloadDigest !== binding.bindingDigest ||
+      audit.occurredAt !== binding.boundAt
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${binding.workflowId} has incomplete Execution Profile binding authority`,
+      );
+    }
+  }
+
+  private resolveWorkflowStartAuthorityClosure(
+    workflow: WorkflowInstance,
+  ): WorkflowStartAuthorityClosure {
+    const policyRow = this.#database
+      .prepare('SELECT * FROM workflow_policy_bindings WHERE workflow_id = ?')
+      .get(workflow.id);
+    const profileRow = this.#database
+      .prepare('SELECT * FROM workflow_execution_profile_bindings WHERE workflow_id = ?')
+      .get(workflow.id);
+    const attempts = this.#database
+      .prepare('SELECT * FROM attempts WHERE workflow_id = ? ORDER BY sequence')
+      .all(workflow.id)
+      .map((row) => decodeAttempt(row));
+
+    if (policyRow === undefined && profileRow === undefined) {
+      if (attempts.length !== 0) {
+        throw new StoreInvariantError(
+          `Workflow ${workflow.id} has Attempt history without start authority`,
+        );
+      }
+      if (
+        workflow.phase === WorkflowPhase.DISCOVERY &&
+        workflow.runStatus === RunStatus.READY &&
+        workflow.version === 1 &&
+        workflow.activeAttemptId === undefined &&
+        workflow.activeCandidateGenerationId === undefined &&
+        workflow.suspendedReason === undefined &&
+        workflow.updatedAt === workflow.createdAt
+      ) {
+        return Object.freeze({ state: 'UNSTARTED', workflow });
+      }
+      if (
+        workflow.phase === WorkflowPhase.DISCOVERY &&
+        workflow.runStatus === RunStatus.CANCELLED &&
+        workflow.version === 2 &&
+        workflow.activeAttemptId === undefined &&
+        workflow.activeCandidateGenerationId === undefined &&
+        workflow.suspendedReason !== undefined
+      ) {
+        return Object.freeze({
+          state: 'CANCELLED_BEFORE_START',
+          workflow,
+          cancellationAudit: this.assertPreStartCancellationClosure(workflow),
+        });
+      }
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} changed execution state without start authority`,
+      );
+    }
+
+    if (policyRow === undefined || profileRow === undefined) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has only one half of its Policy/Profile start authority`,
+      );
+    }
+
+    const policyBinding = decodeWorkflowPolicyBindingRow(policyRow);
+    const executionProfileBinding = decodeExecutionProfileBindingRow(profileRow);
+    this.assertWorkflowPolicyBindingClosure(policyBinding);
+    this.assertExecutionProfileBindingClosure(executionProfileBinding);
+    for (const attempt of attempts) {
+      this.assertWorkerAttemptStartAuthorityClosure(
+        workflow,
+        attempt,
+        policyBinding,
+        executionProfileBinding,
+      );
+    }
+    const firstAttempt = attempts[0];
+    const contextManifest =
+      firstAttempt?.contextManifestId === undefined
+        ? undefined
+        : this.getContextManifest(firstAttempt.contextManifestId);
+    const command = this.getProcessedCommand(policyBinding.startCommandId);
+    const outcome = command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+    const attemptStartAudits =
+      firstAttempt === undefined
+        ? []
+        : this.listAuditEvents('ATTEMPT', firstAttempt.id).filter(
+            (audit) => audit.eventType === 'ATTEMPT_STARTED',
+          );
+    const workflowStartAudits = this.listAuditEvents('WORKFLOW', workflow.id).filter(
+      (audit) =>
+        audit.eventType === 'WORKFLOW_ATTEMPT_STARTED' &&
+        audit.beforeVersion === 1 &&
+        audit.afterVersion === 2,
+    );
+    const attemptStartAudit = attemptStartAudits[0];
+    const workflowStartAudit = workflowStartAudits[0];
+
+    if (firstAttempt === undefined || contextManifest === undefined) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has no first Context-bound Attempt authority`,
+      );
+    }
+    if (
+      firstAttempt.sequence !== 1 ||
+      firstAttempt.phase !== WorkflowPhase.DISCOVERY ||
+      firstAttempt.startedAt !== policyBinding.boundAt ||
+      firstAttempt.contextManifestId === undefined ||
+      firstAttempt.workerSessionRef === undefined
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has invalid first Attempt start authority`,
+      );
+    }
+    if (
+      policyBinding.goalId !== workflow.goalId ||
+      executionProfileBinding.goalId !== workflow.goalId ||
+      policyBinding.workflowId !== workflow.id ||
+      executionProfileBinding.workflowId !== workflow.id ||
+      policyBinding.startCommandId !== executionProfileBinding.startCommandId ||
+      policyBinding.boundAt !== executionProfileBinding.boundAt
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has inconsistent Policy/Profile start authority`,
+      );
+    }
+    if (
+      contextManifest.goalId !== workflow.goalId ||
+      contextManifest.workflowId !== workflow.id ||
+      contextManifest.workflowVersion !== 2 ||
+      contextManifest.phase !== WorkflowPhase.DISCOVERY ||
+      contextManifest.attemptId !== firstAttempt.id ||
+      contextManifest.executionProfileId !== executionProfileBinding.profileId ||
+      contextManifest.executionProfileDigest !== executionProfileBinding.profileDigest ||
+      contextManifest.policyBundleId !== policyBinding.policyBundleId ||
+      contextManifest.policyBundleDigest !== policyBinding.policyBundleDigest
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has inconsistent first Context Manifest authority`,
+      );
+    }
+    if (
+      command?.aggregateType !== 'GOAL' ||
+      command.aggregateId !== workflow.goalId ||
+      command.completedAt !== policyBinding.boundAt ||
+      outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+      outcome.target.aggregateType !== 'GOAL' ||
+      outcome.target.aggregateId !== workflow.goalId ||
+      outcome.goalId !== workflow.goalId ||
+      outcome.workflow.id !== workflow.id ||
+      outcome.workflow.version !== 2 ||
+      outcome.workflow.phase !== WorkflowPhase.DISCOVERY ||
+      outcome.workflow.runStatus !== RunStatus.RUNNING
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has inconsistent first StartGoal command authority`,
+      );
+    }
+    if (
+      attemptStartAudits.length !== 1 ||
+      attemptStartAudit?.actorType !== 'RUNTIME' ||
+      attemptStartAudit.commandId !== policyBinding.startCommandId ||
+      attemptStartAudit.beforeVersion !== 1 ||
+      attemptStartAudit.afterVersion !== 2 ||
+      attemptStartAudit.occurredAt !== policyBinding.boundAt ||
+      workflowStartAudits.length !== 1 ||
+      workflowStartAudit?.actorType !== 'RUNTIME' ||
+      workflowStartAudit.commandId !== policyBinding.startCommandId ||
+      workflowStartAudit.beforeVersion !== 1 ||
+      workflowStartAudit.afterVersion !== 2 ||
+      workflowStartAudit.occurredAt !== policyBinding.boundAt
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has inconsistent first StartGoal audit authority`,
+      );
+    }
+
+    return Object.freeze({
+      state: 'STARTED',
+      workflow,
+      firstAttempt,
+      contextManifest,
+      policyBinding,
+      executionProfileBinding,
+    });
+  }
+
+  private assertWorkerAttemptStartAuthorityClosure(
+    workflow: WorkflowInstance,
+    attempt: Attempt,
+    policyBinding: WorkflowPolicyBinding,
+    executionProfileBinding: ExecutionProfileBinding,
+  ): void {
+    if (!isM1CodingWorkerPhase(attempt.phase)) {
+      if (attempt.contextManifestId !== undefined || attempt.workerSessionRef !== undefined) {
+        throw new StoreInvariantError(
+          `Runtime-owned phase Attempt ${attempt.id} contains coding-Worker authority`,
+        );
+      }
+      return;
+    }
+    if (attempt.contextManifestId === undefined || attempt.workerSessionRef === undefined) {
+      throw new StoreInvariantError(
+        `Worker phase Attempt ${attempt.id} has no Context-bound authority`,
+      );
+    }
+    const manifest = this.getContextManifest(attempt.contextManifestId);
+    const attemptStartAudits = this.listAuditEvents('ATTEMPT', attempt.id).filter(
+      (audit) => audit.eventType === 'ATTEMPT_STARTED',
+    );
+    const attemptStartAudit = attemptStartAudits[0];
+    const workflowStartAudits = this.listAuditEvents('WORKFLOW', workflow.id).filter(
+      (audit) =>
+        audit.eventType === 'WORKFLOW_ATTEMPT_STARTED' &&
+        audit.commandId !== undefined &&
+        audit.commandId === attemptStartAudit?.commandId,
+    );
+    const workflowStartAudit = workflowStartAudits[0];
+    const command =
+      attemptStartAudit?.commandId === undefined
+        ? undefined
+        : this.getProcessedCommand(attemptStartAudit.commandId);
+    const outcome = command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+    const expectedAggregateType = attempt.sequence === 1 ? 'GOAL' : 'WORKFLOW';
+    const expectedAggregateId = attempt.sequence === 1 ? workflow.goalId : workflow.id;
+    if (
+      manifest?.goalId !== workflow.goalId ||
+      manifest.workflowId !== workflow.id ||
+      manifest.attemptId !== attempt.id ||
+      manifest.phase !== attempt.phase ||
+      manifest.createdAt !== attempt.startedAt ||
+      manifest.executionProfileId !== executionProfileBinding.profileId ||
+      manifest.executionProfileDigest !== executionProfileBinding.profileDigest ||
+      manifest.policyBundleId !== policyBinding.policyBundleId ||
+      manifest.policyBundleDigest !== policyBinding.policyBundleDigest ||
+      attemptStartAudits.length !== 1 ||
+      attemptStartAudit?.actorType !== 'RUNTIME' ||
+      attemptStartAudit.commandId === undefined ||
+      attemptStartAudit.beforeVersion === undefined ||
+      attemptStartAudit.afterVersion === undefined ||
+      attemptStartAudit.afterVersion !== attemptStartAudit.beforeVersion + 1 ||
+      attemptStartAudit.occurredAt !== attempt.startedAt ||
+      manifest.workflowVersion !== attemptStartAudit.afterVersion ||
+      workflowStartAudits.length !== 1 ||
+      workflowStartAudit?.actorType !== 'RUNTIME' ||
+      workflowStartAudit.beforeVersion !== attemptStartAudit.beforeVersion ||
+      workflowStartAudit.afterVersion !== attemptStartAudit.afterVersion ||
+      workflowStartAudit.occurredAt !== attempt.startedAt ||
+      command?.aggregateType !== expectedAggregateType ||
+      command.aggregateId !== expectedAggregateId ||
+      command.completedAt !== attempt.startedAt ||
+      outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+      outcome.target.aggregateType !== expectedAggregateType ||
+      outcome.target.aggregateId !== expectedAggregateId ||
+      outcome.goalId !== workflow.goalId ||
+      outcome.workflow.id !== workflow.id ||
+      outcome.workflow.version !== manifest.workflowVersion ||
+      outcome.workflow.phase !== attempt.phase ||
+      outcome.workflow.runStatus !== RunStatus.RUNNING
+    ) {
+      throw new StoreInvariantError(
+        `Worker phase Attempt ${attempt.id} has incomplete start authority`,
+      );
+    }
+  }
+
+  private assertPreStartCancellationClosure(workflow: WorkflowInstance): AuditEventRecord {
+    const cancellationAudits = this.listAuditEvents('WORKFLOW', workflow.id).filter(
+      (audit) => audit.eventType === 'WORKFLOW_CANCELLED',
+    );
+    const cancellationAudit = cancellationAudits[0];
+    const command =
+      cancellationAudit?.commandId === undefined
+        ? undefined
+        : this.getProcessedCommand(cancellationAudit.commandId);
+    const outcome = command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+    if (
+      cancellationAudits.length !== 1 ||
+      cancellationAudit?.actorType !== 'RUNTIME' ||
+      cancellationAudit.commandId === undefined ||
+      cancellationAudit.beforeVersion !== 1 ||
+      cancellationAudit.afterVersion !== 2 ||
+      cancellationAudit.occurredAt !== workflow.updatedAt ||
+      command?.aggregateType !== 'GOAL' ||
+      command.aggregateId !== workflow.goalId ||
+      command.completedAt !== workflow.updatedAt ||
+      outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+      outcome.target.aggregateType !== 'GOAL' ||
+      outcome.target.aggregateId !== workflow.goalId ||
+      outcome.goalId !== workflow.goalId ||
+      outcome.workflow.id !== workflow.id ||
+      outcome.workflow.version !== workflow.version ||
+      outcome.workflow.phase !== workflow.phase ||
+      outcome.workflow.runStatus !== workflow.runStatus
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has incomplete pre-start cancellation authority`,
+      );
+    }
+    return cancellationAudit;
+  }
+
+  private assertRetainedWorkflowStartAuthorityClosure(): void {
+    if (
+      !this.hasTable('workflows') ||
+      !this.hasTable('workflow_policy_bindings') ||
+      !this.hasTable('workflow_execution_profile_bindings')
+    ) {
+      return;
+    }
+    const rows = this.#database.prepare('SELECT * FROM workflows ORDER BY id').all();
+    for (const row of rows) {
+      const workflow = decodeWorkflow(row);
+      const owner = this.getGoalWithWorkflow(workflow.goalId);
+      if (owner?.workflow.id !== workflow.id) {
+        throw new StoreInvariantError(
+          `Workflow ${workflow.id} has no exact Goal ownership authority`,
+        );
+      }
+      this.resolveWorkflowStartAuthorityClosure(workflow);
+    }
   }
 
   private decodeVerifiedContextManifestRow(row: unknown): ContextManifest {
@@ -5102,8 +6879,18 @@ export class SqliteControlStore implements AcceptanceControlStore {
 
     const goalView = this.getGoalWithWorkflow(manifest.goalId);
     const attempt = this.getAttempt(manifest.attemptId);
+    const installedProfile = this.getExecutionProfile(manifest.executionProfileId);
+    const profileBinding = this.getExecutionProfileBinding(manifest.workflowId);
+    const policyBinding = this.getWorkflowPolicyBinding(manifest.workflowId);
     const installedPolicy = this.getPolicyBundle(manifest.policyBundleId);
-    if (goalView === undefined || attempt === undefined || installedPolicy === undefined) {
+    if (
+      goalView === undefined ||
+      attempt === undefined ||
+      installedProfile === undefined ||
+      profileBinding === undefined ||
+      policyBinding === undefined ||
+      installedPolicy === undefined
+    ) {
       throw new StoreInvariantError(
         `Context Manifest ${manifest.id} cannot resolve its authoritative M1 sources`,
       );
@@ -5164,6 +6951,15 @@ export class SqliteControlStore implements AcceptanceControlStore {
       attempt.workerSessionRef === undefined ||
       manifest.createdAt !== attempt.startedAt ||
       manifest.createdAt < workflow.createdAt ||
+      manifest.executionProfileDigest !== installedProfile.profile.digest ||
+      profileBinding.goalId !== goal.id ||
+      profileBinding.profileId !== manifest.executionProfileId ||
+      profileBinding.profileDigest !== manifest.executionProfileDigest ||
+      profileBinding.boundAt > manifest.createdAt ||
+      policyBinding.goalId !== goal.id ||
+      policyBinding.policyBundleId !== manifest.policyBundleId ||
+      policyBinding.policyBundleDigest !== manifest.policyBundleDigest ||
+      policyBinding.boundAt > manifest.createdAt ||
       manifest.policyBundleDigest !== installedPolicy.bundle.digest ||
       installedPolicy.installedAt > manifest.createdAt
     ) {
@@ -5173,7 +6969,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
     }
 
     const expectedPackage = decodeContextPackage({
-      schemaVersion: 1,
+      schemaVersion: 2,
       goalId: goal.id,
       goalRevision: goal.revision,
       workflowId: workflow.id,
@@ -5195,6 +6991,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
             candidateGenerationId: candidateBinding.generationId,
             candidateDigest: candidateBinding.digest,
           }),
+      executionProfileId: installedProfile.profile.id,
+      executionProfileDigest: installedProfile.profile.digest,
       policyBundleId: installedPolicy.bundle.id,
       policyBundleDigest: installedPolicy.bundle.digest,
       responseContract: m1WorkerResponseContract(manifest.phase),
@@ -5253,8 +7051,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
       return;
     }
     const manifest = this.getContextManifest(claim.contextManifestId);
+    const profileBinding = this.getExecutionProfileBinding(expectedWorkflowId);
     if (
       manifest === undefined ||
+      profileBinding === undefined ||
       attempt.workflowId !== expectedWorkflowId ||
       attempt.contextManifestId !== claim.contextManifestId ||
       attempt.workerSessionRef !== claim.workerSessionId ||
@@ -5265,7 +7065,11 @@ export class SqliteControlStore implements AcceptanceControlStore {
       manifest.workflowVersion !== claim.workflowVersion ||
       manifest.attemptId !== attempt.id ||
       manifest.manifestDigest !== claim.contextManifestDigest ||
-      manifest.packageDigest !== claim.packageDigest
+      manifest.packageDigest !== claim.packageDigest ||
+      manifest.executionProfileId !== claim.executionProfileId ||
+      manifest.executionProfileDigest !== claim.executionProfileDigest ||
+      profileBinding.profileId !== claim.executionProfileId ||
+      profileBinding.profileDigest !== claim.executionProfileDigest
     ) {
       throw new StoreInvariantError(
         `Attempt ${attempt.id} control event does not bind its dispatch authority`,
@@ -5282,10 +7086,12 @@ export class SqliteControlStore implements AcceptanceControlStore {
     const workflow = this.getWorkflow(claim.workflowId);
     const attempt = this.getAttempt(claim.attemptId);
     const manifest = this.getContextManifest(claim.contextManifestId);
+    const profileBinding = this.getExecutionProfileBinding(claim.workflowId);
     if (
       workflow === undefined ||
       attempt === undefined ||
       manifest === undefined ||
+      profileBinding === undefined ||
       workflow.version < claim.workflowVersion ||
       attempt.workflowId !== claim.workflowId ||
       attempt.contextManifestId !== claim.contextManifestId ||
@@ -5295,6 +7101,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
       manifest.attemptId !== claim.attemptId ||
       manifest.manifestDigest !== claim.contextManifestDigest ||
       manifest.packageDigest !== claim.packageDigest ||
+      manifest.executionProfileId !== claim.executionProfileId ||
+      manifest.executionProfileDigest !== claim.executionProfileDigest ||
+      profileBinding.profileId !== claim.executionProfileId ||
+      profileBinding.profileDigest !== claim.executionProfileDigest ||
       claim.claimedAt < attempt.startedAt
     ) {
       throw new StoreInvariantError(
@@ -5362,6 +7172,46 @@ export class SqliteControlStore implements AcceptanceControlStore {
             `Policy ${installed.bundle.id} has no matching installation audit authority`,
           );
         }
+      }
+    }
+
+    if (this.hasTable('execution_profiles')) {
+      const rows = this.#database.prepare('SELECT * FROM execution_profiles ORDER BY id').all();
+      for (const row of rows) {
+        const installed = this.decodeVerifiedExecutionProfileRow(row);
+        const matchingAudit = this.listAuditEvents('EXECUTION_PROFILE', installed.profile.id).some(
+          (audit) =>
+            audit.eventType === 'EXECUTION_PROFILE_INSTALLED' &&
+            audit.actorType === 'RUNTIME' &&
+            audit.commandId === undefined &&
+            audit.beforeVersion === undefined &&
+            audit.afterVersion === undefined &&
+            audit.payloadDigest === installed.profile.digest &&
+            audit.occurredAt === installed.installedAt,
+        );
+        if (!matchingAudit) {
+          throw new StoreInvariantError(
+            `Execution Profile ${installed.profile.id} has no matching installation audit authority`,
+          );
+        }
+      }
+    }
+
+    if (this.hasTable('workflow_policy_bindings')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM workflow_policy_bindings ORDER BY workflow_id')
+        .all();
+      for (const row of rows) {
+        this.assertWorkflowPolicyBindingClosure(decodeWorkflowPolicyBindingRow(row));
+      }
+    }
+
+    if (this.hasTable('workflow_execution_profile_bindings')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM workflow_execution_profile_bindings ORDER BY workflow_id')
+        .all();
+      for (const row of rows) {
+        this.assertExecutionProfileBindingClosure(decodeExecutionProfileBindingRow(row));
       }
     }
 
@@ -5571,11 +7421,224 @@ export class SqliteControlStore implements AcceptanceControlStore {
     }
   }
 
+  private assertRetainedRecoveryAuthorityClosure(): void {
+    if (!this.hasTable('recovery_reconciliations')) {
+      return;
+    }
+    const rows = this.#database
+      .prepare(
+        'SELECT * FROM recovery_reconciliations ORDER BY workflow_id, resulting_workflow_version',
+      )
+      .all();
+    for (const row of rows) {
+      const recovery = this.decodeVerifiedRecoveryReconciliationRow(row);
+      const goal = this.getGoal(recovery.goalId);
+      const workflow = this.getWorkflow(recovery.workflowId);
+      const sourceAttempt =
+        recovery.sourceAttemptId === undefined
+          ? undefined
+          : this.getAttempt(recovery.sourceAttemptId);
+      const binding = this.getExecutionProfileBinding(recovery.workflowId);
+      const policyBinding = this.getWorkflowPolicyBinding(recovery.workflowId);
+      const claim =
+        sourceAttempt === undefined ? undefined : this.getWorkerDispatchClaim(sourceAttempt.id);
+      const expectedClaimDigest =
+        claim === undefined
+          ? undefined
+          : sha256Digest(canonicalAuthorityDigests.digest(workerDispatchClaimProjection(claim)));
+      const recoveryAudits = this.listAuditEvents('RECOVERY_RECONCILIATION', recovery.id).filter(
+        (audit) => audit.eventType === 'RECOVERY_RECONCILIATION_RECORDED',
+      );
+      const recoveryAudit = recoveryAudits[0];
+      if (
+        goal === undefined ||
+        workflow === undefined ||
+        sourceAttempt === undefined ||
+        binding === undefined ||
+        policyBinding === undefined ||
+        goal.revision !== recovery.goalRevision ||
+        workflow.goalId !== recovery.goalId ||
+        workflow.version < recovery.resultingWorkflowVersion ||
+        sourceAttempt.workflowId !== recovery.workflowId ||
+        sourceAttempt.phase !== recovery.phase ||
+        binding.profileId !== recovery.executionProfileId ||
+        binding.profileDigest !== recovery.executionProfileDigest ||
+        binding.boundAt > recovery.inspectedAt ||
+        policyBinding.goalId !== recovery.goalId ||
+        policyBinding.boundAt > recovery.inspectedAt ||
+        recovery.expectedProjectIdentity !==
+          deriveM1BaseProjectIdentity(goal.scope.projectPath, canonicalAuthorityDigests) ||
+        recovery.dispatchClaimDigest !== expectedClaimDigest ||
+        recoveryAudits.length !== 1 ||
+        recoveryAudit?.actorType !== 'RUNTIME' ||
+        recoveryAudit.commandId === undefined ||
+        recoveryAudit.beforeVersion !== recovery.inspectedWorkflowVersion ||
+        recoveryAudit.afterVersion !== recovery.resultingWorkflowVersion ||
+        recoveryAudit.payloadDigest !== recovery.reconciliationDigest ||
+        recoveryAudit.occurredAt !== recovery.inspectedAt ||
+        recoveryAudit.sequence <= recovery.lastAuditSequence
+      ) {
+        throw new StoreInvariantError(
+          `Recovery reconciliation ${recovery.id} lacks retained control authority`,
+        );
+      }
+
+      if (recovery.candidateGenerationId === undefined) {
+        if (
+          recovery.candidateBaseIdentity !== undefined ||
+          recovery.expectedCandidateDigest !== undefined ||
+          recovery.observedCandidateDigest !== undefined
+        ) {
+          throw new StoreInvariantError(
+            `Recovery reconciliation ${recovery.id} has partial Candidate history`,
+          );
+        }
+      } else {
+        const generation = this.getCandidateGeneration(recovery.candidateGenerationId);
+        const candidate = this.getCandidateForGoal(recovery.goalId);
+        if (
+          generation === undefined ||
+          generation.candidateId !== candidate?.id ||
+          recovery.candidateBaseIdentity !== candidate.baseProjectIdentity ||
+          (recovery.expectedCandidateDigest !== generation.baseDigest &&
+            recovery.expectedCandidateDigest !== generation.frozenDigest)
+        ) {
+          throw new StoreInvariantError(
+            `Recovery reconciliation ${recovery.id} lacks retained Candidate authority`,
+          );
+        }
+      }
+
+      const commandIdentifier = recoveryAudit.commandId;
+      const processed = this.getProcessedCommand(commandIdentifier);
+      const outcome =
+        processed === undefined ? undefined : decodeStoredCommandOutcome(processed.outcome);
+      const expectedRunStatus =
+        recovery.purpose === RecoveryReconciliationPurpose.STARTUP ||
+        recovery.disposition === RecoveryReconciliationDisposition.BLOCKED
+          ? RunStatus.BLOCKED
+          : RunStatus.READY;
+      const expectedPhase =
+        expectedRunStatus === RunStatus.READY ? recovery.safeResumePhase : recovery.phase;
+      const expectedTargetType =
+        recovery.purpose === RecoveryReconciliationPurpose.STARTUP ? 'WORKFLOW' : 'GOAL';
+      const expectedTargetId =
+        expectedTargetType === 'WORKFLOW' ? recovery.workflowId : recovery.goalId;
+      if (
+        expectedPhase === undefined ||
+        recovery.disposition === RecoveryReconciliationDisposition.SAFE_EARLIER_PHASE ||
+        processed?.aggregateType !== expectedTargetType ||
+        processed.aggregateId !== expectedTargetId ||
+        processed.completedAt !== recovery.inspectedAt ||
+        outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+        outcome.goalId !== recovery.goalId ||
+        outcome.workflow.id !== recovery.workflowId ||
+        outcome.workflow.version !== recovery.resultingWorkflowVersion ||
+        outcome.workflow.phase !== expectedPhase ||
+        outcome.workflow.runStatus !== expectedRunStatus
+      ) {
+        throw new StoreInvariantError(
+          `Recovery reconciliation ${recovery.id} lacks its applied command outcome`,
+        );
+      }
+
+      const workflowAudits = this.listAuditEvents('WORKFLOW', recovery.workflowId).filter(
+        (audit) =>
+          audit.commandId === commandIdentifier &&
+          audit.beforeVersion === recovery.inspectedWorkflowVersion &&
+          audit.afterVersion === recovery.resultingWorkflowVersion &&
+          audit.occurredAt === recovery.inspectedAt,
+      );
+      const workflowAudit = workflowAudits[0];
+      if (workflowAudits.length !== 1 || workflowAudit === undefined) {
+        throw new StoreInvariantError(
+          `Recovery reconciliation ${recovery.id} lacks its Workflow audit`,
+        );
+      }
+
+      if (recovery.purpose === RecoveryReconciliationPurpose.STARTUP) {
+        if (
+          sourceAttempt.status !== AttemptStatus.INTERRUPTED ||
+          sourceAttempt.endedAt !== recovery.inspectedAt ||
+          !sourceAttempt.terminationReason.startsWith(
+            `${AttemptInterruptionReason.RECOVERY_RECONCILIATION}:`,
+          )
+        ) {
+          throw new StoreInvariantError(
+            `Startup recovery ${recovery.id} did not retain its interrupted Attempt`,
+          );
+        }
+        const event = decodeAttemptEvent({
+          type: 'ATTEMPT_FINISHED',
+          commandId: commandIdentifier,
+          workflowId: recovery.workflowId,
+          attemptId: sourceAttempt.id,
+          phase: recovery.phase,
+          fromWorkflowVersion: recovery.inspectedWorkflowVersion,
+          toWorkflowVersion: recovery.resultingWorkflowVersion,
+          fromStatus: AttemptStatus.RUNNING,
+          toStatus: AttemptStatus.INTERRUPTED,
+          resultingRunStatus: RunStatus.BLOCKED,
+          terminationReason: sourceAttempt.terminationReason,
+          occurredAt: recovery.inspectedAt,
+        });
+        const payloadDigest = sha256Digest(canonicalAuthorityDigests.digest(event));
+        const attemptAudits = this.listAuditEvents('ATTEMPT', sourceAttempt.id).filter(
+          (audit) =>
+            audit.commandId === commandIdentifier &&
+            audit.eventType === 'ATTEMPT_FINISHED' &&
+            audit.beforeVersion === recovery.inspectedWorkflowVersion &&
+            audit.afterVersion === recovery.resultingWorkflowVersion,
+        );
+        if (
+          attemptAudits.length !== 1 ||
+          attemptAudits[0]?.payloadDigest !== payloadDigest ||
+          attemptAudits[0].occurredAt !== recovery.inspectedAt ||
+          attemptAudits[0].sequence <= recovery.lastAuditSequence ||
+          workflowAudit.eventType !== 'WORKFLOW_ATTEMPT_FINISHED' ||
+          workflowAudit.payloadDigest !== payloadDigest ||
+          workflowAudit.sequence <= recovery.lastAuditSequence
+        ) {
+          throw new StoreInvariantError(
+            `Startup recovery ${recovery.id} lacks exact Attempt/Workflow audits`,
+          );
+        }
+      } else {
+        const event = decodeRecoveryWorkflowEvent({
+          type: 'WORKFLOW_RECOVERY_RECONCILED',
+          commandId: commandIdentifier,
+          workflowId: recovery.workflowId,
+          fromPhase: recovery.phase,
+          toPhase: expectedPhase,
+          fromVersion: recovery.inspectedWorkflowVersion,
+          toVersion: recovery.resultingWorkflowVersion,
+          resultingRunStatus: expectedRunStatus,
+          reconciliationId: recovery.id,
+          reconciliationDigest: recovery.reconciliationDigest,
+          reason: `RECOVERY:${recovery.reasonCode}`,
+          occurredAt: recovery.inspectedAt,
+        });
+        if (
+          workflowAudit.eventType !== 'WORKFLOW_RECOVERY_RECONCILED' ||
+          workflowAudit.payloadDigest !== sha256Digest(canonicalAuthorityDigests.digest(event)) ||
+          workflowAudit.sequence <= recovery.lastAuditSequence ||
+          sourceAttempt.status === AttemptStatus.RUNNING ||
+          sourceAttempt.endedAt > recovery.inspectedAt
+        ) {
+          throw new StoreInvariantError(
+            `Resume recovery ${recovery.id} lacks exact Workflow/source authority`,
+          );
+        }
+      }
+    }
+  }
+
   private historicalAcceptanceForManifest(manifest: AcceptanceInputManifest) {
     const goal = this.getGoal(manifest.goalId);
     const currentWorkflow = this.getWorkflow(manifest.workflowId);
     const candidate = this.getCandidateForGoal(manifest.goalId);
     const currentGeneration = this.getCandidateGeneration(manifest.candidateGenerationId);
+    const policyBinding = this.getWorkflowPolicyBinding(manifest.workflowId);
     const installedPolicy = this.getPolicyBundle(manifest.policyBundleId);
     const evidenceSet = this.getEvidenceSet(manifest.evidenceSetDigest);
     if (
@@ -5583,12 +7646,17 @@ export class SqliteControlStore implements AcceptanceControlStore {
       currentWorkflow === undefined ||
       candidate === undefined ||
       currentGeneration === undefined ||
+      policyBinding === undefined ||
       installedPolicy === undefined ||
       evidenceSet === undefined ||
       goal.revision !== manifest.goalRevision ||
       currentWorkflow.goalId !== goal.id ||
       currentGeneration.candidateId !== candidate.id ||
       currentGeneration.frozenDigest !== manifest.candidateDigest ||
+      policyBinding.goalId !== manifest.goalId ||
+      policyBinding.policyBundleId !== manifest.policyBundleId ||
+      policyBinding.policyBundleDigest !== manifest.policyBundleDigest ||
+      policyBinding.boundAt > manifest.createdAt ||
       installedPolicy.bundle.digest !== manifest.policyBundleDigest ||
       installedPolicy.installedAt > manifest.createdAt
     ) {
@@ -5729,6 +7797,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
     const decision = this.getAcceptanceDecision(repair.acceptanceDecisionId);
     const freezeCheck = this.getCheckSpecification(repair.freezeCheckId);
     const verificationCheck = this.getCheckSpecification(repair.verificationCheckId);
+    const policyBinding = this.getWorkflowPolicyBinding(repair.workflowId);
     const candidateRow =
       rejected === undefined
         ? undefined
@@ -5758,6 +7827,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
       decision === undefined ||
       freezeCheck === undefined ||
       verificationCheck === undefined ||
+      policyBinding === undefined ||
       candidate === undefined
     ) {
       return reject();
@@ -5791,6 +7861,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
       manifest.evidenceSetDigest !== repair.evidenceSetDigest ||
       manifest.policyBundleId !== repair.policyBundleId ||
       manifest.policyBundleDigest !== repair.policyBundleDigest ||
+      policyBinding.goalId !== repair.goalId ||
+      policyBinding.policyBundleId !== repair.policyBundleId ||
+      policyBinding.policyBundleDigest !== repair.policyBundleDigest ||
+      policyBinding.boundAt > repair.repairedAt ||
       decision.outcome !== AcceptanceOutcome.REJECT_REPAIRABLE ||
       decision.inputManifestDigest !== repair.inputManifestDigest ||
       decision.decisionDigest !== repair.acceptanceDecisionDigest ||
@@ -6031,6 +8105,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
       const generation = this.getCandidateGeneration(closeout.candidateGenerationId);
       const decision = this.getAcceptanceDecision(closeout.acceptanceDecisionId);
       const manifest = this.getAcceptanceInputManifest(closeout.inputManifestDigest);
+      const policyBinding = this.getWorkflowPolicyBinding(closeout.workflowId);
       const audit = this.listAuditEvents('WORKFLOW_CLOSEOUT', closeout.workflowId).filter(
         (candidate) => candidate.eventType === 'WORKFLOW_CLOSEOUT_RECORDED',
       );
@@ -6081,6 +8156,10 @@ export class SqliteControlStore implements AcceptanceControlStore {
         generation?.state !== CandidateGenerationState.ACCEPTED ||
         generation.updatedAt !== closeout.closedAt ||
         generation.frozenDigest !== closeout.candidateDigest ||
+        policyBinding?.goalId !== closeout.goalId ||
+        policyBinding.policyBundleId !== closeout.policyBundleId ||
+        policyBinding.policyBundleDigest !== closeout.policyBundleDigest ||
+        policyBinding.boundAt > closeout.closedAt ||
         decision?.outcome !== AcceptanceOutcome.ACCEPT ||
         decision.issuedAt > closeout.closedAt ||
         decision.decisionDigest !== closeout.acceptanceDecisionDigest ||
@@ -6304,6 +8383,7 @@ export class SqliteControlStore implements AcceptanceControlStore {
     this.#database.exec('BEGIN IMMEDIATE');
     try {
       const result = operation();
+      this.assertRetainedWorkflowStartAuthorityClosure();
       this.#database.exec('COMMIT');
       return result;
     } catch (error) {
@@ -6370,7 +8450,8 @@ export class SqliteControlStore implements AcceptanceControlStore {
       | TransactionStep
       | WorkerTransactionStep
       | CandidateEvidenceTransactionStep
-      | AcceptanceTransactionStep,
+      | AcceptanceTransactionStep
+      | RecoveryTransactionStep,
   ): void {
     this.#transactionProbe?.(step);
   }

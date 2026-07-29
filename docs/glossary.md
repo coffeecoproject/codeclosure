@@ -42,6 +42,13 @@ A typed observation produced by a known runner or authority and bound to exact
 inputs. Prose produced by the worker is not evidence unless a policy explicitly
 treats it as a non-authoritative observation.
 
+## Execution Profile
+
+An immutable, versioned, digested description of the Worker, Candidate Source,
+Verification Runner, and Runtime driver composition bound to a Workflow at
+first start. M1 fixture names are aliases for installed profiles, not Goal
+semantics.
+
 ## Fact
 
 A versioned, provenance-bearing statement about the goal, business domain,
@@ -72,6 +79,12 @@ technical-gate bypass.
 The versioned collection of transition rules, acceptance rules, checker
 specifications, and permission rules active for an evaluation.
 
+## Workflow Policy Binding
+
+The immutable first-start record selecting the exact installed Policy ID,
+version, and digest that governs one Workflow for its lifetime. Installing or
+configuring another Policy does not replace this binding.
+
 ## Promotion
 
 Any action that applies, merges, releases, deploys, or otherwise moves an
@@ -82,6 +95,20 @@ technical closeout and needs separate authority.
 
 Comparison of persisted authoritative intent with current external reality
 after interruption, retry, resume, or detected drift.
+
+## Recovery Reconciliation Record
+
+The immutable, digest-bound result of one Runtime recovery inspection. It binds
+the inspected Workflow, Attempt/dispatch and Candidate authority, safe phase or
+blocker, observation references, and resulting Workflow version. It is not
+permission to reuse an old Attempt.
+
+## Runtime Application Coordinator
+
+The product-facing Runtime service that owns Goal commands, startup recovery,
+and read-only Goal views. Its remaining M1 driver will deterministically
+sequence internal work. It does not replace the Workflow Runtime or Acceptance
+Engine as an authority owner.
 
 ## Verification Runner
 

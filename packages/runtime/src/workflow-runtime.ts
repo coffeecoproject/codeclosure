@@ -38,11 +38,14 @@ import {
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
   decodeEvidenceSet,
+  decodeExecutionProfile,
+  decodeExecutionProfileBinding,
   decodePendingIssue,
   decodeVerificationObligation,
   decodeAttemptSnapshot,
   decodeGoalSnapshot,
   decodePolicyBundle,
+  decodeWorkflowPolicyBinding,
   decodeWorkflowSnapshot,
   decideAttempt,
   decideCandidate,
@@ -54,10 +57,15 @@ import {
   goalId,
   goalRevision,
   evidenceId,
+  executionProfileBindingProjection,
+  executionProfileId,
+  executionProfileProjection,
   isoTimestamp,
   latestIsoTimestamp,
   policyBundleId,
+  policyBundleProjection,
   sha256Digest,
+  workflowPolicyBindingProjection,
   workflowId,
   workflowVersion,
   workerSessionId,
@@ -78,6 +86,9 @@ import {
   type GoalRevision,
   type GuardResult,
   type EvidenceRecord,
+  type ExecutionProfile,
+  type ExecutionProfileBinding,
+  type ExecutionProfileId,
   type IsoTimestamp,
   type PolicyBundle,
   type PolicyBundleId,
@@ -85,6 +96,7 @@ import {
   type VerificationObligationId,
   type WorkflowId,
   type WorkflowInstance,
+  type WorkflowPolicyBinding,
   type WorkflowPhase as WorkflowPhaseType,
   type WorkflowRejection,
   type WorkflowVersion,
@@ -226,6 +238,8 @@ export interface AttemptContextCompilationRequest {
     ReturnType<typeof decodeAttemptSnapshot>,
     { readonly status: 'RUNNING' }
   >;
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly candidate?: {
@@ -241,7 +255,10 @@ export interface AttemptContextFactory {
 export interface WorkerContextRuntimeDependencies {
   readonly identities: WorkerIdentityGenerator;
   readonly factory: AttemptContextFactory;
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleDigest: Sha256Digest;
 }
 
 export interface CandidateEvidenceRuntimeDependencies {
@@ -249,11 +266,13 @@ export interface CandidateEvidenceRuntimeDependencies {
   readonly candidateSource: CandidateSourcePort;
   readonly verification: VerificationPort;
   readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleDigest: Sha256Digest;
 }
 
 export interface AcceptanceRuntimeDependencies {
   readonly identities: AcceptanceIdentityGenerator;
   readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleDigest: Sha256Digest;
 }
 
 export type BeginAttemptRequest = WorkflowCommandRequest;
@@ -367,11 +386,28 @@ interface WorkerAttemptIdentity {
 interface PreparedAttemptContext {
   readonly compilation: ContextCompilation;
   readonly request: WorkerRequest;
+  readonly policyBinding: WorkflowPolicyBinding;
+  readonly executionProfileBinding: ExecutionProfileBinding;
 }
 
 interface ActiveWorkerPolicy {
   readonly bundle: PolicyBundle;
   readonly installedAt: IsoTimestamp;
+}
+
+interface BoundWorkerPolicy {
+  readonly policy: ActiveWorkerPolicy;
+  readonly binding: WorkflowPolicyBinding;
+}
+
+interface ActiveExecutionProfile {
+  readonly profile: ExecutionProfile;
+  readonly installedAt: IsoTimestamp;
+}
+
+interface BoundExecutionProfile {
+  readonly profile: ActiveExecutionProfile;
+  readonly binding: ExecutionProfileBinding;
 }
 
 interface ResolvedAcceptanceConsumption {
@@ -387,6 +423,7 @@ interface ExecuteCommandInput {
   readonly digestInput: unknown;
   readonly missingResource: 'Goal' | 'Workflow';
   readonly missingIdentifier: string;
+  readonly bypassPolicyBinding?: boolean;
   plan(
     context: ResolvedWorkflowCommand,
     inputDigest: ReturnType<DigestProvider['digest']>,
@@ -436,6 +473,9 @@ function isWorkerControlStore(store: WorkflowControlStore): store is WorkerContr
   return [
     'commitContextBoundAttemptStart',
     'getContextManifest',
+    'getExecutionProfile',
+    'getExecutionProfileBinding',
+    'getWorkflowPolicyBinding',
     'getPolicyBundle',
     'getWorkerDispatchClaim',
     'claimWorkerDispatch',
@@ -443,6 +483,7 @@ function isWorkerControlStore(store: WorkflowControlStore): store is WorkerContr
     'commitWorkerAttemptEvent',
     'recordIgnoredWorkerEvent',
     'installPolicyBundle',
+    'installExecutionProfile',
   ].every((method) => typeof Reflect.get(store, method) === 'function');
 }
 
@@ -592,6 +633,9 @@ const workerEventStoreResultSchema = z.discriminatedUnion('status', [
 ]);
 const installedPolicyBundleSchema = z
   .object({ bundle: z.unknown(), installedAt: z.string() })
+  .strict();
+const installedExecutionProfileSchema = z
+  .object({ profile: z.unknown(), installedAt: z.string() })
   .strict();
 
 function decodeStartGoalRequest(value: unknown): StartGoalRequest {
@@ -882,7 +926,10 @@ export class WorkflowRuntimeKernel {
       this.#workerContext = Object.freeze({
         identities: dependencies.workerContext.identities,
         factory: dependencies.workerContext.factory,
+        executionProfileId: executionProfileId(dependencies.workerContext.executionProfileId),
+        executionProfileDigest: sha256Digest(dependencies.workerContext.executionProfileDigest),
         policyBundleId: policyBundleId(dependencies.workerContext.policyBundleId),
+        policyBundleDigest: sha256Digest(dependencies.workerContext.policyBundleDigest),
       });
     } else {
       this.#workerContext = undefined;
@@ -895,7 +942,9 @@ export class WorkflowRuntimeKernel {
       }
       if (
         this.#workerContext !== undefined &&
-        this.#workerContext.policyBundleId !== dependencies.candidateEvidence.policyBundleId
+        (this.#workerContext.policyBundleId !== dependencies.candidateEvidence.policyBundleId ||
+          this.#workerContext.policyBundleDigest !==
+            dependencies.candidateEvidence.policyBundleDigest)
       ) {
         throw new TypeError('M1 Worker and Candidate/Evidence paths must use one Policy Bundle');
       }
@@ -904,6 +953,7 @@ export class WorkflowRuntimeKernel {
         candidateSource: dependencies.candidateEvidence.candidateSource,
         verification: dependencies.candidateEvidence.verification,
         policyBundleId: policyBundleId(dependencies.candidateEvidence.policyBundleId),
+        policyBundleDigest: sha256Digest(dependencies.candidateEvidence.policyBundleDigest),
       });
     } else {
       this.#candidateEvidence = undefined;
@@ -915,7 +965,10 @@ export class WorkflowRuntimeKernel {
       if (this.#candidateEvidence === undefined) {
         throw new TypeError('Acceptance runtime requires Candidate/Evidence dependencies');
       }
-      if (this.#candidateEvidence.policyBundleId !== dependencies.acceptance.policyBundleId) {
+      if (
+        this.#candidateEvidence.policyBundleId !== dependencies.acceptance.policyBundleId ||
+        this.#candidateEvidence.policyBundleDigest !== dependencies.acceptance.policyBundleDigest
+      ) {
         throw new TypeError(
           'M1 Candidate/Evidence and Acceptance paths must use one Policy Bundle',
         );
@@ -923,6 +976,7 @@ export class WorkflowRuntimeKernel {
       this.#acceptance = Object.freeze({
         identities: dependencies.acceptance.identities,
         policyBundleId: policyBundleId(dependencies.acceptance.policyBundleId),
+        policyBundleDigest: sha256Digest(dependencies.acceptance.policyBundleDigest),
       });
     } else {
       this.#acceptance = undefined;
@@ -964,6 +1018,13 @@ export class WorkflowRuntimeKernel {
         });
       }
       const { goal, workflow } = authority.context;
+      const boundPolicy = this.resolveBoundWorkerPolicy(operationId, workflow);
+      if (boundPolicy === undefined) {
+        return Object.freeze({
+          status: 'NOT_ELIGIBLE',
+          reasonCode: 'WORKER_POLICY_BINDING_UNAVAILABLE',
+        });
+      }
       const rawAttempt = this.storeOperation(operationId, 'WORKER_ATTEMPT_READ_FAILURE', () =>
         this.#store.getAttempt(request.attemptId),
       );
@@ -982,6 +1043,13 @@ export class WorkflowRuntimeKernel {
       const manifest = this.decodeStoreSnapshot(operationId, 'CONTEXT_MANIFEST_INVALID', () =>
         decodeContextManifest(rawManifest),
       );
+      const boundProfile = this.resolveBoundExecutionProfile(operationId, workflow);
+      if (boundProfile === undefined) {
+        return Object.freeze({
+          status: 'NOT_ELIGIBLE',
+          reasonCode: 'WORKER_EXECUTION_PROFILE_UNAVAILABLE',
+        });
+      }
       const packageDigest = this.digest(
         operationId,
         request.contextPackage,
@@ -1009,7 +1077,19 @@ export class WorkflowRuntimeKernel {
         manifest.manifestDigest !== request.contextManifestDigest ||
         manifest.manifestDigest !== manifestDigest ||
         manifest.packageDigest !== request.packageDigest ||
-        manifest.packageDigest !== packageDigest
+        manifest.packageDigest !== packageDigest ||
+        manifest.policyBundleId !== request.contextPackage.policyBundleId ||
+        manifest.policyBundleDigest !== request.contextPackage.policyBundleDigest ||
+        boundPolicy.binding.goalId !== goal.id ||
+        boundPolicy.binding.workflowId !== workflow.id ||
+        boundPolicy.binding.policyBundleId !== manifest.policyBundleId ||
+        boundPolicy.binding.policyBundleDigest !== manifest.policyBundleDigest ||
+        manifest.executionProfileId !== request.executionProfileId ||
+        manifest.executionProfileDigest !== request.executionProfileDigest ||
+        boundProfile.binding.goalId !== goal.id ||
+        boundProfile.binding.workflowId !== workflow.id ||
+        boundProfile.binding.profileId !== request.executionProfileId ||
+        boundProfile.binding.profileDigest !== request.executionProfileDigest
       ) {
         return Object.freeze({
           status: 'NOT_ELIGIBLE',
@@ -1017,9 +1097,17 @@ export class WorkflowRuntimeKernel {
         });
       }
 
-      const claimedAt = this.causalNow(operationId, workflow.updatedAt, attempt.startedAt);
+      const claimedAt = this.causalNow(
+        operationId,
+        workflow.updatedAt,
+        attempt.startedAt,
+        boundPolicy.policy.installedAt,
+        boundPolicy.binding.boundAt,
+        boundProfile.profile.installedAt,
+        boundProfile.binding.boundAt,
+      );
       const claim = decodeWorkerDispatchClaim({
-        schemaVersion: 1,
+        schemaVersion: 2,
         workflowId: workflow.id,
         workflowVersion: workflow.version,
         attemptId: attempt.id,
@@ -1027,6 +1115,8 @@ export class WorkflowRuntimeKernel {
         contextManifestId: manifest.id,
         contextManifestDigest: manifest.manifestDigest,
         packageDigest: manifest.packageDigest,
+        executionProfileId: boundProfile.binding.profileId,
+        executionProfileDigest: boundProfile.binding.profileDigest,
         claimedAt,
       });
       const rawResult = this.storeOperation(operationId, 'WORKER_DISPATCH_CLAIM_FAILURE', () =>
@@ -1204,6 +1294,10 @@ export class WorkflowRuntimeKernel {
           });
         }
         const { workflow } = authority.context;
+        const boundPolicy = this.resolveBoundWorkerPolicy(operationId, workflow);
+        if (boundPolicy === undefined) {
+          throw new TypeError(`Workflow ${workflow.id} has no executable Worker Policy binding`);
+        }
         const rawAttempt = this.storeOperation(operationId, 'WORKER_ATTEMPT_READ_FAILURE', () =>
           workerStore.getAttempt(event.attemptId),
         );
@@ -1234,6 +1328,8 @@ export class WorkflowRuntimeKernel {
           workflow.updatedAt,
           currentAttempt.startedAt,
           dispatchClaim.claimedAt,
+          boundPolicy.policy.installedAt,
+          boundPolicy.binding.boundAt,
         );
 
         let ignoredReason: string | undefined;
@@ -1268,7 +1364,12 @@ export class WorkflowRuntimeKernel {
             manifest.manifestDigest !== request.contextManifestDigest ||
             manifest.manifestDigest !== currentManifestDigest ||
             manifest.packageDigest !== request.packageDigest ||
-            manifest.packageDigest !== currentPackageDigest)
+            manifest.packageDigest !== currentPackageDigest ||
+            manifest.policyBundleId !== request.contextPackage.policyBundleId ||
+            manifest.policyBundleDigest !== request.contextPackage.policyBundleDigest ||
+            boundPolicy.binding.workflowId !== workflow.id ||
+            boundPolicy.binding.policyBundleId !== manifest.policyBundleId ||
+            boundPolicy.binding.policyBundleDigest !== manifest.policyBundleDigest)
         ) {
           ignoredReason = 'STALE_WORKER_CONTEXT';
         }
@@ -1570,6 +1671,7 @@ export class WorkflowRuntimeKernel {
   public startGoal(rawInput: StartGoalRequest): RuntimeCommandResult {
     const input = decodeStartGoalRequest(rawInput);
     const target = goalTarget(input.goalId);
+    const configuredProfile = this.#workerContext;
     return this.executeCommand({
       commandId: input.commandId,
       target,
@@ -1582,9 +1684,18 @@ export class WorkflowRuntimeKernel {
         goalId: input.goalId,
         expectedGoalRevision: input.expectedGoalRevision,
         expectedWorkflowVersion: input.expectedWorkflowVersion,
+        ...(configuredProfile === undefined
+          ? {}
+          : {
+              executionProfileId: configuredProfile.executionProfileId,
+              executionProfileDigest: configuredProfile.executionProfileDigest,
+              policyBundleId: configuredProfile.policyBundleId,
+              policyBundleDigest: configuredProfile.policyBundleDigest,
+            }),
       },
       missingResource: 'Goal',
       missingIdentifier: input.goalId,
+      bypassPolicyBinding: true,
       plan: ({ goal, workflow }, inputDigest) => {
         const sequence = this.nextAttemptSequence(input.commandId, workflow.id);
         if (workflow.phase !== WorkflowPhase.DISCOVERY || sequence !== 1) {
@@ -1596,14 +1707,28 @@ export class WorkflowRuntimeKernel {
             ),
           );
         }
+        if (configuredProfile === undefined) {
+          throw new CommandExecutionFailure(
+            commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              'StartGoal requires configured Policy, Execution Profile, and Context authority',
+              'START_GOAL_RUNTIME_COMPOSITION_UNAVAILABLE',
+            ),
+          );
+        }
 
-        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId, workflow.phase);
+        const activePolicy = this.requireConfiguredStartPolicy(input.commandId, workflow.phase);
+        const activeProfile = this.requireConfiguredStartExecutionProfile(
+          input.commandId,
+          workflow.phase,
+        );
         const attemptIdentifier = this.nextAttemptId(input.commandId);
         const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId, workflow.phase);
         const occurredAt = this.causalNow(
           input.commandId,
           workflow.updatedAt,
-          ...(activePolicy === undefined ? [] : [activePolicy.installedAt]),
+          activePolicy.installedAt,
+          activeProfile.installedAt,
         );
         const command = {
           type: 'BEGIN_ATTEMPT',
@@ -1623,44 +1748,61 @@ export class WorkflowRuntimeKernel {
         if (event.type !== 'ATTEMPT_STARTED') {
           throw new TypeError('Begin Attempt decision returned another event type');
         }
+        const profileBinding = this.createExecutionProfileBinding(
+          input.commandId,
+          goal,
+          workflow,
+          activeProfile,
+          event.occurredAt,
+        );
+        const policyBinding = this.createWorkflowPolicyBinding(
+          input.commandId,
+          goal,
+          workflow,
+          activePolicy,
+          event.occurredAt,
+        );
         const prepared = this.prepareAttemptContext(
           input.commandId,
           goal,
           workflow,
           event,
+          policyBinding,
+          activeProfile,
+          profileBinding,
           activePolicy,
         );
+        if (prepared === undefined) {
+          throw new CommandExecutionFailure(
+            commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              'StartGoal did not prepare Context-bound execution authority',
+              'START_GOAL_CONTEXT_AUTHORITY_UNAVAILABLE',
+            ),
+          );
+        }
         const auditEventId = this.nextAuditEventId(input.commandId);
         const workflowAuditEventId = this.nextAuditEventId(input.commandId);
         const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
         const plan: ApplyCommandPlan = {
           kind: 'APPLY',
           commit: () =>
-            prepared === undefined
-              ? this.#store.commitAttemptEvent({
-                  inputDigest,
-                  target,
-                  event,
-                  auditEventId,
-                  workflowAuditEventId,
-                  payloadDigest,
-                })
-              : this.requireWorkerStore().commitContextBoundAttemptStart({
-                  inputDigest,
-                  target,
-                  event,
-                  auditEventId,
-                  workflowAuditEventId,
-                  payloadDigest,
-                  contextManifest: prepared.compilation.manifest,
-                }),
-          ...(prepared === undefined
-            ? {}
-            : {
-                afterApplied: () => {
-                  this.#preparedWorkerRequests.set(attemptIdentifier, prepared.request);
-                },
-              }),
+            this.requireWorkerStore().commitContextBoundAttemptStart({
+              inputDigest,
+              target,
+              event,
+              auditEventId,
+              workflowAuditEventId,
+              payloadDigest,
+              contextManifest: prepared.compilation.manifest,
+              policyBinding: prepared.policyBinding,
+              policyBindingAuditEventId: this.nextAuditEventId(input.commandId),
+              executionProfileBinding: prepared.executionProfileBinding,
+              executionProfileBindingAuditEventId: this.nextAuditEventId(input.commandId),
+            }),
+          afterApplied: () => {
+            this.#preparedWorkerRequests.set(attemptIdentifier, prepared.request);
+          },
         };
         return plan;
       },
@@ -1685,13 +1827,28 @@ export class WorkflowRuntimeKernel {
       missingIdentifier: input.workflowId,
       plan: ({ goal, workflow }, inputDigest) => {
         const sequence = this.nextAttemptSequence(input.commandId, input.workflowId);
-        const activePolicy = this.resolveActiveWorkerPolicy(input.commandId, workflow.phase);
+        if (isM1WorkerPhase(workflow.phase) && this.#workerContext === undefined) {
+          throw new CommandExecutionFailure(
+            commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              `Worker phase ${workflow.phase} has no configured execution authority`,
+              'WORKER_RUNTIME_AUTHORITY_UNAVAILABLE',
+            ),
+          );
+        }
+        const boundPolicy = this.resolveBoundWorkerPolicy(input.commandId, workflow);
+        const boundProfile = this.resolveBoundExecutionProfile(input.commandId, workflow);
         const attemptIdentifier = this.nextAttemptId(input.commandId);
         const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId, workflow.phase);
         const occurredAt = this.causalNow(
           input.commandId,
           workflow.updatedAt,
-          ...(activePolicy === undefined ? [] : [activePolicy.installedAt]),
+          ...(boundPolicy === undefined
+            ? []
+            : [boundPolicy.policy.installedAt, boundPolicy.binding.boundAt]),
+          ...(boundProfile === undefined
+            ? []
+            : [boundProfile.profile.installedAt, boundProfile.binding.boundAt]),
         );
         const decision = decideAttempt(workflow, undefined, {
           type: 'BEGIN_ATTEMPT',
@@ -1715,8 +1872,20 @@ export class WorkflowRuntimeKernel {
           goal,
           workflow,
           event,
-          activePolicy,
+          boundPolicy?.binding,
+          boundProfile?.profile,
+          boundProfile?.binding,
+          boundPolicy?.policy,
         );
+        if (isM1WorkerPhase(workflow.phase) && prepared === undefined) {
+          throw new CommandExecutionFailure(
+            commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              `Worker phase ${workflow.phase} did not prepare Context-bound authority`,
+              'WORKER_CONTEXT_AUTHORITY_UNAVAILABLE',
+            ),
+          );
+        }
         const auditEventId = this.nextAuditEventId(input.commandId);
         const workflowAuditEventId = this.nextAuditEventId(input.commandId);
         const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
@@ -1740,6 +1909,8 @@ export class WorkflowRuntimeKernel {
                   workflowAuditEventId,
                   payloadDigest,
                   contextManifest: prepared.compilation.manifest,
+                  policyBinding: prepared.policyBinding,
+                  executionProfileBinding: prepared.executionProfileBinding,
                 }),
           ...(prepared === undefined
             ? {}
@@ -1783,7 +1954,7 @@ export class WorkflowRuntimeKernel {
             ),
           );
         }
-        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
         const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
           input.commandId,
           goal,
@@ -2027,7 +2198,7 @@ export class WorkflowRuntimeKernel {
           );
         }
         const checkSpec = candidateEvidencePolicy.verification;
-        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
         const environmentIdentity = this.internalOperation(
           input.commandId,
           'VERIFICATION_ENVIRONMENT_DIGEST_FAILURE',
@@ -2198,7 +2369,7 @@ export class WorkflowRuntimeKernel {
       plan: ({ goal, workflow }, inputDigest) => {
         const runtime = this.requireAcceptanceRuntime();
         const store = this.requireAcceptanceStore();
-        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
         const authority = this.resolveAcceptanceAuthority(
           input.commandId,
           goal,
@@ -2453,7 +2624,7 @@ export class WorkflowRuntimeKernel {
             'Repair source reobservation found frozen Candidate drift',
           );
         }
-        const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
         const generationIdentifier = this.internalOperation(
           input.commandId,
           'CANDIDATE_GENERATION_ID_FAILURE',
@@ -2708,6 +2879,7 @@ export class WorkflowRuntimeKernel {
       },
       missingResource: 'Goal',
       missingIdentifier: input.goalId,
+      bypassPolicyBinding: true,
       plan: ({ workflow }, inputDigest) => {
         const dispatchClaim = this.resolveActiveDispatchClaim(input.commandId, workflow);
         const decision = decideWorkflow(workflow, {
@@ -2915,7 +3087,7 @@ export class WorkflowRuntimeKernel {
   ): CommandPlan {
     const runtime = this.requireCandidateEvidenceRuntime();
     const store = this.requireCandidateEvidenceStore();
-    const activePolicy = this.resolveCandidateEvidencePolicy(input.commandId);
+    const activePolicy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
     const occurredAt = this.causalNow(
       input.commandId,
       workflow.updatedAt,
@@ -3226,7 +3398,7 @@ export class WorkflowRuntimeKernel {
         ),
       );
     }
-    const policy = this.resolveCandidateEvidencePolicy(input.commandId);
+    const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
     const observation = freezeEntry.record.observation;
     const guardResults = Object.freeze([
       ...genericGuardResults,
@@ -3826,6 +3998,10 @@ export class WorkflowRuntimeKernel {
     workflow: WorkflowInstance,
     activePolicyBundleId: PolicyBundleId,
   ): AcceptanceAuthorityView {
+    const activePolicy = this.resolveCandidateEvidencePolicy(commandIdentifier, workflow);
+    if (activePolicy.bundle.id !== activePolicyBundleId) {
+      throw new TypeError('Acceptance requested a Policy other than the Workflow binding');
+    }
     const raw: unknown = this.storeOperation(
       commandIdentifier,
       'ACCEPTANCE_AUTHORITY_READ_FAILURE',
@@ -3918,7 +4094,8 @@ export class WorkflowRuntimeKernel {
       generation.id !== workflow.activeCandidateGenerationId ||
       freezeCheck.kind !== CheckSpecificationKind.CANDIDATE_FREEZE ||
       verificationCheck.kind !== CheckSpecificationKind.FAKE_VERIFICATION ||
-      policyBundle.id !== activePolicyBundleId
+      policyBundle.id !== activePolicyBundleId ||
+      policyBundle.digest !== activePolicy.bundle.digest
     ) {
       throw new TypeError('Acceptance authority records do not share one current owner');
     }
@@ -4299,23 +4476,19 @@ export class WorkflowRuntimeKernel {
     );
   }
 
-  private resolveCandidateEvidencePolicy(commandIdentifier: CommandId): ActiveWorkerPolicy {
+  private resolveCandidateEvidencePolicy(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): ActiveWorkerPolicy {
     const runtime = this.requireCandidateEvidenceRuntime();
-    const rawInstalledPolicy = this.storeOperation(
-      commandIdentifier,
-      'CANDIDATE_EVIDENCE_POLICY_READ_FAILURE',
-      () => this.requireWorkerStore().getPolicyBundle(runtime.policyBundleId),
-    );
-    if (rawInstalledPolicy === undefined) {
-      throw new TypeError(`Candidate/Evidence Policy ${runtime.policyBundleId} is not installed`);
+    const bound = this.resolvePersistedWorkflowPolicyBinding(commandIdentifier, workflow);
+    if (
+      bound.policy.bundle.id !== runtime.policyBundleId ||
+      bound.policy.bundle.digest !== runtime.policyBundleDigest
+    ) {
+      throw new TypeError('Bound Workflow has no configured Candidate/Evidence Policy');
     }
-    const parsed = installedPolicyBundleSchema.parse(rawInstalledPolicy);
-    const bundle = decodePolicyBundle(parsed.bundle);
-    const installedAt = isoTimestamp(parsed.installedAt);
-    if (bundle.id !== runtime.policyBundleId) {
-      throw new TypeError('Installed Policy does not match Candidate/Evidence authority');
-    }
-    return Object.freeze({ bundle, installedAt });
+    return bound.policy;
   }
 
   private resolveActiveDispatchClaim(
@@ -4383,7 +4556,9 @@ export class WorkflowRuntimeKernel {
       'ATTEMPT_DISPATCH_CONTEXT_INVALID',
       () => decodeContextManifest(rawManifest),
     );
+    const boundProfile = this.resolvePersistedExecutionProfileBinding(commandIdentifier, workflow);
     if (
+      boundProfile === undefined ||
       attempt.workflowId !== workflow.id ||
       claim.workflowId !== workflow.id ||
       claim.workflowVersion !== workflow.version ||
@@ -4395,7 +4570,11 @@ export class WorkflowRuntimeKernel {
       manifest.attemptId !== attempt.id ||
       manifest.id !== claim.contextManifestId ||
       manifest.manifestDigest !== claim.contextManifestDigest ||
-      manifest.packageDigest !== claim.packageDigest
+      manifest.packageDigest !== claim.packageDigest ||
+      manifest.executionProfileId !== claim.executionProfileId ||
+      manifest.executionProfileDigest !== claim.executionProfileDigest ||
+      boundProfile.binding.profileId !== claim.executionProfileId ||
+      boundProfile.binding.profileDigest !== claim.executionProfileDigest
     ) {
       throw new TypeError(`Dispatch claim ${claim.attemptId} does not bind its active Attempt`);
     }
@@ -4418,7 +4597,235 @@ export class WorkflowRuntimeKernel {
     );
   }
 
-  private resolveActiveWorkerPolicy(
+  private resolveConfiguredExecutionProfile(
+    commandIdentifier: CommandId,
+    phase: WorkflowPhaseType,
+  ): ActiveExecutionProfile | undefined {
+    const workerContext = this.#workerContext;
+    if (workerContext === undefined || !isM1WorkerPhase(phase)) {
+      return undefined;
+    }
+    const activeProfile = this.resolveInstalledExecutionProfile(
+      commandIdentifier,
+      workerContext.executionProfileId,
+    );
+    if (activeProfile.profile.digest !== workerContext.executionProfileDigest) {
+      throw new TypeError(
+        'Installed Execution Profile does not match the configured Runtime composition',
+      );
+    }
+    return activeProfile;
+  }
+
+  private requireConfiguredStartExecutionProfile(
+    commandIdentifier: CommandId,
+    phase: WorkflowPhaseType,
+  ): ActiveExecutionProfile {
+    if (this.#workerContext === undefined || !isM1WorkerPhase(phase)) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'StartGoal requires a configured M1 Execution Profile',
+          'START_GOAL_EXECUTION_PROFILE_UNAVAILABLE',
+        ),
+      );
+    }
+    try {
+      const profile = this.resolveConfiguredExecutionProfile(commandIdentifier, phase);
+      if (profile === undefined) {
+        throw new TypeError('Configured StartGoal Execution Profile did not resolve');
+      }
+      return profile;
+    } catch (error) {
+      if (error instanceof CommandExecutionFailure) {
+        throw error;
+      }
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          error instanceof Error
+            ? error.message
+            : 'StartGoal Execution Profile authority is unavailable',
+          'START_GOAL_EXECUTION_PROFILE_UNAVAILABLE',
+        ),
+        { cause: error },
+      );
+    }
+  }
+
+  private resolveInstalledExecutionProfile(
+    commandIdentifier: CommandId,
+    profileIdentifier: ExecutionProfileId,
+  ): ActiveExecutionProfile {
+    const rawInstalledProfile = this.storeOperation(
+      commandIdentifier,
+      'EXECUTION_PROFILE_READ_FAILURE',
+      () => this.requireWorkerStore().getExecutionProfile(profileIdentifier),
+    );
+    if (rawInstalledProfile === undefined) {
+      throw new TypeError(`Execution Profile ${profileIdentifier} is not installed`);
+    }
+    const parsedInstalledProfile = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'EXECUTION_PROFILE_INVALID',
+      () => installedExecutionProfileSchema.parse(rawInstalledProfile),
+    );
+    const profile = this.decodeStoreSnapshot(commandIdentifier, 'EXECUTION_PROFILE_INVALID', () =>
+      decodeExecutionProfile(parsedInstalledProfile.profile),
+    );
+    const installedAt = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'EXECUTION_PROFILE_INVALID',
+      () => isoTimestamp(parsedInstalledProfile.installedAt),
+    );
+    const canonicalDigest = this.digest(
+      commandIdentifier,
+      executionProfileProjection(profile),
+      'EXECUTION_PROFILE_DIGEST_FAILURE',
+    );
+    if (profile.id !== profileIdentifier || profile.digest !== canonicalDigest) {
+      throw new TypeError('Installed Execution Profile does not match its canonical identity');
+    }
+    return Object.freeze({ profile, installedAt });
+  }
+
+  private createExecutionProfileBinding(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    activeProfile: ActiveExecutionProfile,
+    boundAt: IsoTimestamp,
+  ): ExecutionProfileBinding {
+    if (
+      workflow.goalId !== goal.id ||
+      workflow.goalRevision !== goal.revision ||
+      workflow.phase !== WorkflowPhase.DISCOVERY ||
+      workflow.version !== 1
+    ) {
+      throw new TypeError('Execution Profile may bind only the first StartGoal authority');
+    }
+    if (activeProfile.installedAt > boundAt) {
+      throw new TypeError('Execution Profile binding predates profile installation');
+    }
+    const fields = Object.freeze({
+      schemaVersion: 1 as const,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      profileId: activeProfile.profile.id,
+      profileVersion: activeProfile.profile.version,
+      profileDigest: activeProfile.profile.digest,
+      startCommandId: commandIdentifier,
+      boundAt,
+    });
+    return decodeExecutionProfileBinding({
+      ...fields,
+      bindingDigest: this.digest(
+        commandIdentifier,
+        executionProfileBindingProjection(fields),
+        'EXECUTION_PROFILE_BINDING_DIGEST_FAILURE',
+      ),
+    });
+  }
+
+  private resolveBoundExecutionProfile(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): BoundExecutionProfile | undefined {
+    const workerContext = this.#workerContext;
+    if (workerContext === undefined || !isM1WorkerPhase(workflow.phase)) {
+      return undefined;
+    }
+    const boundProfile = this.resolvePersistedExecutionProfileBinding(commandIdentifier, workflow);
+    if (
+      boundProfile?.profile.profile.id !== workerContext.executionProfileId ||
+      boundProfile.profile.profile.digest !== workerContext.executionProfileDigest
+    ) {
+      throw new TypeError('Bound Workflow has no configured Execution Profile');
+    }
+    return boundProfile;
+  }
+
+  private resolvePersistedExecutionProfileBinding(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): BoundExecutionProfile | undefined {
+    if (!isM1WorkerPhase(workflow.phase)) {
+      return undefined;
+    }
+    const rawBinding = this.storeOperation(
+      commandIdentifier,
+      'EXECUTION_PROFILE_BINDING_READ_FAILURE',
+      () => this.requireWorkerStore().getExecutionProfileBinding(workflow.id),
+    );
+    if (rawBinding === undefined) {
+      throw new TypeError(`Workflow ${workflow.id} has no Execution Profile binding`);
+    }
+    const binding = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'EXECUTION_PROFILE_BINDING_INVALID',
+      () => decodeExecutionProfileBinding(rawBinding),
+    );
+    const activeProfile = this.resolveInstalledExecutionProfile(
+      commandIdentifier,
+      binding.profileId,
+    );
+    const bindingDigest = this.digest(
+      commandIdentifier,
+      executionProfileBindingProjection(binding),
+      'EXECUTION_PROFILE_BINDING_DIGEST_FAILURE',
+    );
+    if (
+      binding.goalId !== workflow.goalId ||
+      binding.workflowId !== workflow.id ||
+      binding.profileId !== activeProfile.profile.id ||
+      binding.profileVersion !== activeProfile.profile.version ||
+      binding.profileDigest !== activeProfile.profile.digest ||
+      binding.bindingDigest !== bindingDigest ||
+      activeProfile.installedAt > binding.boundAt ||
+      binding.boundAt > workflow.updatedAt
+    ) {
+      throw new TypeError(
+        `Workflow ${workflow.id} Execution Profile binding is stale or inconsistent`,
+      );
+    }
+    return Object.freeze({ profile: activeProfile, binding });
+  }
+
+  private resolveInstalledPolicyBundle(
+    commandIdentifier: CommandId,
+    policyIdentifier: PolicyBundleId,
+  ): ActiveWorkerPolicy {
+    const rawInstalledPolicy = this.storeOperation(
+      commandIdentifier,
+      'POLICY_BUNDLE_READ_FAILURE',
+      () => this.requireWorkerStore().getPolicyBundle(policyIdentifier),
+    );
+    if (rawInstalledPolicy === undefined) {
+      throw new TypeError(`Policy Bundle ${policyIdentifier} is not installed`);
+    }
+    const parsedInstalledPolicy = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'POLICY_BUNDLE_INVALID',
+      () => installedPolicyBundleSchema.parse(rawInstalledPolicy),
+    );
+    const bundle = this.decodeStoreSnapshot(commandIdentifier, 'POLICY_BUNDLE_INVALID', () =>
+      decodePolicyBundle(parsedInstalledPolicy.bundle),
+    );
+    const installedAt = this.decodeStoreSnapshot(commandIdentifier, 'POLICY_BUNDLE_INVALID', () =>
+      isoTimestamp(parsedInstalledPolicy.installedAt),
+    );
+    const canonicalDigest = this.digest(
+      commandIdentifier,
+      policyBundleProjection(bundle),
+      'POLICY_BUNDLE_DIGEST_FAILURE',
+    );
+    if (bundle.id !== policyIdentifier || bundle.digest !== canonicalDigest) {
+      throw new TypeError('Installed Policy Bundle does not match its canonical identity');
+    }
+    return Object.freeze({ bundle, installedAt });
+  }
+
+  private resolveConfiguredWorkerPolicy(
     commandIdentifier: CommandId,
     phase: WorkflowPhaseType,
   ): ActiveWorkerPolicy | undefined {
@@ -4426,21 +4833,145 @@ export class WorkflowRuntimeKernel {
     if (workerContext === undefined || !isM1WorkerPhase(phase)) {
       return undefined;
     }
-    const rawInstalledPolicy = this.storeOperation(
+    const policy = this.resolveInstalledPolicyBundle(
       commandIdentifier,
-      'CONTEXT_POLICY_READ_FAILURE',
-      () => this.requireWorkerStore().getPolicyBundle(workerContext.policyBundleId),
+      workerContext.policyBundleId,
     );
-    if (rawInstalledPolicy === undefined) {
-      throw new TypeError(`Active Policy ${workerContext.policyBundleId} is not installed`);
+    if (policy.bundle.digest !== workerContext.policyBundleDigest) {
+      throw new TypeError('Installed Policy does not match the configured Runtime composition');
     }
-    const parsedInstalledPolicy = installedPolicyBundleSchema.parse(rawInstalledPolicy);
-    const bundle = decodePolicyBundle(parsedInstalledPolicy.bundle);
-    const installedAt = isoTimestamp(parsedInstalledPolicy.installedAt);
-    if (bundle.id !== workerContext.policyBundleId) {
-      throw new TypeError('Installed Policy does not match the active Worker policy authority');
+    return policy;
+  }
+
+  private requireConfiguredStartPolicy(
+    commandIdentifier: CommandId,
+    phase: WorkflowPhaseType,
+  ): ActiveWorkerPolicy {
+    if (this.#workerContext === undefined || !isM1WorkerPhase(phase)) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'StartGoal requires a configured M1 Policy Bundle',
+          'START_GOAL_POLICY_UNAVAILABLE',
+        ),
+      );
     }
-    return Object.freeze({ bundle, installedAt });
+    try {
+      const policy = this.resolveConfiguredWorkerPolicy(commandIdentifier, phase);
+      if (policy === undefined) {
+        throw new TypeError('Configured StartGoal Policy did not resolve');
+      }
+      return policy;
+    } catch (error) {
+      if (error instanceof CommandExecutionFailure) {
+        throw error;
+      }
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          error instanceof Error ? error.message : 'StartGoal Policy authority is unavailable',
+          'START_GOAL_POLICY_UNAVAILABLE',
+        ),
+        { cause: error },
+      );
+    }
+  }
+
+  private createWorkflowPolicyBinding(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    activePolicy: ActiveWorkerPolicy,
+    boundAt: IsoTimestamp,
+  ): WorkflowPolicyBinding {
+    if (
+      workflow.goalId !== goal.id ||
+      workflow.goalRevision !== goal.revision ||
+      workflow.phase !== WorkflowPhase.DISCOVERY ||
+      workflow.version !== 1
+    ) {
+      throw new TypeError('Policy may bind only the first StartGoal authority');
+    }
+    if (activePolicy.installedAt > boundAt) {
+      throw new TypeError('Workflow Policy binding predates Policy installation');
+    }
+    const fields = Object.freeze({
+      schemaVersion: 1 as const,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      policyBundleId: activePolicy.bundle.id,
+      policyBundleVersion: activePolicy.bundle.version,
+      policyBundleDigest: activePolicy.bundle.digest,
+      startCommandId: commandIdentifier,
+      boundAt,
+    });
+    return decodeWorkflowPolicyBinding({
+      ...fields,
+      bindingDigest: this.digest(
+        commandIdentifier,
+        workflowPolicyBindingProjection(fields),
+        'WORKFLOW_POLICY_BINDING_DIGEST_FAILURE',
+      ),
+    });
+  }
+
+  private resolveBoundWorkerPolicy(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): BoundWorkerPolicy | undefined {
+    const workerContext = this.#workerContext;
+    if (workerContext === undefined || !isM1WorkerPhase(workflow.phase)) {
+      return undefined;
+    }
+    const boundPolicy = this.resolvePersistedWorkflowPolicyBinding(commandIdentifier, workflow);
+    if (
+      boundPolicy.policy.bundle.id !== workerContext.policyBundleId ||
+      boundPolicy.policy.bundle.digest !== workerContext.policyBundleDigest
+    ) {
+      throw new TypeError('Bound Workflow has no configured Worker Policy');
+    }
+    return boundPolicy;
+  }
+
+  private resolvePersistedWorkflowPolicyBinding(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): BoundWorkerPolicy {
+    const rawBinding = this.storeOperation(
+      commandIdentifier,
+      'WORKFLOW_POLICY_BINDING_READ_FAILURE',
+      () => this.requireWorkerStore().getWorkflowPolicyBinding(workflow.id),
+    );
+    if (rawBinding === undefined) {
+      throw new TypeError(`Workflow ${workflow.id} has no Policy binding`);
+    }
+    const binding = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'WORKFLOW_POLICY_BINDING_INVALID',
+      () => decodeWorkflowPolicyBinding(rawBinding),
+    );
+    const activePolicy = this.resolveInstalledPolicyBundle(
+      commandIdentifier,
+      binding.policyBundleId,
+    );
+    const bindingDigest = this.digest(
+      commandIdentifier,
+      workflowPolicyBindingProjection(binding),
+      'WORKFLOW_POLICY_BINDING_DIGEST_FAILURE',
+    );
+    if (
+      binding.goalId !== workflow.goalId ||
+      binding.workflowId !== workflow.id ||
+      binding.policyBundleId !== activePolicy.bundle.id ||
+      binding.policyBundleVersion !== activePolicy.bundle.version ||
+      binding.policyBundleDigest !== activePolicy.bundle.digest ||
+      binding.bindingDigest !== bindingDigest ||
+      activePolicy.installedAt > binding.boundAt ||
+      binding.boundAt > workflow.updatedAt
+    ) {
+      throw new TypeError(`Workflow ${workflow.id} Policy binding is stale or inconsistent`);
+    }
+    return Object.freeze({ policy: activePolicy, binding });
   }
 
   private prepareAttemptContext(
@@ -4448,12 +4979,25 @@ export class WorkflowRuntimeKernel {
     goal: Goal,
     currentWorkflow: WorkflowInstance,
     event: AttemptStarted,
+    policyBinding: WorkflowPolicyBinding | undefined,
+    activeProfile: ActiveExecutionProfile | undefined,
+    profileBinding: ExecutionProfileBinding | undefined,
     activePolicy: ActiveWorkerPolicy | undefined,
   ): PreparedAttemptContext | undefined {
     const workerContext = this.#workerContext;
     if (workerContext === undefined) {
-      if (activePolicy !== undefined) {
-        throw new TypeError('Active Worker Policy exists without Worker Context dependencies');
+      if (isM1WorkerPhase(event.attempt.phase)) {
+        throw new TypeError('Worker phase Attempt requires configured Context authority');
+      }
+      if (
+        activeProfile !== undefined ||
+        profileBinding !== undefined ||
+        policyBinding !== undefined ||
+        activePolicy !== undefined
+      ) {
+        throw new TypeError(
+          'Active Worker Profile or Policy exists without Worker Context dependencies',
+        );
       }
       return undefined;
     }
@@ -4461,22 +5005,33 @@ export class WorkflowRuntimeKernel {
       if (
         event.attempt.contextManifestId !== undefined ||
         event.attempt.workerSessionRef !== undefined ||
+        activeProfile !== undefined ||
+        profileBinding !== undefined ||
+        policyBinding !== undefined ||
         activePolicy !== undefined
       ) {
         throw new TypeError('Runtime-owned phase Attempt cannot bind coding-Worker authority');
       }
       return undefined;
     }
-    if (activePolicy === undefined) {
-      throw new TypeError('Worker Context compilation requires an active installed Policy');
+    if (activePolicy === undefined || policyBinding === undefined) {
+      throw new TypeError('Worker Context compilation requires an active bound Policy');
+    }
+    if (activeProfile === undefined || profileBinding === undefined) {
+      throw new TypeError('Worker Context compilation requires an active bound Execution Profile');
     }
     const applied = applyAttemptEvent(currentWorkflow, undefined, event);
     if (applied.attempt.status !== 'RUNNING' || applied.attempt.contextManifestId === undefined) {
       throw new TypeError('Worker Attempt start did not produce a context-bound RUNNING Attempt');
     }
     const installedPolicy = activePolicy.bundle;
-    if (activePolicy.installedAt > event.occurredAt) {
-      throw new TypeError('Context Attempt predates its active installed Policy');
+    if (
+      activePolicy.installedAt > event.occurredAt ||
+      policyBinding.boundAt > event.occurredAt ||
+      activeProfile.installedAt > event.occurredAt ||
+      profileBinding.boundAt > event.occurredAt
+    ) {
+      throw new TypeError('Context Attempt predates its active Profile or Policy');
     }
     let candidateBinding:
       { readonly generationId: CandidateGenerationId; readonly digest: Sha256Digest } | undefined;
@@ -4512,6 +5067,8 @@ export class WorkflowRuntimeKernel {
       goal,
       workflow: applied.workflow,
       attempt: applied.attempt,
+      executionProfileId: activeProfile.profile.id,
+      executionProfileDigest: activeProfile.profile.digest,
       policyBundleId: installedPolicy.id,
       policyBundleDigest: installedPolicy.digest,
       ...(candidateBinding === undefined ? {} : { candidate: candidateBinding }),
@@ -4629,6 +5186,20 @@ export class WorkflowRuntimeKernel {
       contextPackage.candidateDigest !== manifest.candidateDigest ||
       contextPackage.policyBundleId !== manifest.policyBundleId ||
       contextPackage.policyBundleDigest !== manifest.policyBundleDigest ||
+      contextPackage.executionProfileId !== manifest.executionProfileId ||
+      contextPackage.executionProfileDigest !== manifest.executionProfileDigest ||
+      contextPackage.executionProfileId !== activeProfile.profile.id ||
+      contextPackage.executionProfileDigest !== activeProfile.profile.digest ||
+      profileBinding.goalId !== goal.id ||
+      profileBinding.workflowId !== applied.workflow.id ||
+      profileBinding.profileId !== activeProfile.profile.id ||
+      profileBinding.profileVersion !== activeProfile.profile.version ||
+      profileBinding.profileDigest !== activeProfile.profile.digest ||
+      policyBinding.goalId !== goal.id ||
+      policyBinding.workflowId !== applied.workflow.id ||
+      policyBinding.policyBundleId !== installedPolicy.id ||
+      policyBinding.policyBundleVersion !== installedPolicy.version ||
+      policyBinding.policyBundleDigest !== installedPolicy.digest ||
       contextPackage.policyBundleId !== installedPolicy.id ||
       contextPackage.policyBundleDigest !== installedPolicy.digest ||
       contextPackage.phaseObjective !== m1PhaseObjective(applied.workflow.phase) ||
@@ -4657,6 +5228,8 @@ export class WorkflowRuntimeKernel {
     return Object.freeze({
       compilation: Object.freeze({ package: contextPackage, manifest }),
       request: decodeWorkerRequest(request),
+      policyBinding,
+      executionProfileBinding: profileBinding,
     });
   }
 
@@ -4781,6 +5354,9 @@ export class WorkflowRuntimeKernel {
           );
         }
         const { context } = authority;
+        if (input.bypassPolicyBinding !== true) {
+          this.assertConfiguredWorkflowPolicy(input.commandId, context.workflow);
+        }
 
         const freshnessError = this.commandFreshnessError(input, context);
         const plan =
@@ -4876,6 +5452,38 @@ export class WorkflowRuntimeKernel {
       }
     }
     throw new Error('Unreachable command execution state');
+  }
+
+  private assertConfiguredWorkflowPolicy(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
+  ): void {
+    if (workflow.version === 1) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.DOMAIN_REJECTED,
+          `Workflow ${workflow.id} has not been started through StartGoal`,
+          'WORKFLOW_START_AUTHORITY_MISSING',
+        ),
+      );
+    }
+    const configured = this.#candidateEvidence ?? this.#workerContext;
+    if (configured === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          `Workflow ${workflow.id} cannot continue without its configured Policy`,
+          'WORKFLOW_POLICY_RUNTIME_UNAVAILABLE',
+        ),
+      );
+    }
+    const bound = this.resolvePersistedWorkflowPolicyBinding(commandIdentifier, workflow);
+    if (
+      bound.binding.policyBundleId !== configured.policyBundleId ||
+      bound.binding.policyBundleDigest !== configured.policyBundleDigest
+    ) {
+      throw new TypeError('Runtime composition changed the Workflow Policy binding');
+    }
   }
 
   private preflightReplay(

@@ -30,6 +30,7 @@ import {
   CanonicalJsonSha256DigestProvider,
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
+  createExecutionProfileInstaller,
   createPolicyInstaller,
   type Clock,
 } from '@codeclosure/runtime';
@@ -38,6 +39,7 @@ import {
   DeterministicIds,
   FakeCandidateSource,
   FakeVerificationRunner,
+  testExecutionProfileDefinition,
 } from '@codeclosure/testing';
 import {
   WorkflowRuntimeKernel,
@@ -155,6 +157,16 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
     digest: digests.digest(policyBundleProjection(definition)),
   });
   assert.equal(policyInstall.value.bundle.digest, policy.digest);
+  const profileInstall = createExecutionProfileInstaller({
+    store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids,
+    digests,
+  }).installExecutionProfile(testExecutionProfileDefinition('candidate-e2e'));
+  if (profileInstall.status === 'PROFILE_CONFLICT') {
+    assert.fail(profileInstall.message);
+  }
+  const profile = profileInstall.value.profile;
   const creation = store.createGoalWithWorkflow({
     commandId: commandId('command_candidate-e2e-create'),
     inputDigest: digests.digest({ type: 'CREATE_CANDIDATE_E2E' }),
@@ -180,7 +192,10 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
     phaseGuards: genericGuards,
     workerContext: Object.freeze({
       identities: ids,
+      executionProfileId: profile.id,
+      executionProfileDigest: profile.digest,
       policyBundleId: policy.id,
+      policyBundleDigest: policy.digest,
       factory: Object.freeze({
         compile: (input: AttemptContextCompilationRequest) => compiler.compile(input),
       }),
@@ -190,6 +205,7 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
       candidateSource: new FakeCandidateSource(),
       verification: new FakeVerificationRunner(),
       policyBundleId: policy.id,
+      policyBundleDigest: policy.digest,
     }),
   });
 

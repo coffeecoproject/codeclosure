@@ -58,6 +58,8 @@ Prove the authority boundary without any LLM or Codex dependency.
 - Candidate-generation state model with deterministic fake digest;
 - immutable fake Evidence records with separate monotonic eligibility;
 - minimal Acceptance Engine policy;
+- immutable installed M1 Policy and Execution Profile identities with separate
+  first-start Workflow bindings;
 - startup recovery/reconciliation for interrupted Attempts;
 - machine-readable and human-readable status output.
 
@@ -75,7 +77,8 @@ Prove the authority boundary without any LLM or Codex dependency.
 ### Walking-Skeleton Demonstration
 
 ```text
-codeclosure goal create "demo objective"
+codeclosure goal create --objective "demo objective" --project <fixture-path> \
+  --criterion "the controlled M1 objective has exact passing fake evidence"
   -> Goal and Workflow persist in DISCOVERY / READY
 codeclosure goal start <goal-id> --fixture happy-path
   -> first DISCOVERY Attempt starts
@@ -95,6 +98,8 @@ The demo must also show a failing-evidence path that cannot close.
 
 - all M1 state-machine and acceptance adversarial tests pass;
 - process restart preserves authoritative state;
+- restart never redispatches consumed authority and resume uses the same bound
+  execution profile with a fresh Attempt;
 - state mutation and audit append are atomic;
 - stale version writes are rejected;
 - worker cannot write an Acceptance Decision or terminal state;
@@ -218,7 +223,6 @@ None of these is an M0–M2 requirement.
 
 These are intentionally deferred to focused milestone ADRs, plans, or spikes:
 
-- platform application-data path library;
 - logging/tracing implementation;
 - transaction/repository API details;
 - candidate workspace mechanism for M2;

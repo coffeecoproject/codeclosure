@@ -105,6 +105,10 @@ ContextPackage
   verificationObligations[]
   blockers[]
   priorAttemptFeedback?
+  executionProfileId
+  executionProfileDigest
+  policyBundleId
+  policyBundleDigest
   responseContract
 ```
 
@@ -132,6 +136,8 @@ ContextManifest
   attemptId
   candidateGenerationId?
   candidateDigest?
+  executionProfileId
+  executionProfileDigest
   policyBundleId
   policyBundleDigest
   capabilityGrantDigest
@@ -165,24 +171,29 @@ record-envelope fields defined by
 [ADR 0006](adr/0006-canonical-serialization-and-digest-profiles.md).
 Worker results bind both the manifest identity and digest.
 
-For the current M1 path, the Runtime first applies the proposed Attempt start in
-memory and compiles against that resulting Workflow version. Runtime
-configuration selects the active Policy ID; the Runtime loads that installed
-bundle and supplies its exact ID and digest to the compiler, so the compiler
-cannot choose or downgrade Policy authority. Before persistence the Runtime
+The Runtime first applies the proposed Attempt start in memory, compiles against
+that resulting Workflow version, creates or resolves the Workflow's immutable
+installed Policy binding, and resolves the separate immutable installed
+Execution Profile binding. The Runtime
+supplies both exact IDs and digests to the compiler, so the compiler cannot
+choose or downgrade execution or Policy authority. Before persistence the Runtime
 independently cross-checks the exact Goal content, phase objective, capability
-grant, response contract, Candidate and Policy bindings, authority labels, and
-the complete Manifest entry projection. The Store then commits the Attempt,
-Workflow, audit events, processed Start command, and Manifest in one
-transaction. A digest-valid package that disagrees with source authority is
-invalid; a digest proves identity, not correctness or authorization.
+grant, response contract, Candidate, Execution Profile, and Policy bindings,
+authority labels, and the complete Manifest entry projection. The Store then
+commits the Attempt, Workflow, first-start Policy and profile bindings when
+applicable, audit events, processed command, and Manifest in one transaction. A
+digest-valid package that disagrees with source authority is invalid; a digest
+proves identity, not correctness or authorization.
 
 After commit, an immutable dispatch claim revalidates the active Workflow
-version and all request digests before `WorkerPort` is invoked. Cancellation
-and dispatch serialize on that version. Worker events are deduplicated by an
-independent `WorkerEventId`; a current event is admitted transactionally, while
-a stale or mismatched event can create only an ignored delivery receipt. See
-[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md).
+version, bound Execution Profile, and all request digests before `WorkerPort`
+is invoked. Cancellation and dispatch serialize on that version. Worker events
+are deduplicated by an independent `WorkerEventId`; a current event is admitted
+transactionally, while a stale or mismatched event can create only an ignored
+delivery receipt. See
+[ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md) and
+[ADR 0021](adr/0021-m1-execution-profile-and-cli-composition.md) plus
+[ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
 
 M1 has no durable resolver that can prove the status, scope, revision, and
 provenance of a selected Fact, Human Decision, or project source. The Runtime
@@ -195,9 +206,9 @@ restriction is specified by
 
 ### 1. Bind identity
 
-Load the exact Goal, Workflow, phase, policy bundle, and current Candidate
-revision in one consistent read snapshot. Abort on missing or mismatched
-identity.
+Load the exact Goal, Workflow, phase, bound execution profile, policy bundle,
+and current Candidate revision in one consistent read snapshot. Abort on
+missing or mismatched identity.
 
 ### 2. Derive phase query
 

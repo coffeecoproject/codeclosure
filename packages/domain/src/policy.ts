@@ -1,8 +1,16 @@
 import {
+  commandId,
+  goalId,
+  isoTimestamp,
   policyBundleId,
   sha256Digest,
+  workflowId,
+  type CommandId,
+  type GoalId,
+  type IsoTimestamp,
   type PolicyBundleId,
   type Sha256Digest,
+  type WorkflowId,
 } from './identifiers.js';
 
 export interface PolicyCheckerIdentity {
@@ -26,6 +34,25 @@ export interface PolicyBundleDefinition {
 
 export interface PolicyBundle extends PolicyBundleDefinition {
   readonly digest: Sha256Digest;
+}
+
+/**
+ * The exact Policy authority permanently selected by a Workflow's first Start.
+ *
+ * This is deliberately separate from ExecutionProfileBinding: Policy owns the
+ * control semantics, while an Execution Profile identifies executable adapter
+ * composition. Neither identity may be inferred from the other.
+ */
+export interface WorkflowPolicyBinding {
+  readonly schemaVersion: 1;
+  readonly goalId: GoalId;
+  readonly workflowId: WorkflowId;
+  readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleVersion: string;
+  readonly policyBundleDigest: Sha256Digest;
+  readonly startCommandId: CommandId;
+  readonly boundAt: IsoTimestamp;
+  readonly bindingDigest: Sha256Digest;
 }
 
 function assertNonBlank(value: string, name: string): void {
@@ -90,5 +117,34 @@ export function policyBundleProjection(bundle: PolicyBundleDefinition): unknown 
     applicabilityRules: bundle.applicabilityRules,
     acceptanceRules: bundle.acceptanceRules,
     checkerVersions: bundle.checkerVersions,
+  };
+}
+
+export function assertWorkflowPolicyBindingInvariant(binding: WorkflowPolicyBinding): void {
+  if (field(binding, 'schemaVersion') !== 1) {
+    throw new TypeError('Workflow Policy binding schema version is unsupported');
+  }
+  goalId(binding.goalId);
+  workflowId(binding.workflowId);
+  policyBundleId(binding.policyBundleId);
+  assertNonBlank(binding.policyBundleVersion, 'Workflow Policy binding version');
+  sha256Digest(binding.policyBundleDigest);
+  commandId(binding.startCommandId);
+  isoTimestamp(binding.boundAt);
+  sha256Digest(binding.bindingDigest);
+}
+
+export function workflowPolicyBindingProjection(
+  binding: Omit<WorkflowPolicyBinding, 'bindingDigest'>,
+): unknown {
+  return {
+    schemaVersion: binding.schemaVersion,
+    goalId: binding.goalId,
+    workflowId: binding.workflowId,
+    policyBundleId: binding.policyBundleId,
+    policyBundleVersion: binding.policyBundleVersion,
+    policyBundleDigest: binding.policyBundleDigest,
+    startCommandId: binding.startCommandId,
+    boundAt: binding.boundAt,
   };
 }

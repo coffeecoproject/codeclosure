@@ -3,3 +3,6 @@ export * from './deterministic-fixtures.js';
 export * from './fake-worker.js';
 export * from './fake-candidate-source.js';
 export * from './fake-verification-runner.js';
+export * from './execution-profile-fixture.js';
+export * from './recovery-inspector-fixture.js';
+export * from './workflow-start-authority-fixture.js';

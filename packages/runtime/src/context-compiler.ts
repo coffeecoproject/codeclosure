@@ -14,6 +14,7 @@ import {
   decodeGoalSnapshot,
   decodeWorkflowSnapshot,
   deriveGoalStatus,
+  executionProfileId,
   isoTimestamp,
   policyBundleId,
   sha256Digest,
@@ -23,6 +24,7 @@ import {
   type ContextManifest,
   type ContextManifestEntry,
   type ContextManifestId,
+  type ExecutionProfileId,
   type ContextOmissionDecision,
   type ContextPackageEntry,
   type Goal,
@@ -49,6 +51,8 @@ export interface CompileContextInput {
   readonly goal: Goal;
   readonly workflow: WorkflowInstance;
   readonly attempt: Attempt;
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly selectedEntries?: readonly ContextSourceInput[];
@@ -246,6 +250,8 @@ export function contextManifestDigestProjection(
     ...(manifest.candidateDigest === undefined
       ? {}
       : { candidateDigest: manifest.candidateDigest }),
+    executionProfileId: manifest.executionProfileId,
+    executionProfileDigest: manifest.executionProfileDigest,
     policyBundleId: manifest.policyBundleId,
     policyBundleDigest: manifest.policyBundleDigest,
     capabilityGrantDigest: manifest.capabilityGrantDigest,
@@ -281,6 +287,8 @@ export class MinimalContextCompiler {
     const goal = decodeGoalSnapshot(rawInput.goal);
     const workflow = decodeWorkflowSnapshot(rawInput.workflow);
     const attempt = decodeAttemptSnapshot(rawInput.attempt);
+    const profileIdentifier = executionProfileId(rawInput.executionProfileId);
+    const profileDigest = sha256Digest(rawInput.executionProfileDigest);
     const policyIdentifier = policyBundleId(rawInput.policyBundleId);
     const policyDigest = sha256Digest(rawInput.policyBundleDigest);
 
@@ -337,7 +345,7 @@ export class MinimalContextCompiler {
     }
 
     const contextPackage = decodeContextPackage({
-      schemaVersion: 1,
+      schemaVersion: 2,
       goalId: goal.id,
       goalRevision: goal.revision,
       workflowId: workflow.id,
@@ -359,6 +367,8 @@ export class MinimalContextCompiler {
         nonGoals: goal.nonGoals,
       },
       selectedEntries,
+      executionProfileId: profileIdentifier,
+      executionProfileDigest: profileDigest,
       policyBundleId: policyIdentifier,
       policyBundleDigest: policyDigest,
       responseContract: contract,
@@ -383,7 +393,7 @@ export class MinimalContextCompiler {
     const synthesizedEntries = deriveContextManifestEntries(contextPackage, this.#digests);
 
     const manifestWithoutDigest = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       compilerVersion: this.#compilerVersion,
       goalId: goal.id,
       goalRevision: goal.revision,
@@ -397,6 +407,8 @@ export class MinimalContextCompiler {
             candidateGenerationId: candidateBinding.generationId,
             candidateDigest: candidateBinding.digest,
           }),
+      executionProfileId: profileIdentifier,
+      executionProfileDigest: profileDigest,
       policyBundleId: policyIdentifier,
       policyBundleDigest: policyDigest,
       capabilityGrantDigest,

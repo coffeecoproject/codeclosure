@@ -1,6 +1,7 @@
 import {
   candidateGenerationId,
   contextManifestId,
+  executionProfileId,
   goalId,
   goalRevision,
   isoTimestamp,
@@ -12,6 +13,7 @@ import {
   type AttemptId,
   type CandidateGenerationId,
   type ContextManifestId,
+  type ExecutionProfileId,
   type GoalId,
   type GoalRevision,
   type IsoTimestamp,
@@ -83,7 +85,7 @@ export interface ContextPackageGoal {
 }
 
 export interface ContextPackage {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
   readonly workflowId: WorkflowId;
@@ -96,6 +98,8 @@ export interface ContextPackage {
   readonly capabilityGrant: CapabilityGrant;
   readonly goal: ContextPackageGoal;
   readonly selectedEntries: readonly ContextPackageEntry[];
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly responseContract: WorkerResponseContract;
@@ -118,7 +122,7 @@ export interface ContextOmissionDecision {
 
 export interface ContextManifest {
   readonly id: ContextManifestId;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly compilerVersion: string;
   readonly createdAt: IsoTimestamp;
   readonly goalId: GoalId;
@@ -129,6 +133,8 @@ export interface ContextManifest {
   readonly attemptId: AttemptId;
   readonly candidateGenerationId?: CandidateGenerationId;
   readonly candidateDigest?: Sha256Digest;
+  readonly executionProfileId: ExecutionProfileId;
+  readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly capabilityGrantDigest: Sha256Digest;
@@ -262,7 +268,7 @@ export function assertWorkerResponseContractInvariant(contract: WorkerResponseCo
 }
 
 export function assertContextPackageInvariant(contextPackage: ContextPackage): void {
-  if (field(contextPackage, 'schemaVersion') !== 1) {
+  if (field(contextPackage, 'schemaVersion') !== 2) {
     throw new TypeError('Context Package schema version is unsupported');
   }
   goalId(contextPackage.goalId);
@@ -270,6 +276,8 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
   workflowId(contextPackage.workflowId);
   workflowVersion(contextPackage.workflowVersion);
   attemptId(contextPackage.attemptId);
+  executionProfileId(contextPackage.executionProfileId);
+  sha256Digest(contextPackage.executionProfileDigest);
   policyBundleId(contextPackage.policyBundleId);
   sha256Digest(contextPackage.policyBundleDigest);
   if (
@@ -326,7 +334,7 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
 }
 
 export function assertContextManifestInvariant(manifest: ContextManifest): void {
-  if (field(manifest, 'schemaVersion') !== 1) {
+  if (field(manifest, 'schemaVersion') !== 2) {
     throw new TypeError('Context Manifest schema version is unsupported');
   }
   contextManifestId(manifest.id);
@@ -335,6 +343,8 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
   workflowId(manifest.workflowId);
   workflowVersion(manifest.workflowVersion);
   attemptId(manifest.attemptId);
+  executionProfileId(manifest.executionProfileId);
+  sha256Digest(manifest.executionProfileDigest);
   policyBundleId(manifest.policyBundleId);
   isoTimestamp(manifest.createdAt);
   assertNonBlank(manifest.compilerVersion, 'Context compilerVersion');

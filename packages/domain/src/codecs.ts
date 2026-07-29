@@ -73,6 +73,7 @@ import {
   commandId,
   contextManifestId,
   evidenceId,
+  executionProfileId,
   goalId,
   goalRevision,
   isoTimestamp,
@@ -433,7 +434,7 @@ function materializeContextPackageEntry(
 
 const contextPackageSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     goalId: z.string(),
     goalRevision: z.number().int().positive(),
     workflowId: z.string(),
@@ -458,6 +459,8 @@ const contextPackageSchema = z
       })
       .strict(),
     selectedEntries: z.array(contextPackageEntrySchema),
+    executionProfileId: z.string(),
+    executionProfileDigest: z.string(),
     policyBundleId: z.string(),
     policyBundleDigest: z.string(),
     responseContract: z.unknown(),
@@ -506,6 +509,8 @@ export function decodeContextPackage(value: unknown): ContextPackage {
     selectedEntries: Object.freeze(
       parsed.selectedEntries.map((entry) => materializeContextPackageEntry(entry)),
     ),
+    executionProfileId: executionProfileId(parsed.executionProfileId),
+    executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     policyBundleId: policyBundleId(parsed.policyBundleId),
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
     responseContract: decodeWorkerResponseContract(parsed.responseContract),
@@ -551,7 +556,7 @@ const contextOmissionDecisionSchema = z
 const contextManifestSchema = z
   .object({
     id: z.string(),
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     compilerVersion: nonBlankStringSchema,
     createdAt: z.string(),
     goalId: z.string(),
@@ -562,6 +567,8 @@ const contextManifestSchema = z
     attemptId: z.string(),
     candidateGenerationId: z.string().optional(),
     candidateDigest: z.string().optional(),
+    executionProfileId: z.string(),
+    executionProfileDigest: z.string(),
     policyBundleId: z.string(),
     policyBundleDigest: z.string(),
     capabilityGrantDigest: z.string(),
@@ -602,6 +609,8 @@ export function decodeContextManifest(value: unknown): ContextManifest {
     ...(parsed.candidateDigest === undefined
       ? {}
       : { candidateDigest: sha256Digest(parsed.candidateDigest) }),
+    executionProfileId: executionProfileId(parsed.executionProfileId),
+    executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     policyBundleId: policyBundleId(parsed.policyBundleId),
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
     capabilityGrantDigest: sha256Digest(parsed.capabilityGrantDigest),

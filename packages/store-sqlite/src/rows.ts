@@ -18,6 +18,9 @@ import {
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
   decodeEvidenceSet,
+  decodeExecutionProfile,
+  decodeExecutionProfileBinding,
+  decodeRecoveryReconciliationRecord,
   decodeCloseoutRecord,
   decodePendingIssue,
   commandId,
@@ -25,6 +28,7 @@ import {
   decodeContextManifest,
   decodeGoalSnapshot,
   decodePolicyBundle,
+  decodeWorkflowPolicyBinding,
   decodeVerificationObligation,
   decodeWorkflowSnapshot,
   goalId,
@@ -44,6 +48,9 @@ import {
   type EvidenceEligibility,
   type EvidenceRecord,
   type EvidenceSet,
+  type ExecutionProfile,
+  type ExecutionProfileBinding,
+  type RecoveryReconciliationRecord,
   type CloseoutRecord,
   type Goal,
   type GoalId,
@@ -53,11 +60,13 @@ import {
   type Sha256Digest,
   type WorkflowInstance,
   type WorkflowId,
+  type WorkflowPolicyBinding,
   type VerificationObligation,
 } from '@codeclosure/domain';
 import {
   decodeWorkerDispatchClaim,
   decodeWorkerEventReceipt,
+  type InstalledExecutionProfile,
   type InstalledPolicyBundle,
   type WorkerDispatchClaim,
   type WorkerEventReceipt,
@@ -198,6 +207,8 @@ const contextManifestRowSchema = z.object({
   attempt_id: z.string(),
   candidate_generation_id: z.string().nullable(),
   candidate_digest: z.string().nullable(),
+  execution_profile_id: z.string(),
+  execution_profile_digest: z.string(),
   policy_bundle_id: z.string(),
   policy_bundle_digest: z.string(),
   capability_grant_digest: z.string(),
@@ -218,6 +229,83 @@ const policyBundleRowSchema = z.object({
   installed_at: z.string(),
 });
 
+const executionProfileRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.number().int().positive(),
+  profile_version: nonBlankStringSchema,
+  canonical_content_json: z.string(),
+  profile_digest: z.string(),
+  installed_at: z.string(),
+});
+
+const executionProfileBindingRowSchema = z.object({
+  workflow_id: z.string(),
+  schema_version: z.number().int().positive(),
+  goal_id: z.string(),
+  profile_id: z.string(),
+  profile_version: nonBlankStringSchema,
+  profile_digest: z.string(),
+  start_command_id: z.string(),
+  bound_at: z.string(),
+  binding_digest: z.string(),
+});
+
+const workflowPolicyBindingRowSchema = z.object({
+  workflow_id: z.string(),
+  schema_version: z.literal(1),
+  goal_id: z.string(),
+  policy_bundle_id: z.string(),
+  policy_bundle_version: nonBlankStringSchema,
+  policy_bundle_digest: z.string(),
+  start_command_id: z.string(),
+  bound_at: z.string(),
+  binding_digest: z.string(),
+});
+
+const recoveryReconciliationRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.literal(1),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  phase: workflowPhaseSchema,
+  inspected_workflow_version: z.number().int().positive(),
+  resulting_workflow_version: z.number().int().positive(),
+  source_attempt_id: z.string().nullable(),
+  dispatch_claim_digest: z.string().nullable(),
+  last_audit_sequence: z.number().int().positive(),
+  expected_project_identity: nonBlankStringSchema,
+  observed_project_identity: nonBlankStringSchema.nullable(),
+  candidate_generation_id: z.string().nullable(),
+  candidate_base_identity: nonBlankStringSchema.nullable(),
+  expected_candidate_digest: z.string().nullable(),
+  observed_candidate_digest: z.string().nullable(),
+  execution_profile_id: z.string(),
+  execution_profile_digest: z.string(),
+  purpose: z.enum(['STARTUP', 'RESUME']),
+  disposition: z.enum(['SAFE_SAME_PHASE', 'SAFE_EARLIER_PHASE', 'BLOCKED']),
+  safe_resume_phase: workflowPhaseSchema.nullable(),
+  reason_code: z.enum([
+    'EXACT_AUTHORITY_MATCH',
+    'INSPECTION_UNAVAILABLE',
+    'INSPECTOR_FAILURE',
+    'PROFILE_BINDING_MISSING',
+    'PROFILE_BINDING_MISMATCH',
+    'SOURCE_ATTEMPT_NOT_RECOVERABLE',
+    'PROJECT_IDENTITY_MISMATCH',
+    'CANDIDATE_AUTHORITY_MISSING',
+    'CANDIDATE_GENERATION_MISMATCH',
+    'CANDIDATE_BASE_IDENTITY_MISMATCH',
+    'CANDIDATE_DIGEST_MISMATCH',
+    'UNSUPPORTED_RECOVERY_PHASE',
+  ]),
+  observation_refs_json: z.string(),
+  inspector_version: nonBlankStringSchema,
+  recovery_policy_version: nonBlankStringSchema,
+  inspected_at: z.string(),
+  reconciliation_digest: z.string(),
+});
+
 const workerDispatchClaimRowSchema = z.object({
   attempt_id: z.string(),
   schema_version: z.number().int().positive(),
@@ -227,6 +315,8 @@ const workerDispatchClaimRowSchema = z.object({
   context_manifest_id: z.string(),
   context_manifest_digest: z.string(),
   package_digest: z.string(),
+  execution_profile_id: z.string(),
+  execution_profile_digest: z.string(),
   claimed_at: z.string(),
 });
 
@@ -557,6 +647,8 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
         ? {}
         : { candidateGenerationId: parsed.candidate_generation_id }),
       ...(parsed.candidate_digest === null ? {} : { candidateDigest: parsed.candidate_digest }),
+      executionProfileId: parsed.execution_profile_id,
+      executionProfileDigest: parsed.execution_profile_digest,
       policyBundleId: parsed.policy_bundle_id,
       policyBundleDigest: parsed.policy_bundle_digest,
       capabilityGrantDigest: parsed.capability_grant_digest,
@@ -629,6 +721,131 @@ export function decodePolicyBundleRow(row: unknown): InstalledPolicyBundle {
   }
 }
 
+export function decodeExecutionProfileRow(row: unknown): InstalledExecutionProfile {
+  try {
+    const parsed = executionProfileRowSchema.parse(row);
+    const canonicalContent = parseJson(
+      parsed.canonical_content_json,
+      'ExecutionProfile.canonicalContent',
+    );
+    if (!isJsonObject(canonicalContent)) {
+      throw new TypeError('Execution Profile canonical content must be an object');
+    }
+    const profile: ExecutionProfile = decodeExecutionProfile({
+      ...canonicalContent,
+      digest: parsed.profile_digest,
+    });
+    if (
+      profile.id !== parsed.id ||
+      profile.schemaVersion !== parsed.schema_version ||
+      profile.version !== parsed.profile_version
+    ) {
+      throw new TypeError('Execution Profile storage columns disagree with canonical content');
+    }
+    return Object.freeze({ profile, installedAt: isoTimestamp(parsed.installed_at) });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ExecutionProfile', { cause: error });
+  }
+}
+
+export function decodeExecutionProfileBindingRow(row: unknown): ExecutionProfileBinding {
+  try {
+    const parsed = executionProfileBindingRowSchema.parse(row);
+    return decodeExecutionProfileBinding({
+      schemaVersion: parsed.schema_version,
+      goalId: parsed.goal_id,
+      workflowId: parsed.workflow_id,
+      profileId: parsed.profile_id,
+      profileVersion: parsed.profile_version,
+      profileDigest: parsed.profile_digest,
+      startCommandId: parsed.start_command_id,
+      boundAt: parsed.bound_at,
+      bindingDigest: parsed.binding_digest,
+    });
+  } catch (error) {
+    throw new PersistenceDecodeError('ExecutionProfileBinding', { cause: error });
+  }
+}
+
+export function decodeWorkflowPolicyBindingRow(row: unknown): WorkflowPolicyBinding {
+  try {
+    const parsed = workflowPolicyBindingRowSchema.parse(row);
+    return decodeWorkflowPolicyBinding({
+      schemaVersion: parsed.schema_version,
+      goalId: parsed.goal_id,
+      workflowId: parsed.workflow_id,
+      policyBundleId: parsed.policy_bundle_id,
+      policyBundleVersion: parsed.policy_bundle_version,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      startCommandId: parsed.start_command_id,
+      boundAt: parsed.bound_at,
+      bindingDigest: parsed.binding_digest,
+    });
+  } catch (error) {
+    throw new PersistenceDecodeError('WorkflowPolicyBinding', { cause: error });
+  }
+}
+
+export function decodeRecoveryReconciliationRow(row: unknown): RecoveryReconciliationRecord {
+  try {
+    const parsed = recoveryReconciliationRowSchema.parse(row);
+    const observationRefs = parseJson(
+      parsed.observation_refs_json,
+      'RecoveryReconciliation.observationRefs',
+    );
+    return decodeRecoveryReconciliationRecord({
+      id: parsed.id,
+      schemaVersion: parsed.schema_version,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      workflowId: parsed.workflow_id,
+      phase: parsed.phase,
+      inspectedWorkflowVersion: parsed.inspected_workflow_version,
+      resultingWorkflowVersion: parsed.resulting_workflow_version,
+      ...(parsed.source_attempt_id === null ? {} : { sourceAttemptId: parsed.source_attempt_id }),
+      ...(parsed.dispatch_claim_digest === null
+        ? {}
+        : { dispatchClaimDigest: parsed.dispatch_claim_digest }),
+      lastAuditSequence: parsed.last_audit_sequence,
+      expectedProjectIdentity: parsed.expected_project_identity,
+      ...(parsed.observed_project_identity === null
+        ? {}
+        : { observedProjectIdentity: parsed.observed_project_identity }),
+      ...(parsed.candidate_generation_id === null
+        ? {}
+        : { candidateGenerationId: parsed.candidate_generation_id }),
+      ...(parsed.candidate_base_identity === null
+        ? {}
+        : { candidateBaseIdentity: parsed.candidate_base_identity }),
+      ...(parsed.expected_candidate_digest === null
+        ? {}
+        : { expectedCandidateDigest: parsed.expected_candidate_digest }),
+      ...(parsed.observed_candidate_digest === null
+        ? {}
+        : { observedCandidateDigest: parsed.observed_candidate_digest }),
+      executionProfileId: parsed.execution_profile_id,
+      executionProfileDigest: parsed.execution_profile_digest,
+      purpose: parsed.purpose,
+      disposition: parsed.disposition,
+      ...(parsed.safe_resume_phase === null ? {} : { safeResumePhase: parsed.safe_resume_phase }),
+      reasonCode: parsed.reason_code,
+      observationRefs,
+      inspectorVersion: parsed.inspector_version,
+      recoveryPolicyVersion: parsed.recovery_policy_version,
+      inspectedAt: parsed.inspected_at,
+      reconciliationDigest: parsed.reconciliation_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('RecoveryReconciliation', { cause: error });
+  }
+}
+
 export function decodeWorkerDispatchClaimRow(row: unknown): WorkerDispatchClaim {
   try {
     const parsed = workerDispatchClaimRowSchema.parse(row);
@@ -641,6 +858,8 @@ export function decodeWorkerDispatchClaimRow(row: unknown): WorkerDispatchClaim 
       contextManifestId: parsed.context_manifest_id,
       contextManifestDigest: parsed.context_manifest_digest,
       packageDigest: parsed.package_digest,
+      executionProfileId: parsed.execution_profile_id,
+      executionProfileDigest: parsed.execution_profile_digest,
       claimedAt: parsed.claimed_at,
     });
   } catch (error) {
