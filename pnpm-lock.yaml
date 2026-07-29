@@ -44,6 +44,9 @@ importers:
       '@codeclosure/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@codeclosure/store-sqlite':
+        specifier: workspace:*
+        version: link:../../packages/store-sqlite
       zod:
         specifier: 4.4.3
         version: 4.4.3

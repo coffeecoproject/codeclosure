@@ -581,8 +581,14 @@ profile bound at first start cannot be replaced during resume. Status and audit
 views explain the resulting authority but cannot resume it. See
 [ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md).
 
-The remaining trusted composition work MUST invoke this recovery capability
-after opening/migrating the Store and before publishing any handler capability.
+The remaining trusted composition work MUST activate the Store through the
+verified isolation bootstrap in
+[ADR 0023](docs/adr/0023-verified-sqlite-authority-activation.md). That
+bootstrap holds one unactivated SQLite handle across retained-project
+inspection, filesystem isolation verification, migration, post-migration
+authority validation, and exact binding comparison. Only after activation may
+composition invoke startup recovery, and recovery MUST still complete before
+publishing any handler capability.
 
 ## Initial Deployment Model
 

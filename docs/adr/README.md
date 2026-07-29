@@ -28,6 +28,7 @@ supersedes it.
 | [0020](0020-runtime-application-recovery-and-query-boundary.md) | Own orchestration, recovery, and queries in the Runtime application boundary | Accepted |
 | [0021](0021-m1-execution-profile-and-cli-composition.md) | Bind M1 execution profiles and define local CLI composition | Accepted |
 | [0022](0022-immutable-workflow-policy-binding.md) | Bind one immutable Policy identity to each started Workflow | Accepted |
+| [0023](0023-verified-sqlite-authority-activation.md) | Activate SQLite authority through a verified isolation bootstrap | Accepted |
 
 ## ADR lifecycle
 

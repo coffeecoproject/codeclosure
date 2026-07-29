@@ -83,15 +83,13 @@ function beginImmediate<T>(database: Database.Database, operation: () => T): T {
   }
 }
 
-export function applyMigrations(
+function applyMigrationFiles(
   database: Database.Database,
+  files: readonly MigrationFile[],
   directory: string,
   now: () => IsoTimestamp,
 ): readonly AppliedMigration[] {
-  const files = readMigrationFiles(directory);
-
-  return beginImmediate(database, () => {
-    database.exec(`
+  database.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY CHECK (version >= 1),
         name TEXT NOT NULL UNIQUE,
@@ -100,58 +98,78 @@ export function applyMigrations(
       ) STRICT
     `);
 
-    const storedRows = database
-      .prepare('SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version')
-      .all()
-      .map((row) => {
-        const parsed = migrationRowSchema.parse(row);
-        isoTimestamp(parsed.applied_at);
-        return parsed;
-      });
-    const filesByVersion = new Map(files.map((file) => [file.version, file]));
+  const storedRows = database
+    .prepare('SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version')
+    .all()
+    .map((row) => {
+      const parsed = migrationRowSchema.parse(row);
+      isoTimestamp(parsed.applied_at);
+      return parsed;
+    });
+  const filesByVersion = new Map(files.map((file) => [file.version, file]));
 
-    for (const stored of storedRows) {
-      const file = filesByVersion.get(stored.version);
-      if (file === undefined) {
-        throw new MigrationIntegrityError(
-          `Applied migration ${stored.version} is missing from ${directory}`,
-        );
-      }
-      if (file.name !== stored.name || file.checksum !== stored.checksum) {
-        throw new MigrationIntegrityError(`Applied migration ${stored.version} was modified`);
-      }
-    }
-
-    const appliedVersions = new Set(storedRows.map((row) => row.version));
-    const insert = database.prepare(
-      'INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
-    );
-    for (const file of files) {
-      if (appliedVersions.has(file.version)) {
-        continue;
-      }
-      database.exec(file.sql);
-      insert.run(file.version, file.name, file.checksum, isoTimestamp(now()));
-    }
-
-    const foreignKeyViolations = database.prepare('PRAGMA foreign_key_check').all();
-    if (foreignKeyViolations.length > 0) {
+  for (const stored of storedRows) {
+    const file = filesByVersion.get(stored.version);
+    if (file === undefined) {
       throw new MigrationIntegrityError(
-        `SQLite foreign-key integrity check found ${foreignKeyViolations.length} violation(s)`,
+        `Applied migration ${stored.version} is missing from ${directory}`,
       );
     }
+    if (file.name !== stored.name || file.checksum !== stored.checksum) {
+      throw new MigrationIntegrityError(`Applied migration ${stored.version} was modified`);
+    }
+  }
 
-    return database
-      .prepare('SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version')
-      .all()
-      .map((row) => {
-        const parsed = migrationRowSchema.parse(row);
-        return Object.freeze({
-          version: parsed.version,
-          name: parsed.name,
-          checksum: parsed.checksum,
-          appliedAt: isoTimestamp(parsed.applied_at),
-        });
+  const appliedVersions = new Set(storedRows.map((row) => row.version));
+  const insert = database.prepare(
+    'INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
+  );
+  for (const file of files) {
+    if (appliedVersions.has(file.version)) {
+      continue;
+    }
+    database.exec(file.sql);
+    insert.run(file.version, file.name, file.checksum, isoTimestamp(now()));
+  }
+
+  const foreignKeyViolations = database.prepare('PRAGMA foreign_key_check').all();
+  if (foreignKeyViolations.length > 0) {
+    throw new MigrationIntegrityError(
+      `SQLite foreign-key integrity check found ${foreignKeyViolations.length} violation(s)`,
+    );
+  }
+
+  return database
+    .prepare('SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version')
+    .all()
+    .map((row) => {
+      const parsed = migrationRowSchema.parse(row);
+      return Object.freeze({
+        version: parsed.version,
+        name: parsed.name,
+        checksum: parsed.checksum,
+        appliedAt: isoTimestamp(parsed.applied_at),
       });
-  });
+    });
+}
+
+/** Internal activation hook: the caller owns the surrounding transaction. */
+export function applyMigrationsWithinCurrentTransaction(
+  database: Database.Database,
+  directory: string,
+  now: () => IsoTimestamp,
+): readonly AppliedMigration[] {
+  if (!database.inTransaction) {
+    throw new MigrationIntegrityError('Migration activation requires an existing transaction');
+  }
+  return applyMigrationFiles(database, readMigrationFiles(directory), directory, now);
+}
+
+export function applyMigrations(
+  database: Database.Database,
+  directory: string,
+  now: () => IsoTimestamp,
+): readonly AppliedMigration[] {
+  const files = readMigrationFiles(directory);
+  return beginImmediate(database, () => applyMigrationFiles(database, files, directory, now));
 }

@@ -93,12 +93,13 @@ M1 `demo run` and `--fixture` commands. Neither `domain` nor `runtime` imports
 `packages/testing`; M2 replaces this composition edge with a real adapter.
 
 The remaining Slice 7 work MUST add this trusted composition module. It will
-install the exact built-in M1 Policy and Execution Profiles, resolve the
-application-data home, open and migrate SQLite, construct production
-clock/identity providers, run startup reconciliation, and only then publish
-narrow handler capabilities. See
+resolve and verify the application-data home, activate SQLite through one
+guarded inspection/migration lifecycle, install the exact built-in M1 Policy
+and Execution Profiles, construct production clock/identity providers, run
+startup reconciliation, and only then publish narrow handler capabilities. See
 [ADR 0020](../adr/0020-runtime-application-recovery-and-query-boundary.md) and
-[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md).
+[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md), plus
+[ADR 0023](../adr/0023-verified-sqlite-authority-activation.md).
 
 During Slice 3 the still-empty CLI package depends only on the public Runtime
 surface, so it cannot import the SQLite mutation adapter or internal test
@@ -663,8 +664,8 @@ not complete.
 - Runtime-owned deterministic workflow driver with one persisted operation per
   re-entry boundary;
 - built-in Policy and installed Execution Profile composition, separate
-  immutable first-start bindings, production clock/identity providers, and platform data-home
-  resolution;
+  immutable first-start bindings, production clock/identity providers,
+  platform data-home resolution, and verified SQLite authority activation;
 - command surface, strict JSON/human rendering, and fixed exit
   classifications;
 - narrow recovery catalog and `RecoveryInspector`;
@@ -680,7 +681,9 @@ kernel capability; every profile/recovery/view record survives strict reopen;
 an old dispatch is never repeated; and `technicalCloseout` is impossible
 without current immutable closeout authority. See
 [ADR 0020](../adr/0020-runtime-application-recovery-and-query-boundary.md) and
-[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md).
+[ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md), with the
+activation ordering in
+[ADR 0023](../adr/0023-verified-sqlite-authority-activation.md).
 
 ### Slice 8 — M1 audit
 

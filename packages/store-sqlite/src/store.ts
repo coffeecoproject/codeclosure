@@ -208,6 +208,7 @@ import {
 } from '@codeclosure/runtime';
 
 import {
+  AuthorityActivationError,
   CommandIdConflictError,
   OptimisticConcurrencyError,
   StoreInvariantError,
@@ -215,6 +216,7 @@ import {
 import { serializeJson } from './json.js';
 import {
   applyMigrations,
+  applyMigrationsWithinCurrentTransaction,
   defaultMigrationsDirectory,
   type AppliedMigration,
 } from './migrations.js';
@@ -319,6 +321,45 @@ export interface SqliteControlStoreOptions {
   ) => void;
 }
 
+export const SqliteAuthorityDatabaseState = {
+  EMPTY: 'EMPTY',
+  RETAINED_M1: 'RETAINED_M1',
+} as const;
+export type SqliteAuthorityDatabaseState =
+  (typeof SqliteAuthorityDatabaseState)[keyof typeof SqliteAuthorityDatabaseState];
+
+export interface SqliteRetainedProjectReference {
+  readonly goalId: GoalId;
+  readonly projectPath: string;
+}
+
+/**
+ * Denial-only bootstrap input. Runtime authority is established only after
+ * migrations and owning Store codecs validate the retained records.
+ */
+export interface SqliteAuthorityIsolationSnapshot {
+  readonly schemaVersion: 1;
+  readonly databasePath: string;
+  readonly databaseState: SqliteAuthorityDatabaseState;
+  readonly projectReferences: readonly SqliteRetainedProjectReference[];
+}
+
+export interface SqliteAuthorityIsolationLease {
+  /** Revalidates every filesystem identity bound during bootstrap. */
+  assertCurrent(): void;
+
+  /** Refuses a CreateGoal path that was not part of the verified invocation. */
+  assertProjectPathAllowed(projectPath: string): void;
+}
+
+export interface SqliteAuthorityIsolationVerifier {
+  verify(snapshot: SqliteAuthorityIsolationSnapshot): unknown;
+}
+
+export interface VerifiedSqliteControlStoreOptions extends SqliteControlStoreOptions {
+  readonly isolationVerifier: SqliteAuthorityIsolationVerifier;
+}
+
 interface AuditWriteIdentity {
   readonly auditEventId: AuditEventId;
   readonly payloadDigest: Sha256Digest;
@@ -339,6 +380,32 @@ const authorityIdentifierRowSchema = z
     id: z.string(),
   })
   .strict();
+
+const sqliteSchemaObjectRowsSchema = z.array(
+  z
+    .object({
+      type: z.enum(['index', 'table', 'trigger', 'view']),
+      name: z.string().min(1),
+    })
+    .strict(),
+);
+
+const retainedProjectReferenceRowsSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+      project_path: z.string().min(1),
+    })
+    .strict(),
+);
+
+const retainedGoalIdentifierRowsSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+    })
+    .strict(),
+);
 
 const auditSequenceWatermarkRowSchema = z
   .object({
@@ -397,6 +464,109 @@ function normalizeFilename(filename: string): string {
   const absolute = resolve(filename);
   mkdirSync(dirname(absolute), { recursive: true });
   return absolute;
+}
+
+function normalizePreparedFilename(filename: string): string {
+  if (filename === ':memory:') {
+    throw new AuthorityActivationError(
+      'Verified SQLite authority activation requires a filesystem database',
+    );
+  }
+  if (filename.trim().length === 0) {
+    throw new AuthorityActivationError('Prepared SQLite filename must not be empty');
+  }
+  const absolute = resolve(filename);
+  if (filename !== absolute) {
+    throw new AuthorityActivationError(
+      'Prepared SQLite filename must already be one normalized absolute path',
+    );
+  }
+  return absolute;
+}
+
+function inspectAuthorityIsolationSnapshot(
+  database: Database.Database,
+  databasePath: string,
+): SqliteAuthorityIsolationSnapshot {
+  try {
+    const objects = sqliteSchemaObjectRowsSchema.parse(
+      database
+        .prepare(
+          `SELECT type, name
+             FROM sqlite_schema
+            WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type, name`,
+        )
+        .all(),
+    );
+    if (objects.length === 0) {
+      return Object.freeze({
+        schemaVersion: 1,
+        databasePath,
+        databaseState: SqliteAuthorityDatabaseState.EMPTY,
+        projectReferences: Object.freeze([]),
+      });
+    }
+
+    const tableNames = new Set(
+      objects.filter((object) => object.type === 'table').map((object) => object.name),
+    );
+    if (!tableNames.has('schema_migrations') || !tableNames.has('goals')) {
+      throw new AuthorityActivationError(
+        'SQLite authority bootstrap found an unsupported non-empty schema',
+      );
+    }
+
+    const rows = retainedProjectReferenceRowsSchema.parse(
+      database.prepare('SELECT id, project_path FROM goals ORDER BY id').all(),
+    );
+    const seenGoalIds = new Set<GoalId>();
+    const projectReferences = Object.freeze(
+      rows.map((row) => {
+        const identifier = goalId(row.id);
+        if (seenGoalIds.has(identifier)) {
+          throw new AuthorityActivationError(
+            `SQLite authority bootstrap contains duplicate Goal ${identifier}`,
+          );
+        }
+        seenGoalIds.add(identifier);
+        return Object.freeze({ goalId: identifier, projectPath: row.project_path });
+      }),
+    );
+    return Object.freeze({
+      schemaVersion: 1,
+      databasePath,
+      databaseState: SqliteAuthorityDatabaseState.RETAINED_M1,
+      projectReferences,
+    });
+  } catch (error) {
+    if (error instanceof AuthorityActivationError) {
+      throw error;
+    }
+    throw new AuthorityActivationError(
+      'SQLite authority bootstrap state failed strict inspection',
+      { cause: error },
+    );
+  }
+}
+
+function decodeAuthorityIsolationLease(value: unknown): SqliteAuthorityIsolationLease {
+  if (typeof value !== 'object' || value === null) {
+    throw new AuthorityActivationError('Authority isolation verifier returned no lease');
+  }
+  const assertCurrent: unknown = Reflect.get(value, 'assertCurrent');
+  const assertProjectPathAllowed: unknown = Reflect.get(value, 'assertProjectPathAllowed');
+  if (typeof assertCurrent !== 'function' || typeof assertProjectPathAllowed !== 'function') {
+    throw new AuthorityActivationError('Authority isolation verifier returned a malformed lease');
+  }
+  return Object.freeze({
+    assertCurrent: () => {
+      Reflect.apply(assertCurrent, value, []);
+    },
+    assertProjectPathAllowed: (projectPath: string) => {
+      Reflect.apply(assertProjectPathAllowed, value, [projectPath]);
+    },
+  });
 }
 
 function validateBusyTimeout(value: number): number {
@@ -1137,6 +1307,7 @@ export class SqliteControlStore
 {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
+  readonly #authorityIsolationLease: SqliteAuthorityIsolationLease | undefined;
   readonly #transactionProbe:
     | ((
         step:
@@ -1162,10 +1333,12 @@ export class SqliteControlStore
             | RecoveryTransactionStep,
         ) => void)
       | undefined,
+    authorityIsolationLease?: SqliteAuthorityIsolationLease,
   ) {
     this.#database = database;
     this.#appliedMigrations = Object.freeze([...appliedMigrations]);
     this.#transactionProbe = transactionProbe;
+    this.#authorityIsolationLease = authorityIsolationLease;
   }
 
   public static open(options: SqliteControlStoreOptions): SqliteControlStore {
@@ -1203,6 +1376,65 @@ export class SqliteControlStore
     }
   }
 
+  public static openVerified(options: VerifiedSqliteControlStoreOptions): SqliteControlStore {
+    const filename = normalizePreparedFilename(options.filename);
+    const busyTimeout = validateBusyTimeout(options.busyTimeoutMilliseconds ?? 5_000);
+    const database = new Database(filename, { fileMustExist: true, timeout: busyTimeout });
+
+    try {
+      database.pragma('foreign_keys = ON');
+      database.pragma(`busy_timeout = ${busyTimeout}`);
+      database.pragma('synchronous = FULL');
+      const foreignKeys = database.pragma('foreign_keys', { simple: true });
+      if (foreignKeys !== 1) {
+        throw new StoreInvariantError('SQLite foreign-key enforcement could not be enabled');
+      }
+
+      database.exec('BEGIN IMMEDIATE');
+      database.pragma('query_only = ON');
+      const isolationSnapshot = inspectAuthorityIsolationSnapshot(database, filename);
+      const isolationLease = decodeAuthorityIsolationLease(
+        options.isolationVerifier.verify(isolationSnapshot),
+      );
+      isolationLease.assertCurrent();
+
+      database.pragma('query_only = OFF');
+      const migrations = applyMigrationsWithinCurrentTransaction(
+        database,
+        options.migrationsDirectory ?? defaultMigrationsDirectory(),
+        options.now ?? systemNow,
+      );
+      const store = new SqliteControlStore(
+        database,
+        migrations,
+        options.transactionProbe,
+        isolationLease,
+      );
+      store.assertRetainedWorkflowStartAuthorityClosure();
+      store.assertRetainedWorkerAuthorityClosure();
+      store.assertRetainedCandidateEvidenceAuthorityClosure();
+      store.assertRetainedRecoveryAuthorityClosure();
+      store.assertRetainedAcceptanceAuthorityClosure();
+      store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
+      isolationLease.assertCurrent();
+      database.exec('COMMIT');
+
+      const journalMode = database.pragma('journal_mode = WAL', { simple: true });
+      if (journalMode !== 'wal') {
+        throw new StoreInvariantError('SQLite WAL journal mode could not be enabled');
+      }
+      isolationLease.assertCurrent();
+      store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
+      return store;
+    } catch (error) {
+      if (database.inTransaction) {
+        database.exec('ROLLBACK');
+      }
+      database.close();
+      throw error;
+    }
+  }
+
   public close(): void {
     if (!this.#closed) {
       this.#database.close();
@@ -1213,6 +1445,40 @@ export class SqliteControlStore
   public appliedMigrations(): readonly AppliedMigration[] {
     this.assertOpen();
     return this.#appliedMigrations;
+  }
+
+  private assertRetainedProjectReferencesUnchanged(
+    isolationSnapshot: SqliteAuthorityIsolationSnapshot,
+  ): void {
+    const identifiers = retainedGoalIdentifierRowsSchema.parse(
+      this.#database.prepare('SELECT id FROM goals ORDER BY id').all(),
+    );
+    const decodedReferences = identifiers.map((row) => {
+      const identifier = goalId(row.id);
+      const owner = this.getGoalWithWorkflow(identifier);
+      if (owner === undefined) {
+        throw new AuthorityActivationError(
+          `Goal ${identifier} disappeared during SQLite authority activation`,
+        );
+      }
+      return Object.freeze({ goalId: owner.goal.id, projectPath: owner.goal.scope.projectPath });
+    });
+    if (decodedReferences.length !== isolationSnapshot.projectReferences.length) {
+      throw new AuthorityActivationError(
+        'Retained Goal project bindings changed during SQLite authority activation',
+      );
+    }
+    for (const [index, reference] of decodedReferences.entries()) {
+      const inspected = isolationSnapshot.projectReferences[index];
+      if (
+        inspected?.goalId !== reference.goalId ||
+        inspected.projectPath !== reference.projectPath
+      ) {
+        throw new AuthorityActivationError(
+          'Retained Goal project bindings changed during SQLite authority activation',
+        );
+      }
+    }
   }
 
   public getGoal(rawGoalIdentifier: GoalId): Goal | undefined {
@@ -2482,6 +2748,7 @@ export class SqliteControlStore
     const nonGoals = serializeJson(input.goal.nonGoals);
 
     return this.runCommandImmediate(() => {
+      this.#authorityIsolationLease?.assertProjectPathAllowed(input.goal.scope.projectPath);
       const existingRow = this.#database
         .prepare('SELECT * FROM processed_commands WHERE command_id = ?')
         .get(input.commandId);
@@ -8382,8 +8649,10 @@ export class SqliteControlStore
     }
     this.#database.exec('BEGIN IMMEDIATE');
     try {
+      this.#authorityIsolationLease?.assertCurrent();
       const result = operation();
       this.assertRetainedWorkflowStartAuthorityClosure();
+      this.#authorityIsolationLease?.assertCurrent();
       this.#database.exec('COMMIT');
       return result;
     } catch (error) {
@@ -8426,11 +8695,14 @@ export class SqliteControlStore
 
   private runRead<Value>(operation: () => Value): Value {
     if (this.#database.inTransaction) {
+      this.#authorityIsolationLease?.assertCurrent();
       return operation();
     }
     this.#database.exec('BEGIN');
     try {
+      this.#authorityIsolationLease?.assertCurrent();
       const result = operation();
+      this.#authorityIsolationLease?.assertCurrent();
       this.#database.exec('COMMIT');
       return result;
     } catch (error) {
@@ -8465,4 +8737,10 @@ export class SqliteControlStore
 
 export function openSqliteControlStore(options: SqliteControlStoreOptions): SqliteControlStore {
   return SqliteControlStore.open(options);
+}
+
+export function openVerifiedSqliteControlStore(
+  options: VerifiedSqliteControlStoreOptions,
+): SqliteControlStore {
+  return SqliteControlStore.openVerified(options);
 }

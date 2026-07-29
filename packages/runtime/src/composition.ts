@@ -14,3 +14,4 @@ export type {
   WorkflowDriverDependencies,
   WorkflowDriverIdentityGenerator,
 } from './workflow-driver.js';
+export { CryptographicIdentityGenerator, SystemUtcClock } from './production-adapters.js';

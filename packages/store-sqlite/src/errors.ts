@@ -12,6 +12,13 @@ export class MigrationIntegrityError extends SqliteStoreError {
   }
 }
 
+export class AuthorityActivationError extends SqliteStoreError {
+  public constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'AuthorityActivationError';
+  }
+}
+
 export class PersistenceDecodeError extends SqliteStoreError {
   public constructor(recordType: string, options?: ErrorOptions) {
     super(`Stored ${recordType} failed boundary validation`, options);

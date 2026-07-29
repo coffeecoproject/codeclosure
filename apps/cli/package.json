@@ -20,10 +20,12 @@
   "scripts": {
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
+    "test": "pnpm run build && node --test test/*.test.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
     "@codeclosure/runtime": "workspace:*",
+    "@codeclosure/store-sqlite": "workspace:*",
     "zod": "4.4.3"
   }
 }

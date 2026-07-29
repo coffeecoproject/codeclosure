@@ -39,6 +39,11 @@ const PUBLIC_ADAPTER_RUNTIME_IMPORTS = new Set([
   'WorkflowDriveSummary',
 ]);
 
+const TRUSTED_COMPOSITION_STORE_IMPORTS = new Set([
+  'openVerifiedSqliteControlStore',
+  'SqliteAuthorityIsolationSnapshot',
+]);
+
 const CliSourceZone = Object.freeze({
   ENTRY_POINT: 'ENTRY_POINT',
   HANDLER: 'HANDLER',
@@ -197,7 +202,24 @@ export function findCliBoundaryViolationsInSource(source, filePath, repositoryRo
           'Trusted CLI composition must use the declared package root, not an undeclared package subpath.',
         );
       } else {
-        requireExplicitNamedImport(node, specifier, kind, 'Trusted CLI composition');
+        const explicit = requireExplicitNamedImport(
+          node,
+          specifier,
+          kind,
+          'Trusted CLI composition',
+        );
+        if (explicit && specifier === '@codeclosure/store-sqlite') {
+          for (const element of node.importClause.namedBindings.elements) {
+            const name = importedName(element);
+            if (!TRUSTED_COMPOSITION_STORE_IMPORTS.has(name)) {
+              record(
+                element,
+                specifier,
+                `Trusted CLI composition may not import unverified Store capability ${name}.`,
+              );
+            }
+          }
+        }
       }
       return;
     }
@@ -215,7 +237,16 @@ export function findCliBoundaryViolationsInSource(source, filePath, repositoryRo
           'CLI handlers must receive facade capabilities; only the CLI entry point may invoke trusted composition.',
         );
       } else {
-        requireExplicitNamedImport(node, specifier, kind, 'The CLI entry point');
+        const compositionRoot = resolve(repositoryRoot, 'apps/cli/src/composition/index.js');
+        if (relativeTarget !== compositionRoot) {
+          record(
+            node,
+            specifier,
+            'The CLI entry point may import only the trusted composition root.',
+          );
+        } else {
+          requireExplicitNamedImport(node, specifier, kind, 'The CLI entry point');
+        }
       }
       return;
     }

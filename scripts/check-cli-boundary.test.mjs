@@ -56,10 +56,21 @@ void test('trusted composition may use explicit package exports needed to constr
   const source = [
     "import { createCodeClosureApplication } from '@codeclosure/runtime';",
     "import { createWorkflowDriver } from '@codeclosure/runtime/composition';",
-    "import { openSqliteControlStore } from '@codeclosure/store-sqlite';",
+    "import { openVerifiedSqliteControlStore, type SqliteAuthorityIsolationSnapshot } from '@codeclosure/store-sqlite';",
     "import { FakeWorker } from '@codeclosure/testing';",
   ].join('\n');
   assert.deepEqual(violations(source, compositionFixturePath), []);
+});
+
+void test('trusted production composition rejects raw or alternate Store open paths', () => {
+  const forbidden = [
+    "import { openSqliteControlStore } from '@codeclosure/store-sqlite';",
+    "import { SqliteControlStore } from '@codeclosure/store-sqlite';",
+    "import { applyMigrations } from '@codeclosure/store-sqlite';",
+  ];
+  for (const source of forbidden) {
+    assert.equal(violations(source, compositionFixturePath).length, 1, source);
+  }
 });
 
 void test('trusted composition cannot use internal subpaths, implicit imports, or re-export control capabilities', () => {
@@ -69,7 +80,7 @@ void test('trusted composition cannot use internal subpaths, implicit imports, o
     "import * as store from '@codeclosure/store-sqlite';",
     "const store = await import('@codeclosure/store-sqlite');",
     "export { openSqliteControlStore } from '@codeclosure/store-sqlite';",
-    "import { openSqliteControlStore } from '@codeclosure/store-sqlite'; export { openSqliteControlStore };",
+    "import { openVerifiedSqliteControlStore } from '@codeclosure/store-sqlite'; export { openVerifiedSqliteControlStore };",
     "import { WorkflowRuntimeKernel } from '../../../../packages/runtime/src/workflow-runtime.js';",
   ];
   for (const source of forbidden) {
@@ -86,6 +97,13 @@ void test('only the CLI entry point may invoke the local trusted composition mod
       entryPointFixturePath,
     ),
     [],
+  );
+  assert.equal(
+    violations(
+      "import { openCliSqliteAuthority } from './composition/sqlite-authority.js';",
+      entryPointFixturePath,
+    ).length,
+    1,
   );
   assert.equal(
     violations("export * from './composition/index.js';", entryPointFixturePath).length,
