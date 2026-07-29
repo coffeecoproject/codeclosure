@@ -173,6 +173,11 @@ export interface CreateGoalRequest {
   readonly criteria: readonly string[];
 }
 
+/** Strict public-adapter parser for the Goal identity accepted by read commands. */
+export function parseGoalIdentifier(value: string): GoalId {
+  return goalId(value);
+}
+
 export interface NormalizedProjectPathPort {
   /**
    * Accepts only a normalized absolute path and returns that exact identity.

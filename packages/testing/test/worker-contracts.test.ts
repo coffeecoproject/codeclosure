@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setImmediate as waitForImmediate } from 'node:timers/promises';
 
 import {
   AttemptFailureClass,
@@ -36,13 +37,13 @@ import { FakeWorker, FakeWorkerFixture } from '../src/fake-worker.ts';
 const packageDigest = sha256Digest(`sha256:${'a'.repeat(64)}`);
 const manifestDigest = sha256Digest(`sha256:${'b'.repeat(64)}`);
 
-function request(): WorkerRequest {
+function request(version = 2): WorkerRequest {
   const contextPackage = decodeContextPackage({
     schemaVersion: 2,
     goalId: goalId('goal_worker-fixture'),
     goalRevision: goalRevision(1),
     workflowId: workflowId('workflow_worker-fixture'),
-    workflowVersion: workflowVersion(2),
+    workflowVersion: workflowVersion(version),
     phase: WorkflowPhase.DISCOVERY,
     attemptId: attemptId('attempt_worker-fixture'),
     phaseObjective: 'Inspect the bounded fixture.',
@@ -126,9 +127,50 @@ void test('[I-009][I-019] stale context is shape-valid but fails semantic reques
 });
 
 void test('[I-009] duplicate Worker delivery retains one independent WorkerEventId', async () => {
-  const events = await collect(new FakeWorker({ fixture: FakeWorkerFixture.DUPLICATE_RESULT }));
+  const workerRequest = request();
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.DUPLICATE_RESULT });
+  assert.deepEqual(worker.readObservation(), {
+    schemaVersion: 1,
+    fixture: FakeWorkerFixture.DUPLICATE_RESULT,
+    requestCount: 0,
+    eventDeliveryCount: 0,
+    requests: [],
+  });
+
+  const events = await collect(worker, workerRequest);
   assert.equal(events.length, 2);
-  assert.equal(decodeWorkerEvent(events[0]).id, decodeWorkerEvent(events[1]).id);
+  const eventId = decodeWorkerEvent(events[0]).id;
+  assert.equal(eventId, decodeWorkerEvent(events[1]).id);
+
+  const observation = worker.readObservation();
+  assert.equal(Object.isFrozen(observation), true);
+  assert.equal(Object.isFrozen(observation.requests), true);
+  assert.equal(Object.isFrozen(observation.requests[0]), true);
+  assert.equal(Object.isFrozen(observation.requests[0]?.deliveries), true);
+  assert.deepEqual(observation, {
+    schemaVersion: 1,
+    fixture: FakeWorkerFixture.DUPLICATE_RESULT,
+    requestCount: 1,
+    eventDeliveryCount: 2,
+    requests: [
+      {
+        attemptId: workerRequest.attemptId,
+        workflowId: workerRequest.contextPackage.workflowId,
+        workflowVersion: workerRequest.contextPackage.workflowVersion,
+        phase: workerRequest.contextPackage.phase,
+        workerSessionId: workerRequest.workerSessionId,
+        contextManifestId: workerRequest.contextManifestId,
+        contextManifestDigest: workerRequest.contextManifestDigest,
+        packageDigest: workerRequest.packageDigest,
+        executionProfileId: workerRequest.contextPackage.executionProfileId,
+        executionProfileDigest: workerRequest.contextPackage.executionProfileDigest,
+        deliveries: [
+          { ordinal: 1, eventId },
+          { ordinal: 2, eventId },
+        ],
+      },
+    ],
+  });
 });
 
 void test('[I-027] Worker failure is typed while abrupt termination remains a port failure', async () => {
@@ -210,4 +252,23 @@ void test('[I-010] delayed FakeWorker respects AbortSignal interruption', async 
   await assert.rejects(consumption, (error: unknown) => {
     return error instanceof Error && error.name === 'AbortError';
   });
+});
+
+void test('[I-008][I-010] restart FakeWorker delays only the initial bound dispatch', async () => {
+  const initialWorker = new FakeWorker({ fixture: FakeWorkerFixture.INITIAL_DISPATCH_DELAY });
+  const initialConsumption = collect(initialWorker, request(2));
+  let initialCompleted = false;
+  void initialConsumption.then(() => {
+    initialCompleted = true;
+  });
+  await initialWorker.waitUntilStarted();
+  await waitForImmediate();
+  assert.equal(initialCompleted, false);
+  initialWorker.release();
+  assert.equal((await initialConsumption).length, 1);
+
+  const recoveredWorker = new FakeWorker({ fixture: FakeWorkerFixture.INITIAL_DISPATCH_DELAY });
+  const recoveredEvents = await collect(recoveredWorker, request(5));
+  assert.equal(recoveredEvents.length, 1);
+  assert.equal(decodeWorkerEvent(recoveredEvents[0]).type, 'WORKER_RESULT');
 });

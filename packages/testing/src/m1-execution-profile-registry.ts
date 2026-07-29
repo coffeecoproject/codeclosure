@@ -109,9 +109,13 @@ const m1Profiles: readonly M1FakeExecutionProfileRecipe[] = Object.freeze([
   ),
   recipe(
     M1FakeExecutionProfileName.RESTART_RESUME,
-    FakeWorkerFixture.VALID_RESULT,
+    FakeWorkerFixture.INITIAL_DISPATCH_DELAY,
     FakeCandidateSourceFixture.STABLE,
     FakeVerificationFixture.PASS,
+    Object.freeze({
+      id: 'profile_m1-restart-resume-v2',
+      profileVersion: 'codeclosure-m1-fake-profile-v2',
+    }),
   ),
   recipe(
     M1FakeExecutionProfileName.DUPLICATE_RESULT,

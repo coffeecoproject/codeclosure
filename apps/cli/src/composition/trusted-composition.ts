@@ -17,6 +17,7 @@ import {
   createWorkflowDriver,
 } from '@codeclosure/runtime/composition';
 
+import { ProtectedPathKind, resolveCodeClosureDataHomePath } from './data-home.js';
 import {
   installM1RuntimeProfiles,
   parseM1RuntimeProfileName,
@@ -39,6 +40,52 @@ export interface CliComposition {
 
 export interface TrustedCliComposition extends CliComposition {
   readonly scenarioControl: M1RuntimeProfileScenarioControl;
+  readonly proofObservation: ReturnType<typeof installM1RuntimeProfiles>['proofObservation'];
+}
+
+export interface CreateCliInvocationCompositionOptions {
+  readonly platform: NodeJS.Platform;
+  readonly environment: Readonly<Record<string, string | undefined>>;
+  /** Exact normalized project path known to this invocation, when applicable. */
+  readonly projectPath?: string;
+  readonly startProfileName?: string;
+}
+
+/** Creates one fresh application-command identity without exposing the generator. */
+export function createCliCommandId(): ReturnType<CryptographicIdentityGenerator['nextCommandId']> {
+  return new CryptographicIdentityGenerator().nextCommandId();
+}
+
+/** Validates the closed M1 fixture alias without exporting FakeWorker registry types. */
+export function validateCliStartProfileName(value: string): string {
+  return parseM1RuntimeProfileName(value);
+}
+
+/**
+ * Production entry-point wrapper. Filesystem and data-home capabilities remain
+ * inside trusted composition while handlers receive only the narrow facade.
+ */
+export function createCliInvocationComposition(
+  options: CreateCliInvocationCompositionOptions,
+): CliComposition {
+  const protectedPaths =
+    options.projectPath === undefined
+      ? Object.freeze([])
+      : Object.freeze([
+          Object.freeze({ kind: ProtectedPathKind.PROJECT, path: options.projectPath }),
+        ]);
+  return createCliComposition({
+    dataHomePath: resolveCodeClosureDataHomePath({
+      platform: options.platform,
+      environment: options.environment,
+    }),
+    protectedPaths,
+    allowedProjectPaths:
+      options.projectPath === undefined ? Object.freeze([]) : Object.freeze([options.projectPath]),
+    ...(options.startProfileName === undefined
+      ? {}
+      : { startProfileName: options.startProfileName }),
+  });
 }
 
 /** Internal factory retained inside the trusted composition directory. */
@@ -114,6 +161,7 @@ export function createTrustedCliComposition(
       application,
       startupRecovery,
       scenarioControl: profiles.scenarioControl,
+      proofObservation: profiles.proofObservation,
       close: (): void => {
         if (!closed) {
           store.close();

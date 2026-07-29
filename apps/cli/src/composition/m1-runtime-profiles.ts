@@ -19,6 +19,10 @@ export interface M1RuntimeProfileRegistry {
   readonly startProfile: RuntimeExecutionProfile;
   readonly resolver: RuntimeExecutionProfileResolver;
   readonly scenarioControl: M1RuntimeProfileScenarioControl;
+  /** Run-owned fixture telemetry; never part of the Runtime execution facade. */
+  readonly proofObservation: {
+    readDuplicateResultWorker(): ReturnType<FakeWorker['readObservation']>;
+  };
 }
 
 export interface M1RuntimeProfileScenarioControl {
@@ -34,6 +38,7 @@ export function parseM1RuntimeProfileName(name: string | undefined): M1FakeExecu
 interface CreatedRuntimeProfile {
   readonly profile: RuntimeExecutionProfile;
   readonly candidateSource: FakeCandidateSource;
+  readonly worker: FakeWorker;
 }
 
 function runtimeProfile(
@@ -41,17 +46,19 @@ function runtimeProfile(
   recipe: ReturnType<typeof m1FakeExecutionProfileRecipe>,
 ): CreatedRuntimeProfile {
   const candidateSource = new FakeCandidateSource(recipe.candidateSourceFixture);
+  const worker = new FakeWorker({ fixture: recipe.workerFixture });
   return Object.freeze({
     profile: Object.freeze({
       schemaVersion: 1,
       profileId: installed.profile.id,
       profileDigest: installed.profile.digest,
       driverVersion: installed.profile.driverVersion,
-      worker: new FakeWorker({ fixture: recipe.workerFixture }),
+      worker,
       candidateSource,
       verification: new FakeVerificationRunner({ fixture: recipe.verificationFixture }),
     }),
     candidateSource,
+    worker,
   });
 }
 
@@ -63,6 +70,7 @@ export function installM1RuntimeProfiles(
   const selectedRecipe = m1FakeExecutionProfileRecipe(startProfileName);
   const profilesById = new Map<string, RuntimeExecutionProfile>();
   const candidateSourcesByName = new Map<M1FakeExecutionProfileName, FakeCandidateSource>();
+  const workersByName = new Map<M1FakeExecutionProfileName, FakeWorker>();
 
   for (const recipe of m1FakeExecutionProfileRecipes()) {
     const result = installer.installExecutionProfile(recipe.definition);
@@ -75,6 +83,7 @@ export function installM1RuntimeProfiles(
     const created = runtimeProfile(installed, recipe);
     profilesById.set(installed.profile.id, created.profile);
     candidateSourcesByName.set(recipe.name, created.candidateSource);
+    workersByName.set(recipe.name, created.worker);
   }
 
   const startProfile = profilesById.get(selectedRecipe.definition.id);
@@ -107,6 +116,15 @@ export function installM1RuntimeProfiles(
           throw new TypeError('Stale-closeout Candidate Source is unavailable');
         }
         source.simulateFrozenDrift(generationId);
+      },
+    }),
+    proofObservation: Object.freeze({
+      readDuplicateResultWorker: (): ReturnType<FakeWorker['readObservation']> => {
+        const worker = workersByName.get(M1FakeExecutionProfileName.DUPLICATE_RESULT);
+        if (worker === undefined) {
+          throw new TypeError('Duplicate-result FakeWorker is unavailable');
+        }
+        return worker.readObservation();
       },
     }),
   });

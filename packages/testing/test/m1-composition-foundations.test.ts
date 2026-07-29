@@ -148,6 +148,17 @@ void test('[I-013] M1 Fake profile registry is closed, unique, and behavior-boun
   assert.equal(staleCloseout.version, 'codeclosure-m1-fake-profile-v2');
   assert.equal(staleCloseout.candidateSourceVersion, 'controlled-frozen-drift-v1');
   assertRecipe(
+    M1FakeExecutionProfileName.RESTART_RESUME,
+    FakeWorkerFixture.INITIAL_DISPATCH_DELAY,
+    FakeCandidateSourceFixture.STABLE,
+    FakeVerificationFixture.PASS,
+  );
+  const restartResume = m1FakeExecutionProfileRecipe(
+    M1FakeExecutionProfileName.RESTART_RESUME,
+  ).definition;
+  assert.equal(restartResume.id, 'profile_m1-restart-resume-v2');
+  assert.equal(restartResume.version, 'codeclosure-m1-fake-profile-v2');
+  assertRecipe(
     M1FakeExecutionProfileName.CANDIDATE_DRIFT,
     FakeWorkerFixture.VALID_RESULT,
     FakeCandidateSourceFixture.FREEZE_DRIFT,

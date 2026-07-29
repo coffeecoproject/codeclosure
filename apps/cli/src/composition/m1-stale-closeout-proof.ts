@@ -4,15 +4,19 @@ import { join } from 'node:path';
 
 import {
   WorkflowDriveStopReason,
-  type CodeClosureApplication,
+  type GoalAuditView,
   type GoalStatusView,
   type WorkflowDriveSummary,
 } from '@codeclosure/runtime';
-import { CryptographicIdentityGenerator } from '@codeclosure/runtime/composition';
-import { M1FakeExecutionProfileName } from '@codeclosure/testing';
 
 import { ProtectedPathKind } from './data-home.js';
 import {
+  assertM1ProofReopen,
+  requireM1ProofAudit,
+  requireM1ProofStatus,
+} from './m1-demo-proof-helpers.js';
+import {
+  createCliCommandId,
   createCliComposition,
   createTrustedCliComposition,
   type CreateCliCompositionOptions,
@@ -30,22 +34,12 @@ export interface M1StaleCloseoutProofResult {
   readonly beforeDrift: GoalStatusView;
   readonly finalStatus: GoalStatusView;
   readonly reopenedStatus: GoalStatusView;
+  readonly audit: GoalAuditView;
   readonly finalDrive: WorkflowDriveSummary;
 }
 
 /** Bound to m1-deterministic-driver-v1: operation 15 persists ACCEPT, 16 closes. */
 const M1_STALE_CLOSEOUT_ACCEPT_OPERATION_LIMIT = 15;
-
-function requireGoalStatus(
-  application: CodeClosureApplication,
-  goalIdentifier: GoalStatusView['goalId'],
-): GoalStatusView {
-  const status = application.getGoalStatus(goalIdentifier);
-  if (status.status !== 'FOUND') {
-    throw new TypeError('M1 proof Goal status is unavailable');
-  }
-  return status.view;
-}
 
 /**
  * Runs the temporal stale-closeout proof through public StartGoal replay. The
@@ -61,7 +55,7 @@ export async function runM1StaleCloseoutProof(
       Object.freeze({ kind: ProtectedPathKind.PROJECT, path: options.projectPath }),
     ]),
     allowedProjectPaths: Object.freeze([options.projectPath]),
-    startProfileName: M1FakeExecutionProfileName.STALE_CLOSEOUT,
+    startProfileName: 'stale-closeout',
   });
   let trusted: TrustedCliComposition | undefined;
   try {
@@ -69,9 +63,8 @@ export async function runM1StaleCloseoutProof(
       compositionOptions,
       M1_STALE_CLOSEOUT_ACCEPT_OPERATION_LIMIT,
     );
-    const commandIds = new CryptographicIdentityGenerator();
     const created = trusted.application.createGoal({
-      commandId: commandIds.nextCommandId(),
+      commandId: createCliCommandId(),
       objective: 'Prove stale source authority cannot be consumed by Closeout',
       projectPath: options.projectPath,
       criteria: ['Closeout rejects source drift after an ACCEPT decision'],
@@ -79,15 +72,15 @@ export async function runM1StaleCloseoutProof(
     if (created.status !== 'APPLIED') {
       throw new TypeError('M1 stale-closeout proof could not create its isolated Goal');
     }
-    const createdStatus = requireGoalStatus(trusted.application, created.output.goalId);
+    const createdStatus = requireM1ProofStatus(trusted.application, created.output.goalId);
     const startRequest = Object.freeze({
-      commandId: commandIds.nextCommandId(),
+      commandId: createCliCommandId(),
       goalId: created.output.goalId,
       expectedGoalRevision: createdStatus.goalRevision,
       expectedWorkflowVersion: created.output.workflowVersion,
     });
     const accepted = await trusted.application.startGoal(startRequest);
-    const beforeDrift = requireGoalStatus(trusted.application, created.output.goalId);
+    const beforeDrift = requireM1ProofStatus(trusted.application, created.output.goalId);
     if (
       !accepted.command.output.ok ||
       accepted.drive?.stopReason !== WorkflowDriveStopReason.OPERATION_LIMIT ||
@@ -108,7 +101,7 @@ export async function runM1StaleCloseoutProof(
     if (!closedAttempt.command.output.ok || closedAttempt.drive === undefined) {
       throw new TypeError('M1 stale-closeout proof could not re-enter the Runtime driver');
     }
-    const finalStatus = requireGoalStatus(trusted.application, created.output.goalId);
+    const finalStatus = requireM1ProofStatus(trusted.application, created.output.goalId);
     if (
       closedAttempt.drive.stopReason !== WorkflowDriveStopReason.FAILED ||
       finalStatus.phase !== 'FINAL_VERIFY' ||
@@ -119,15 +112,22 @@ export async function runM1StaleCloseoutProof(
     ) {
       throw new TypeError('M1 stale-closeout proof did not finish with fail-closed authority');
     }
+    const audit = requireM1ProofAudit(trusted.application, created.output.goalId);
 
     trusted.close();
     const reopened = createCliComposition({
       ...compositionOptions,
-      startProfileName: M1FakeExecutionProfileName.HAPPY_PATH,
+      startProfileName: 'happy-path',
     });
     let reopenedStatus: GoalStatusView;
     try {
-      reopenedStatus = requireGoalStatus(reopened.application, created.output.goalId);
+      reopenedStatus = requireM1ProofStatus(reopened.application, created.output.goalId);
+      assertM1ProofReopen(
+        finalStatus,
+        reopenedStatus,
+        audit,
+        requireM1ProofAudit(reopened.application, created.output.goalId),
+      );
     } finally {
       reopened.close();
     }
@@ -143,11 +143,12 @@ export async function runM1StaleCloseoutProof(
 
     return Object.freeze({
       schemaVersion: 1,
-      scenario: M1FakeExecutionProfileName.STALE_CLOSEOUT,
+      scenario: 'stale-closeout',
       goalId: created.output.goalId,
       beforeDrift,
       finalStatus,
       reopenedStatus,
+      audit,
       finalDrive: closedAttempt.drive,
     });
   } finally {

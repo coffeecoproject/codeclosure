@@ -9,9 +9,13 @@ control, SQLite persistence and audit, minimal Context compilation, typed
 stable freeze observation, independent fake verification, immutable Evidence,
 canonical Evidence Sets, deterministic Acceptance Decisions, transactional
 closeout, immutable exact repair-generation authority, and verified local
-startup composition exist. CLI command parsing/rendering and proof scenarios
-remain M1 work. Real candidate isolation and real project verification remain
-M2 work. Components marked for later slices or milestones are architectural
+startup composition exist. The real CLI now implements Goal
+lifecycle/status and audit commands with closed input validation, versioned
+JSON/human rendering, fixed exit classification, and cross-process SQLite
+reads. All eight named proof scenarios run in isolated temporary authority
+homes and assert exact terminal, audit, and reopen state. The Slice 8 M1 audit
+remains; real candidate isolation and real project verification remain M2
+work. Components marked for later slices or milestones are architectural
 boundaries, not current implementation claims.
 
 ## Architectural Goal
@@ -224,6 +228,36 @@ other callers receive neither the control Store mutation port, the internal
 kernel object, nor the recovery coordinator. See
 [ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md)
 and [ADR 0021](docs/adr/0021-m1-execution-profile-and-cli-composition.md).
+
+The currently implemented CLI adapters cover Goal creation, start, status,
+resume, cancellation, Goal-owned audit, and all eight named M1 proof demos.
+They parse and validate operands before opening authority, route normalized
+project identity through trusted composition, invoke only narrow application
+or proof capabilities, and render Runtime-owned authority without deriving
+lifecycle or completion authority. Demo adapters create their own isolated
+authority home and return success only after scenario-specific final state,
+audit, and SQLite reopen assertions pass. The restart proof interrupts one real
+CLI start process only after its dispatch claim is durable, then uses separate
+public status and resume processes. The public status process, not an internal
+proof read, must perform startup recovery. A subsequent proof-only facade
+exposes only captured `status`, `audit`, and `close`; it fails closed if its own
+composition reports any recovery scan or reconciliation. The separately named
+dispatch observer is read-only and exposes only the current claimed Attempt
+identity, phase, and Workflow version; neither proof capability can authorize
+recovery or replacement work. The duplicate-result proof observes every
+Worker-backed Attempt separately: two deliveries carry the same
+`WorkerEventId`, while Runtime audit retains one dispatch claim and one paired
+Attempt/Workflow finish effect for that Attempt. CLI source enforcement assigns
+privileged package imports to exact named composition owners rather than to the
+whole composition directory, confines relative imports to CLI source, closes
+privileged export and sensitive-consumer manifests, rejects dynamic module
+loading, and prevents statically evident direct or forwarded raw SQLite
+authority from reaching the restart proof. This is an engineering-miswiring
+gate, not a hostile-JavaScript sandbox; Runtime and Store validation remain the
+authority boundary. Proof-owned child processes have fixed deadlines, hard
+retained-output limits, forced cleanup, and resolve completion from the child
+`close` event after process termination and all stdio closure, not from `exit`
+alone.
 
 ### Context Compiler
 

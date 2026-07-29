@@ -22,7 +22,13 @@ import {
 } from '@codeclosure/testing';
 
 import { ProtectedPathKind } from '../dist/composition/data-home.js';
-import { createCliComposition, runM1StaleCloseoutProof } from '../dist/composition/index.js';
+import {
+  createCliComposition,
+  runM1DemoProof,
+  runM1StaleCloseoutProof,
+} from '../dist/composition/index.js';
+import { createM1ProofReadFacade } from '../dist/composition/m1-proof-read-facade.js';
+import { assertFreshReplacementDispatch } from '../dist/composition/m1-restart-proof-assertions.js';
 
 function temporaryRoot(t: TestContext): string {
   const root = mkdtempSync(join(tmpdir(), 'codeclosure-cli-composition-'));
@@ -170,6 +176,136 @@ void test('[I-001][I-003][I-023] trusted composition publishes only the narrow f
   assert.equal(retained.status, 'FOUND');
   assert.equal(retained.view.technicalCloseout, true);
   assert.equal(reopened.startupRecovery.scannedCount, 0);
+  reopened.close();
+
+  const proofRead = createM1ProofReadFacade(options(root, project), created.output.goalId);
+  assert.equal(Object.isFrozen(proofRead), true);
+  assert.deepEqual(Reflect.ownKeys(proofRead).toSorted(), ['audit', 'close', 'status']);
+  assert.equal(proofRead.status.technicalCloseout, true);
+  assert.equal(proofRead.audit.goalId, created.output.goalId);
+  proofRead.close();
+  proofRead.close();
+});
+
+void test('[I-001][I-009] proof-read facade fails closed and closes after recovery', (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  mkdirSync(project, { mode: 0o700 });
+  const seeded = seedActiveAttempt(root, project, 'BUILT_IN');
+
+  assert.throws(
+    () =>
+      createM1ProofReadFacade(
+        {
+          dataHomePath: seeded.dataHomePath,
+          protectedPaths: [],
+          allowedProjectPaths: [],
+        },
+        seeded.goalId,
+      ),
+    /proof read cannot perform or conceal startup recovery/i,
+  );
+
+  const reopened = openSqliteControlStore({ filename: seeded.databasePath });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(seeded.workflowId)?.runStatus, 'BLOCKED');
+});
+
+void test('[I-004][I-009] duplicate-result proof binds two deliveries to one effect', async () => {
+  const proof = await runM1DemoProof('duplicate-result');
+
+  assert.equal(proof.passed, true);
+  assert.equal(proof.proofCode, 'DUPLICATE_RESULT_DEDUPLICATED');
+  assert.equal(proof.finalStatus.technicalCloseout, true);
+  assert.deepEqual(proof.finalStatus.executionProfileRef, {
+    id: 'profile_m1-duplicate-result',
+    version: 'codeclosure-m1-fake-profile-v1',
+    digest: 'sha256:cdac9cf23125a66074093b5f139a73caa954e01e3105f6bf1a7d7b03405a158d',
+  });
+});
+
+void test('[I-004][I-009] restart proof requires Worker-caused paired finish authority', async () => {
+  const proof = await runM1DemoProof('restart-resume');
+  const recoveredStatus = proof.intermediateStatus;
+  assert.ok(recoveredStatus);
+
+  const recoveryAudits = proof.audit.events.filter(
+    (event) => event.eventType === 'RECOVERY_RECONCILIATION_RECORDED',
+  );
+  assert.equal(recoveryAudits.length, 2);
+  const startupRecovery = recoveryAudits[0];
+  const resumeRecovery = recoveryAudits[1];
+  assert.ok(startupRecovery);
+  assert.ok(resumeRecovery);
+
+  const abandonedClaim = proof.audit.events.find(
+    (event) =>
+      event.eventType === 'WORKER_DISPATCH_CLAIMED' && event.sequence < startupRecovery.sequence,
+  );
+  assert.ok(abandonedClaim);
+  if (abandonedClaim.beforeVersion === undefined) {
+    assert.fail('Restart fixture abandoned claim has no Workflow version');
+  }
+  const abandoned = Object.freeze({
+    attemptId: abandonedClaim.aggregateId,
+    phase: recoveredStatus.phase,
+    workflowVersion: abandonedClaim.beforeVersion,
+  });
+  assert.doesNotThrow(() =>
+    assertFreshReplacementDispatch(proof.audit, abandoned, recoveredStatus),
+  );
+
+  const freshStart = proof.audit.events.find(
+    (event) => event.eventType === 'ATTEMPT_STARTED' && event.sequence > resumeRecovery.sequence,
+  );
+  assert.ok(freshStart);
+  const freshFinish = proof.audit.events.find(
+    (event) =>
+      event.eventType === 'ATTEMPT_FINISHED' && event.aggregateId === freshStart.aggregateId,
+  );
+  assert.ok(freshFinish);
+  assert.ok(freshFinish.commandId);
+  const pairedWorkflowFinish = proof.audit.events.find(
+    (event) =>
+      event.eventType === 'WORKFLOW_ATTEMPT_FINISHED' &&
+      event.aggregateId === recoveredStatus.workflowId &&
+      event.commandId === freshFinish.commandId,
+  );
+  assert.ok(pairedWorkflowFinish);
+  if (pairedWorkflowFinish.afterVersion === undefined) {
+    assert.fail('Restart fixture paired Workflow finish has no after version');
+  }
+  const pairedWorkflowAfterVersion = pairedWorkflowFinish.afterVersion;
+
+  const invalidWorkerCauseAudit = Object.freeze({
+    ...proof.audit,
+    events: Object.freeze(
+      proof.audit.events.map((event) =>
+        event === freshFinish || event === pairedWorkflowFinish
+          ? Object.freeze({ ...event, causationId: 'command_non-worker-cause' })
+          : event,
+      ),
+    ),
+  });
+  assert.throws(
+    () => assertFreshReplacementDispatch(invalidWorkerCauseAudit, abandoned, recoveredStatus),
+    /valid WorkerEventId/,
+  );
+
+  const mismatchedPairAudit = Object.freeze({
+    ...proof.audit,
+    events: Object.freeze(
+      proof.audit.events.map((event) =>
+        event === pairedWorkflowFinish
+          ? Object.freeze({ ...event, afterVersion: pairedWorkflowAfterVersion + 1 })
+          : event,
+      ),
+    ),
+  });
+  assert.throws(
+    () => assertFreshReplacementDispatch(mismatchedPairAudit, abandoned, recoveredStatus),
+    /finish authority does not match/,
+  );
 });
 
 void test('[I-003][I-005][I-009] stale-closeout proof drifts only after current ACCEPT', async (t) => {
@@ -391,6 +527,7 @@ void test('[I-003][I-006] corrected stale-closeout profile preserves the immutab
   if (legacy.status !== 'INSTALLED') {
     assert.fail('Legacy stale-closeout v1 fixture was not installed');
   }
+  const legacyInstallation = legacy.value;
   store.close();
   if (process.platform !== 'win32') {
     chmodSync(databasePath, 0o600);
@@ -425,6 +562,61 @@ void test('[I-003][I-006] corrected stale-closeout profile preserves the immutab
 
   const retained = openSqliteControlStore({ filename: databasePath });
   t.after(() => retained.close());
-  assert.ok(retained.getExecutionProfile(legacy.value.profile.id));
+  assert.deepEqual(retained.getExecutionProfile(legacyInstallation.profile.id), legacyInstallation);
   assert.ok(retained.getExecutionProfile(corrected.id));
+});
+
+void test('[I-003][I-006] restart-resume v2 preserves the immutable v1 row', (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  const dataHomePath = join(root, 'authority');
+  const databasePath = join(dataHomePath, 'state.sqlite');
+  mkdirSync(project, { mode: 0o700 });
+  mkdirSync(dataHomePath, { mode: 0o700 });
+  const store = openSqliteControlStore({ filename: databasePath });
+  const restartResumeV2 = m1FakeExecutionProfileRecipe(
+    M1FakeExecutionProfileName.RESTART_RESUME,
+  ).definition;
+  const legacy = createExecutionProfileInstaller({
+    store,
+    clock: new SystemUtcClock(),
+    ids: new CryptographicIdentityGenerator(),
+    digests: new CanonicalJsonSha256DigestProvider(),
+  }).installExecutionProfile(
+    Object.freeze({
+      id: 'profile_m1-restart-resume',
+      schemaVersion: 1,
+      version: 'codeclosure-m1-fake-profile-v1',
+      workerAdapter: 'fake-worker:valid-result',
+      workerAdapterVersion: 'v1',
+      candidateSource: 'fake-candidate-source:STABLE',
+      candidateSourceVersion: 'v1',
+      verificationRunner: 'fake-verification-runner:PASS',
+      verificationRunnerVersion: 'v1',
+      driverVersion: 'm1-deterministic-driver-v1',
+    }),
+  );
+  if (legacy.status !== 'INSTALLED') {
+    assert.fail('Legacy restart-resume v1 fixture was not installed');
+  }
+  assert.equal(
+    legacy.value.profile.digest,
+    'sha256:90df76d5f6cccc77e0b0bbff052655ec354a03a201d3dbc2965fabd101edfeb6',
+  );
+  const legacyInstallation = legacy.value;
+  store.close();
+  if (process.platform !== 'win32') {
+    chmodSync(databasePath, 0o600);
+  }
+
+  const composition = createCliComposition({
+    ...options(root, project),
+    startProfileName: M1FakeExecutionProfileName.RESTART_RESUME,
+  });
+  composition.close();
+
+  const retained = openSqliteControlStore({ filename: databasePath });
+  t.after(() => retained.close());
+  assert.deepEqual(retained.getExecutionProfile(legacyInstallation.profile.id), legacyInstallation);
+  assert.ok(retained.getExecutionProfile(restartResumeV2.id));
 });

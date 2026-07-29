@@ -11,8 +11,12 @@ Evidence persistence/invalidation, canonical Evidence Set transition into
 repair-generation coordination. The Slice 7 Runtime application facade,
 execution-profile binding, recovery, read views, and deterministic application
 driver are also implemented. Verified local production composition is now
-implemented; CLI command handling and proof scenarios, real project editing,
-and Codex integration are not yet implemented.
+implemented. The real CLI currently implements Goal creation, start, status,
+resume, cancellation, and Goal-owned audit, including cross-process SQLite
+reads and exact status rendering. All eight public proof-scenario adapters are
+implemented with isolated authority, scenario-specific terminal assertions,
+Goal-owned audit checks, and strict reopen comparison. The Slice 8 M1 audit,
+real project editing, and Codex integration are not yet implemented.
 
 ## Purpose
 
@@ -45,6 +49,34 @@ operation. It requires explicit success criteria and atomically creates one
 Goal plus its unique `DISCOVERY`/`READY` Workflow; it does not dispatch work.
 The first Context-bound `StartGoal` transaction binds one installed Execution
 Profile. Resume cannot select another profile.
+
+The implemented CLI creation adapter requires an explicit objective, project,
+and at least one non-blank criterion. Lifecycle adapters read current Goal and
+Workflow versions, then submit the public Runtime command; the command
+transaction still owns freshness. Status and audit adapters read Runtime-owned
+views and do not infer phase, next action, Acceptance, technical closeout, or
+events. Named proof scenarios are user-facing only through a narrow proof
+capability. Each one creates a run-owned isolated authority home and returns
+success only after its exact expected status, audit, and reopened authority are
+verified; it cannot issue Acceptance or closeout itself. The restart proof
+terminates a real public start process after observing its durable dispatch
+claim, then crosses separate public status and resume processes. The public
+status process must complete startup recovery before the internal proof-read
+facade opens. That facade exposes only captured `status`, `audit`, and `close`,
+and fails closed whenever its own composition reports a non-empty startup
+recovery summary. The separate dispatch observer is read-only: it exposes only
+the current claimed Attempt identity, phase, and Workflow version, while
+startup composition and the Runtime remain the only owners of reconciliation
+and replacement-work sequencing. An exact owner/consumer source gate rejects
+statically evident direct or forwarded raw Store access; it is an engineering
+miswiring gate, not a hostile-JavaScript sandbox, and Runtime/Store validation
+remains authoritative. The duplicate-result proof observes each Worker-backed
+Attempt and requires two deliveries with the same `WorkerEventId` but exactly
+one dispatch claim and one paired Attempt/Workflow finish effect in Runtime
+audit. Each public CLI child process has a fixed deadline, hard retained-output
+limit, and forced cleanup on failure; successful completion is resolved from
+the child `close` event after process termination and stdio closure, never from
+`exit` alone.
 
 `BeginAttempt`, worker-result admission, interruption, recovery reconciliation,
 and phase transitions are internal runtime commands. Their

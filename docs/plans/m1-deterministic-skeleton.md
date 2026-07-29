@@ -1,8 +1,7 @@
 # M1 Deterministic Skeleton Implementation Plan
 
-- Status: In implementation; Slices 0–6 and the Slice 7 profile, application,
-  query, recovery, deterministic driver, and verified local composition are
-  implemented; CLI command handling, rendering, and demos remain
+- Status: In implementation; Slices 0–7 are implemented and the Slice 8 M1
+  completion audit remains
 - Plan date: 2026-07-27
 - Milestone: M1
 - Worker backend: `FakeWorker` only
@@ -102,22 +101,35 @@ See
 [ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md), plus
 [ADR 0023](../adr/0023-verified-sqlite-authority-activation.md).
 
-The CLI package began with only the public Runtime surface. Slice 7 now adds the
-SQLite and testing-package dependencies only inside the named trusted
-composition module, which constructs the application and hands CLI handlers
-the narrow Goal capability and read views; handler modules MUST NOT receive or
-import the raw store.
+The CLI package began with only the public Runtime surface. Slice 7 now permits
+SQLite, Runtime-composition, and testing-package imports only in separately
+named privileged composition modules, each with its own exact named-import
+allowlist. Those modules construct the application and hand CLI handlers the
+narrow Goal capability and read views; handler and proof modules MUST NOT
+receive or import the raw store.
 
-The implemented source boundary gate reserves `apps/cli/src/composition/` for
-that trusted composition code. Only `apps/cli/src/index.ts` may invoke it;
-ordinary CLI handlers may import only an explicit allowlist of facade and view
-contracts from the Runtime package root. Trusted composition MUST use static
-named package exports, MUST NOT reach through repository-internal paths, and
-MUST NOT re-export imported Store, Runtime composition, or testing
-capabilities. Its testing-package allowlist contains only the M1 Fake adapters
-and closed profile registry; deterministic test identities and other harness
-capabilities are rejected. This dependency gate prevents accidental capability
-routing; it does not replace Runtime and Store authority validation.
+The implemented source boundary gate partitions
+`apps/cli/src/composition/` into ordinary support/proof code and an exact list
+of privileged owners. Only `apps/cli/src/index.ts` may invoke the closed
+composition root; ordinary CLI handlers may import only an explicit allowlist
+of facade and view contracts from the Runtime package root. Privileged
+composition MUST use static named package exports, MUST NOT reach through
+repository-internal or `node_modules` paths, and MUST NOT re-export imported
+Store, Runtime composition, or testing capabilities. Every relative import
+MUST remain inside `apps/cli/src`; external imports use a closed set of approved
+package names. Each privileged module has an exact direct-export manifest, and
+each sensitive internal module has exact importer and imported-name rules.
+Dynamic `import`, `require`, Node module loader acquisition, and aliases of
+those loaders fail the source gate. The testing-package allowlist exists only
+on the M1 runtime-profile owner and contains only the Fake adapters and closed
+profile registry; deterministic test identities and other harness capabilities
+are rejected. The restart proof may observe a durable dispatch claim only
+through its named read-only observer; the gate prevents direct or forwarded
+access to the SQLite authority module. Compile-backed reverse tests cover the
+otherwise valid `node_modules` bypass. This source check is a gate for
+statically evident engineering miswiring, not a sandbox for hostile JavaScript;
+it prevents accidental capability routing but does not replace Runtime and
+Store authority validation.
 
 ## 4. M1 command surface
 
@@ -133,6 +145,15 @@ codeclosure goal cancel <goal-id> [--json]
 codeclosure audit show <goal-id> [--json]
 codeclosure demo run <scenario> [--json]
 ```
+
+The Goal lifecycle/status, audit, and proof-demo commands above are currently
+implemented. They enter through the real executable, parse untrusted operands
+through a closed `parseArgs` plus Zod boundary, receive only narrow Runtime or
+proof capabilities, and close the verified SQLite composition after each
+ordinary Goal invocation. `StartGoal` and `ResumeGoal` return the Runtime
+command outcome separately from the informational driver stop summary. Every
+demo owns an isolated temporary application home and succeeds only after its
+expected final status, audit, and strict SQLite reopen state have been asserted.
 
 `demo run` is an M1 proof surface backed only by named deterministic fixtures:
 
@@ -185,7 +206,7 @@ caller-authored `GuardResult` values; ordinary guard evaluators are injected
 only into the internal kernel. Closeout is available only through the Slice 6
 Acceptance path; generic internal phase requests cannot invoke it.
 
-Machine output uses a versioned envelope:
+The Runtime mutating response uses a versioned command output:
 
 ```text
 CommandOutput
@@ -207,7 +228,11 @@ is an authority record, not an additional user-facing completion surface. See
 [ADR 0010](../adr/0010-command-admission-and-outcome-binding.md) and
 [ADR 0011](../adr/0011-store-authored-command-outcome-semantics.md).
 
-Human output is a view over the same response.
+The CLI JSON renderer wraps that Runtime result, Runtime read result, or exact
+demo proof in a separate schema-versioned tagged envelope. The implemented
+tags are `COMMAND_RESULT`, `DRIVEN_COMMAND_RESULT`, `GOAL_STATUS`,
+`GOAL_AUDIT`, `DEMO_RESULT`, and `CLI_ERROR`. Human output is a view over the
+same envelope and never manufactures Acceptance or closeout fields.
 
 Slice 7 status and blocker views read the immutable Acceptance Decision
 separately. They MUST NOT enrich the stored command outcome into another
@@ -221,6 +246,11 @@ progress, and `5` is infrastructure or internal failure. Status/audit reads of
 a blocked Goal and an applied cancellation return `0` while still rendering
 their non-success lifecycle explicitly. See
 [ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md).
+
+The implemented command surface has subprocess coverage for all five reserved
+exit classifications. In particular, an applied start that reaches a current
+repairable Acceptance decision returns `4`, while its exact decision remains
+in Runtime status authority rather than in the exit code.
 
 ## 5. Domain commands and ports
 
@@ -649,8 +679,9 @@ than inferring its consumed decision or granted child authority.
 
 ### Slice 7 — CLI, recovery, and proof demos
 
-Implementation status (2026-07-29): ADR 0020 through ADR 0022 are accepted. The
-immutable Execution Profile installation/binding, public application
+Implementation status (2026-07-29): implemented; the formal Slice 8 M1 audit
+remains. ADR 0020 through ADR 0023 are accepted. The immutable Execution
+Profile installation/binding, public application
 create/resume/cancel and read boundary, exact startup/resume recovery closure,
 SQLite migrations, reopen validation, and adversarial recovery tests are
 implemented. Public `StartGoal` and `ResumeGoal` now delegate to the
@@ -661,15 +692,42 @@ compatibility checks, and fresh stop summaries are implemented and covered by
 reverse boundary/concurrency gates. Verified production local composition now
 installs the exact Policy and eight Fake Execution Profiles, runs startup
 recovery before returning the facade, closes SQLite on composition failure,
-and exposes no Store, kernel, or recovery coordinator. CLI argument handling,
-human/JSON rendering, exit mapping, and most proof demos remain. The
-`stale-closeout` trusted-composition proof now reaches a persisted `ACCEPT`,
-arms controlled frozen-source drift, re-enters the same Runtime driver, proves
-that closeout fails with an invalidated Candidate, and reopens that exact
-failed authority inside a run-owned temporary application home. It uses a new
-immutable v2 profile identity rather than changing the retained v1 profile
-meaning. The public `demo run` adapter and the other named demo proofs are still
-unimplemented, so Slice 7 and M1 remain incomplete.
+and exposes no Store, kernel, or recovery coordinator. The real CLI now
+implements closed argument parsing and Zod admission for the Goal
+lifecycle/status and audit commands, one schema-versioned JSON document or an
+ANSI-free human rendering, central exit mapping, and real cross-process SQLite
+create/read/start/cancel/audit proofs. Start and resume derive optimistic
+versions from one Runtime status view and still rely on Runtime to revalidate
+the command transaction. Status renders exact Policy, profile, Candidate,
+Acceptance, blocker, and closeout fields only when the Runtime view supplies
+them. Audit renders only Runtime-owned immutable events. The
+eight public `demo run` scenarios now execute through run-owned temporary
+application homes. They assert exact expected terminal authority, immutable
+Goal audit, and strict reopen equality before returning proof success. The
+`stale-closeout` scenario reaches a persisted `ACCEPT`, arms controlled
+frozen-source drift, and proves that closeout fails with an invalidated
+Candidate. The `restart-resume` scenario leaves an exact dispatch in flight,
+terminates that real CLI process after the durable claim is observed, proves
+startup reconciliation in a new public status process, resumes in another new
+public CLI process with a fresh Attempt, and reaches closeout without
+redispatching the retained claim. The public status process must complete
+startup recovery before an internal proof read opens. That proof-read facade
+publishes only captured `status`, `audit`, and `close`, and fails closed if its
+own composition reports any recovery scan or reconciliation. A separate named
+read-only observer detects only the durable claimed-Attempt identity, phase,
+and Workflow version; it cannot release the Worker, mutate Workflow state, or
+sequence recovery. Every proof-owned public CLI child has a fixed deadline, a
+hard combined-output retention limit, and forced cleanup on failure. Completion
+is resolved from the child `close` event after process termination and all
+stdio closure, not from `exit` alone, so a partial JSON document cannot be
+treated as completed output. The `duplicate-result` scenario observes each
+Worker-backed Attempt, verifies two delivery ordinals with the same
+`WorkerEventId`, and correlates one dispatch claim with one authoritative paired
+Attempt/Workflow finish effect per Attempt. Both corrected scenarios use new
+immutable v2 profile identities while preserving the complete retained v1
+installation record, including its original installation time. The other
+adversarial scenarios prove that worker claims, missing/failing evidence, and
+Candidate drift cannot manufacture closeout.
 
 - Runtime application facade for create/start/resume/cancel and read queries;
 - Runtime-owned deterministic workflow driver with one persisted operation per
@@ -677,8 +735,7 @@ unimplemented, so Slice 7 and M1 remain incomplete.
 - built-in Policy and installed Execution Profile composition, separate
   immutable first-start bindings, production clock/identity providers,
   platform data-home resolution, and verified SQLite authority activation;
-- command surface, strict JSON/human rendering, and fixed exit
-  classifications;
+- command surface, strict JSON/human rendering, and fixed exit classifications;
 - narrow recovery catalog and `RecoveryInspector`;
 - exact immutable recovery reconciliation, startup interruption without
   redispatch, and fresh-Attempt `ResumeGoal`;
