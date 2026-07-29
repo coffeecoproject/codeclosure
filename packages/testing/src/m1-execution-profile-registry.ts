@@ -38,22 +38,29 @@ const PROFILE_VERSION = 'codeclosure-m1-fake-profile-v1';
 const ADAPTER_VERSION = 'v1';
 const DRIVER_VERSION = 'm1-deterministic-driver-v1';
 
+interface M1FakeExecutionProfileIdentity {
+  readonly id?: string;
+  readonly profileVersion?: string;
+  readonly candidateSourceVersion?: string;
+}
+
 function recipe(
   name: M1FakeExecutionProfileName,
   workerFixture: FakeWorkerFixtureType,
   candidateSourceFixture: FakeCandidateSourceFixtureType,
   verificationFixture: FakeVerificationFixtureType,
+  identity: M1FakeExecutionProfileIdentity = Object.freeze({}),
 ): M1FakeExecutionProfileRecipe {
   return Object.freeze({
     name,
     definition: Object.freeze({
-      id: executionProfileId(`profile_m1-${name}`),
+      id: executionProfileId(identity.id ?? `profile_m1-${name}`),
       schemaVersion: 1,
-      version: PROFILE_VERSION,
+      version: identity.profileVersion ?? PROFILE_VERSION,
       workerAdapter: `fake-worker:${workerFixture}`,
       workerAdapterVersion: ADAPTER_VERSION,
       candidateSource: `fake-candidate-source:${candidateSourceFixture}`,
-      candidateSourceVersion: ADAPTER_VERSION,
+      candidateSourceVersion: identity.candidateSourceVersion ?? ADAPTER_VERSION,
       verificationRunner: `fake-verification-runner:${verificationFixture}`,
       verificationRunnerVersion: ADAPTER_VERSION,
       driverVersion: DRIVER_VERSION,
@@ -92,8 +99,13 @@ const m1Profiles: readonly M1FakeExecutionProfileRecipe[] = Object.freeze([
   recipe(
     M1FakeExecutionProfileName.STALE_CLOSEOUT,
     FakeWorkerFixture.VALID_RESULT,
-    FakeCandidateSourceFixture.FROZEN_DRIFT,
+    FakeCandidateSourceFixture.CONTROLLED_FROZEN_DRIFT,
     FakeVerificationFixture.PASS,
+    Object.freeze({
+      id: 'profile_m1-stale-closeout-v2',
+      profileVersion: 'codeclosure-m1-fake-profile-v2',
+      candidateSourceVersion: 'controlled-frozen-drift-v1',
+    }),
   ),
   recipe(
     M1FakeExecutionProfileName.RESTART_RESUME,

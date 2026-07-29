@@ -2877,7 +2877,10 @@ void test('[I-006][I-008][I-009] reopen rejects closeout with a divergent Goal t
 });
 
 void test('[I-005][I-008][I-009] source drift after ACCEPT invalidates authority instead of closing', (t) => {
-  const harness = createHarness(t, { name: 'acceptance-closeout-source-drift' });
+  const harness = createHarness(t, {
+    name: 'acceptance-closeout-source-drift',
+    sourceFixture: FakeCandidateSourceFixture.CONTROLLED_FROZEN_DRIFT,
+  });
   const final = advanceToFinalVerify(harness);
   assertApplied(
     harness.runtime.evaluateAcceptance({
@@ -3361,6 +3364,7 @@ void test('[I-006][I-009] reopen rejects REJECTED Candidate authority without a 
 void test('[I-005][I-008][I-009] source drift after repairable rejection invalidates instead of branching', (t) => {
   const harness = createHarness(t, {
     name: 'acceptance-repair-source-drift',
+    sourceFixture: FakeCandidateSourceFixture.CONTROLLED_FROZEN_DRIFT,
     verificationFixture: FakeVerificationFixture.FAIL,
   });
   const final = advanceToFinalVerify(harness);

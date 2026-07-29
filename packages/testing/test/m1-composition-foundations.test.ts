@@ -5,6 +5,7 @@ import {
   GuardOutcome,
   RunStatus,
   WorkflowPhase,
+  candidateGenerationId,
   decodePolicyBundle,
   goalId,
   goalRevision,
@@ -28,7 +29,7 @@ import {
 import { createM1DeterministicPhaseGuardEvaluator } from '@codeclosure/runtime/composition';
 import { isRuntimeOwnedPhaseGuard } from '@codeclosure/runtime/testing/workflow-runtime';
 
-import { FakeCandidateSourceFixture } from '../src/fake-candidate-source.ts';
+import { FakeCandidateSource, FakeCandidateSourceFixture } from '../src/fake-candidate-source.ts';
 import { FakeVerificationFixture } from '../src/fake-verification-runner.ts';
 import { FakeWorkerFixture } from '../src/fake-worker.ts';
 import {
@@ -137,9 +138,15 @@ void test('[I-013] M1 Fake profile registry is closed, unique, and behavior-boun
   assertRecipe(
     M1FakeExecutionProfileName.STALE_CLOSEOUT,
     FakeWorkerFixture.VALID_RESULT,
-    FakeCandidateSourceFixture.FROZEN_DRIFT,
+    FakeCandidateSourceFixture.CONTROLLED_FROZEN_DRIFT,
     FakeVerificationFixture.PASS,
   );
+  const staleCloseout = m1FakeExecutionProfileRecipe(
+    M1FakeExecutionProfileName.STALE_CLOSEOUT,
+  ).definition;
+  assert.equal(staleCloseout.id, 'profile_m1-stale-closeout-v2');
+  assert.equal(staleCloseout.version, 'codeclosure-m1-fake-profile-v2');
+  assert.equal(staleCloseout.candidateSourceVersion, 'controlled-frozen-drift-v1');
   assertRecipe(
     M1FakeExecutionProfileName.CANDIDATE_DRIFT,
     FakeWorkerFixture.VALID_RESULT,
@@ -147,6 +154,22 @@ void test('[I-013] M1 Fake profile registry is closed, unique, and behavior-boun
     FakeVerificationFixture.PASS,
   );
   assert.throws(() => m1FakeExecutionProfileRecipe('unknown'), /Unknown M1 Fake execution profile/);
+});
+
+void test('[I-005][I-013] only the controlled Candidate Source accepts a drift trigger', () => {
+  const generationIdentifier = candidateGenerationId('generation_m1-controlled-drift');
+  assert.throws(
+    () =>
+      new FakeCandidateSource(FakeCandidateSourceFixture.STABLE).simulateFrozenDrift(
+        generationIdentifier,
+      ),
+    /does not permit controlled frozen drift/,
+  );
+  assert.doesNotThrow(() =>
+    new FakeCandidateSource(FakeCandidateSourceFixture.CONTROLLED_FROZEN_DRIFT).simulateFrozenDrift(
+      generationIdentifier,
+    ),
+  );
 });
 
 function assertRecipe(

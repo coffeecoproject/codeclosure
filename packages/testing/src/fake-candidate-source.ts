@@ -15,6 +15,7 @@ export const FakeCandidateSourceFixture = {
   STABLE: 'STABLE',
   FREEZE_DRIFT: 'FREEZE_DRIFT',
   FROZEN_DRIFT: 'FROZEN_DRIFT',
+  CONTROLLED_FROZEN_DRIFT: 'CONTROLLED_FROZEN_DRIFT',
   MALFORMED: 'MALFORMED',
   THROW: 'THROW',
   FREEZE_SENSITIVE_OUTPUT: 'FREEZE_SENSITIVE_OUTPUT',
@@ -37,6 +38,9 @@ export class FakeCandidateSource implements CandidateSourcePort {
   }
 
   public simulateFrozenDrift(generationId: CandidateGenerationId): void {
+    if (this.#fixture !== FakeCandidateSourceFixture.CONTROLLED_FROZEN_DRIFT) {
+      throw new TypeError('Fake Candidate Source does not permit controlled frozen drift');
+    }
     this.#simulatedDrift.add(generationId);
   }
 

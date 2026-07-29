@@ -662,8 +662,14 @@ reverse boundary/concurrency gates. Verified production local composition now
 installs the exact Policy and eight Fake Execution Profiles, runs startup
 recovery before returning the facade, closes SQLite on composition failure,
 and exposes no Store, kernel, or recovery coordinator. CLI argument handling,
-human/JSON rendering, exit mapping, and proof demos remain. Slice 7 and M1 are
-therefore not complete.
+human/JSON rendering, exit mapping, and most proof demos remain. The
+`stale-closeout` trusted-composition proof now reaches a persisted `ACCEPT`,
+arms controlled frozen-source drift, re-enters the same Runtime driver, proves
+that closeout fails with an invalidated Candidate, and reopens that exact
+failed authority inside a run-owned temporary application home. It uses a new
+immutable v2 profile identity rather than changing the retained v1 profile
+meaning. The public `demo run` adapter and the other named demo proofs are still
+unimplemented, so Slice 7 and M1 remain incomplete.
 
 - Runtime application facade for create/start/resume/cancel and read queries;
 - Runtime-owned deterministic workflow driver with one persisted operation per

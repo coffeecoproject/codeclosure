@@ -22,7 +22,7 @@ import {
 } from '@codeclosure/testing';
 
 import { ProtectedPathKind } from '../dist/composition/data-home.js';
-import { createCliComposition } from '../dist/composition/index.js';
+import { createCliComposition, runM1StaleCloseoutProof } from '../dist/composition/index.js';
 
 function temporaryRoot(t: TestContext): string {
   const root = mkdtempSync(join(tmpdir(), 'codeclosure-cli-composition-'));
@@ -170,6 +170,34 @@ void test('[I-001][I-003][I-023] trusted composition publishes only the narrow f
   assert.equal(retained.status, 'FOUND');
   assert.equal(retained.view.technicalCloseout, true);
   assert.equal(reopened.startupRecovery.scannedCount, 0);
+});
+
+void test('[I-003][I-005][I-009] stale-closeout proof drifts only after current ACCEPT', async (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  mkdirSync(project, { mode: 0o700 });
+
+  const proof = await runM1StaleCloseoutProof({ projectPath: project });
+
+  assert.equal(proof.schemaVersion, 1);
+  assert.equal(proof.scenario, M1FakeExecutionProfileName.STALE_CLOSEOUT);
+  assert.equal(proof.beforeDrift.phase, 'FINAL_VERIFY');
+  assert.equal(proof.beforeDrift.runStatus, 'READY');
+  assert.equal(proof.beforeDrift.acceptanceSummary?.outcome, 'ACCEPT');
+  assert.equal(proof.beforeDrift.activeCandidateRef?.state, 'FROZEN');
+  assert.equal(proof.beforeDrift.technicalCloseout, false);
+  assert.equal(proof.beforeDrift.closeoutRef, undefined);
+  assert.equal(proof.finalDrive.stopReason, WorkflowDriveStopReason.FAILED);
+  assert.equal(proof.finalStatus.phase, 'FINAL_VERIFY');
+  assert.equal(proof.finalStatus.runStatus, 'FAILED');
+  assert.equal(proof.finalStatus.activeCandidateRef?.state, 'INVALIDATED');
+  assert.equal(proof.finalStatus.technicalCloseout, false);
+  assert.equal(proof.finalStatus.closeoutRef, undefined);
+  assert.equal(proof.reopenedStatus.phase, 'FINAL_VERIFY');
+  assert.equal(proof.reopenedStatus.runStatus, 'FAILED');
+  assert.equal(proof.reopenedStatus.activeCandidateRef?.state, 'INVALIDATED');
+  assert.equal(proof.reopenedStatus.technicalCloseout, false);
+  assert.equal(proof.reopenedStatus.closeoutRef, undefined);
 });
 
 void test('[I-008][I-011] startup recovery finishes before the facade is returned', (t) => {
@@ -333,4 +361,70 @@ void test('[I-003][I-006] retained built-in Profile conflicts stop composition',
     () => createCliComposition(options(root, project)),
     /Built-in M1 Execution Profile conflicts with retained authority: happy-path/,
   );
+});
+
+void test('[I-003][I-006] corrected stale-closeout profile preserves the immutable v1 row', async (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  const dataHomePath = join(root, 'authority');
+  const databasePath = join(dataHomePath, 'state.sqlite');
+  mkdirSync(project, { mode: 0o700 });
+  mkdirSync(dataHomePath, { mode: 0o700 });
+  const store = openSqliteControlStore({ filename: databasePath });
+  const corrected = m1FakeExecutionProfileRecipe(
+    M1FakeExecutionProfileName.STALE_CLOSEOUT,
+  ).definition;
+  const legacy = createExecutionProfileInstaller({
+    store,
+    clock: new SystemUtcClock(),
+    ids: new CryptographicIdentityGenerator(),
+    digests: new CanonicalJsonSha256DigestProvider(),
+  }).installExecutionProfile(
+    Object.freeze({
+      ...corrected,
+      id: 'profile_m1-stale-closeout',
+      version: 'codeclosure-m1-fake-profile-v1',
+      candidateSource: 'fake-candidate-source:FROZEN_DRIFT',
+      candidateSourceVersion: 'v1',
+    }),
+  );
+  if (legacy.status !== 'INSTALLED') {
+    assert.fail('Legacy stale-closeout v1 fixture was not installed');
+  }
+  store.close();
+  if (process.platform !== 'win32') {
+    chmodSync(databasePath, 0o600);
+  }
+
+  const composition = createCliComposition({
+    ...options(root, project),
+    startProfileName: M1FakeExecutionProfileName.STALE_CLOSEOUT,
+  });
+  t.after(() => composition.close());
+  const ids = new CryptographicIdentityGenerator();
+  const created = composition.application.createGoal({
+    commandId: ids.nextCommandId(),
+    objective: 'Bind the corrected immutable stale-closeout profile',
+    projectPath: project,
+    criteria: ['New starts bind v2 without rewriting retained v1 authority'],
+  });
+  assert.equal(created.status, 'APPLIED');
+  const createdStatus = composition.application.getGoalStatus(created.output.goalId);
+  assert.equal(createdStatus.status, 'FOUND');
+  const started = await composition.application.startGoal({
+    commandId: ids.nextCommandId(),
+    goalId: created.output.goalId,
+    expectedGoalRevision: createdStatus.view.goalRevision,
+    expectedWorkflowVersion: created.output.workflowVersion,
+  });
+  assert.equal(started.drive?.stopReason, WorkflowDriveStopReason.CLOSED);
+  const status = composition.application.getGoalStatus(created.output.goalId);
+  assert.equal(status.status, 'FOUND');
+  assert.equal(status.view.executionProfileRef?.id, 'profile_m1-stale-closeout-v2');
+  composition.close();
+
+  const retained = openSqliteControlStore({ filename: databasePath });
+  t.after(() => retained.close());
+  assert.ok(retained.getExecutionProfile(legacy.value.profile.id));
+  assert.ok(retained.getExecutionProfile(corrected.id));
 });

@@ -42,6 +42,13 @@ A typed observation produced by a known runner or authority and bound to exact
 inputs. Prose produced by the worker is not evidence unless a policy explicitly
 treats it as a non-authoritative observation.
 
+## Demo Scenario
+
+An M1 proof recipe that selects an immutable Execution Profile and may
+coordinate a controlled change in Fake external reality at a persisted Runtime
+boundary. A Demo Scenario does not sequence internal phase commands, mutate the
+Store, issue Acceptance, or become completion authority.
+
 ## Execution Profile
 
 An immutable, versioned, digested description of the Worker, Candidate Source,
