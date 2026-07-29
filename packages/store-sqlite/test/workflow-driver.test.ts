@@ -9,7 +9,6 @@ import {
   AttemptStatus,
   GuardOutcome,
   RunStatus,
-  WorkflowGuard,
   WorkflowPhase,
   commandId,
   createGoal,
@@ -47,6 +46,7 @@ import {
 } from '@codeclosure/runtime/composition';
 import {
   WorkflowRuntimeKernel,
+  isRuntimeOwnedPhaseGuard,
   type AttemptContextCompilationRequest,
   type PhaseGuardEvaluator,
   type StartGoalRequest,
@@ -67,28 +67,11 @@ import {
 const createdAt = isoTimestamp('2026-07-29T00:00:00.000Z');
 const digests = new CanonicalJsonSha256DigestProvider();
 
-const runtimeOwnedGuards = new Set<WorkflowGuard>([
-  WorkflowGuard.CANDIDATE_GENERATION_PREPARED,
-  WorkflowGuard.MUTABLE_CANDIDATE_CURRENT,
-  WorkflowGuard.WORKER_QUIESCENT,
-  WorkflowGuard.NO_WRITE_CAPABLE_WORKER,
-  WorkflowGuard.FREEZE_IDENTITY_STABLE,
-  WorkflowGuard.CHANGE_IDENTITY_RECORDED,
-  WorkflowGuard.FROZEN_DIGEST_PERSISTED,
-  WorkflowGuard.INTEGRITY_POLICY_PASSED,
-  WorkflowGuard.REQUIRED_EVIDENCE_ACCOUNTED,
-  WorkflowGuard.EVIDENCE_BINDINGS_CURRENT,
-  WorkflowGuard.CLEANUP_PROVEN,
-  WorkflowGuard.SOURCE_DIGEST_CURRENT,
-  WorkflowGuard.CURRENT_ACCEPTANCE,
-  WorkflowGuard.REJECT_REPAIRABLE_RECORDED,
-]);
-
 const genericGuards: PhaseGuardEvaluator = Object.freeze({
   evaluate: (input: Parameters<PhaseGuardEvaluator['evaluate']>[0]) =>
     Object.freeze(
       (requiredGuardsForTransition(input.workflow.phase, input.requestedPhase) ?? [])
-        .filter((guard) => !runtimeOwnedGuards.has(guard))
+        .filter((guard) => !isRuntimeOwnedPhaseGuard(guard))
         .map((guard) =>
           Object.freeze({
             guard,
@@ -687,6 +670,8 @@ void test('[I-008][I-009][I-010] replay never redispatches a retained claim and 
     clock: harness.clock,
     ids: harness.ids,
     digests,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
     inspector,
     inspectorVersion: 'fake-recovery-inspector-v1',
     recoveryPolicyVersion: 'm1-exact-same-phase-v1',

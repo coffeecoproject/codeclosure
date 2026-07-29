@@ -26,6 +26,7 @@
   "dependencies": {
     "@codeclosure/runtime": "workspace:*",
     "@codeclosure/store-sqlite": "workspace:*",
+    "@codeclosure/testing": "workspace:*",
     "zod": "4.4.3"
   }
 }

@@ -7,5 +7,9 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/runtime" }, { "path": "../../packages/store-sqlite" }]
+  "references": [
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/store-sqlite" },
+    { "path": "../../packages/testing" }
+  ]
 }

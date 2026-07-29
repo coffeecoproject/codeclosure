@@ -8,11 +8,11 @@ control, SQLite persistence and audit, minimal Context compilation, typed
 `FakeWorker` dispatch and event admission, logical Candidate generations,
 stable freeze observation, independent fake verification, immutable Evidence,
 canonical Evidence Sets, deterministic Acceptance Decisions, transactional
-closeout, and immutable exact repair-generation authority exist. CLI proof
-scenarios and complete startup orchestration remain M1 work. Real candidate
-isolation and real project verification remain M2 work. Components marked for
-later slices or milestones are architectural boundaries, not current
-implementation claims.
+closeout, immutable exact repair-generation authority, and verified local
+startup composition exist. CLI command parsing/rendering and proof scenarios
+remain M1 work. Real candidate isolation and real project verification remain
+M2 work. Components marked for later slices or milestones are architectural
+boundaries, not current implementation claims.
 
 ## Architectural Goal
 
@@ -216,10 +216,12 @@ query application capabilities for public adapters. Public mutations operate
 only by Goal identity. Startup recovery remains a separate trusted lifecycle
 capability and is not a handler command. The internal Workflow control kernel
 and its Attempt/phase commands remain unavailable as package-root adapter
-capabilities. The remaining trusted composition root may construct the Store,
-kernel, driver, installed Execution Profiles, and recovery inspector, but CLI
-handlers, worker adapters, and other callers receive neither the control Store
-mutation port nor the internal kernel object. See
+capabilities. The implemented trusted composition root constructs the verified
+Store, driver, installed Policy and Execution Profiles, and recovery inspector;
+the driver alone constructs its hidden kernel. Composition completes startup
+recovery before returning a facade, while CLI handlers, worker adapters, and
+other callers receive neither the control Store mutation port, the internal
+kernel object, nor the recovery coordinator. See
 [ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md)
 and [ADR 0021](docs/adr/0021-m1-execution-profile-and-cli-composition.md).
 
@@ -558,21 +560,25 @@ remains interruption. Worker non-admission results distinguish untrusted
 delivery from control-plane failure, so a Store or Runtime failure is never
 relabelled as a Worker protocol defect simply because no event committed.
 
-The implemented Slice 7 startup-recovery capability:
+The implemented Slice 7 startup sequence:
 
-1. opens and migrates the control store;
-2. uses a narrow recovery catalog to detect non-terminal Goals and incomplete
+1. lets trusted composition activate and migrate the control Store through the
+   verified isolation bootstrap;
+2. installs or exactly matches the built-in M1 Policy and eight named Execution
+   Profiles;
+3. invokes Runtime startup recovery before publishing the application facade;
+4. uses a narrow recovery catalog to detect non-terminal Goals and incomplete
    Attempts;
-3. treats every retained dispatch claim as consumed history, never redispatch
+5. treats every retained dispatch claim as consumed history, never redispatch
    permission;
-4. inspects Candidate, base, and repository identity through the closed
+6. inspects Candidate, base, and project identity through the closed
    `RecoveryInspector` port;
-5. atomically interrupts unverifiable in-flight work, advances the Workflow,
+7. atomically interrupts unverifiable in-flight work, advances the Workflow,
    persists an exact `RecoveryReconciliationRecord`, audits the decision, and
    leaves startup-recovered work `BLOCKED`;
-6. lets an explicit `ResumeGoal` persist a fresh safe-or-blocked reconciliation
+8. lets an explicit `ResumeGoal` persist a fresh safe-or-blocked reconciliation
    before any replacement Attempt; and
-7. creates fresh Context, Worker Session, and dispatch authority only after a
+9. creates fresh Context, Worker Session, and dispatch authority only after a
    safe resume commit.
 
 Recovery and the deterministic Workflow driver belong to the Runtime
@@ -581,14 +587,14 @@ profile bound at first start cannot be replaced during resume. Status and audit
 views explain the resulting authority but cannot resume it. See
 [ADR 0020](docs/adr/0020-runtime-application-recovery-and-query-boundary.md).
 
-The remaining trusted composition work MUST activate the Store through the
-verified isolation bootstrap in
+Trusted composition activates the Store through the verified isolation
+bootstrap in
 [ADR 0023](docs/adr/0023-verified-sqlite-authority-activation.md). That
 bootstrap holds one unactivated SQLite handle across retained-project
 inspection, filesystem isolation verification, migration, post-migration
-authority validation, and exact binding comparison. Only after activation may
-composition invoke startup recovery, and recovery MUST still complete before
-publishing any handler capability.
+authority validation, and exact binding comparison. Only after activation does
+composition invoke startup recovery, and recovery completes before any handler
+capability is published.
 
 ## Initial Deployment Model
 

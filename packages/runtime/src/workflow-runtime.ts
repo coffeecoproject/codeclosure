@@ -461,6 +461,11 @@ const reservedPhaseGuards = new Set<WorkflowGuard>([
   WorkflowGuard.REJECT_REPAIRABLE_RECORDED,
 ]);
 
+/** Internal authority classification shared by Runtime composition and tests. */
+export function isRuntimeOwnedPhaseGuard(guard: WorkflowGuard): boolean {
+  return reservedPhaseGuards.has(guard);
+}
+
 function isM1WorkerPhase(phase: WorkflowPhaseType): boolean {
   return (
     phase === WorkflowPhase.DISCOVERY ||
@@ -2962,7 +2967,7 @@ export class WorkflowRuntimeKernel {
           workflow,
           requestedPhase: input.requestedPhase,
         });
-        const reserved = guardResults.find((result) => reservedPhaseGuards.has(result.guard));
+        const reserved = guardResults.find((result) => isRuntimeOwnedPhaseGuard(result.guard));
         if (reserved !== undefined) {
           throw new CommandExecutionFailure(
             commandError(

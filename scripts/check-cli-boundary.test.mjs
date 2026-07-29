@@ -73,6 +73,21 @@ void test('trusted production composition rejects raw or alternate Store open pa
   }
 });
 
+void test('trusted production composition accepts only the closed M1 Fake registry', () => {
+  assert.deepEqual(
+    violations(
+      "import { FakeCandidateSource, FakeVerificationRunner, FakeWorker, M1FakeExecutionProfileName, m1FakeExecutionProfileRecipe, m1FakeExecutionProfileRecipes } from '@codeclosure/testing';",
+      compositionFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations("import { DeterministicIds } from '@codeclosure/testing';", compositionFixturePath)
+      .length,
+    1,
+  );
+});
+
 void test('trusted composition cannot use internal subpaths, implicit imports, or re-export control capabilities', () => {
   const forbidden = [
     "import { WorkflowRuntimeKernel } from '@codeclosure/runtime/testing/workflow-runtime';",

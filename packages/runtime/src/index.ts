@@ -7,6 +7,7 @@ export * from './candidate-evidence-policy.js';
 export * from './contracts.js';
 export * from './evidence-factory.js';
 export * from './execution-profile-installer.js';
+export * from './m1-policy.js';
 export * from './context-compiler.js';
 export * from './ports.js';
 export * from './policy-installer.js';

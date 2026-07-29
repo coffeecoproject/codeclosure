@@ -44,6 +44,15 @@ const TRUSTED_COMPOSITION_STORE_IMPORTS = new Set([
   'SqliteAuthorityIsolationSnapshot',
 ]);
 
+const TRUSTED_COMPOSITION_TESTING_IMPORTS = new Set([
+  'FakeCandidateSource',
+  'FakeVerificationRunner',
+  'FakeWorker',
+  'M1FakeExecutionProfileName',
+  'm1FakeExecutionProfileRecipe',
+  'm1FakeExecutionProfileRecipes',
+]);
+
 const CliSourceZone = Object.freeze({
   ENTRY_POINT: 'ENTRY_POINT',
   HANDLER: 'HANDLER',
@@ -216,6 +225,17 @@ export function findCliBoundaryViolationsInSource(source, filePath, repositoryRo
                 element,
                 specifier,
                 `Trusted CLI composition may not import unverified Store capability ${name}.`,
+              );
+            }
+          }
+        } else if (explicit && specifier === '@codeclosure/testing') {
+          for (const element of node.importClause.namedBindings.elements) {
+            const name = importedName(element);
+            if (!TRUSTED_COMPOSITION_TESTING_IMPORTS.has(name)) {
+              record(
+                element,
+                specifier,
+                `Trusted CLI composition may not import non-production testing capability ${name}.`,
               );
             }
           }

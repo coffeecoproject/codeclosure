@@ -5,6 +5,7 @@ import {
   policyBundleId,
   type Attempt,
   type ExecutionProfile,
+  type ExecutionProfileDefinition,
   type Goal,
   type PolicyBundle,
   type PolicyBundleDefinition,
@@ -40,6 +41,8 @@ export interface CreateWorkflowStartAuthorityRuntimeInput {
   readonly store: WorkerControlStore;
   readonly namespace: string;
   readonly clock: Clock;
+  readonly policyDefinition?: PolicyBundleDefinition;
+  readonly executionProfileDefinition?: ExecutionProfileDefinition;
 }
 
 export interface WorkflowStartAuthorityRuntimeFixture {
@@ -156,7 +159,7 @@ export function createWorkflowStartAuthorityRuntime(
     clock: input.clock,
     ids,
     digests,
-  }).installPolicyBundle(policyDefinition(namespace, digests));
+  }).installPolicyBundle(input.policyDefinition ?? policyDefinition(namespace, digests));
   if (policyInstall.status === 'POLICY_CONFLICT') {
     throw new TypeError(policyInstall.message);
   }
@@ -165,7 +168,9 @@ export function createWorkflowStartAuthorityRuntime(
     clock: input.clock,
     ids,
     digests,
-  }).installExecutionProfile(testExecutionProfileDefinition(namespace));
+  }).installExecutionProfile(
+    input.executionProfileDefinition ?? testExecutionProfileDefinition(namespace),
+  );
   if (profileInstall.status === 'PROFILE_CONFLICT') {
     throw new TypeError(profileInstall.message);
   }

@@ -1,8 +1,8 @@
 # M1 Deterministic Skeleton Implementation Plan
 
 - Status: In implementation; Slices 0–6 and the Slice 7 profile, application,
-  query, recovery, and deterministic driver are implemented; local
-  composition, CLI, and demos remain
+  query, recovery, deterministic driver, and verified local composition are
+  implemented; CLI command handling, rendering, and demos remain
 - Plan date: 2026-07-27
 - Milestone: M1
 - Worker backend: `FakeWorker` only
@@ -92,20 +92,20 @@ The CLI composition root may construct `FakeWorker` from `packages/testing` for
 M1 `demo run` and `--fixture` commands. Neither `domain` nor `runtime` imports
 `packages/testing`; M2 replaces this composition edge with a real adapter.
 
-The remaining Slice 7 work MUST add this trusted composition module. It will
-resolve and verify the application-data home, activate SQLite through one
-guarded inspection/migration lifecycle, install the exact built-in M1 Policy
-and Execution Profiles, construct production clock/identity providers, run
-startup reconciliation, and only then publish narrow handler capabilities. See
+The implemented Slice 7 trusted composition module resolves and verifies the
+application-data home, activates SQLite through one guarded
+inspection/migration lifecycle, installs the exact built-in M1 Policy and eight
+named Execution Profiles, constructs production clock/identity providers, runs
+startup reconciliation, and only then publishes the narrow application facade.
+See
 [ADR 0020](../adr/0020-runtime-application-recovery-and-query-boundary.md) and
 [ADR 0021](../adr/0021-m1-execution-profile-and-cli-composition.md), plus
 [ADR 0023](../adr/0023-verified-sqlite-authority-activation.md).
 
-During Slice 3 the still-empty CLI package depends only on the public Runtime
-surface, so it cannot import the SQLite mutation adapter or internal test
-fixtures. Slice 7 may add those dependencies only through a named trusted
-composition module that constructs the application and hands CLI handlers the
-narrow Goal capability and read views; handler modules MUST NOT receive or
+The CLI package began with only the public Runtime surface. Slice 7 now adds the
+SQLite and testing-package dependencies only inside the named trusted
+composition module, which constructs the application and hands CLI handlers
+the narrow Goal capability and read views; handler modules MUST NOT receive or
 import the raw store.
 
 The implemented source boundary gate reserves `apps/cli/src/composition/` for
@@ -114,8 +114,10 @@ ordinary CLI handlers may import only an explicit allowlist of facade and view
 contracts from the Runtime package root. Trusted composition MUST use static
 named package exports, MUST NOT reach through repository-internal paths, and
 MUST NOT re-export imported Store, Runtime composition, or testing
-capabilities. This dependency gate prevents accidental capability routing; it
-does not replace Runtime and Store authority validation.
+capabilities. Its testing-package allowlist contains only the M1 Fake adapters
+and closed profile registry; deterministic test identities and other harness
+capabilities are rejected. This dependency gate prevents accidental capability
+routing; it does not replace Runtime and Store authority validation.
 
 ## 4. M1 command surface
 
@@ -656,9 +658,12 @@ Runtime-owned deterministic driver, which reloads authority at every committed
 boundary, closes the passing path, stops on repairable rejection, and never
 redispatches retained claims. Workflow Policy binding, pre-recovery
 compatibility checks, and fresh stop summaries are implemented and covered by
-reverse boundary/concurrency gates. Production local composition, CLI
-rendering/exit mapping, and proof demos remain. Slice 7 and M1 are therefore
-not complete.
+reverse boundary/concurrency gates. Verified production local composition now
+installs the exact Policy and eight Fake Execution Profiles, runs startup
+recovery before returning the facade, closes SQLite on composition failure,
+and exposes no Store, kernel, or recovery coordinator. CLI argument handling,
+human/JSON rendering, exit mapping, and proof demos remain. Slice 7 and M1 are
+therefore not complete.
 
 - Runtime application facade for create/start/resume/cancel and read queries;
 - Runtime-owned deterministic workflow driver with one persisted operation per

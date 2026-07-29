@@ -47,6 +47,9 @@ importers:
       '@codeclosure/store-sqlite':
         specifier: workspace:*
         version: link:../../packages/store-sqlite
+      '@codeclosure/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       zod:
         specifier: 4.4.3
         version: 4.4.3

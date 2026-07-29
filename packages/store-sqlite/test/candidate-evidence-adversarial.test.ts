@@ -17,7 +17,6 @@ import {
   RunStatus,
   RecoveryReasonCode,
   RecoveryReconciliationDisposition,
-  WorkflowGuard,
   WorkflowPhase,
   candidateGenerationId,
   acceptanceDecisionProjection,
@@ -49,6 +48,7 @@ import {
   workflowId,
   type AttemptId,
   type CandidateGenerationId,
+  type PolicyBundle,
   type PolicyBundleDefinition,
   type VerificationObligationId,
   type WorkflowInstance,
@@ -95,29 +95,13 @@ import {
 } from '@codeclosure/testing';
 import {
   WorkflowRuntimeKernel,
+  isRuntimeOwnedPhaseGuard,
   type AttemptContextCompilationRequest,
   type PhaseGuardEvaluator,
 } from '@codeclosure/runtime/testing/workflow-runtime';
 
 const createdAt = isoTimestamp('2026-07-27T00:00:00.000Z');
 const digests = new CanonicalJsonSha256DigestProvider();
-
-const reservedGuards = new Set<WorkflowGuard>([
-  WorkflowGuard.CANDIDATE_GENERATION_PREPARED,
-  WorkflowGuard.MUTABLE_CANDIDATE_CURRENT,
-  WorkflowGuard.WORKER_QUIESCENT,
-  WorkflowGuard.NO_WRITE_CAPABLE_WORKER,
-  WorkflowGuard.FREEZE_IDENTITY_STABLE,
-  WorkflowGuard.CHANGE_IDENTITY_RECORDED,
-  WorkflowGuard.FROZEN_DIGEST_PERSISTED,
-  WorkflowGuard.INTEGRITY_POLICY_PASSED,
-  WorkflowGuard.REQUIRED_EVIDENCE_ACCOUNTED,
-  WorkflowGuard.EVIDENCE_BINDINGS_CURRENT,
-  WorkflowGuard.CLEANUP_PROVEN,
-  WorkflowGuard.SOURCE_DIGEST_CURRENT,
-  WorkflowGuard.CURRENT_ACCEPTANCE,
-  WorkflowGuard.REJECT_REPAIRABLE_RECORDED,
-]);
 
 const genericGuards: PhaseGuardEvaluator = Object.freeze({
   evaluate: ({
@@ -129,7 +113,7 @@ const genericGuards: PhaseGuardEvaluator = Object.freeze({
   }) =>
     Object.freeze(
       (requiredGuardsForTransition(workflow.phase, requestedPhase) ?? [])
-        .filter((guard) => !reservedGuards.has(guard))
+        .filter((guard) => !isRuntimeOwnedPhaseGuard(guard))
         .map((guard) =>
           Object.freeze({
             guard,
@@ -145,6 +129,7 @@ interface Harness {
   readonly filename: string;
   readonly store: SqliteControlStore;
   readonly runtime: WorkflowRuntimeKernel;
+  readonly policy: PolicyBundle;
   readonly candidateSource: FakeCandidateSource;
   readonly ids: DeterministicIds;
   readonly goalId: ReturnType<typeof goalId>;
@@ -311,6 +296,7 @@ function createHarness(
     filename,
     store,
     runtime,
+    policy,
     candidateSource,
     ids,
     goalId: goalIdentifier,
@@ -781,6 +767,8 @@ void test('[I-006][I-008][I-009] IMPLEMENT recovery binds the exact current Cand
     }),
     ids: new DeterministicIds('implement-recovery-control'),
     digests,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
     inspector,
     inspectorVersion: 'fake-recovery-inspector-v1',
     recoveryPolicyVersion: 'm1-exact-same-phase-v1',

@@ -10,8 +10,9 @@ Evidence persistence/invalidation, canonical Evidence Set transition into
 `FINAL_VERIFY`, deterministic Acceptance evaluation, accepted closeout, and
 repair-generation coordination. The Slice 7 Runtime application facade,
 execution-profile binding, recovery, read views, and deterministic application
-driver are also implemented. Local production composition, CLI proof
-scenarios, real project editing, and Codex integration are not yet implemented.
+driver are also implemented. Verified local production composition is now
+implemented; CLI command handling and proof scenarios, real project editing,
+and Codex integration are not yet implemented.
 
 ## Purpose
 

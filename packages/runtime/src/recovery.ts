@@ -29,6 +29,7 @@ import {
   latestIsoTimestamp,
   nextWorkflowVersion,
   planRecoveryWorkflowEvent,
+  policyBundleId,
   recoveryReconciliationId,
   recoveryReconciliationProjection,
   sha256Digest,
@@ -38,7 +39,9 @@ import {
   type CommandId,
   type GoalId,
   type GoalRevision,
+  type PolicyBundleId,
   type RecoveryReconciliationRecord,
+  type Sha256Digest,
   type WorkflowVersion,
 } from '@codeclosure/domain';
 
@@ -158,6 +161,8 @@ export interface RecoveryCoordinatorDependencies {
   readonly clock: Clock;
   readonly ids: RecoveryIdentityGenerator;
   readonly digests: DigestProvider;
+  readonly policyBundleId: PolicyBundleId;
+  readonly policyBundleDigest: Sha256Digest;
   readonly inspector: RecoveryInspector;
   readonly inspectorVersion: string;
   readonly recoveryPolicyVersion: string;
@@ -394,6 +399,8 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
   readonly #clock: Clock;
   readonly #ids: RecoveryIdentityGenerator;
   readonly #digests: DigestProvider;
+  readonly #policyBundleId: PolicyBundleId;
+  readonly #policyBundleDigest: Sha256Digest;
   readonly #inspector: RecoveryInspector;
   readonly #inspectorVersion: string;
   readonly #recoveryPolicyVersion: string;
@@ -409,6 +416,8 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
     this.#clock = dependencies.clock;
     this.#ids = dependencies.ids;
     this.#digests = dependencies.digests;
+    this.#policyBundleId = policyBundleId(dependencies.policyBundleId);
+    this.#policyBundleDigest = sha256Digest(dependencies.policyBundleDigest);
     this.#inspector = dependencies.inspector;
     this.#inspectorVersion = dependencies.inspectorVersion;
     this.#recoveryPolicyVersion = dependencies.recoveryPolicyVersion;
@@ -422,6 +431,9 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
     const discovered = Object.freeze(
       rawCatalog.map((entry) => decodeRecoveryCatalog(entry, this.#digests)),
     );
+    for (const catalog of discovered) {
+      this.assertPolicyCompatibility(catalog);
+    }
     const recoveryIds: RecoveryReconciliationRecord['id'][] = [];
     for (const discoveredEntry of discovered) {
       const rawCurrent = this.#store.getRecoveryCatalogForGoal(discoveredEntry.goal.id);
@@ -429,6 +441,7 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         continue;
       }
       const catalog = decodeRecoveryCatalog(rawCurrent, this.#digests);
+      this.assertPolicyCompatibility(catalog);
       if (catalog.blockerKind !== RecoverableBlockerKind.ACTIVE_ATTEMPT) {
         continue;
       }
@@ -590,6 +603,7 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         'RESUME_GOAL_RECOVERY_CATALOG_INVALID',
         () => decodeRecoveryCatalog(rawCatalog, this.#digests),
       );
+      this.assertPolicyCompatibility(catalog);
       if (
         catalog.goal.revision !== input.expectedGoalRevision ||
         catalog.workflow.version !== input.expectedWorkflowVersion ||
@@ -783,6 +797,17 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         this.#digests.digest(recoveryReconciliationProjection(semantic)),
       ),
     });
+  }
+
+  private assertPolicyCompatibility(catalog: DecodedRecoveryCatalog): void {
+    if (
+      catalog.policyBinding.policyBundleId !== this.#policyBundleId ||
+      catalog.policyBinding.policyBundleDigest !== this.#policyBundleDigest
+    ) {
+      throw new TypeError(
+        'Recovery Workflow Policy binding is incompatible with trusted Runtime composition',
+      );
+    }
   }
 
   private inspectClosed(request: RecoveryInspectionRequest): RecoveryInspectionResult {

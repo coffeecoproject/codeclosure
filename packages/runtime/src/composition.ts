@@ -15,3 +15,4 @@ export type {
   WorkflowDriverIdentityGenerator,
 } from './workflow-driver.js';
 export { CryptographicIdentityGenerator, SystemUtcClock } from './production-adapters.js';
+export { createM1DeterministicPhaseGuardEvaluator } from './m1-phase-guards.js';

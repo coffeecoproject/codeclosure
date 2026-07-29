@@ -106,9 +106,9 @@ permission to reuse an old Attempt.
 ## Runtime Application Coordinator
 
 The product-facing Runtime service that owns Goal commands, startup recovery,
-and read-only Goal views. Its remaining M1 driver will deterministically
-sequence internal work. It does not replace the Workflow Runtime or Acceptance
-Engine as an authority owner.
+deterministic M1 driving, and read-only Goal views. Trusted composition invokes
+startup recovery before publishing its narrow application facade. It does not
+replace the Workflow Runtime or Acceptance Engine as an authority owner.
 
 ## Verification Runner
 
