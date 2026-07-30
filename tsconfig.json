@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/codex-app-server-client" },
     { "path": "./packages/domain" },
     { "path": "./packages/runtime" },
     { "path": "./packages/store-sqlite" },

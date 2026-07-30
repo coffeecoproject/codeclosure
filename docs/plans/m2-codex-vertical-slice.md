@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slice 0 is implemented and Slice 1 has not started
+- Status: In progress; Slices 0 and 1 are implemented and Slice 2 has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -61,7 +61,7 @@ From the user's point of view, M2 should behave plainly:
 | Slice | Scope | Status | Evidence source |
 | --- | --- | --- | --- |
 | 0 | authority and protocol decision closure | Implemented | [Slice 0 decision-closure review](../reviews/m2-slice0-decision-closure.md), accepted ADRs, focused probes |
-| 1 | version-bound App Server client | Not started | client contract and fixture tests |
+| 1 | version-bound App Server client | Implemented | [Slice 1 App Server client review](../reviews/m2-slice1-app-server-client.md), pinned snapshot, offline fixtures, and bounded live preflight |
 | 2 | Goal-bound Codex Worker Adapter | Not started | adapter contract and phase-mapping tests |
 | 3 | real isolated Candidate workspace | Not started | containment, freeze, drift, and recovery tests |
 | 4 | real Verification Runner | Not started | runner, Evidence, mutation, and limit tests |
@@ -726,8 +726,8 @@ Current execution record on 2026-07-30:
   Server process restart, and Turn interruption;
 - automatic-compaction triggering was not forced or observed and remains
   `UNKNOWN` and unselected; and
-- Slice 0 is implemented. Slice 1 may now begin, but no Slice 1 product package
-  or checked-in supported profile exists yet.
+- At Slice 0 close, Slice 1 could begin, but no Slice 1 product package or
+  checked-in supported profile existed yet.
 
 ### Slice 1 — Version-bound App Server client
 
@@ -760,6 +760,31 @@ Exit proof:
 - protocol drift is detected before a live Worker dispatch; and
 - the client package compiles and tests without any CodeClosure domain,
   Runtime, Worker, Candidate, or Intake import.
+
+Current execution record on 2026-07-31:
+
+- the lower client package has no production dependency and imports no
+  CodeClosure Domain, Runtime, Store, Worker, Candidate, Acceptance, or Intake
+  package;
+- the checked profile binds `codex-cli 0.146.0`, 622 raw-byte-identity
+  TypeScript files, 275 RFC-8785-identity JSON Schema files, and snapshot digest
+  `sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21`;
+- deterministic fixtures cover the handshake, Thread/Turn, manual Compact and
+  continuation, configuration/environment isolation, framing, correlation,
+  server requests, cancellation, shutdown, timeout, EOF, stderr, and process
+  failure; adversarial cases additionally prove null-prototype JSON own-field
+  semantics, stable rejection of executable mutation or unavailability before
+  spawn, separate bounds for pending manual and observed unfinished compaction
+  tracking, and lifecycle slot release, with 40 of 40 client tests passing;
+- the complete repository quality gate passes, including all M1 regression
+  suites; and
+- after explicit authorization, the bounded live preflight verified the exact
+  binary/snapshot, controlled configuration, permission profile, exact
+  instruction sources, poisoned-project-config exclusion, initialization,
+  Thread start, one no-tool completed Turn, bounded diagnostics, and temporary
+  state cleanup without retaining response or private reasoning content; and
+- the [Slice 1 review](../reviews/m2-slice1-app-server-client.md) records a
+  `PASS`. Slice 1 is implemented and Slice 2 may begin, but has not started.
 
 ### Slice 2 — Goal-bound Codex Worker Adapter
 

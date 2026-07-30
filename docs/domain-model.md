@@ -14,7 +14,9 @@ schema or Runtime. M2 Slice 0 has accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
 0028 through ADR 0030. Those target structures are not implemented Domain or
 SQLite behavior yet. The bounded 0.146.0 live capability probe now passes;
-Slice 1 product implementation has not started.
+the Slice 1 lower client, protocol snapshot, offline fixtures, and live
+compatibility preflight are implemented without allowing a generated Codex
+protocol type to enter the Domain. Slice 2 Domain integration has not started.
 
 ## Design Rules
 

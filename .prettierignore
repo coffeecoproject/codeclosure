@@ -4,3 +4,5 @@ coverage/
 .cache/
 *.md
 pnpm-lock.yaml
+packages/codex-app-server-client/src/protocol/
+packages/codex-app-server-client/src/protocol-surface.ts

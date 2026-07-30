@@ -24,9 +24,13 @@ The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
 current milestone. Slice 0 decision closure is implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
-and ADR 0028 through ADR 0030 are accepted. No production Codex client, Worker
-adapter, real Candidate adapter, real verifier, or migration is implemented
-yet; Slice 1 is not started.
+and ADR 0028 through ADR 0030 are accepted. Slice 1 is implemented: the
+version-bound lower client, pinned protocol snapshot, deterministic fake
+server, offline adversarial suite, and bounded live compatibility preflight
+pass. The [Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
+the exact evidence and limitations. No Goal-bound Codex Worker adapter, real
+Candidate adapter, real verifier, or M2 migration is implemented yet; Slice 2
+has not started.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in

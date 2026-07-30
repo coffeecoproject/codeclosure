@@ -3,7 +3,13 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'pnpm-lock.yaml'],
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      'packages/codex-app-server-client/src/protocol/**',
+      'pnpm-lock.yaml',
+    ],
   },
   {
     files: ['**/*.{js,mjs}'],

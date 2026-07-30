@@ -118,11 +118,12 @@ promotion consent, or a release claim.
 
 ## M2 — Codex Vertical Slice
 
-Status: In progress. Slice 0 authority/protocol decision closure is implemented;
-its accepted decisions and probes do not yet constitute a production Codex
-path, and Slice 1 has not started. The detailed work sequence and status are in the
-[M2 implementation plan](plans/m2-codex-vertical-slice.md), and the independent
-exit procedure is in the [M2 acceptance plan](plans/m2-acceptance-plan.md).
+Status: In progress. Slice 0 authority/protocol decision closure and Slice 1
+version-bound App Server client are implemented. They do not yet constitute a
+Goal-bound production Codex path; Slice 2 has not started. The detailed work
+sequence and status are in the [M2 implementation
+plan](plans/m2-codex-vertical-slice.md), and the independent exit procedure is
+in the [M2 acceptance plan](plans/m2-acceptance-plan.md).
 
 ### Objective
 

@@ -21,9 +21,11 @@ quality and invariant evidence. Real project editing and Codex integration are
 not implemented in M1. M2 Slice 0 has accepted external-execution causality,
 controlled Candidate copy/lease, and real-verification contracts, but no M2
 Workflow state or Store migration is implemented. The bounded 0.146.0 live
-capability probe passes; Slice 1 product implementation has not started. Goal
-Intake is an accepted pre-Goal target for M2.5; it is not implemented and does
-not add another Workflow phase.
+capability probe passes. The Slice 1 lower App Server client and offline
+fixtures are implemented and its bounded live compatibility preflight passes;
+no Codex client event is mapped into Workflow state because the Slice 2 Worker
+Adapter has not started. Goal Intake is an accepted pre-Goal target for M2.5;
+it is not implemented and does not add another Workflow phase.
 
 ## Purpose
 

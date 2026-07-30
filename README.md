@@ -13,8 +13,10 @@ complete.
 
 The M0 architecture baseline and bounded M1 deterministic skeleton are
 complete. M2 is the current implementation milestone. Its pre-implementation
-decision closure has passed against the selected local Codex version; the
-version-bound App Server client itself is not implemented yet. The
+decision closure has passed against the selected local Codex version. The
+version-bound lower App Server client is implemented and has passed its bounded
+offline and live compatibility review. Goal-bound Codex Worker integration is
+not implemented yet. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.

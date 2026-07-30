@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   auditPackageDependencies,
   collectModuleSpecifiers,
+  importViolation,
   modulePackageName,
   parsePnpmLockImporters,
 } from './check-dependencies-lib.mjs';
@@ -52,12 +53,26 @@ packages:
     specifier: '1.2.3',
     version: '1.2.3(peer@4.5.6)',
   });
+  const emptyImporters = parsePnpmLockImporters(`
+lockfileVersion: '9.0'
+
+importers:
+
+  packages/empty: {}
+
+packages:
+`);
+  assert.deepEqual(emptyImporters.get('packages/empty'), {
+    dependencies: new Map(),
+    devDependencies: new Map(),
+  });
 });
 
-void test('the M1 manifest, lockfile, and actual source dependency graph are closed', () => {
+void test('the current manifest, lockfile, and actual source dependency graph are closed', () => {
   const audit = auditPackageDependencies(repositoryRoot);
-  assert.equal(audit.packageCount, 5);
+  assert.equal(audit.packageCount, 6);
   assert.deepEqual(audit.violations, []);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/codex-app-server-client'), []);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/domain'), ['zod']);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/runtime'), [
     '@codeclosure/domain',
@@ -79,4 +94,22 @@ void test('the M1 manifest, lockfile, and actual source dependency graph are clo
     '@codeclosure/testing',
     'zod',
   ]);
+});
+
+void test('the lower App Server client reverse fixture rejects every CodeClosure authority import', () => {
+  const packageRoot = resolve(repositoryRoot, 'packages/codex-app-server-client');
+  const sourcePath = resolve(packageRoot, 'src/client.ts');
+  const available = new Set(['@codeclosure/codex-app-server-client']);
+  for (const forbidden of [
+    '@codeclosure/domain',
+    '@codeclosure/runtime',
+    '@codeclosure/store-sqlite',
+    '@codeclosure/testing',
+    '@codeclosure/cli',
+  ]) {
+    assert.equal(
+      importViolation(forbidden, sourcePath, packageRoot, available),
+      `undeclared package import ${forbidden}`,
+    );
+  }
 });

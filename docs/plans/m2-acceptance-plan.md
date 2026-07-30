@@ -1,7 +1,7 @@
 # M2 Milestone Acceptance Plan
 
-- Status: Prepared; Slice 0 is implemented and milestone acceptance has not
-  started
+- Status: Prepared; Slices 0 and 1 are implemented, Slice 2 has not started,
+  and milestone acceptance has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Implementation record: [M2 Codex vertical slice plan](m2-codex-vertical-slice.md)
@@ -230,7 +230,7 @@ the report must preserve each row's individual outcome.
 | `M2-A04` | Domain and Runtime import no Codex/OpenAI protocol DTO or package | dependency and source-import audit |
 | `M2-A05` | The lower App Server client imports no Domain, Runtime, WorkerPort, Workflow, Candidate, Evidence, Acceptance, Store, CLI, or Intake contract | dependency audit plus reverse fixtures |
 | `M2-A06` | The Worker, workspace, and verifier adapters cannot import Store or internal Runtime mutation capability | dependency and compile-backed negative fixtures |
-| `M2-A07` | The resolved Codex executable path, version, and SHA-256 match the M2 supported profile | protocol identity command |
+| `M2-A07` | The resolved Codex executable path, version, and SHA-256 match the M2 supported profile at verification and immediately before process spawn; executable mutation or unavailability after launch construction fails closed as `VERSION_MISMATCH` | protocol identity command and executable mutation/unavailability fixtures |
 | `M2-A08` | Repeated TypeScript generation is raw-byte-identical; repeated JSON generation rejects duplicate keys and is canonical-byte-identical under the exact RFC 8785 UTF-8 normalization profile; the checked-in manifest binds both identities | schema regeneration and canonicalization check |
 | `M2-A09` | Formatting, lint, strict typecheck, all tests, and forced production build pass | complete quality gate |
 | `M2-A10` | Every Node test summary has zero failed, cancelled, skipped, and todo tests | no-skip runner and stage summaries |
@@ -241,7 +241,7 @@ the report must preserve each row's individual outcome.
 | --- | --- | --- |
 | `M2-B01` | One connection performs exactly one `initialize` then `initialized` handshake before other requests | fake-server protocol contract |
 | `M2-B02` | Request IDs correlate to exactly one result or error; unknown, duplicate, and conflicting responses fail closed | correlation adversarial suite |
-| `M2-B03` | Partial lines, malformed JSON, oversized lines, oversized collections, and buffer exhaustion cannot become typed protocol events | framing and limit suite |
+| `M2-B03` | Partial lines, malformed JSON, duplicate keys, prototype-bearing objects, oversized lines, oversized collections, and buffer exhaustion cannot synthesize inherited fields or become invalid typed protocol events | framing, own-field, and limit suite |
 | `M2-B04` | Stderr is bounded diagnostic input and cannot be parsed as stdout protocol authority | process-stream test |
 | `M2-B05` | Unexpected EOF, spawn error, signal, nonzero exit, and shutdown timeout terminate every pending request deterministically | process-lifecycle suite |
 | `M2-B06` | Client cancellation sends only the requested interruption and does not infer successful completion | interruption suite |
@@ -249,7 +249,7 @@ the report must preserve each row's individual outcome.
 | `M2-B08` | The client performs no hidden Turn retry, process retry, Thread resume, approval, or model fallback | call-trace and source boundary tests |
 | `M2-B09` | Live local stdio initialization and one bounded Thread/Turn conform to the pinned generated schema | live compatibility preflight |
 | `M2-B10` | Explicit argv, environment, controlled config/state roots, custom permission-profile digest, managed requirements, exact `config/read`, `permissionProfile/list`, and `instructionSources`, plus outer black-box isolation determine App Server inputs; poisoned ambient config, instructions, hooks, skills, MCP, plugins, apps, search, provider, and environment values cannot enter or widen the selected profile | configuration-isolation suite |
-| `M2-B11` | The pinned schema and focused probes separately classify protocol-surface presence and observed operation for Thread resume, manual compaction, automatic-compaction configuration/trigger, `contextCompaction` lifecycle, post-compaction continuation, and controlled-state behavior without inspecting private reasoning; every capability selected by the installed profile is `SUPPORTED`, while `UNSUPPORTED` or `UNKNOWN` capabilities remain unselected | version-bound capability record, deterministic fixtures, and bounded compatibility preflight |
+| `M2-B11` | The pinned schema and focused probes separately classify protocol-surface presence and observed operation for Thread resume, manual compaction, automatic-compaction configuration/trigger, `contextCompaction` lifecycle, post-compaction continuation, and controlled-state behavior without inspecting private reasoning; pending manual-compaction trackers and observed unfinished lifecycles are separately bounded, and completed lifecycles release their slots; every capability selected by the installed profile is `SUPPORTED`, while `UNSUPPORTED` or `UNKNOWN` capabilities remain unselected | version-bound capability record, deterministic fixtures, and bounded compatibility preflight |
 
 ### Worker mapping and authority
 

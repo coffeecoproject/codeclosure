@@ -26,6 +26,12 @@ const packagePolicies = Object.freeze([
     }),
   }),
   Object.freeze({
+    path: 'packages/codex-app-server-client',
+    name: '@codeclosure/codex-app-server-client',
+    dependencies: Object.freeze({}),
+    devDependencies: Object.freeze({}),
+  }),
+  Object.freeze({
     path: 'packages/domain',
     name: '@codeclosure/domain',
     dependencies: Object.freeze({ zod: '4.4.3' }),
@@ -186,6 +192,14 @@ export function parsePnpmLockImporters(source) {
     if (/^\S/u.test(line)) {
       break;
     }
+    const emptyImporterMatch = /^ {2}(\S.*): \{\}$/u.exec(line);
+    if (emptyImporterMatch !== null) {
+      importer = unquoteYamlScalar(emptyImporterMatch[1]);
+      importers.set(importer, { dependencies: new Map(), devDependencies: new Map() });
+      group = undefined;
+      dependency = undefined;
+      continue;
+    }
     const importerMatch = /^ {2}(\S.*):$/u.exec(line);
     if (importerMatch !== null) {
       importer = unquoteYamlScalar(importerMatch[1]);
@@ -300,7 +314,7 @@ function compareLockImporter(policy, importer, policiesByName, violations) {
   }
 }
 
-function importViolation(specifier, filePath, packageRoot, availableDependencies) {
+export function importViolation(specifier, filePath, packageRoot, availableDependencies) {
   if (specifier.startsWith('node:')) {
     return isBuiltin(specifier) ? undefined : `unknown Node built-in ${specifier}`;
   }
@@ -356,6 +370,7 @@ function collectPolicySourceFiles(repositoryRoot, policy) {
   for (const [directoryName, mode] of [
     ['src', 'PRODUCTION'],
     ['test', 'TEST'],
+    ['scripts', 'TEST'],
   ]) {
     const directory = resolve(packageRoot, directoryName);
     try {
@@ -479,7 +494,7 @@ export function auditPackageDependencies(repositoryRoot) {
 
 export function formatDependencyAuditReport(audit) {
   const lines = [
-    `M1 package dependency audit: ${audit.violations.length === 0 ? 'PASS' : 'FAIL'}`,
+    `Current-milestone package dependency audit: ${audit.violations.length === 0 ? 'PASS' : 'FAIL'}`,
     `Workspace packages: ${audit.packageCount}`,
     `JavaScript/TypeScript sources inspected: ${audit.sourceFileCount}`,
     'Production dependency graph:',

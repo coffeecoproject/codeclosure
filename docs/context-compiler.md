@@ -9,8 +9,10 @@ fail-closed source subset, exact digest binding, atomic Attempt binding,
 `FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
 Retrieval, relevance packing, and a full Fact Graph remain planned for later
 milestones. ADR 0028 now fixes the planned M2 Thread/configuration boundary, but
-no Codex Context dispatch is implemented. Its bounded 0.146.0 live capability
-proof passes. This is the Goal-bound Worker Context Compiler;
+no Codex Context dispatch is implemented. Its bounded 0.146.0 Slice 0 live
+capability proof passes, and the Slice 1 lower client is implemented without a
+Worker Context mapping. That mapping remains Slice 2 work. This is the
+Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
 that are not implemented.
 

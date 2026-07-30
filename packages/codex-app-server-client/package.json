@@ -1,0 +1,30 @@
+{
+  "name": "@codeclosure/codex-app-server-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist",
+    "protocol"
+  ],
+  "scripts": {
+    "build": "tsc -b --pretty false",
+    "clean": "tsc -b --clean",
+    "probe:live": "pnpm run build && node scripts/run-live-preflight.mjs",
+    "test": "pnpm run test:unit",
+    "test:unit": "pnpm run build && node ../../scripts/run-node-tests.mjs test/*.test.ts",
+    "typecheck": "tsc -b --pretty false"
+  }
+}
