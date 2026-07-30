@@ -46,24 +46,61 @@ Goal Intake precedes this state machine and owns no `WorkflowPhase`,
 `RunStatus`, or `Attempt`. Its independent planned flow is:
 
 ```text
-Raw Request
-  -> DRAFTING
-  -> NEEDS_CLARIFICATION
-  -> DRAFTING
-  -> READY_FOR_CONFIRMATION
-  -> CONFIRMED
-  -> MATERIALIZED
-  -> formal Goal revision 1 plus initial Workflow
-  -> DISCOVERY / READY
+Raw Request Revision
+  -> trusted preflight
+       |-- PRE_ANALYSIS_NO_EXECUTION
+       |     -> Intent Admission Decision
+       |     |-- ANSWER_ONLY
+       |     |     -> AnswerOnlyResponse
+       |     |        (ANSWER_RETURNED | ANSWER_FAILED)
+       |     |     -> terminal NO_EXECUTION
+       |     `-- other non-execution reason
+       |           -> terminal NO_EXECUTION
+       |
+       `-- ANALYZING
+             -> Intent Analysis Proposal
+             -> Intent Projection Revision
+             -> Intent Admission Decision
+                  |-- CLARIFY
+                  |     -> NEEDS_CLARIFICATION
+                  |     -> new Raw Request Revision
+                  |     -> ANALYZING
+                  |
+                  |-- NO_EXECUTION
+                  |     -> terminal NO_EXECUTION
+                  |
+                  `-- MATERIALIZE
+                        -> atomic formal Goal revision 1 plus initial Workflow
+                        -> terminal MATERIALIZED IntakeRun
+                        -> DISCOVERY / READY
+                        -> optional separate ordinary StartGoal
+
+Any pre-Goal processing branch
+  -> processing cannot safely finish
+  -> reason-coded IntakeFailureRecord
+  -> terminal FAILED
 ```
 
 The uppercase Intake statuses belong to a versioned `IntakeRun`, not to the
-Workflow enum. A validated Draft remains a proposal. Only an exact current Goal
-Confirmation, Goal Manager validation, and the Runtime's atomic
-Materialization transaction may create the formal Goal plus initial Workflow.
-The accepted boundary is defined by
-[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md) and
-[Goal Intake](goal-intake.md).
+Workflow enum. A pre-analysis `NO_EXECUTION` Decision has no Proposal or
+Projection binding. When analysis occurs, the assistant Proposal and validated
+Intent Projection remain pre-Goal records. Only a deterministic `MATERIALIZE`
+decision over exact source-bound input, Goal Manager validation, and the
+Runtime's atomic Materialization transaction may create the formal Goal plus
+initial Workflow.
+An `ANSWER_ONLY` decision may invoke a separate bounded answer operation. Its
+stored `AnswerOnlyResponse` reports `ANSWER_RETURNED` or `ANSWER_FAILED` but is
+not formal authority; answer delivery failure does not change the IntakeRun
+from terminal `NO_EXECUTION` to `FAILED`. `FAILED` instead closes the current
+IntakeRun after an Intake processing failure. M2.5 does not automatically retry
+that run: another attempt requires a new IntakeRun. On restart, a valid orphaned
+`ANALYZING` run that has no committed
+Proposal or Decision and no resumable operation is atomically reconciled to
+reason-coded `FAILED` before another model call.
+`READY_TO_MATERIALIZE` is a derived next action, not a stored state that can be
+consumed later. The accepted boundary is defined by
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
+and [Goal Intake](goal-intake.md).
 
 ## Public and Internal Command Boundary
 
@@ -78,11 +115,22 @@ Goal plus its unique `DISCOVERY`/`READY` Workflow; it does not dispatch work.
 The first Context-bound `StartGoal` transaction binds one installed Execution
 Profile. Resume cannot select another profile.
 
-The planned M2.5 `MaterializeGoal` application command adds exact Raw Request,
-Draft revision/digest, Confirmation, Intake version, and project/scope guards
-before converging on the same Goal Manager validation and atomic Goal/Workflow
-creation primitive. It does not change or wrap the implemented direct
-`CreateGoal` contract.
+The planned M2.5 `MaterializeGoal` application command adds exact Raw Request
+revision/digest, Intent Analysis Proposal, Intent Projection revision/digest,
+Source Binding, Material Ambiguity, Admission Policy, Intake version, and
+project/scope guards before converging on the same Goal Manager validation and
+atomic Goal/Workflow creation primitive. It does not change or wrap the
+implemented direct `CreateGoal` contract.
+
+Materialization creates only a `DISCOVERY / READY` Workflow. For an admitted
+governed-execution request, the same transaction may persist one exact
+`GoalStartAuthorization` and preallocated ordinary `StartGoal` Command ID. The
+application coordinator invokes that `StartGoal` only after Materialization
+commits. First Policy/Execution Profile binding, Context/Attempt creation, and
+Worker dispatch remain inside the existing Start path. A crash or Start failure
+therefore leaves a visible `READY` Goal, while exact command replay cannot
+duplicate first-Start bindings or redispatch a retained Attempt/claim. Any later
+driver continuation still follows current persisted authority under ADR 0020.
 
 The implemented CLI creation adapter requires an explicit objective, project,
 and at least one non-blank criterion. Lifecycle adapters read current Goal and
@@ -549,15 +597,19 @@ the Goal. The later planned path is:
 DISCOVERY / PLAN / IMPLEMENT
   -> WAITING_FOR_INPUT
   -> Goal Revision Proposal
-  -> exact user confirmation
+  -> source-bound Goal Revision Admission
   -> Goal Manager creates a new Goal revision
   -> affected Plan, Context, Candidate, Evidence, and Acceptance authority
      becomes stale or invalid according to policy
   -> Runtime reconciles before continuation
 ```
 
-This is distinct from reopening the original IntakeRun. It is not required for
-M2 or the basic M2.5 Goal Intake vertical slice.
+This is distinct from reopening the original IntakeRun or creating another
+GoalMaterializationRecord. M3 may reuse Intent analysis, Source Binding,
+Material Ambiguity, and Admission Policy concepts, but it needs a distinct
+`GoalRevisionAdmissionDecision` bound to the current formal Goal revision and
+its dependent-authority invalidation. It is not required for M2 or the basic
+M2.5 Goal Intake vertical slice.
 
 ## Cancellation
 

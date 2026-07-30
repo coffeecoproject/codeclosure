@@ -11,6 +11,21 @@ manifest. It is one of `ACCEPT`, `REJECT_REPAIRABLE`, `REJECT_BLOCKED`,
 The read-only policy evaluator that consumes authoritative state and evidence.
 It cannot edit source or mutate workflow state.
 
+## Answer-only Response
+
+A bounded, immutable M2.5 interaction result for an `ANSWER_ONLY` Admission
+Decision. It records either validated assistant-authored answer content or a
+safe delivery-failure code. It is useful output but cannot become Source
+Binding, Fact, Criterion, Human Decision, Evidence, Acceptance, Goal, Workflow,
+or execution authority.
+
+## Automatic Goal Materialization
+
+The planned Intake behavior in which a deterministic `MATERIALIZE` decision
+causes the Runtime to create one formal Goal and `DISCOVERY / READY` Workflow
+without a separate Draft-confirmation action. It does not itself start an
+Attempt or dispatch a Worker.
+
 ## Candidate
 
 An isolated proposed project state evaluated for one Goal revision. Candidates
@@ -29,8 +44,9 @@ Candidate. Closeout is not merge, release, deployment, or production consent.
 ## Clarification Question
 
 A versioned, scoped pre-Goal question whose answer may materially change a Goal
-Draft's objective, criteria, scope, non-goals, project identity, or risk. It is
-not a Workflow blocker because no formal Workflow exists yet.
+Projection's objective, criteria, scope, non-goals, project identity, risk, or
+execution authorization. It is not a Workflow blocker because no formal
+Workflow exists yet.
 
 ## Completion Request
 
@@ -81,37 +97,35 @@ criteria, scope, revisions, and lifecycle status independent of any Codex
 thread. A Codex thread-scoped goal or plan is disposable worker execution state
 and is not this authoritative product object.
 
-## Goal Confirmation
-
-An immutable user-authored confirmation bound to one exact Goal Draft identity,
-revision, canonical digest, principal, and project or scope. It authorizes only
-Goal Materialization and is neither technical Acceptance nor external-effect
-consent.
-
-## Goal Draft
-
-One immutable, digest-bound proposed interpretation of a Raw Request. A Goal
-Draft is created by the Goal Intake Coordinator after validating untrusted
-proposal input; it is not formal user intent or a CodeClosure Goal.
-
 ## Goal Intake
 
-The planned pre-Goal product flow that records a Raw Request, develops a Goal
-Draft, resolves material questions, captures exact user Confirmation, and may
-materialize a formal Goal. It is not the `DISCOVERY` Workflow phase.
+The planned pre-Goal product flow that records Raw Request revisions, validates
+assistant analysis, forms a source-bound Intent Projection, resolves material
+ambiguities, and obtains a deterministic Intent Admission Decision. It is not
+the `DISCOVERY` Workflow phase.
 
 ## Goal Materialization
 
-The atomic Runtime application operation that consumes one current exact Goal
-Confirmation and creates the formal Goal, initial Workflow,
-GoalMaterializationRecord, audits, and command outcome. It is distinct from
-post-closeout Promotion.
+The atomic Runtime application operation that consumes one current exact
+`MATERIALIZE` decision and creates the formal Goal, initial `DISCOVERY / READY`
+Workflow, GoalMaterializationRecord, audits, and command outcome. It is
+distinct from first Start and post-closeout Promotion.
+
+## Goal Start Authorization
+
+An immutable Intake record created exactly once for an admitted
+`GOVERNED_EXECUTION / AUTHORIZE_START` Materialization and never for
+`MATERIALIZE_ONLY`. It binds the source-bound request and materialized Goal to
+one preallocated ordinary `StartGoal` command. It is not an Attempt or dispatch
+claim and cannot bypass Start freshness, Policy, Execution Profile, Context, or
+recovery guards.
 
 ## Goal Revision Proposal
 
 A non-authoritative proposal raised after formal execution begins when newly
-discovered ambiguity may require changing Goal intent. Only exact user
-confirmation and the Goal Manager can create the later Goal revision.
+discovered ambiguity may require changing Goal intent. A later source-bound
+Goal Revision Admission Decision and the Goal Manager, not a Worker proposal,
+may create the later Goal revision.
 
 ## Human Decision
 
@@ -119,11 +133,55 @@ A typed, scoped record of a business fact, product preference, unavailable
 external fact, or exact real-world consent. It is an acceptance input, not a
 technical-gate bypass.
 
+## Intake Failure Record
+
+An immutable, reason-coded record that closes one Intake Run as `FAILED` when
+Intent analysis, optional project observation, or Admission preparation cannot
+safely finish. It carries no Goal or Workflow authority and requires a new
+Intake Run for retry.
+
 ## Intake Run
 
-A versioned pre-Goal lifecycle that owns Drafting, clarification, confirmation,
-Materialization, abandonment, or failure status. Its statuses are not Workflow
-phases or run statuses.
+A versioned pre-Goal lifecycle that owns analysis, clarification,
+non-execution, Materialization, or failure status. Its statuses are not
+Workflow phases or run statuses. `FAILED` is terminal for one Intake Run; M2.5
+requires a new Intake Run rather than silently retrying the failed operation.
+
+## Intent Admission
+
+The deterministic CodeClosure decision over one exact Raw Request revision,
+trusted interaction action, and Admission Policy. Projection-backed variants
+also bind one complete Intent Analysis Proposal, Intent Projection, Source
+Binding set, Material Ambiguity set, and optional or required project/scope as
+their outcome permits. A pre-analysis `NO_EXECUTION` variant carries none of
+those Projection fields. Its outcomes are `MATERIALIZE`, `CLARIFY`, or
+`NO_EXECUTION`. It is not technical Acceptance.
+
+## Intent Admission Policy
+
+The immutable, versioned, digested pre-Goal policy that defines required Goal
+fields, allowed provenance classes, materiality, non-execution reasons, and
+automatic-Start eligibility. It is separate from the Workflow Policy bound by
+first `StartGoal`.
+
+## Intent Analysis Proposal
+
+One bounded, untrusted assistant interpretation of current Intake input. It may
+suggest structure or questions but cannot author Source Binding, Admission,
+Goal, Workflow, Start, or Acceptance authority.
+
+## Intent Projection
+
+One immutable, CodeClosure-owned structured interpretation of current Raw
+Request input. Each material field carries exact Source Bindings. A Projection
+is an Admission input, not a formal Goal or proof of user intent by itself.
+
+## Material Ambiguity
+
+An unresolved pre-Goal choice that could materially change objective, required
+criteria, scope, non-goals, project identity, risk, or execution authorization.
+An unresolved Material Ambiguity requires `CLARIFY` rather than automatic Goal
+creation.
 
 ## Policy Bundle
 
@@ -145,14 +203,18 @@ technical closeout and needs separate authority.
 ## Project-assisted Intake
 
 Optional policy-authorized Goal Intake that uses bounded, read-only project
-exploration to propose Draft changes or questions. Its observations are not
-formal Goal Facts or Acceptance Evidence without fresh Goal-bound validation.
+exploration to propose Intent Projection changes or questions. Its observations
+are not formal Goal Facts or Acceptance Evidence without fresh Goal-bound
+validation.
 
 ## Raw Request
 
-The immutable, provenance-bearing record of what a user actually submitted to
-Goal Intake before any assistant interpretation. It may contain incomplete or
-ambiguous intent and is not itself a formal Goal.
+The provenance-bearing Intake root whose immutable revisions record exactly
+the complete user-authored content admitted under the retention policy and
+which trusted interaction action the identified user used before assistant
+interpretation. A redacted display value is not Raw Request source content. A
+revision may contain incomplete or ambiguous intent and is not itself a formal
+Goal.
 
 ## Reconciliation
 
@@ -172,6 +234,14 @@ The product-facing Runtime service that owns Goal commands, startup recovery,
 deterministic M1 driving, and read-only Goal views. Trusted composition invokes
 startup recovery before publishing its narrow application facade. It does not
 replace the Workflow Runtime or Acceptance Engine as an authority owner.
+
+## Source Binding
+
+The exact link from an Intent Projection field to a source revision, digest,
+optional content span, and Runtime-owned provenance class. It proves source
+identity, not that an interpretation is semantically correct. A `USER_STATED`
+span may address only retained user-authored source bytes, never a redacted
+display or synthetic omission marker.
 
 ## Verification Runner
 

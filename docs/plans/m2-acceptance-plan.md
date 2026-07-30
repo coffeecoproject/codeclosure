@@ -13,10 +13,10 @@ a repeatable procedure with explicit entry conditions, mandatory cases,
 evidence, source identity, and unconditional verdict rules.
 
 This is a milestone assessment plan. It MUST NOT issue or replace a technical
-`ACCEPT` decision, mutate a Workflow, authorize Goal Intake or Goal
-Materialization, authorize Candidate Promotion, or authorize any external
-effect. Only the Acceptance Engine may issue technical decisions and only the
-Workflow Runtime may mutate Workflow state.
+`ACCEPT` decision, mutate a Workflow, authorize Intent Admission or automatic
+Goal Materialization/Start, authorize Candidate Promotion, or authorize any
+external effect. Only the Acceptance Engine may issue technical decisions and
+only the Workflow Runtime may mutate Workflow state.
 
 ## 2. Governing authority
 
@@ -91,8 +91,9 @@ The mandatory acceptance scope is:
 
 The following remain outside M2 and MUST NOT be inferred from `PASS`:
 
-- Goal Intake, Raw Request, Goal Draft, clarification, Confirmation, or Goal
-  Materialization;
+- Goal Intake, Raw Request revisions, Intent Analysis, Intent Projection,
+  Source Binding, Material Ambiguity, Intent Admission, automatic Goal
+  Materialization, or Intake-authorized Start;
 - changes to direct `CreateGoal`;
 - full Fact Graph discovery or execution-time Goal revision;
 - proof that arbitrary models, Codex versions, platforms, repositories, build
@@ -530,4 +531,5 @@ status documents are updated consistently.
 
 That `PASS` proves only that the reusable App Server client and Goal-bound
 Worker execution branch satisfy M2. It does not prove the future Intake
-Assistant Adapter, Draft/Confirmation authority, or Goal Materialization path.
+Assistant Adapter, Intent Projection/Admission authority, Goal Materialization,
+or Intake-authorized automatic Start path.

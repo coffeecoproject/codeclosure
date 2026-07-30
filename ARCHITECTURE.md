@@ -24,11 +24,15 @@ The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) are prepared;
 no M2 implementation slice has started.
 
-The pre-Goal Intake and Goal Materialization target is accepted in
-[ADR 0026](docs/adr/0026-pre-goal-intake-and-goal-materialization-authority.md)
+The source-bound Intent Admission and automatic Goal Materialization target is
+accepted in
+[ADR 0027](docs/adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 but is not implemented. M2 must preserve a reusable Codex App Server client
-boundary; the Intake Coordinator, Draft/Confirmation authority, and Intake
-Assistant Adapter remain planned for M2.5.
+boundary; the Intake Coordinator, Intent Projection/Admission authority, and
+Intake Assistant Adapter remain planned for M2.5. The same Intake boundary owns
+bounded non-authoritative Answer-only results and terminal Intake-failure
+classification. Materialization creates a `READY` Workflow; optional automatic
+execution still crosses the separate ordinary `StartGoal` boundary.
 
 ## Architectural Goal
 
@@ -50,10 +54,10 @@ execution.
         Goal Intake Coordinator     |
             (M2.5 planned)           |
           |-- Intake Assistant       |
-          |-- Draft Store            |
-          `-- Confirmation Gateway   |
+          |-- Intake Store           |
+          `-- Intent Admission Engine
                    |                |
-                   | exact confirmed Draft
+                   | admitted source-bound Projection
                    +--------+-------+
                             |
                             v
@@ -95,10 +99,12 @@ facade and renders Runtime-owned read views. It does not write or query the
 control database directly, sequence internal Workflow commands, or infer
 successful completion from a worker transcript.
 
-The planned Intake surface separately presents Raw Request, Draft revision,
-material questions, exact Confirmation, and Materialization status. It does
-not render a proposal as a formal Goal or reuse a Goal status view before
-Materialization.
+The planned Intake surface separately presents Raw Request revisions, trusted
+interaction action, assistant Proposal, source-bound Intent Projection,
+material questions, Admission reasons, Answer-only delivery disposition,
+terminal Intake failure/next action, and Materialization/Start dispositions. It
+does not render a proposal, Projection, or assistant answer as a formal Goal or
+reuse a Goal status view before Materialization.
 
 ### Control Plane
 
@@ -129,13 +135,25 @@ own records make external reality true.
 
 ### Boundary A — User to Control Runtime
 
-Natural-language input first becomes an immutable Raw Request. Assistant output
-is an untrusted Goal Draft Proposal. The Intake Coordinator may validate and
-persist a Draft revision, but only an exact user Confirmation plus Goal Manager
-validation and the Runtime's atomic Materialization transaction can create a
-formal Goal and Workflow. A Goal revision or Human Decision becomes
-authoritative only after the owning runtime boundary validates and persists its
-typed record.
+Natural-language input and its trusted interaction action first become an
+immutable Raw Request revision. Assistant output is an untrusted Intent
+Analysis Proposal. The Intake Coordinator may validate it and persist a
+source-bound Intent Projection revision, but only the deterministic Intent
+Admission Engine may issue `MATERIALIZE`. Goal Manager validation and the
+Runtime's atomic Materialization transaction then create a formal Goal and
+`DISCOVERY / READY` Workflow. Materialization never creates an Attempt or
+dispatches a Worker; optional automatic execution uses a separately bound
+ordinary `StartGoal`. A Goal revision or Human Decision becomes authoritative
+only after the owning Runtime boundary validates and persists its typed record.
+
+For `ANSWER_ONLY`, the assistant may author bounded answer content through a
+separate response contract, but the Intake Coordinator owns validation,
+disposition, identity, and persistence. An `AnswerOnlyResponse` is useful
+interaction output, not a Source Binding, Fact, Criterion, Human Decision,
+Evidence, Acceptance Decision, Goal, Workflow, or execution authorization.
+An Intake processing failure becomes a reason-coded terminal `FAILED` record
+for that IntakeRun; M2.5 does not silently recall the model or resume the same
+failed operation.
 
 ### Boundary B — Control Runtime to Worker
 
@@ -176,17 +194,34 @@ requires a separate gateway and policy.
 
 ### Goal Intake Coordinator — planned M2.5
 
-Owns the pre-Goal IntakeRun lifecycle and validated Raw Request, Goal Draft,
-Clarification Question, and Confirmation records. It compiles Intake-specific
-packages, invokes an Intake Assistant through a narrow port, validates all
-assistant output as untrusted input, and derives immutable Draft identity,
-revision, provenance, and digest authority.
+Owns the pre-Goal IntakeRun lifecycle and validated Raw Request revisions,
+Intent Analysis Proposals, Intent Projection revisions, Source Bindings,
+Material Ambiguities, Clarification Questions, Answer-only result disposition,
+and terminal Intake failure classification. It compiles operation-specific
+Intake packages, invokes an Intake Assistant through a narrow port, validates
+all assistant output as untrusted input, and derives immutable Projection,
+AnswerOnlyResponse, and IntakeFailureRecord identity and digest authority.
 
-It cannot create a formal Goal, mutate a Workflow, dispatch a Goal-bound
-Worker, issue technical Acceptance, or authorize an external effect. Goal
-Materialization crosses into the Runtime application boundary, where the Goal
-Manager validates formal intent and the Workflow Runtime remains the only
-Workflow writer. See [Goal Intake](docs/goal-intake.md).
+It cannot issue an Admission Decision by itself, create a formal Goal, mutate a
+Workflow, invoke `StartGoal`, dispatch a Goal-bound Worker, issue technical
+Acceptance, or authorize an external effect. Goal Materialization crosses into
+the Runtime application boundary, where the Goal Manager validates formal
+intent and the Workflow Runtime remains the only Workflow writer. See
+[Goal Intake](docs/goal-intake.md).
+
+### Intent Admission Engine — planned M2.5
+
+Evaluates either one immutable pre-analysis Raw Request view or one complete
+Projection/Source-Binding view under an exact Admission Policy and issues
+`MATERIALIZE`, `CLARIFY`, or `NO_EXECUTION` with an ordered reason trace. It is
+deterministic for fixed canonical inputs and cannot call an assistant while
+deciding.
+
+It owns neither the Projection nor the resulting Goal. It cannot mutate Intake
+or Workflow state, create an Attempt, select a replacement execution profile,
+issue technical Acceptance, or perform an external effect. The trusted Store
+may reject malformed or stale decisions but cannot replace another outcome
+with `MATERIALIZE`.
 
 ### Runtime Application Coordinator
 
@@ -560,14 +595,15 @@ Codex App Server Client
 ├── Codex Worker Adapter
 │   └── Goal-bound WorkerPort requests and events
 └── Goal Intake Assistant Adapter (M2.5 planned)
-    └── pre-Goal IntakePackage and GoalDraftProposal
+    ├── IntakePackage -> IntentAnalysisProposal
+    └── AnswerOnlyPackage -> bounded answer response
 ```
 
 The client owns protocol process, transport, initialization, generated schema,
 stream, interruption, and compatibility mechanics. It owns no Goal, Workflow,
-Worker, Draft, Confirmation, Acceptance, or persistence semantics. M2
-implements and validates the Worker branch only; Goal Intake is not an M2 exit
-condition.
+Worker, Projection, Source Binding, Admission, Start, Acceptance, or
+persistence semantics. M2 implements and validates the Worker branch only;
+Goal Intake is not an M2 exit condition.
 
 For the planned M2 branch, Codex configuration and state are execution inputs,
 not ambient host truth. Trusted composition must either disable or exactly bind

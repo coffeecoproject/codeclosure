@@ -151,8 +151,9 @@ the M1 authority boundary.
 
 ### Explicit Non-Scope
 
-- Goal Intake user flow, Raw Request, Goal Draft, clarification, Confirmation,
-  or Goal Materialization;
+- Goal Intake user flow, Raw Request revision, Intent Analysis, Intent
+  Projection, Source Binding, Material Ambiguity, Intent Admission, automatic
+  Goal Materialization, or Intake-authorized automatic Start;
 - changes to the accepted direct M1 `CreateGoal` command;
 - full Fact Graph traversal or execution-time Goal revision;
 - rich TUI, multiple agents, cloud, or multi-user behavior; and
@@ -206,29 +207,37 @@ natural-language request.
 ## M2.5 — Goal Intake and Materialization Vertical Slice
 
 Status: Not started. The scope below is planned behavior governed by
-[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
 M2.5 implementation MUST NOT begin until M2 has passed its exit review.
 
 ### Objective
 
-Turn one natural-language Raw Request into an exactly confirmed formal Goal
-without giving the assistant Goal, Workflow, Acceptance, or confirmation
-authority.
+Turn one natural-language Raw Request into a source-bound admitted formal Goal
+without requiring confirmation of a model-authored Draft and without giving the
+assistant Goal, Workflow, Start, Acceptance, or Admission authority.
 
 ### Scope
 
-- immutable Raw Request and versioned IntakeRun;
-- immutable Goal Draft revisions and canonical Draft digests;
+- immutable Raw Request revisions and versioned IntakeRun;
+- immutable Intent Analysis Proposals and Intent Projection revisions;
+- exact Source Bindings with Runtime-owned provenance classification;
+- explicit Material Ambiguity records and bounded clarification;
 - Goal Intake Assistant Adapter over the reusable App Server client;
-- bounded Clarification Questions and typed user answers;
-- exact Goal Confirmation bound to Draft revision, digest, principal, and
-  project or scope;
+- deterministic Intent Admission Engine and versioned Admission Policy;
+- `MATERIALIZE`, `CLARIFY`, and reason-coded `NO_EXECUTION` decisions;
+- bounded non-authoritative Answer-only results with explicit returned/failed
+  disposition;
+- reason-coded terminal Intake failure records, restart reconciliation, and
+  new-Intake retry semantics;
 - atomic Goal Materialization through the Goal Manager and Workflow Runtime;
 - one formal Goal revision 1 and one `DISCOVERY / READY` Workflow;
-- immutable Goal Materialization Record, audit, command idempotency, and strict
-  reopen validation;
-- basic CLI/read views for request, Draft, question, confirmation, and
-  Materialization status; and
+- optional immutable Goal Start Authorization followed only by a separate
+  ordinary `StartGoal` transaction;
+- immutable Goal Materialization Record, audits, command idempotency, separate
+  Materialization/Start dispositions, and strict reopen validation;
+- basic CLI/read views for request, Proposal, Projection, Source Bindings,
+  ambiguity, Admission, Answer-only result, terminal failure/next action,
+  Materialization, and Start status; and
 - stale, concurrent, replay, partial-write, forged-authority, restart, and
   adapter-boundary adversarial tests.
 
@@ -239,42 +248,96 @@ authority.
 - automatic or execution-time Goal revision;
 - rich TUI or complete Human Decision UX;
 - multiple Intake agents or model-voting pipelines;
+- automatic retry or resumption of the same failed Intake analysis operation;
 - long-term business knowledge base; and
 - technical Acceptance or post-closeout Promotion changes.
 
 ### Required Demonstration
 
-For one bounded local request:
+For one bounded local governed-execution request:
 
-1. the user submits an incomplete Raw Request;
-2. the Intake Assistant returns a Goal Draft Proposal and one material
-   clarification;
-3. CodeClosure validates and persists Draft revision 1;
-4. the user answer produces Draft revision 2;
-5. a stale confirmation of revision 1 is rejected without a formal Goal;
-6. the user confirms the exact revision-2 digest;
+1. the user submits an incomplete Raw Request revision through the explicit
+   governed-execution action;
+2. the Intake Assistant returns an Intent Analysis Proposal containing one
+   unsupported material assumption;
+3. CodeClosure validates the Proposal, forms Intent Projection revision 1 with
+   exact Source Bindings, and records the Material Ambiguity;
+4. Intent Admission returns `CLARIFY`, persists one bounded question, and
+   creates no Goal or Workflow;
+5. the user answer produces Raw Request revision 2 and a new Projection, while
+   a stale attempt to materialize revision 1 is rejected;
+6. the exact revision-2 input produces deterministic
+   `MATERIALIZE / AUTHORIZE_START`;
 7. Goal Materialization atomically creates Goal revision 1, its unique
-   `DISCOVERY / READY` Workflow, the Materialization Record, audits, and command
-   outcome; and
-8. strict reopen returns the identical Intake-to-Goal authority chain.
+   `DISCOVERY / READY` Workflow, the Materialization Record, exactly one Goal
+   Start Authorization, audits, and command outcome;
+8. the application invokes the separately persisted ordinary `StartGoal`, and
+   fault injection between the two operations leaves a visible `READY` Goal
+   rather than partial or duplicate execution; and
+9. strict reopen returns the identical Raw Request-to-Projection-to-Admission-
+   to-Goal chain and its separate Start disposition.
+
+Supplementary cases must show:
+
+1. an answer-only request reaching reason-coded `NO_EXECUTION`, returning one
+   bounded stored answer, and replaying it without another assistant call;
+2. Answer-only delivery failure remaining `NO_EXECUTION / ANSWER_FAILED`
+   without creating formal authority or an Intake processing failure;
+3. governed read-only project inspection not being misclassified as
+   answer-only; and
+4. an interrupted orphaned `ANALYZING` run being reconciled on restart to one
+   audited terminal `FAILED / INTERRUPTED_ANALYSIS`, with retry requiring a new
+   Intake Run.
 
 ### Exit Criteria
 
 - model output, transcript text, Codex lifecycle, or a generic approval cannot
-  create a Draft Confirmation or formal Goal;
-- changing a confirmation-bearing Draft field invalidates earlier
-  Confirmation authority;
+  author trusted interaction action, Source Binding, Admission, Start
+  Authorization, or a formal Goal;
+- Admission persistence rejects partial Proposal/Projection bindings,
+  Projection fields on pre-analysis decisions, missing Materialization
+  project/scope, and invalid kind/outcome/action/disposition combinations;
+- Intake persistence and strict reopen reject partial or mixed terminal
+  Decision, Answer-only, Failure, and Goal-reference shapes;
+- redacted displays, omission markers, synthetic replacement text, and
+  unavailable source content cannot satisfy a material `USER_STATED` binding;
+- a material field supported only by model inference cannot pass Admission;
+- changing Raw Request, Projection, Source Binding, ambiguity, project/scope,
+  or Admission Policy invalidates the earlier chain for Materialization;
 - direct `CreateGoal` remains unchanged and creates no synthetic Intake
   records;
 - exact command replay produces one materialization effect, while conflicting
   reuse and concurrent losers fail closed;
-- injected failure at every compound-write boundary leaves no partial Goal or
-  Workflow authority;
+- injected failure at every Admission/Materialization compound-write boundary
+  leaves no partial Goal or Workflow authority;
+- Goal Materialization never creates an Attempt or dispatch; automatic Start
+  passes the ordinary first-Start Policy/Profile/Context boundary;
+- a crash or failure between Materialization and Start leaves the Goal `READY`,
+  and replay cannot duplicate first-Start bindings or redispatch a retained
+  Attempt/claim;
+- a preallocated automatic Start racing a different explicit manual Start
+  produces exactly one first-Start Policy/Profile binding, Context, Attempt,
+  and dispatch claim, with a typed loser outcome;
+- substituting the Start Authorization's command, Goal/Workflow version,
+  Policy, Execution Profile, or digest binding fails closed;
+- `MATERIALIZE_ONLY` and `NO_EXECUTION` cannot obtain automatic Start authority;
+- an Answer-only result is bounded, exactly bound, non-authoritative, and
+  replayed from storage without another assistant call;
+- Answer-only delivery failure remains distinguishable from terminal Intake
+  processing failure and cannot create Goal, Workflow, Evidence, Acceptance, or
+  execution authority;
+- a recorded Intake processing failure is terminal for that Intake Run, exact
+  replay performs no model recall, and retry requires a new Intake Run;
+- restart reconciliation closes a valid non-resumable orphaned `ANALYZING` run
+  as audited `FAILED / INTERRUPTED_ANALYSIS` before another assistant call,
+  while corrupt authority still fails strict reopen;
 - Intake authority survives restart without conversation reconstruction;
 - the Intake Adapter has no WorkerPort, Candidate-write, Store-mutation,
-  Acceptance, or external-effect capability;
+  Admission, Start, Acceptance, or external-effect capability;
 - Intake observations cannot satisfy formal Goal Evidence without fresh
   Goal-bound verification;
+- correction after Materialization uses explicit cancellation/new Intake rather
+  than silently revising the Goal;
 - the planned proposal-self-materialization invariant and its executable tests
   enter `RUNTIME_INVARIANTS.md` together; and
 - every M1 and M2 regression gate remains green.
@@ -290,13 +353,15 @@ runtime state.
 
 - provenance-bearing Fact Graph;
 - project-assisted Goal Intake with exact read-only project provenance;
-- Raw Request/Draft relationships to Fact and Business Scenario sources;
+- Raw Request/Intent Projection relationships to Fact and Business Scenario
+  sources;
 - business-scenario discovery and applicability;
 - code/business relationship mapping;
 - Context Compiler relevance selection and hard budgets;
 - Context Manifest omission decisions;
 - decision and unresolved-fact gateway;
-- Goal Revision Proposal and exact user confirmation;
+- Goal Revision Proposal plus a distinct source-bound
+  `GoalRevisionAdmissionDecision`;
 - dependency invalidation after a formal Goal revision;
 - Intake Context relevance selection, omission records, and hard budgets;
 - scenario-to-obligation-to-evidence trace;
@@ -328,8 +393,9 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - candidate retention and cleanup policy;
 - CodeClosure builds selected CodeClosure changes;
 - escaped-defect and false-acceptance tracking;
-- Goal Draft edit/confirmation rate, clarification burden, and execution-time
-  Goal-revision frequency;
+- Intent Projection revision rate, clarification burden, Admission outcome,
+  post-Materialization correction/cancellation rate, and execution-time Goal-
+  revision frequency;
 - requirement-misunderstanding rework and missed-scenario tracking; and
 - Intake quality comparison across supported model versions.
 
@@ -341,8 +407,9 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - false completion attempts remain rejected;
 - operator can see Goal, phase, scenario coverage, blocker, and next action
   without reading raw transcripts.
-- operators can see which Intake content was user-stated, project-observed,
-  model-proposed, unresolved, and exactly confirmed;
+- operators can see which Intake content was user-stated, policy-derived,
+  project-observed, model-proposed, or unresolved, and why Admission selected
+  its outcome;
 - Intake privacy and retention policy is inspectable and enforced; and
 - Intake quality metrics do not become Goal, Acceptance, or model-selection
   authority by themselves.

@@ -1,6 +1,6 @@
 # ADR 0026: Pre-Goal Intake and Goal materialization authority
 
-- Status: Accepted
+- Status: Superseded by [ADR 0027](0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 - Date: 2026-07-30
 
 ## Context

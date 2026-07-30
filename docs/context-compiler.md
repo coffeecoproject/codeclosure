@@ -399,23 +399,32 @@ Context Compiler.
 The planned Intake path instead uses:
 
 ```text
-Raw Request + current Goal Draft + clarification state
+Raw Request revision + optional current Intent Projection + clarification state
   + optional bounded project observations
   + Intake policy and assistant response contract
   -> Intake Package + Intake Manifest
-  -> Goal Draft Proposal
+  -> Intent Analysis Proposal
 ```
 
-An Intake Manifest binds only IntakeRun, Raw Request, Draft revision/digest,
-question, project/scope, policy, adapter, provenance, omission, and budget
-identity. It cannot be used as a Goal-bound Context Manifest, Worker dispatch
-claim, Evidence input, or Acceptance input.
+An Intake Manifest binds only IntakeRun, Raw Request revision/digest, optional
+current Intent Projection revision/digest, question, project/scope, Intake
+policy, adapter, provenance, omission, and budget identity. It cannot be used as
+a Goal-bound Context Manifest, Worker dispatch claim, Evidence input, or
+Acceptance input. Source Binding, Material Ambiguity, and Intent Admission are
+performed by their owning Runtime components after assistant output validates;
+the assistant and Intake compiler cannot author those decisions. A
+`PRE_ANALYSIS_NO_EXECUTION` decision does not compile an intent-analysis Intake
+Package or call the assistant to decide Admission. Its `ANSWER_ONLY` subtype
+may use a separate `AnswerOnlyPackage` and bounded answer response contract,
+bound to the exact Raw Request, Decision, Intake policy, adapter, provenance,
+omissions, and budgets. That package grants no project tools and its result
+cannot enter Goal-bound Context, Evidence, or Acceptance as authority.
 
 Canonical projection, rendering, digest, byte-budget, redaction, and protocol
 utilities MAY be shared below both compilers. Their domain records, codecs,
 freshness rules, and authority labels remain separate. See
-[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md) and
-[Goal Intake](goal-intake.md).
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
+and [Goal Intake](goal-intake.md).
 
 ## M1 Boundary
 

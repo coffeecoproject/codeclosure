@@ -107,7 +107,7 @@ The primary accepted decisions for this milestone are
 [ADR 0024](../adr/0024-stop-m1-transient-failure-without-retry-authority.md),
 [ADR 0025](../adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md),
 and
-[ADR 0026](../adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
+[ADR 0027](../adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
 
 If M2 needs to change a durable decision in those records, implementation must
 stop and a superseding or additional ADR must be accepted first.
@@ -168,8 +168,9 @@ may imply Codex backs a phase not named in that profile and tested.
 
 M2 MUST NOT add or claim:
 
-- Raw Request, Goal Draft, clarification, Goal Confirmation, Goal
-  Materialization, or another Goal Intake user flow;
+- Raw Request revision, Intent Analysis, Intent Projection, Source Binding,
+  Material Ambiguity, Intent Admission, automatic Goal Materialization,
+  Intake-authorized Start, or another Goal Intake user flow;
 - any change to the accepted direct `CreateGoal` command;
 - full Fact Graph traversal, broad business discovery, or execution-time Goal
   revision;
@@ -689,7 +690,7 @@ Exit proof:
 - source-checkout byte identity and Git metadata treatment are unambiguous;
 - every remaining open decision has an owner, chosen rule, test obligation, and
   ADR need;
-- the selected design preserves every M1 invariant and ADR 0026's client seam;
+- the selected design preserves every M1 invariant and ADR 0027's client seam;
   and
 - the plan and acceptance matrix are updated if the accepted decision changes
   their concrete proof.
@@ -998,7 +999,8 @@ regression baseline. It does not hand Goal-bound WorkerPort semantics to Goal
 Intake.
 
 After M2 passes, M2.5 may add an Intake-specific adapter, package, persistence,
-confirmation, and Goal Materialization path under
-[ADR 0026](../adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
-That work must remain unable to write Workflow state, issue technical
+Intent Projection, Source Binding, Admission, Goal Materialization, and
+separately authorized automatic-Start path under
+[ADR 0027](../adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
+That work must remain unable to write Workflow state directly, issue technical
 Acceptance, mutate Candidates, or reuse Worker authority as intent authority.

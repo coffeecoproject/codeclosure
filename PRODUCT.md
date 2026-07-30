@@ -63,8 +63,10 @@ The initial user is one developer working locally in a software repository who
 wants Codex-level implementation capability without delegating completion
 authority to the model.
 
-The user should be able to state a request in natural language, inspect the
-exact proposed Goal before execution, and then see:
+The user should be able to state a request in natural language, understand
+whether CodeClosure will execute, clarify, or answer without execution, see
+whether an Answer-only response was returned or failed, inspect the source-bound
+formal intent when needed, and then see:
 
 - the active goal;
 - its explicit required success criteria;
@@ -83,7 +85,8 @@ workflow stages manually.
 ### User owns
 
 - the real goal and priority;
-- confirmation that one exact proposed Goal Draft represents that intent;
+- the exact Raw Request content and trusted interaction action used to ask for
+  governed execution, answer-only handling, or materialization without Start;
 - business facts that cannot be derived from project evidence;
 - preferences between materially different valid product outcomes;
 - consent to a concrete external or irreversible real-world effect;
@@ -92,8 +95,12 @@ workflow stages manually.
 ### CodeClosure owns
 
 - authoritative goal and workflow state;
-- Raw Request provenance, Goal Draft revisions, exact Confirmation bindings,
-  and Goal Materialization authority for the planned Intake path;
+- Raw Request revisions, Intent Projection revisions, Source Bindings,
+  Material Ambiguity, deterministic Intent Admission, Goal Materialization,
+  and optional automatic-Start causality for the planned Intake path;
+- bounded Answer-only response validation/disposition and terminal Intake
+  failure/restart classification, without treating assistant answer text as
+  formal truth;
 - technical routing and phase transitions;
 - allowed-action enforcement;
 - fact provenance and unresolved-fact tracking;
@@ -118,9 +125,12 @@ Worker may report a closed failure reason; CodeClosure alone maps that reason to
 retry and recovery classification.
 
 The planned Goal Intake Assistant is a separate adapter role rather than a
-Goal-bound Worker. It may propose a Draft or clarification question but owns no
-Draft identity, user Confirmation, formal Goal, Workflow, Acceptance, or
-closeout authority. See [ADR 0026](docs/adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
+Goal-bound Worker. It may return an Intent Analysis Proposal or clarification
+proposal, or bounded Answer-only content, but owns no Projection identity,
+Source Binding, Admission Decision, formal Goal, Workflow, Start, Acceptance, or
+closeout authority. Answer-only content is a non-authoritative response, not a
+Fact, Criterion, Evidence record, or execution instruction. See
+[ADR 0027](docs/adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
 
 ### Verification runner owns
 
@@ -146,18 +156,34 @@ execution:
 
 ```text
 state a request in natural language
-  -> inspect a proposed Goal Draft
-  -> resolve material questions
-  -> confirm the exact Draft revision and digest
-  -> materialize the formal Goal and Workflow atomically
+  -> CodeClosure performs trusted preflight
+  -> when analysis is needed, validate an assistant Intent Analysis Proposal
+  -> form a source-bound Intent Projection
+  -> resolve only material ambiguities
+  -> deterministic Intent Admission
+       |-- CLARIFY
+       |-- NO_EXECUTION
+       |     `-- ANSWER_ONLY returns ANSWER_RETURNED or ANSWER_FAILED
+       `-- MATERIALIZE the formal Goal and READY Workflow atomically
+             -> optionally invoke separately authorized StartGoal
 ```
 
 This planned Goal Intake path does not require the user to write a complete
-Criterion at the first message, and it cannot silently decide a business
-outcome for the user. The accepted direct `CreateGoal` path remains available
-for callers that already provide an explicit objective, project, and required
-criteria. The complete target contract is in
+Criterion at the first message or confirm a model-authored Draft. CodeClosure
+may derive only meaning-preserving structure under named policy; a materially
+different business outcome or unsupported model inference requires
+clarification. The accepted direct `CreateGoal` path remains available for
+callers that already provide an explicit objective, project, and required
+criteria. Goal Materialization creates only a `READY` Workflow; even when the
+user experiences one automatic operation, first Start remains a separate
+audited command. The complete target contract is in
 [Goal Intake](docs/goal-intake.md).
+
+M2.5 treats an Intake processing `FAILED` result as terminal for that Intake
+Run and does not silently retry the assistant. A user retry starts a new Intake
+Run. This is distinct from `ANSWER_FAILED`, where non-execution was intentional
+but the requested non-authoritative answer could not be delivered; retrying the
+answer likewise requires a new explicit Answer-only request.
 
 Once a formal Goal exists, the governed engineering loop remains:
 
@@ -227,11 +253,16 @@ M1 and M2 should make these claims measurable:
 M2.5 should additionally make these Goal-formation claims measurable:
 
 - model output cannot create or revise a formal Goal;
-- a stale or mismatched Draft Confirmation cannot materialize a Goal;
+- a material field supported only by model inference cannot pass Intent
+  Admission;
+- stale or mismatched Raw Request, Projection, Source Binding, project, or
+  Admission input cannot materialize a Goal;
 - a successful Materialization creates one exact Goal and Workflow atomically;
-  and
-- the user can distinguish what they stated, what the system proposed, what
-  remains unresolved, and what exact Draft they confirmed.
+- automatic Start remains a separate exact `StartGoal` effect and failure
+  leaves the materialized Goal visibly `READY`; and
+- the user can distinguish what they stated, what the assistant proposed, what
+  CodeClosure projected, what remains unresolved, and why Admission chose its
+  outcome.
 
 ## Explicit Non-Goals for the Initial Product
 

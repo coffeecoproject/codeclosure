@@ -31,7 +31,8 @@ supersedes it.
 | [0023](0023-verified-sqlite-authority-activation.md) | Activate SQLite authority through a verified isolation bootstrap | Accepted |
 | [0024](0024-stop-m1-transient-failure-without-retry-authority.md) | Stop M1 after transient Worker failure without retry authority | Accepted |
 | [0025](0025-separate-worker-event-idempotency-from-current-dispatch-termination.md) | Separate Worker event idempotency from current-dispatch termination | Accepted |
-| [0026](0026-pre-goal-intake-and-goal-materialization-authority.md) | Place Goal Intake before Workflow and materialize only an exactly confirmed draft | Accepted |
+| [0026](0026-pre-goal-intake-and-goal-materialization-authority.md) | Place Goal Intake before Workflow and materialize only an exactly confirmed draft | Superseded by [0027](0027-source-bound-intent-admission-and-automatic-goal-materialization.md) |
+| [0027](0027-source-bound-intent-admission-and-automatic-goal-materialization.md) | Admit source-bound intent and materialize automatically without merging first Start authority | Accepted |
 
 ## ADR lifecycle
 

@@ -8,8 +8,8 @@ implementation provides the deterministic rule set under
 SQLite persistence, current-input replay validation, transactional closeout,
 and immutable exact repair-generation authority. It still uses only logical
 Candidate and fake Evidence inputs; real project verification remains M2 work.
-Goal Draft confirmation and Goal Materialization are a separate pre-Goal
-authority and are not implemented by the Acceptance Engine.
+Intent Admission and Goal Materialization are a separate pre-Goal authority and
+are not implemented by the Acceptance Engine.
 
 ## Purpose
 
@@ -41,12 +41,19 @@ The Acceptance Engine:
 - may not mutate Workflow phase or Goal status;
 - may not authorize release or another real-world effect.
 
-It also does not judge whether a Goal Draft represents the user's true intent,
-record Goal Confirmation, or approve Goal Materialization. Those pre-Goal
-decisions depend on structural validation, provenance, exact Draft
-revision/digest, explicit user Confirmation, Goal Manager validation, and the
-Runtime's atomic creation transaction. They are not technical `ACCEPT`. See
-[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
+It also does not judge the user's true intent, classify an assistant proposal
+as user-stated, issue an Intent Admission Decision, authorize automatic Start,
+or approve Goal Materialization. A pre-analysis `NO_EXECUTION` decision binds
+the exact Raw Request, trusted action, and Admission Policy without a Proposal
+or Projection. Projection-backed Admission and Goal Materialization additionally
+depend on structural validation, exact Proposal/Projection revisions and
+digests, Source Bindings, material-ambiguity state, Goal Manager validation, and
+the Runtime's atomic creation transaction. None of these is technical `ACCEPT`.
+Likewise, a bounded `AnswerOnlyResponse` is interaction output, not proof that
+its content is true and not Acceptance input. An `ANSWER_FAILED` disposition or
+terminal Intake `FAILED` record is also unrelated to technical Acceptance.
+See
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
 
 The Workflow Runtime is the only component that consumes a current `ACCEPT`
 and transactionally transitions to `CLOSEOUT`.

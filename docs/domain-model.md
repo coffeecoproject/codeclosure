@@ -66,55 +66,121 @@ At minimum, M1 uses distinct opaque identifiers for:
 Implementations must not interchange these as untyped strings inside the
 domain.
 
-The planned M2.5 Intake boundary adds distinct `RawRequestId`, `IntakeRunId`,
-`GoalDraftId`, `GoalDraftRevision`, `ClarificationQuestionId`,
-`GoalConfirmationId`, and `GoalMaterializationId` types. They MUST NOT be
+The planned M2.5 Intake boundary adds distinct `RawRequestId`,
+`RawRequestRevision`, `IntakeRunId`, `IntentAnalysisProposalId`,
+`IntentProjectionId`, `IntentProjectionRevision`, `MaterialAmbiguityId`,
+`ClarificationQuestionId`, `IntentAdmissionDecisionId`,
+`IntentAdmissionPolicyId`, `AnswerOnlyResponseId`, `IntakeFailureRecordId`,
+`GoalMaterializationId`, and `GoalStartAuthorizationId` types. They MUST NOT be
 interchanged with Goal, Workflow, Attempt, Worker, Command, or Acceptance
 identity.
 
 ## Pre-Goal Intake — planned M2.5
 
-Goal Intake records the path from user input to a confirmed formal Goal without
-creating Workflow authority early. Its minimal record relationship is:
+Goal Intake records the path from user input to source-bound admitted formal
+intent without creating Workflow authority early. Its minimal record
+relationship is:
 
 ```text
 RawRequest
   └── IntakeRun
-        └── GoalDraft revision 1
-              └── GoalDraft revision 2
-                    └── GoalConfirmation
-                          └── GoalMaterializationRecord
-                                ├── Formal Goal revision 1
-                                └── DISCOVERY / READY Workflow
+        ├── RawRequestRevision 1
+        │     └── RawRequestRevision 2?
+        ├── IntentAnalysisProposal?
+        │     └── IntentProjectionRevision?
+        ├── IntentAdmissionDecision?
+        │     ├── CLARIFY
+        │     │     └── ClarificationQuestion
+        │     ├── NO_EXECUTION
+        │     │     └── AnswerOnlyResponse?
+        │     └── MATERIALIZE
+        │           └── GoalMaterializationRecord
+        │                 ├── Formal Goal revision 1
+        │                 ├── DISCOVERY / READY Workflow
+        │                 └── GoalStartAuthorization?
+        └── IntakeFailureRecord? -> FAILED
 ```
 
 The semantic distinctions are:
 
 ```text
-RawRequest
-= what the user actually submitted
+RawRequestRevision
+= exact user-authored content admitted under retention policy and its trusted action
 
-GoalDraft
-= a validated system proposal, not authoritative intent
+IntentAnalysisProposal
+= untrusted assistant analysis
 
-GoalConfirmation
-= the user's exact confirmation of one Draft revision and digest
+IntentProjectionRevision
+= CodeClosure's structured, source-bound interpretation, not a formal Goal
+
+IntentAdmissionDecision
+= CodeClosure's deterministic MATERIALIZE / CLARIFY / NO_EXECUTION decision
+
+AnswerOnlyResponse
+= bounded non-authoritative answer content or typed delivery failure
+
+IntakeFailureRecord
+= terminal typed failure of one Intake Run, not an Admission outcome
 
 GoalMaterializationRecord
-= the immutable binding from confirmed Draft authority to formal Goal/Workflow
+= the immutable binding from admitted intent to formal Goal/Workflow
+
+GoalStartAuthorization
+= optional exact causality for one separate ordinary StartGoal command
 ```
 
-`GoalDraft` revisions are immutable and use a versioned canonical Draft digest.
-A change to objective, criteria, scope, non-goals, assumptions, or another
-confirmation-bearing field creates a new Draft revision and makes an earlier
-Confirmation stale for new Materialization.
+Raw Request and Intent Projection revisions are immutable and use versioned
+canonical digests. A change to user content, trusted interaction action,
+objective, criteria, scope, non-goals, assumptions, requested execution
+disposition, or a material Source Binding creates a new revision and makes an
+earlier Projection/Admission chain stale for new Materialization.
 
-The Goal Intake Coordinator owns IntakeRun sequencing and validated Draft
-record creation. The Confirmation Gateway owns typed confirmation capture. The
-Goal Manager validates formal intent, while the Workflow Runtime remains the
-only Workflow writer. The trusted application transaction atomically persists
-the formal Goal, initial Workflow, Materialization Record, audits, and command
-outcome. See [ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md)
+`IntentAdmissionDecision` is a closed discriminated union. A pre-analysis
+`NO_EXECUTION` variant carries no Proposal/Projection binding and may omit
+project/scope. Projection-backed `NO_EXECUTION` and `CLARIFY` variants carry one
+complete Proposal/Projection identity-and-digest binding. The `MATERIALIZE`
+variant carries that complete binding plus a required project/scope and the
+action-matched `LEAVE_READY` or `AUTHORIZE_START` disposition. Partial binding
+tuples and all other kind/outcome/action/disposition combinations are invalid
+at schema and Store boundaries.
+
+Raw Request source text used by `USER_STATED` bindings is exact retained
+user-authored content. Redacted display values and omission markers are derived
+views, not source content. If a material span cannot be retained safely, Intake
+must reject that revision and obtain a safely restated revision rather than
+preserve authority over substituted text.
+
+For `NO_EXECUTION / ANSWER_ONLY`, exactly one immutable `AnswerOnlyResponse`
+records either bounded validated assistant content or a typed delivery failure.
+The Runtime owns its bindings, disposition, safe failure classification, and
+digests; answer content remains untrusted and cannot become Source Binding,
+Fact, Criterion, Human Decision, Evidence, Acceptance, Goal, Workflow, or
+execution authority. Other Admission outcomes have no Answer-only response and
+derive `NOT_REQUESTED`.
+
+`FAILED` is terminal for one Intake Run and binds exactly one immutable
+`IntakeFailureRecord`. M2.5 records no automatic retry authority: committed
+failure replay returns the same result, while another try creates a new Intake
+Run. Startup converts only a structurally valid orphaned `ANALYZING` Run to
+`FAILED / INTERRUPTED_ANALYSIS`; corrupt authority still fails strict reopen.
+
+The IntakeRun terminal fields are a closed union: `MATERIALIZED` binds one
+`MATERIALIZE` Decision and Goal; `NO_EXECUTION / ANSWER_ONLY` binds one
+`NO_EXECUTION` Decision and Answer-only response; other `NO_EXECUTION` reasons
+bind no answer; and `FAILED` binds one Failure Record without a terminal
+Decision, answer, or Goal. Non-terminal runs carry no terminal references.
+Mixed or partial shapes are invalid at domain, Store, and reopen boundaries.
+
+The Goal Intake Coordinator owns IntakeRun sequencing and validated Projection,
+Source Binding, ambiguity, and question records. The deterministic Intent
+Admission Engine owns Admission decisions. The Goal Manager validates formal
+intent, while the Workflow Runtime remains the only Workflow writer. The
+trusted Materialization transaction atomically persists the Admission Decision,
+formal Goal, initial Workflow, Materialization Record, exactly one Start
+Authorization for `AUTHORIZE_START` and none otherwise, audits, and command
+outcome. A later ordinary `StartGoal` transaction remains the only first-Start
+path. See
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and [Goal Intake](goal-intake.md).
 
 ## Goal
@@ -146,11 +212,11 @@ Changing objective, success criteria, or scope creates a new Goal revision and
 invalidates dependent plans, contexts, candidates, evidence, and acceptance as
 required by policy.
 
-Goal Materialization creates formal Goal revision 1 only from exact current
-Draft and Confirmation authority. `GoalDraftRevision` remains a separate
-pre-Goal type and never becomes `GoalRevision` by renaming or copying model
-identity. Direct explicit `CreateGoal` continues to create revision 1 under the
-same Goal Manager validation without synthesizing Intake records.
+Goal Materialization creates formal Goal revision 1 only from one exact current
+source-bound `MATERIALIZE` decision. `IntentProjectionRevision` remains a
+separate pre-Goal type and never becomes `GoalRevision` by renaming or copying
+model identity. Direct explicit `CreateGoal` continues to create revision 1
+under the same Goal Manager validation without synthesizing Intake records.
 
 In M1, `Goal.status` is a user-facing projection of the Goal's unique Workflow
 run status. Goal intent and revision remain owned by the Goal Manager; only the
@@ -1086,11 +1152,17 @@ describes.
 
 | Record | Proposal source | Validation owner | Mutation owner |
 | --- | --- | --- | --- |
-| Raw Request — planned M2.5 | user / trusted client | Intake input policy | Goal Intake Coordinator, immutable persistence |
+| Raw Request revision — planned M2.5 | identified user / trusted interaction surface | Intake input and retention policy | Goal Intake Coordinator, immutable persistence |
 | Intake Run — planned M2.5 | user command / Intake policy | Goal Intake Coordinator | Goal Intake Coordinator through audited versioned transaction |
-| Goal Draft revision — planned M2.5 | user input plus assistant proposal | Goal Intake Coordinator and Draft policy | Goal Intake Coordinator, immutable revision persistence |
-| Goal Confirmation — planned M2.5 | exact user action | Confirmation Gateway and confirmation policy | Confirmation Gateway through Runtime-authored immutable persistence |
-| Goal Materialization — planned M2.5 | current confirmed Draft | Goal Manager, Workflow Runtime, and Store backstops | Runtime application compound transaction, immutable record |
+| Intent Analysis Proposal — planned M2.5 | Intake Assistant | Goal Intake Coordinator closed-schema and binding validation | Goal Intake Coordinator, immutable untrusted-observation persistence |
+| Intent Projection revision — planned M2.5 | current Raw Request plus validated Proposal and observations | Goal Intake Coordinator and Projection policy | Goal Intake Coordinator, immutable revision persistence |
+| Source Binding / Material Ambiguity — planned M2.5 | exact source records and policy | Goal Intake Coordinator and source/materiality policy | Goal Intake Coordinator, immutable persistence |
+| Intent Admission Policy — planned M2.5 | trusted composition definition | Runtime and Store canonical policy validation | Runtime installer, immutable Store persistence |
+| Intent Admission Decision — planned M2.5 | exact pre-analysis Raw Request or complete source-bound Projection view | deterministic Intent Admission Engine plus Store backstop | Admission Engine issuance; immutable Store persistence |
+| Answer-only Response — planned M2.5 | Intake Assistant answer content or Runtime-classified delivery failure | Goal Intake Coordinator closed-schema, budget, binding, and retention validation | Goal Intake Coordinator, immutable non-authoritative response persistence |
+| Intake Failure Record — planned M2.5 | Runtime observation of bounded Intake operation failure or startup interruption | Goal Intake Coordinator and Store version/failure backstops | Goal Intake Coordinator through audited terminal transaction |
+| Goal Materialization — planned M2.5 | current `MATERIALIZE` decision | Goal Manager, Workflow Runtime, and Store backstops | Runtime application compound transaction, immutable record |
+| Goal Start Authorization — planned M2.5 | source-bound governed-execution action plus admitted Goal | Runtime start policy and Store backstop | Materialization transaction, immutable; consumed only through ordinary `StartGoal` |
 | Goal intent and revision | user / CLI | Goal Manager | Goal Manager through runtime transaction |
 | Goal lifecycle projection | Workflow run status | Workflow Runtime | Persistence synchronization inside the Workflow transaction |
 | Execution Profile | trusted composition definition | Runtime and Store profile validation | Runtime installer, immutable Store persistence |

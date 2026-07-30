@@ -345,10 +345,11 @@ not make the review authoritative.
 ## Intake Observation Boundary — planned M2.5
 
 An Intake Assistant or optional read-only project explorer may return a bounded
-observation to help produce a Goal Draft or clarification question. That record
-is pre-Goal proposal context, not Acceptance Evidence, because it has no formal
-Goal revision, Workflow, Candidate, Check Specification, Verification
-Obligation, current project identity, or Evidence producer binding.
+observation to help produce an Intent Projection or Clarification Question. An
+Answer-only operation may return bounded answer content. Both are pre-Goal
+interaction records, not Acceptance Evidence, because they have no formal Goal
+revision, Workflow, Candidate, Check Specification, Verification Obligation,
+current project identity, or Evidence producer binding.
 
 Persisting an Intake observation or showing it to the user MUST NOT create an
 `EvidenceRecord`, `EvidenceSet`, satisfied Criterion, or technical closeout
@@ -357,10 +358,10 @@ reobserve or revalidate it under that Goal's current revision and bind it to the
 exact Candidate, Check Specification, runner, environment, and project/source
 identity required by the Evidence contract.
 
-Historical Intake provenance MAY remain linked for explanation, but it cannot
-replace fresh formal verification. See
-[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md) and
-[Goal Intake](goal-intake.md).
+Historical Intake provenance and Answer-only content MAY remain linked for
+explanation, but neither can replace fresh formal verification. See
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
+and [Goal Intake](goal-intake.md).
 
 ## M1 Boundary
 
