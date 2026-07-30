@@ -1,6 +1,7 @@
 # M2 Milestone Acceptance Plan
 
-- Status: Prepared; executable acceptance has not started
+- Status: Prepared; Slice 0 is implemented and milestone acceptance has not
+  started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Implementation record: [M2 Codex vertical slice plan](m2-codex-vertical-slice.md)
@@ -247,8 +248,8 @@ the report must preserve each row's individual outcome.
 | `M2-B07` | Unknown server requests and unsupported experimental methods fail closed | server-request suite |
 | `M2-B08` | The client performs no hidden Turn retry, process retry, Thread resume, approval, or model fallback | call-trace and source boundary tests |
 | `M2-B09` | Live local stdio initialization and one bounded Thread/Turn conform to the pinned generated schema | live compatibility preflight |
-| `M2-B10` | Explicit argv, environment, configuration roots, state roots, and outer isolation determine App Server inputs; poisoned ambient config, instructions, hooks, skills, MCP, plugins, apps, search, provider, and environment values cannot enter or widen the selected profile | configuration-isolation suite |
-| `M2-B11` | The pinned schema and focused probes classify Thread resume, manual compaction, automatic-compaction configuration, `contextCompaction` lifecycle, post-compaction continuation, and controlled-state behavior without inspecting private reasoning; every capability selected by the installed profile is supported, while unsupported or unknown optional capabilities remain unselected | version-bound capability record, deterministic fixtures, and bounded compatibility preflight |
+| `M2-B10` | Explicit argv, environment, controlled config/state roots, custom permission-profile digest, managed requirements, exact `config/read`, `permissionProfile/list`, and `instructionSources`, plus outer black-box isolation determine App Server inputs; poisoned ambient config, instructions, hooks, skills, MCP, plugins, apps, search, provider, and environment values cannot enter or widen the selected profile | configuration-isolation suite |
+| `M2-B11` | The pinned schema and focused probes separately classify protocol-surface presence and observed operation for Thread resume, manual compaction, automatic-compaction configuration/trigger, `contextCompaction` lifecycle, post-compaction continuation, and controlled-state behavior without inspecting private reasoning; every capability selected by the installed profile is `SUPPORTED`, while `UNSUPPORTED` or `UNKNOWN` capabilities remain unselected | version-bound capability record, deterministic fixtures, and bounded compatibility preflight |
 
 ### Worker mapping and authority
 
@@ -264,7 +265,7 @@ the report must preserve each row's individual outcome.
 | `M2-C08` | Backend Thread/Turn identity cannot mutate Workflow, issue Acceptance, or substitute for a Runtime Command or Worker Event ID | authority and compile-boundary tests |
 | `M2-C09` | Every durable Worker receipt has its prior dispatch and backend-execution causality, and Store failure is not blamed on Codex | Store fault-injection suite |
 | `M2-C10` | App Server-observed effective settings, managed-requirements identity, and `instructionSources` match the trusted request; an unknown, stale, changed, or widened input blocks admission rather than becoming Context | effective-input admission suite |
-| `M2-C11` | One Worker Request, its bounded worker Turn, and every App Server-managed tool call use one exact Thread; an unexpected split or adapter-authored continuation fails closed, while an authorized manual-compaction maintenance Turn cannot become another Worker dispatch or result | fake-server call trace and adapter policy tests |
+| `M2-C11` | One Worker Request, its bounded worker Turn, and every App Server-managed tool call use one exact Thread; an unexpected split, adapter-authored continuation, or `turn/steer` use fails closed, while an authorized manual-compaction maintenance Turn cannot become another Worker dispatch or result | fake-server call trace and adapter policy tests |
 
 ### Candidate workspace
 
@@ -285,9 +286,9 @@ the report must preserve each row's individual outcome.
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-E01` | One real, non-fake `CheckSpecification` binds argv, cwd, environment, timeout, output limit, runner, Candidate, and source digest exactly | Verification Runner contract |
-| `M2-E02` | The runner executes without shell interpolation, Candidate write capability, Store access, Worker access, or network | runner boundary and process tests |
-| `M2-E03` | Exit, stdout/stderr, timeout, truncation, crash, and environment observations are bounded and validated before Evidence creation | runner adversarial suite |
+| `M2-E01` | One schema-version-2 `LOCAL_COMMAND` Check Specification binds executable realpath/content digest, ordered argv, contained cwd, environment, timeout/grace, output/retention limits, runner, frozen Candidate, read-only workspace lease, and isolation profile exactly | Verification Runner contract |
+| `M2-E02` | The runner invokes no shell and executes under the selected versioned Darwin isolation profile without Candidate write capability, authority/credential read capability, Store or Worker access, or network; an unavailable or unenforceable profile blocks verification | runner boundary and black-box process tests |
+| `M2-E03` | `LOCAL_COMMAND_OBSERVATION_V1` exit/signal, stdout/stderr, timeout, truncation, spawn failure, and environment observations are bounded and validated before Runtime-derived `LOCAL_COMMAND_TEST_RESULT` Evidence; retained payload bytes and their authoritative references commit or roll back together | runner adversarial and SQLite fault-injection suite |
 | `M2-E04` | A failing required check creates current failing Evidence and prevents technical `ACCEPT` and closeout | Runtime integration case |
 | `M2-E05` | A passing check can satisfy only the exact current obligation, Candidate, source, specification, runner, and environment binding | Evidence exact-binding suite |
 | `M2-E06` | Worker-reported tests, App Server command Items, transcript text, and path existence cannot become formal Evidence | authority tests |

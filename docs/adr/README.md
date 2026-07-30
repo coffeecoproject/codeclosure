@@ -33,6 +33,9 @@ supersedes it.
 | [0025](0025-separate-worker-event-idempotency-from-current-dispatch-termination.md) | Separate Worker event idempotency from current-dispatch termination | Accepted |
 | [0026](0026-pre-goal-intake-and-goal-materialization-authority.md) | Place Goal Intake before Workflow and materialize only an exactly confirmed draft | Superseded by [0027](0027-source-bound-intent-admission-and-automatic-goal-materialization.md) |
 | [0027](0027-source-bound-intent-admission-and-automatic-goal-materialization.md) | Admit source-bound intent and materialize automatically without merging first Start authority | Accepted |
+| [0028](0028-runtime-owned-external-execution-and-codex-profile.md) | Make external execution Runtime-owned and Codex configuration profile-bound | Accepted |
+| [0029](0029-controlled-copy-candidate-workspaces.md) | Use controlled-copy Candidate workspaces for bounded M2 execution | Accepted |
+| [0030](0030-real-local-verification-contract.md) | Add a versioned real local-command verification contract | Accepted |
 
 ## ADR lifecycle
 

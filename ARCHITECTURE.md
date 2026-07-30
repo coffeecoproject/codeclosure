@@ -21,8 +21,12 @@ project verification remain M2 work. Components marked for later milestones
 are architectural boundaries, not current implementation claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
-[independent acceptance plan](docs/plans/m2-acceptance-plan.md) are prepared;
-no M2 implementation slice has started.
+[independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
+current milestone. Slice 0 decision closure is implemented: repeated schema,
+configuration, workspace-containment, and bounded live App Server probes pass,
+and ADR 0028 through ADR 0030 are accepted. No production Codex client, Worker
+adapter, real Candidate adapter, real verifier, or migration is implemented
+yet; Slice 1 is not started.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -390,7 +394,9 @@ user's source checkout directly in the governed path.
 
 The current M1 adapter is logical and deterministic: it proves generation,
 freeze, and invalidation authority but does not create a filesystem-isolated
-workspace or edit a real project. Concrete isolation remains M2 work.
+workspace or edit a real project. ADR 0029 selects a Runtime-managed controlled
+copy, exact source/Git projections, and a protocol-neutral workspace lease for
+M2; implementation remains Slice 3 work.
 
 ### Evidence Store
 
@@ -403,8 +409,11 @@ Runtime admission derives the producer and check binding from the validated
 request, constructs the normalized fake observation, and uses its
 Runtime-computed digest as the fake payload reference. Unknown fields and raw
 adapter exceptions are rejected without becoming authority. A
-CodeClosure-owned content-addressed blob store is required before larger real
-runner payloads are admitted.
+CodeClosure-owned content-addressed payload store is required before larger
+real runner payloads are admitted. ADR 0030 selects a bounded immutable SQLite
+payload table for M2 so payload, Evidence, eligibility, Workflow effects, audit,
+and command outcome can commit atomically; implementation remains Slice 4
+work.
 
 ### Acceptance Engine
 
@@ -454,6 +463,11 @@ Candidate workspace
   project code          worker-writable only during IMPLEMENT
   run-owned outputs     bounded and phase-specific
 ```
+
+For bounded M2, ADR 0030 stores immutable stdout/stderr payload bytes in a
+content-addressed SQLite table so payload references and Evidence authority are
+transactional. The `evidence/` directory remains a later large-payload target,
+not an M2 implementation claim.
 
 The Slice 7 application MUST resolve a platform data home: macOS uses
 `$HOME/Library/Application Support/CodeClosure`, Linux uses
@@ -616,6 +630,23 @@ widen the bound profile. Credentials remain separately injected secrets and
 must not enter profile digests, Candidate command environments, audit, or
 Evidence.
 
+ADR 0028 makes the Runtime-owned `ExternalExecutionRecord` the durable causal
+bridge from one M1 dispatch to an observed process, backend session, backend
+operation, and terminal disposition. A separate maintenance intent records
+working-context compaction without creating another Worker dispatch or result.
+The adapter returns only protocol-neutral observations and receives no Store.
+`turn/steer` is prohibited because it would insert unadmitted input into an
+active Turn.
+
+M2 uses a controlled `CODEX_HOME`, strict config, an exact custom permission
+profile, untrusted project config, source-bound instruction files, disabled
+ambient integrations, and separately provisioned credentials. On the selected
+0.146.0 schema, the stable Thread response reports the custom permission profile
+as a legacy `workspaceWrite`/`network=false` projection. Effective binding
+therefore combines `config/read`, `permissionProfile/list`, exact
+`instructionSources`, and black-box containment rather than trusting that
+legacy projection alone.
+
 Application `CommandId` values and worker-delivery `WorkerEventId` values are
 also separate authority domains. The Codex adapter may report a worker event;
 it cannot choose or impersonate the runtime command that admits that event.
@@ -656,16 +687,14 @@ packages/store-sqlite
 packages/testing
 ```
 
-The following are possible later package splits, introduced only when their
-internal M1 modules have enough independent responsibility to justify a public
-package boundary:
+ADR 0028 fixes the planned M2 adapter splits while leaving them unimplemented in
+Slice 0:
 
 ```text
-packages/context-compiler
-packages/evidence
-packages/acceptance
-packages/workspace
+packages/codex-app-server-client
 packages/adapter-codex
+packages/workspace-local
+packages/verification-local
 ```
 
 M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside

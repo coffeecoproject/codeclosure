@@ -6,8 +6,10 @@ This document defines the target evidence contract. The audited M1
 implementation provides logical Candidate-freeze Evidence, independent fake
 verification observations, monotonic eligibility, and canonical Evidence Sets.
 The deterministic Acceptance Engine consumes those records through a separate
-authority boundary; Evidence still cannot approve itself. A real verifier
-remains M2 work. Pre-Goal Intake observations are not part of the implemented
+authority boundary; Evidence still cannot approve itself. ADR 0030 fixes the
+planned M2 real local-command variants and bounded payload-storage contract,
+but no real verifier, version-2 codec, payload table, or migration is
+implemented yet. Pre-Goal Intake observations are not part of the implemented
 Evidence model and cannot satisfy a formal Goal's Acceptance.
 
 ## Purpose
@@ -173,6 +175,23 @@ The M1 Check Specification is also the producer authorization record. Its
 `producerType` and `producerIdentity` are immutable, and a persisted Evidence
 record MUST match both. A runner response cannot override them.
 
+### M2 local-command variant — planned
+
+M2 adds a closed schema-version-2 `LOCAL_COMMAND` Check Specification. Its
+identity MUST include the exact executable realpath and content digest, ordered
+argv without a shell string, contained cwd, frozen Candidate and read-only
+workspace-lease digests, environment allowlist/digest, verification-isolation
+profile, timeout and termination grace, bounded stdout/stderr/total-output and
+retention limits, accepted exit codes, runner identity, cleanup policy, and
+expected `LOCAL_COMMAND_OBSERVATION_V1` schema.
+
+The untrusted runner returns only a `LocalCommandVerificationResult`; it cannot
+name authoritative timestamps, Evidence status, payload references, Candidate
+or Check digests, eligibility, Acceptance, repair, or closeout. The Runtime
+derives those bindings and creates `LOCAL_COMMAND_TEST_RESULT` Evidence with a
+`LOCAL_COMMAND_ENVIRONMENT_V1` identity. See
+[ADR 0030](adr/0030-real-local-verification-contract.md).
+
 ## Observation Versus Result
 
 The producer records observations such as:
@@ -263,9 +282,12 @@ derives producer and Check Specification bindings, environment identity,
 result status, and payload reference from the validated request and typed
 observation, and hashes the observation as the fake payload reference.
 Runner-supplied authority fields and unknown fields are rejected.
-No separate large blob is claimed. Before real or larger runner output is
-supported, immutable payloads MUST live in a CodeClosure-owned
-content-addressed store and be referenced by digest.
+No separate large blob is claimed by M1. The bounded M2 design stores retained
+stdout/stderr bytes in an immutable content-addressed SQLite payload table and
+commits the payload, Evidence, initial eligibility, Runtime effect, audit, and
+processed-command outcome atomically. It is planned for Slice 4 and is not
+present in the current schema. Larger or arbitrary-project payload storage
+remains a later explicit decision.
 
 The worker-writable Candidate must not contain the only copy of evidence used
 for acceptance. Project-local exports may be generated for human inspection,

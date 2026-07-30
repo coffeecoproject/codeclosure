@@ -7,9 +7,10 @@ implementation provides the deterministic rule set under
 [M1 Rule Set](#m1-rule-set), strict manifest and decision codecs, immutable
 SQLite persistence, current-input replay validation, transactional closeout,
 and immutable exact repair-generation authority. It still uses only logical
-Candidate and fake Evidence inputs; real project verification remains M2 work.
-Intent Admission and Goal Materialization are a separate pre-Goal authority and
-are not implemented by the Acceptance Engine.
+Candidate and fake Evidence inputs. ADR 0030 fixes the planned M2 real
+local-command Evidence contract, but that verifier and its version-2 records
+are not implemented. Intent Admission and Goal Materialization are a separate
+pre-Goal authority and are not implemented by the Acceptance Engine.
 
 ## Purpose
 
@@ -182,6 +183,12 @@ A rule cannot return an untyped success string.
 - required commands/tests/builds/checks have passing observations;
 - runtime/source/environment identities agree;
 - run-owned resource cleanup is proven when applicable.
+
+For the planned M2 `LOCAL_COMMAND_TEST_RESULT`, eligibility additionally
+requires the exact version-2 Check, executable/argv, Candidate and read-only
+workspace lease, runner, isolation/environment, observation, and retained
+payload bindings defined by ADR 0030. A zero exit code, Worker command Item, or
+stdout claim without those current bindings cannot satisfy a rule.
 
 ### Review and issues
 

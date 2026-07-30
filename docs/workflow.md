@@ -18,8 +18,12 @@ implemented with isolated authority, scenario-specific terminal assertions,
 Goal-owned audit checks, and strict reopen comparison. The
 [M1 completion review](reviews/m1-completion-review.md) records the final
 quality and invariant evidence. Real project editing and Codex integration are
-not implemented in M1. Goal Intake is an accepted pre-Goal target for M2.5; it
-is not implemented and does not add another Workflow phase.
+not implemented in M1. M2 Slice 0 has accepted external-execution causality,
+controlled Candidate copy/lease, and real-verification contracts, but no M2
+Workflow state or Store migration is implemented. The bounded 0.146.0 live
+capability probe passes; Slice 1 product implementation has not started. Goal
+Intake is an accepted pre-Goal target for M2.5; it is not implemented and does
+not add another Workflow phase.
 
 ## Purpose
 
@@ -762,6 +766,16 @@ either moves the Workflow to a permitted `READY` safe phase or retains a
 concrete `BLOCKED` reason. A new Attempt may begin only after that transaction
 commits. The old Attempt, Context, Worker Session, and dispatch claim are never
 reused.
+
+For planned M2 external execution, the dispatch transaction also commits an
+`ExternalExecutionRecord` in `AUTHORIZED` state before process spawn. Process,
+backend-session, backend-operation, maintenance, and terminal observations are
+separately admitted by the Runtime. A restart with an active external record
+marks the old execution `ABANDONED` while performing the existing M1
+reconciliation; it does not attach, resume, or synthesize a Worker result for
+that old Attempt. Any later resume uses a fresh Attempt and dispatch, with a
+fresh Thread by default. See
+[ADR 0028](adr/0028-runtime-owned-external-execution-and-codex-profile.md).
 
 Current M1 recovery policy permits only an exact same-phase resume. The domain
 models `SAFE_EARLIER_PHASE` so a later accepted policy can add a conservative

@@ -36,6 +36,14 @@ are versioned by generation and are mutable only during `IMPLEMENT`.
 A canonical content identity for the candidate source and required metadata at
 freeze time. Evidence and acceptance bind to this digest.
 
+## Candidate Workspace Lease
+
+A planned M2 Runtime-issued, digest-bound authority that resolves one exact
+Candidate generation below a CodeClosure-owned workspace root. It grants only
+the declared mutable or read-only access mode and cannot be replaced with the
+user source checkout, authority home, another generation, or a filesystem
+alias.
+
 ## Closeout
 
 The successful technical terminal phase for one accepted Goal revision and
@@ -77,6 +85,20 @@ An immutable, versioned, digested description of the Worker, Candidate Source,
 Verification Runner, and Runtime driver composition bound to a Workflow at
 first start. M1 fixture names are aliases for installed profiles, not Goal
 semantics.
+
+## External Backend Capability Record
+
+A planned M2 Runtime-owned classification of exact binary/schema behavior as
+`SUPPORTED`, `UNSUPPORTED`, or `UNKNOWN`, with its proof source. An Execution
+Profile may select only supported capabilities; protocol method presence alone
+does not prove operational behavior.
+
+## External Execution Record
+
+A planned M2 protocol-neutral Runtime record that binds durable dispatch intent
+to observed external process, backend session, operation, and terminal state.
+Codex Thread and Turn IDs may appear only as opaque backend references and do
+not become Workflow, Worker-result, or completion authority.
 
 ## Fact
 

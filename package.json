@@ -17,6 +17,8 @@
     "format:check": "prettier --check .",
     "gate:quality": "pnpm format:check && pnpm docs:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:digests && pnpm test:migrations && pnpm test:authority && pnpm test:cli && pnpm test:demos && pnpm test:invariants && pnpm build",
     "lint": "eslint . && node scripts/run-node-tests.mjs scripts/check-cli-boundary.test.mjs scripts/check-dependencies.test.mjs && node scripts/check-cli-boundary.mjs && node scripts/check-dependencies.mjs",
+    "probe:m2:slice0": "node scripts/run-m2-slice0-probes.mjs",
+    "probe:m2:slice0:live": "node scripts/run-m2-slice0-app-server-probe.mjs",
     "test": "pnpm test:unit && pnpm test:digests && pnpm test:migrations && pnpm test:authority && pnpm test:cli && pnpm test:demos && pnpm test:invariants",
     "test:authority": "pnpm --filter @codeclosure/store-sqlite test:authority",
     "test:cli": "pnpm --filter @codeclosure/cli test:integration",
@@ -24,7 +26,7 @@
     "test:digests": "pnpm --filter @codeclosure/testing test:digests",
     "test:invariants": "node scripts/run-node-tests.mjs scripts/check-invariants.test.mjs && node scripts/check-invariants.mjs",
     "test:migrations": "pnpm --filter @codeclosure/store-sqlite test:migrations",
-    "test:unit": "node scripts/run-node-tests.mjs scripts/run-node-tests.test.mjs && pnpm --filter @codeclosure/testing test:unit",
+    "test:unit": "node scripts/run-node-tests.mjs scripts/run-node-tests.test.mjs scripts/m2-slice0-probe.test.mjs && pnpm --filter @codeclosure/testing test:unit",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false"
   },
   "devDependencies": {

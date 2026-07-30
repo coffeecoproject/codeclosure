@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: Prepared; implementation has not started
+- Status: In progress; Slice 0 is implemented and Slice 1 has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -60,7 +60,7 @@ From the user's point of view, M2 should behave plainly:
 
 | Slice | Scope | Status | Evidence source |
 | --- | --- | --- | --- |
-| 0 | authority and protocol decision closure | Not started | this plan, accepted ADRs, focused spikes |
+| 0 | authority and protocol decision closure | Implemented | [Slice 0 decision-closure review](../reviews/m2-slice0-decision-closure.md), accepted ADRs, focused probes |
 | 1 | version-bound App Server client | Not started | client contract and fixture tests |
 | 2 | Goal-bound Codex Worker Adapter | Not started | adapter contract and phase-mapping tests |
 | 3 | real isolated Candidate workspace | Not started | containment, freeze, drift, and recovery tests |
@@ -108,6 +108,11 @@ The primary accepted decisions for this milestone are
 [ADR 0025](../adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md),
 and
 [ADR 0027](../adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
+Slice 0 additionally accepts
+[ADR 0028](../adr/0028-runtime-owned-external-execution-and-codex-profile.md),
+[ADR 0029](../adr/0029-controlled-copy-candidate-workspaces.md), and
+[ADR 0030](../adr/0030-real-local-verification-contract.md) for the M2-only
+external execution, Candidate workspace, and real-verification boundaries.
 
 If M2 needs to change a durable decision in those records, implementation must
 stop and a superseding or additional ADR must be accepted first.
@@ -134,6 +139,14 @@ The 2026-07-30 planning preflight observed `codex-cli 0.145.0` and local
 environment observation, not the supported M2 version claim. Slice 1 must
 recapture and bind the exact version used by the implementation and acceptance
 run.
+
+The Slice 0 execution preflight on the same date resolved `codex-cli 0.146.0`,
+launcher digest
+`sha256:134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477`,
+and delegated executable digest
+`sha256:ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02`.
+These are Slice 0 observations. Slice 1 still owns the checked-in supported
+profile and must fail closed if its execution environment differs.
 
 ## 5. Fixed M2 scope
 
@@ -312,8 +325,9 @@ contains configuration, authentication, logs, sessions, skills, and other state.
 M2 therefore cannot treat the operator's ambient Codex installation as the
 Workflow's effective Execution Profile.
 
-Slice 0 must finalize a versioned, protocol-neutral execution-config contract.
-Its non-secret canonical projection must bind at least:
+[ADR 0028](../adr/0028-runtime-owned-external-execution-and-codex-profile.md)
+selects the versioned, protocol-neutral execution-config contract. Its
+non-secret canonical projection binds at least:
 
 - resolved Codex launcher and delegated executable identity;
 - protocol and schema-snapshot profile;
@@ -332,8 +346,8 @@ Its non-secret canonical projection must bind at least:
 - effective managed-requirements identity, environment allowlist, and the
   redacted non-secret configuration digest.
 
-Trusted composition must use isolated state/config roots, explicit supported
-overrides, or an outer process boundary selected in Slice 0 so ambient user or
+Trusted composition uses isolated state/config roots, strict config, an exact
+custom permission profile, and explicit supported overrides so ambient user or
 project configuration cannot widen the binding. M2 defaults disable every tool,
 integration, hook, telemetry exporter, or network surface not required for the
 bounded model-service and authentication traffic of the live proof. Managed
@@ -540,11 +554,9 @@ closed and terminate the bounded invocation.
 
 ## 13. Real Candidate workspace
 
-Slice 0 must select one concrete isolation mechanism under ADR 0005 and record
-the selection in an ADR or the accepted Slice 0 record before Slice 3 begins.
-The initial comparison is a Runtime-managed detached Git worktree versus a
-controlled repository copy. A mechanism is eligible only if it proves all of
-the following:
+[ADR 0029](../adr/0029-controlled-copy-candidate-workspaces.md) selects a
+Runtime-managed controlled copy and rejects a detached Git worktree for bounded
+M2. A mechanism is eligible only if it proves all of the following:
 
 - the user's checkout is never the Worker cwd or writable root;
 - the Runtime owns every created path and can prove containment after resolving
@@ -611,11 +623,12 @@ eligible passing Evidence. Passing command output remains insufficient without
 the exact Evidence and Acceptance bindings.
 
 The M1 public contracts currently admit only logical `M1_LOGICAL` environment
-identity and fake verification observations. Slice 0 must choose the versioned
-`CheckSpecification`, Verification Request/Result, environment identity,
-Evidence observation, codec, persistence, and migration evolution required for
-the real runner. No M2 adapter may overload an M1 fake discriminator with real
-process evidence.
+identity and fake verification observations.
+[ADR 0030](../adr/0030-real-local-verification-contract.md) selects additive
+version-2 `LOCAL_COMMAND`, `LOCAL_COMMAND_OBSERVATION_V1`,
+`LOCAL_COMMAND_ENVIRONMENT_V1`, and `LOCAL_COMMAND_TEST_RESULT` contracts plus
+an atomic bounded SQLite payload store. No M2 adapter may overload an M1 fake
+discriminator with real process evidence.
 
 ## 15. Trusted composition and CLI boundary
 
@@ -694,6 +707,27 @@ Exit proof:
   and
 - the plan and acceptance matrix are updated if the accepted decision changes
   their concrete proof.
+
+Current execution record on 2026-07-30:
+
+- the M1 entry gate passed from a clean `main` worktree at
+  `1aa72ee239f7ec13ecc41b3317e463b8ad9f234b`;
+- repeated `codex-cli 0.146.0` generation produced 622 raw-byte-identical
+  TypeScript files and 275 canonical-byte-identical JSON Schema files; only the
+  raw aggregate JSON definition-member order differed;
+- local containment probes rejected source, authority, sibling-generation, and
+  symlink-alias cwd targets and demonstrated the detached-worktree Git metadata
+  side effect;
+- ADR 0028, ADR 0029, and ADR 0030 close the local decisions without adding a
+  product Codex package or migration; and
+- the authorized bounded live probe supports controlled same-Thread tool use,
+  exact configuration/instruction admission, credential-read denial, approval
+  request decline, manual Compact and continuation, exact resume after App
+  Server process restart, and Turn interruption;
+- automatic-compaction triggering was not forced or observed and remains
+  `UNKNOWN` and unselected; and
+- Slice 0 is implemented. Slice 1 may now begin, but no Slice 1 product package
+  or checked-in supported profile exists yet.
 
 ### Slice 1 — Version-bound App Server client
 

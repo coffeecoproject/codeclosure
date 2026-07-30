@@ -12,8 +12,9 @@ complete.
 ## Status
 
 The M0 architecture baseline and bounded M1 deterministic skeleton are
-complete. M2 is planned as the current implementation milestone, but its
-implementation has not started. The
+complete. M2 is the current implementation milestone. Its pre-implementation
+decision closure has passed against the selected local Codex version; the
+version-bound App Server client itself is not implemented yet. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.

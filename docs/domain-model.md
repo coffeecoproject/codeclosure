@@ -10,7 +10,11 @@ completion result is recorded in the
 [`M1 completion review`](reviews/m1-completion-review.md). Target structures
 outside that subset remain planned behavior. The accepted pre-Goal Intake
 records below are planned for M2.5 and are not part of the implemented M1
-schema or Runtime.
+schema or Runtime. M2 Slice 0 has accepted the planned external-execution,
+controlled-copy workspace-lease, and real local-verification contracts in ADR
+0028 through ADR 0030. Those target structures are not implemented Domain or
+SQLite behavior yet. The bounded 0.146.0 live capability probe now passes;
+Slice 1 product implementation has not started.
 
 ## Design Rules
 
@@ -875,6 +879,96 @@ FakeWorker enum fields on Goal or Workflow. Context, dispatch, recovery, and
 specialized Candidate/Verification operations resolve the same binding. See
 [ADR 0021](adr/0021-m1-execution-profile-and-cli-composition.md).
 
+Execution Profile schema version 2 is planned for M2 as an additive union. It
+retains the fields above and adds one non-secret `externalExecution` definition
+binding binary/protocol/schema, model/provider/effort, controlled roots,
+permission and instruction manifests, environment, managed requirements,
+disabled integrations, continuity, compaction, interruption, and retention.
+M1 version-1 profiles are not upgraded or rehashed. See
+[ADR 0028](adr/0028-runtime-owned-external-execution-and-codex-profile.md).
+
+## External Execution — planned M2
+
+```text
+ExternalExecutionRecord
+  id
+  schemaVersion
+  version
+  state
+  goalId
+  goalRevision
+  workflowId
+  workflowVersionAtAuthorization
+  phase
+  phaseVersion
+  attemptId
+  workerSessionId
+  dispatchClaimDigest
+  contextManifestId
+  contextPackageDigest
+  executionProfileId
+  executionProfileDigest
+  policyBundleId
+  policyBundleDigest
+  backendKind
+  binaryProtocolSchemaDigest
+  executionConfigDigest
+  managedRequirementsDigest
+  instructionSourceManifestDigest
+  controlledStateRootIdentity
+  candidateWorkspaceLeaseId?
+  candidateWorkspaceLeaseDigest?
+  backendSessionRef?
+  backendOperationRef?
+  authorizedAt
+  updatedAt
+  terminalAt?
+  auditSequence
+
+ExternalMaintenanceIntent
+  id
+  externalExecutionId
+  sequence
+  kind = WORKING_CONTEXT_COMPACTION
+  intentDigest
+  state
+  authorizedAt
+  observedAt?
+
+ExternalBackendCapabilityRecord
+  schemaVersion
+  backendKind
+  binaryIdentityDigest
+  protocolSchemaDigest
+  configurationProfileDigest
+  capabilityEntries[]
+    capability
+    classification = SUPPORTED | UNSUPPORTED | UNKNOWN
+    proofKind
+    proofDigest?
+  observedAt
+  recordDigest
+```
+
+Only the Runtime persists these records. Backend session and operation
+references are bounded opaque observations; Domain does not import Codex Thread
+or Turn types. `AUTHORIZED` is committed with the existing Worker dispatch
+before spawn. Later states are `PROCESS_OBSERVED`, `SESSION_OBSERVED`,
+`OPERATION_RUNNING`, then `COMPLETED`, `INTERRUPTED`, `FAILED`, or `ABANDONED`.
+Backend completion is not a Worker result or Goal completion.
+
+The immutable capability record belongs to trusted Runtime composition. An
+installed Execution Profile may select only entries classified `SUPPORTED` for
+the same exact binary, protocol schema, and configuration identity. Schema
+presence alone may establish a protocol surface but not an operation that
+requires a live Thread, Turn, tool call, Compact lifecycle, or resume.
+
+The adapter receives an immutable intent-bound directive and no Store. Exact
+duplicate observations replay their original disposition; conflicting or late
+observations fail closed. Restart reconciles the old Attempt and does not
+redispatch or resume it. See
+[ADR 0028](adr/0028-runtime-owned-external-execution-and-codex-profile.md).
+
 ## Candidate and Candidate Generation
 
 ```text
@@ -934,6 +1028,15 @@ derives `workspaceIdentity` from the Runtime-allocated generation ID. The Store
 rederives both on write and reopen; adapter fixture labels are not identity
 authority.
 
+M2 adds a protocol-neutral `CandidateWorkspaceLease` that binds the exact Goal,
+Workflow, Candidate generation/version, source tree and Git metadata digests,
+owned workspace root, generation realpath, allowed/reserved path policy, access
+mode, lifecycle, and lease digest. Only trusted workspace composition resolves
+it. A Worker lease is `MUTABLE`; freeze revokes it permanently, and verification
+uses a distinct `READ_ONLY` lease. ADR 0029 selects a controlled copy containing
+no `.git`, symlink, submodule, special file, or ignored source file for the
+bounded M2 profile.
+
 ## Check Specification
 
 ```text
@@ -956,6 +1059,14 @@ CheckSpecification
 The current M1 `m1.2` specification persistently authorizes one producer as
 well as one bounded operation. Evidence must match its exact producer type and
 identity; a runner response cannot supply an alternate binding.
+
+M2 adds a schema-version-2 `LOCAL_COMMAND` variant. It binds an exact executable
+realpath/digest/version, ordered argv with no shell, frozen Candidate and
+read-only lease, contained cwd, environment inheritance `NONE`, isolation
+profile, timeout and termination grace, separate/total output limits, accepted
+exit codes, payload policy, runner identity, and
+`LOCAL_COMMAND_OBSERVATION_V1`. M1 specifications retain their current version
+and digest meaning.
 
 ## Verification Obligation
 
@@ -1033,6 +1144,15 @@ M1 uses strict `CandidateFreezeEvidenceRecord` and
 producer, environment, payload, and result fields that follow from the Check
 and typed observation. M1 rejects a `factSnapshotDigest` on either variant and
 does not expose a generic producer-authored Evidence constructor.
+
+M2 adds `LOCAL_COMMAND_TEST_RESULT` with
+`LOCAL_COMMAND_ENVIRONMENT_V1`. The runner returns only bounded process
+observations; Runtime derives status, identities, timestamps, digests, and
+payload references. Bounded stdout/stderr bytes are stored content-addressed in
+SQLite in the same transaction as Evidence, initial eligibility, Workflow
+effects, audit, and command outcome. The additive migration must preserve every
+M1 version-1 record and digest. See
+[ADR 0030](adr/0030-real-local-verification-contract.md).
 
 ## Acceptance Input, Decision, and Repair Authority
 
@@ -1166,13 +1286,18 @@ describes.
 | Goal intent and revision | user / CLI | Goal Manager | Goal Manager through runtime transaction |
 | Goal lifecycle projection | Workflow run status | Workflow Runtime | Persistence synchronization inside the Workflow transaction |
 | Execution Profile | trusted composition definition | Runtime and Store profile validation | Runtime installer, immutable Store persistence |
+| External backend capability — planned M2 | version-bound probe and trusted composition | Runtime profile installer and exact identity validation | Runtime installer, immutable Store persistence |
 | Workflow Policy binding | selected installed Policy | Workflow Runtime and Store | First `StartGoal` compound transaction |
 | Workflow Execution Profile binding | selected installed profile | Workflow Runtime and Store | First `StartGoal` compound transaction |
+| External Execution — planned M2 | Runtime-authorized dispatch plus bounded backend observations | Workflow Runtime and Store external-execution backstops | Workflow Runtime through audited versioned transactions |
+| External maintenance — planned M2 | Runtime policy over one admitted backend session | Workflow Runtime and Store maintenance backstops | Workflow Runtime; never the Worker adapter |
 | Recovery reconciliation | Runtime inspection of external reality | Recovery policy and Store | Workflow Runtime compound transaction, immutable record |
 | Fact | user, project, runner, worker | Fact policy | Fact Store service |
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
+| Candidate workspace lease — planned M2 | trusted workspace composition over persisted Candidate authority | Workflow Runtime, Candidate Manager, and containment policy | Runtime-coordinated workspace adapter; immutable lease versions |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
+| Evidence payload — planned M2 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |
 | Evidence eligibility | integrity observation / runtime command | Evidence policy | Evidence Store through an audited monotonic transition |
 | Acceptance decision | Acceptance Engine | Acceptance policy plus Store backstop | Acceptance Engine issuance; Acceptance Store persistence, immutable |
 | Acceptance repair record | Workflow Runtime coordination | Store and SQLite exact-authority backstops | Workflow Runtime compound transaction, immutable |

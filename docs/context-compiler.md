@@ -7,8 +7,10 @@ implementation provides the deterministic subset described under
 [M1 Boundary](#m1-boundary): canonical Context Packages and Manifests, a
 fail-closed source subset, exact digest binding, atomic Attempt binding,
 `FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
-Retrieval, relevance packing, a full Fact Graph, and Codex Thread policy remain
-planned for later milestones. This is the Goal-bound Worker Context Compiler;
+Retrieval, relevance packing, and a full Fact Graph remain planned for later
+milestones. ADR 0028 now fixes the planned M2 Thread/configuration boundary, but
+no Codex Context dispatch is implemented. Its bounded 0.146.0 live capability
+proof passes. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
 that are not implemented.
 
@@ -336,6 +338,15 @@ grant before the Execution Profile is bound or make that profile unavailable.
 After binding, a changed or mismatched managed-requirements identity blocks
 dispatch; it cannot silently narrow, widen, or replace Worker authority.
 
+The selected M2 profile uses controlled config/state roots, untrusted project
+config, a custom permission profile, and exact `config/read`,
+`permissionProfile/list`, and `instructionSources` comparisons. Source-bound
+`AGENTS.md` files may be present; Candidate-local config, hooks, plugins, MCP,
+apps, skills, subagents, dynamic tools, and Web Search are disabled for the
+bounded profile. Stable `turn/steer` is also prohibited: a user or adapter may
+not insert input into an active Worker Turn outside a newly admitted Runtime
+directive and Context compilation.
+
 ## Codex Compact Interaction
 
 The [Codex App Server protocol](https://learn.chatgpt.com/docs/app-server.md)
@@ -370,6 +381,13 @@ Rules:
 - an intentionally exported worker-authored summary may be included only as
   labelled, bounded, non-authoritative working context; and
 - losing the Codex Thread must not prevent safe resumption.
+
+For the selected 0.146.0 decision baseline, the bounded live probe supports
+manual compaction, its `contextCompaction` Item lifecycle, post-compaction
+continuation, and exact Thread resume after App Server process restart.
+Availability of the automatic-compaction configuration surface still does not
+prove that an automatic trigger worked. Automatic triggering remains `UNKNOWN`
+and unselected by the bounded M2 Execution Profile.
 
 ## Context Invalidation
 
