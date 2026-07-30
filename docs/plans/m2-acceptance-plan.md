@@ -46,15 +46,18 @@ resolved through the repository's ADR process.
 The round answers one question:
 
 > Does the identified source tree prove that one exact supported Codex App
-> Server version can edit only an isolated Candidate, that CodeClosure—not
-> Codex—owns Worker admission, verification, rejection, repair, Acceptance, and
-> closeout across failure and restart, and that the complete bounded
-> reject/repair/accept path works without Goal Intake or an external effect?
+> Server version can edit only an isolated Candidate under a controlled
+> execution configuration, that CodeClosure—not Codex—owns Worker admission,
+> verification, rejection, repair, Acceptance, and closeout across failure and
+> restart, that a deterministic real-Candidate/real-verifier path proves
+> reject/repair/accept, and that a separate bounded live Codex path follows its
+> real first verification result without Goal Intake or an external effect?
 
 The accepted unit is the complete identified source tree plus its exact
-generated protocol snapshot and recorded live environment. It is not an
-individual package, transcript, Thread, Turn, Candidate directory, test log,
-previous M1 report, or successful model response.
+canonical generated protocol snapshot, controlled execution-input profile, and
+recorded live environment. It is not an individual package, transcript,
+Thread, Turn, Candidate directory, test log, previous M1 report, or successful
+model response.
 
 ## 4. Scope
 
@@ -62,8 +65,10 @@ The mandatory acceptance scope is:
 
 - the complete M1 control-plane regression baseline;
 - the lower App Server client's dependency isolation and protocol behavior;
-- exact Codex executable, version, generated TypeScript/JSON schema, and
-  compatibility identity;
+- exact Codex executable, version, raw generated TypeScript schema, canonical
+  generated JSON schema, normalization profile, and compatibility identity;
+- controlled App Server configuration, state root, instruction sources, tool
+  exposure, and credential boundary;
 - local stdio process initialization, request correlation, notifications,
   server requests, interruption, shutdown, and bounded stream handling;
 - the Goal-bound Codex Worker Adapter and selected phase mappings;
@@ -76,8 +81,12 @@ The mandatory acceptance scope is:
 - Thread start/resume policy, Compact handling, backend/process failure,
   cancellation, and CodeClosure restart;
 - public CLI/composition isolation and status/audit rendering; and
-- one bounded live Codex edit, failing verification, repair, passing
-  verification, Acceptance, and closeout demonstration.
+- one deterministic real-Candidate/real-verifier demonstration that proves
+  failing verification, rejection, repair, passing verification, Acceptance,
+  and closeout; and
+- one separate bounded live Codex edit-and-verify demonstration whose first
+  post-edit result is not prescribed: a correct first pass continues normally,
+  while a real failure enters the governed repair branch.
 
 The following remain outside M2 and MUST NOT be inferred from `PASS`:
 
@@ -114,23 +123,33 @@ Before the round begins, the operator MUST establish all of the following:
    separate, are outside the Candidate, resolve through known symlinks to
    regular files, and their version plus SHA-256 identities match the supported
    M2 protocol profile.
-7. Freshly generated TypeScript and JSON schemas compare byte-for-byte with the
-   checked-in snapshot.
-8. Local Codex authentication and the selected model are available without
+7. Freshly generated TypeScript schemas compare byte-for-byte with the
+   checked-in snapshot, and freshly generated JSON schemas compare after
+   duplicate-key rejection and exact RFC 8785 UTF-8 canonicalization under the
+   accepted normalization profile.
+8. Controlled Codex configuration and state roots are established. Effective
+   instruction sources and tool policy match the M2 Execution Profile, ambient
+   configuration cannot widen authority, and the profile binds the exact
+   identity of all compatible managed requirements.
+9. Local Codex authentication and the selected model are available without
    printing, copying, or persisting credentials into the fixture or report.
-9. The live fixture is a unique disposable local Git repository containing no
+10. The deterministic reject/repair fixture is unique and disposable, uses a
+    real Candidate workspace and Verification Runner, and requires no live
+    model or external network.
+11. The live fixture is a unique disposable local Git repository containing no
    user work, secret, remote push target, hook, submodule with effects, or
    dependency installation requirement.
-10. The authority home, Candidate workspace root, verifier temporary root, and
-    fixture source are separate exact paths created for this round.
-11. Candidate commands have network disabled. The only allowed external
-    network use is the App Server's authenticated model request required for
-    the bounded live proof.
-12. No required command will merge, commit to a user branch, push, deploy,
+12. The authority home, Candidate workspace root, verifier temporary root,
+    deterministic fixture source, live fixture source, and controlled Codex
+    state root are separate exact paths created for this round.
+13. Candidate commands have network disabled. The only allowed external
+    network use is the bounded App Server model-service and authentication
+    traffic required for the live proof.
+14. No required command will merge, commit to a user branch, push, deploy,
     publish, communicate, purchase, or mutate a non-fixture external system.
-13. The current tree passes the complete offline quality gate before the live
+15. The current tree passes the complete offline quality gate before the live
     case begins.
-14. No known blocking defect or higher-authority conflict is being waived.
+16. No known blocking defect or higher-authority conflict is being waived.
 
 If a required binary, credential, model, service, network path, fixture
 isolation property, or source identity cannot be established, the verdict is
@@ -144,6 +163,9 @@ The deterministic layer MUST:
 
 - use a fake App Server process for malformed, duplicate, ordering, limit,
   timeout, approval, cancellation, and process-failure cases;
+- use a separate controlled Worker/App Server fixture with real Candidate and
+  Verification Runner boundaries to deterministically prove the complete
+  reject/repair/accept branch without relying on model behavior;
 - create only unique temporary source, Candidate, verifier, and authority
   directories;
 - use public Runtime/CLI views for authority assertions unless a focused Store
@@ -159,7 +181,11 @@ The live layer MUST:
   path;
 - invoke App Server over local stdio rather than shelling out to a top-level
   autonomous Codex task;
-- use the exact M2 Execution Profile and generated protocol snapshot;
+- use the exact M2 Execution Profile, canonical generated protocol snapshot,
+  controlled configuration roots, and controlled Codex state root;
+- compare effective model, provider, cwd, sandbox, approval, instruction-source,
+  and tool exposure observations with the requested profile before admitting
+  Worker events;
 - constrain Worker cwd and write access to the current mutable Candidate;
 - disable Candidate command network access and unsupported tools/effects;
 - record requested model plus observed reroute, warning, error, Thread, Turn,
@@ -168,14 +194,20 @@ The live layer MUST:
 - assert persisted Goal, Workflow, Attempt, Candidate, Evidence, Acceptance,
   Closeout, backend binding, and audit identity independently of transcript
   wording; and
-- perform no external effect beyond the bounded authenticated model request.
+- perform no external effect beyond the bounded model-service and
+  authentication traffic required for the live proof.
+
+The live prompt and fixture MUST NOT manufacture a first verification failure.
+If the first frozen Candidate passes the required real check, CodeClosure must
+accept that result through the normal evidence path. If it fails, only then may
+the Runtime authorize a distinct repair generation.
 
 The dated acceptance report records exact source and environment identity,
-commands, stage summaries, aggregate test counts, every matrix row, the live
-fixture identity, requested/observed backend metadata, findings, unavailable
-checks, and verdict. It may summarize Worker output but MUST NOT treat a
-transcript as authority or include credentials, raw hidden reasoning, or
-unbounded project content.
+commands, stage summaries, aggregate test counts, every matrix row, both
+fixture identities, requested/observed backend and execution-configuration
+metadata, findings, unavailable checks, and verdict. It may summarize Worker
+output but MUST NOT treat a transcript as authority or include credentials,
+raw hidden reasoning, or unbounded project content.
 
 ## 7. Mandatory acceptance matrix
 
@@ -193,7 +225,7 @@ the report must preserve each row's individual outcome.
 | `M2-A05` | The lower App Server client imports no Domain, Runtime, WorkerPort, Workflow, Candidate, Evidence, Acceptance, Store, CLI, or Intake contract | dependency audit plus reverse fixtures |
 | `M2-A06` | The Worker, workspace, and verifier adapters cannot import Store or internal Runtime mutation capability | dependency and compile-backed negative fixtures |
 | `M2-A07` | The resolved Codex executable path, version, and SHA-256 match the M2 supported profile | protocol identity command |
-| `M2-A08` | Fresh TypeScript and JSON schema generation is byte-identical to the checked-in snapshot and digest | schema regeneration check |
+| `M2-A08` | Repeated TypeScript generation is raw-byte-identical; repeated JSON generation rejects duplicate keys and is canonical-byte-identical under the exact RFC 8785 UTF-8 normalization profile; the checked-in manifest binds both identities | schema regeneration and canonicalization check |
 | `M2-A09` | Formatting, lint, strict typecheck, all tests, and forced production build pass | complete quality gate |
 | `M2-A10` | Every Node test summary has zero failed, cancelled, skipped, and todo tests | no-skip runner and stage summaries |
 
@@ -210,13 +242,14 @@ the report must preserve each row's individual outcome.
 | `M2-B07` | Unknown server requests and unsupported experimental methods fail closed | server-request suite |
 | `M2-B08` | The client performs no hidden Turn retry, process retry, Thread resume, approval, or model fallback | call-trace and source boundary tests |
 | `M2-B09` | Live local stdio initialization and one bounded Thread/Turn conform to the pinned generated schema | live compatibility preflight |
+| `M2-B10` | Explicit argv, environment, configuration roots, state roots, and outer isolation determine App Server inputs; poisoned ambient config, instructions, hooks, skills, MCP, plugins, apps, search, provider, and environment values cannot enter or widen the selected profile | configuration-isolation suite |
 
 ### Worker mapping and authority
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-C01` | Runtime-selected phase, cwd, sandbox, network, approval, model, effort, and response schema map exactly to the App Server request | adapter projection tests |
-| `M2-C02` | Every emitted Worker event binds the current Attempt, Worker Session, Context Manifest, package, Profile, Policy, Candidate when present, and backend execution observation | adapter and Runtime authority tests |
+| `M2-C01` | Runtime-selected phase, Candidate workspace lease, cwd, sandbox, network, approval, model, provider, effort, response schema, configuration, instruction, tool, and state policy map exactly to the App Server execution | adapter projection tests |
+| `M2-C02` | Every emitted Worker event binds the current Attempt, Worker Session, Context Manifest, package, Profile, Policy, Candidate lease when present, and backend execution observation | adapter and Runtime authority tests |
 | `M2-C03` | `turn/completed` without one valid structured payload is a Worker failure, not completion | fake-server adversarial case |
 | `M2-C04` | Free-form “done,” `ACCEPT`, passing-looking logs, plan Items, diff events, and command results cannot advance or close a Goal | lying-worker real-adapter fixtures |
 | `M2-C05` | Malformed, unknown, oversized, multiple-terminal, invalid-only, wrong-phase, and stale payloads fail closed | response-contract suite |
@@ -224,12 +257,13 @@ the report must preserve each row's individual outcome.
 | `M2-C07` | Process, backend, protocol, declined approval, cancellation, and host-control failures retain distinct typed classifications | failure-mapping suite |
 | `M2-C08` | Backend Thread/Turn identity cannot mutate Workflow, issue Acceptance, or substitute for a Runtime Command or Worker Event ID | authority and compile-boundary tests |
 | `M2-C09` | Every durable Worker receipt has its prior dispatch and backend-execution causality, and Store failure is not blamed on Codex | Store fault-injection suite |
+| `M2-C10` | App Server-observed effective settings, managed-requirements identity, and `instructionSources` match the trusted request; an unknown, stale, changed, or widened input blocks admission rather than becoming Context | effective-input admission suite |
 
 ### Candidate workspace
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-D01` | Worker cwd and writable roots resolve inside one current mutable Candidate and outside source checkout plus authority home | containment integration suite |
+| `M2-D01` | Worker cwd and writable roots derive from one current Runtime-issued Candidate workspace lease, resolve inside that mutable Candidate, and remain outside source checkout plus authority home | containment integration suite |
 | `M2-D02` | Base repository, parent generation, allowed paths, project identity, and mutable-generation identity are exact and replayable | Candidate manifest tests |
 | `M2-D03` | Symlink, alias, traversal, case, special-file, ignored-file, and metadata edge cases cannot escape policy | filesystem adversarial suite |
 | `M2-D04` | Freeze creates an exact canonical tree digest and permanently removes Worker mutation authority from that generation | freeze integration suite |
@@ -237,13 +271,14 @@ the report must preserve each row's individual outcome.
 | `M2-D06` | Repair creates a new generation from the exact eligible parent and leaves the old frozen generation byte-identical | repair-generation suite |
 | `M2-D07` | Partial create/freeze/repair failure leaves no falsely current Candidate authority | transaction/filesystem reconciliation tests |
 | `M2-D08` | Restart classifies owned, retained, orphaned, and unsafe paths without deleting an unresolved or user-owned target | cleanup/reopen suite |
-| `M2-D09` | The user's source fixture remains byte-identical and the authority home is inaccessible from the Worker-writable Candidate | black-box isolation proof |
+| `M2-D09` | The source fixture's declared content projection remains byte-identical, while separately recorded Git metadata changes are either absent or explicitly attributable to the acceptance harness | source-manifest and Git-metadata comparison |
+| `M2-D10` | The authority home and controlled Codex state root are inaccessible from the Worker-writable Candidate | black-box isolation proof |
 
 ### Verification, Evidence, and Acceptance
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-E01` | One real `CheckSpecification` binds argv, cwd, environment, timeout, output limit, runner, Candidate, and source digest exactly | Verification Runner contract |
+| `M2-E01` | One real, non-fake `CheckSpecification` binds argv, cwd, environment, timeout, output limit, runner, Candidate, and source digest exactly | Verification Runner contract |
 | `M2-E02` | The runner executes without shell interpolation, Candidate write capability, Store access, Worker access, or network | runner boundary and process tests |
 | `M2-E03` | Exit, stdout/stderr, timeout, truncation, crash, and environment observations are bounded and validated before Evidence creation | runner adversarial suite |
 | `M2-E04` | A failing required check creates current failing Evidence and prevents technical `ACCEPT` and closeout | Runtime integration case |
@@ -253,18 +288,18 @@ the report must preserve each row's individual outcome.
 | `M2-E08` | Deterministic Acceptance replay and exact repair authority retain M1 semantics across SQLite reopen | acceptance/reopen suite |
 | `M2-E09` | Final Closeout binds the exact current Candidate and Evidence Set only after the Acceptance Engine issues current `ACCEPT` | black-box closeout proof |
 
-### End-to-end live demonstration
+### End-to-end deterministic and live demonstrations
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-F01` | The live Codex Turn edits only the current mutable Candidate | bounded live run plus source comparison |
-| `M2-F02` | Codex emits a completion request, while the first required real check deterministically fails | live audit and verification record |
-| `M2-F03` | CodeClosure retains rejection/repair-required state and creates a distinct repair generation | Runtime status, Candidate, and Acceptance records |
-| `M2-F04` | A subsequent live Codex Turn repairs the new generation without changing the failed frozen parent | live source digests and parent comparison |
-| `M2-F05` | Fresh required verification passes only on the repaired frozen digest | runner and Evidence records |
-| `M2-F06` | Acceptance and Runtime closeout occur only after current passing Evidence | Acceptance Decision, Closeout Record, and audit |
-| `M2-F07` | The final public result names exact Candidate and Evidence digests and does not present Turn success as Goal authority | CLI JSON/human views |
-| `M2-F08` | The live run performs no Goal Intake, project promotion, Git push, release, deployment, or other external effect | command trace, fixture inspection, and audit review |
+| `M2-F01` | A controlled deterministic execution edits only generation 1, after which one required real check fails on its frozen digest without a live model or fabricated Evidence | deterministic fixture, workspace trace, and verification record |
+| `M2-F02` | CodeClosure retains rejection/repair-required state, creates a distinct generation 2 from the exact eligible parent, and leaves frozen generation 1 unchanged | Runtime status, Candidate, and Acceptance records |
+| `M2-F03` | The controlled repair execution changes only generation 2; fresh real verification passes, current Evidence is admitted, and Acceptance plus closeout follow in exact order | deterministic fixture, runner, Evidence, Acceptance, Closeout, and audit |
+| `M2-F04` | A separate live Codex Turn edits only its current mutable Candidate and emits one valid completion request | bounded live run plus source comparison |
+| `M2-F05` | The first live post-edit verification result is not prescribed: `PASS` follows the normal evidence path, while `FAIL` alone authorizes a distinct bounded repair generation; no synthetic failure or needless rejection occurs | live branch trace and policy assertions |
+| `M2-F06` | The selected live branch reaches current passing Evidence, Acceptance, and Runtime closeout within bounded phase/Turn policy | runner, Evidence, Acceptance Decision, Closeout Record, and audit |
+| `M2-F07` | The final public result names the exact live branch, Candidate, and Evidence digests and does not present Turn success as Goal authority | CLI JSON/human views |
+| `M2-F08` | Neither demonstration performs Goal Intake, project promotion, Git push, release, deployment, or another external effect | command traces, fixture inspection, and audit review |
 
 ### Lifecycle, restart, and security
 
@@ -272,7 +307,7 @@ the report must preserve each row's individual outcome.
 | --- | --- | --- |
 | `M2-G01` | Compact/context-compaction events do not add, remove, or revise CodeClosure authority | protocol and Runtime comparison test |
 | `M2-G02` | Thread deletion, wrong Thread, wrong Turn, unavailable resume, and mismatched protocol profile fail closed | Thread policy suite |
-| `M2-G03` | Approval requests beyond exact Candidate capability, session-wide grants, user input, MCP elicitation, connector, dynamic-tool, and effect requests are declined/cancelled | server-request policy suite |
+| `M2-G03` | Approval requests beyond exact Candidate capability, session-wide grants, user input, MCP elicitation, connector, dynamic-tool, app, plugin, skill, search, and effect requests are disabled or declined/cancelled | server-request policy suite |
 | `M2-G04` | Runtime cancellation interrupts current work without allowing a late event to close or corrupt the next dispatch | cancellation-order suite |
 | `M2-G05` | App Server failure has no hidden retry authority and leaves a visible governed blocker/failure | backend failure black-box case |
 | `M2-G06` | CodeClosure restart reconciles the old active Attempt before `ResumeGoal` creates fresh Attempt, Context, Session, dispatch, and default fresh Thread | cross-process restart proof |
@@ -280,6 +315,7 @@ the report must preserve each row's individual outcome.
 | `M2-G08` | Strict reopen reconstructs identical Goal/Workflow/Candidate/Evidence/Acceptance/backend authority without transcript replay | SQLite and public-view comparison |
 | `M2-G09` | Credentials, hidden reasoning, unbounded protocol content, and raw environment secrets do not enter Store, audit, CLI JSON, or acceptance report | redaction and retention audit |
 | `M2-G10` | No worker-writable path can reach authority storage or another generation through configured roots or filesystem indirection | containment/security suite |
+| `M2-G11` | Controlled Codex state, config, instructions, telemetry, history, and credentials cannot leak into Candidate commands, Candidate files, logs, audit, Evidence, or the report | state and secret-boundary audit |
 
 ### Regression, traceability, and milestone boundary
 
@@ -293,47 +329,76 @@ the report must preserve each row's individual outcome.
 | `M2-H06` | No source, package, command, schema, migration, view, or demo implements or claims Goal Intake | scope and dependency audit |
 | `M2-H07` | No accepted result authorizes Candidate Promotion or another external effect | CLI surface, audit, and documentation review |
 
-## 8. Required live fixture
+## 8. Required acceptance fixtures
 
-The live fixture MUST be deliberately bounded and disposable. It contains:
+### Deterministic reject/repair fixture
 
-- a minimal Git repository with one small implementation defect;
-- one exact required local check that fails before the repair and passes after
-  the intended edit;
-- no dependency download, network call, credential, Git remote, effectful hook,
-  submodule, generated secret, or user-owned file;
-- an explicit allowed-path set containing only the intended source/test paths;
-- a source digest captured before and after the complete round; and
-- a separate Runtime authority home and Candidate workspace root.
+The deterministic fixture MUST be deliberately bounded and disposable. It
+uses a controlled Worker/App Server behavior that produces an incomplete first
+generation and a correct repair generation without a live model. The Runtime
+must still use the real Candidate workspace, freeze, Verification Runner,
+Evidence, Acceptance, audit, and closeout boundaries; the fixture MUST NOT
+fabricate verification or authority records.
 
-The prompt may state the technical task and required check, but it MUST NOT tell
-Codex to forge CodeClosure events, write the authority store, mark the Goal
-accepted, bypass a failed check, edit frozen source, or apply the Candidate to
-the fixture source. The expected first failure must come from a deterministic
-fixture/check condition, not a request for the model to intentionally sabotage
-the result.
-
-The live proof succeeds only if the persisted chain shows:
+Its persisted chain MUST show:
 
 ```text
 mutable Candidate generation 1
-  -> Codex completion request
+  -> controlled completion request
   -> frozen digest 1
-  -> required verification FAIL
+  -> required real verification FAIL
   -> technical rejection / exact repair authority
   -> mutable Candidate generation 2 derived from generation 1
-  -> Codex repair completion request
+  -> controlled repair completion request
   -> frozen digest 2
-  -> fresh required verification PASS
+  -> fresh required real verification PASS
   -> current Evidence Set
   -> Acceptance Engine ACCEPT
   -> Runtime CLOSEOUT
 ```
 
-An alternate model edit that still satisfies the exact bounded Goal is allowed.
-Skipping the first real failure, editing the fixture source directly, reusing
-generation-1 Evidence, or obtaining a pass through fixture nondeterminism fails
-the case.
+This is the stable proof that CodeClosure can govern rejection and repair. It
+MUST make no model or external-network request.
+
+### Live Codex fixture
+
+The separate live fixture MUST be deliberately bounded and disposable. It
+contains:
+
+- a minimal Git repository with one small implementation defect;
+- one exact required local check that fails before Codex edits the Candidate
+  and passes after any correct edit;
+- no dependency download, network call, credential, Git remote, effectful hook,
+  submodule, generated secret, or user-owned file;
+- an explicit allowed-path set containing only the intended source/test paths;
+- a source-manifest digest and separate Git-metadata observation captured
+  before and after the complete round; and
+- separate Runtime authority, Candidate workspace, verifier temporary, and
+  controlled Codex state roots.
+
+The prompt may state the technical task and required check, but it MUST NOT tell
+Codex to forge CodeClosure events, write the authority store, mark the Goal
+accepted, bypass a failed check, intentionally produce a failing edit, edit
+frozen source, or apply the Candidate to the fixture source.
+
+The live branch is selected by the first real post-edit verification result:
+
+```text
+Codex edits mutable Candidate generation 1
+  -> completion request
+  -> freeze and real verification
+      PASS -> current Evidence -> ACCEPT -> CLOSEOUT
+      FAIL -> exact repair authority -> new generation
+              -> bounded authorized repair Turn
+              -> freeze and fresh verification
+              -> PASS -> current Evidence -> ACCEPT -> CLOSEOUT
+```
+
+An alternate model edit that satisfies the exact bounded Goal is allowed. A
+correct first-pass edit MUST NOT be rejected merely to demonstrate repair. If a
+real failure occurs, the old frozen generation and its Evidence MUST NOT be
+reused as current authority. The selected branch must reach a real passing
+check within the bounded phase/Turn policy; otherwise the live case fails.
 
 ## 9. Canonical executable procedure
 
@@ -349,17 +414,25 @@ available. When implemented, it must execute in this order:
 1. validate entry conditions without printing credentials;
 2. capture opening source, Git, toolchain, platform, and Codex protocol
    identity;
-3. regenerate and compare the exact protocol schemas;
+3. regenerate TypeScript and JSON protocol schemas repeatedly, reject duplicate
+   JSON keys, and compare the exact raw/canonical identities under the pinned
+   normalization profile;
 4. run the complete quality gate, including every M1 regression and M2 offline
    test;
 5. run deterministic fake-App-Server protocol and adversarial acceptance cases;
 6. run Candidate, verifier, Store fault-injection, recovery, and public CLI
    black-box cases;
-7. run the one bounded live Codex reject/repair/accept fixture;
-8. close and strictly reopen authority, then compare public status and audit;
-9. prove fixture source and non-owned paths are unchanged;
-10. capture closing source and environment identity; and
-11. emit a machine-readable row-by-row result with aggregate zero-skip counts.
+7. run the deterministic real-Candidate/real-verifier
+   reject/repair/accept fixture;
+8. run the separate bounded live Codex edit-and-verify fixture and follow its
+   natural first verification branch;
+9. close and strictly reopen authority for both demonstrations, then compare
+   public status and audit;
+10. prove fixture content projections and non-owned paths are unchanged, and
+    account separately for Git metadata;
+11. capture closing source, environment, effective App Server input, and state
+    identities; and
+12. emit a machine-readable row-by-row result with aggregate zero-skip counts.
 
 After the executable command, the operator MUST inspect complete output, run
 `git diff --check`, inspect the actual diff and working-tree status, review the
@@ -378,8 +451,9 @@ The only M2 verdicts are:
 
 - `PASS`: every mandatory matrix row passes on one accepted source and protocol
   identity; every Node test summary has zero failed, cancelled, skipped, and
-  todo tests; the live proof passes; opening and closing identities match; no
-  mandatory check is unavailable; and no blocking finding remains.
+  todo tests; both the deterministic and live proofs pass; opening and closing
+  identities match; no mandatory check is unavailable; and no blocking finding
+  remains.
 - `FAIL`: any mandatory assertion, test, schema comparison, dependency rule,
   protocol behavior, Candidate containment property, verification, Evidence,
   Acceptance, recovery, CLI, documentation, live outcome, non-effect claim, or
@@ -411,24 +485,30 @@ The dated M2 completion review MUST contain:
 1. date, scope, verdict, branch, base revision, working-tree state, source path
    count, and source digest;
 2. OS/architecture, Node, pnpm, resolved Codex path, Codex version, executable
-   digest, generated-schema digest, requested model, and observed reroutes or
-   warnings;
+   digest, raw TypeScript-schema digest, canonical JSON-schema digest,
+   normalization-profile identity, requested model/provider, controlled config
+   and state identities, managed-requirements identity, effective instruction
+   sources/tools, and observed reroutes or warnings;
 3. the exact canonical command and exit status;
 4. every quality/offline stage with aggregate tests and zero-skip evidence;
 5. every mandatory matrix row and its primary evidence reference;
-6. the live fixture source, Candidate, verifier, authority-home, and allowed
-   external-network identities without secrets;
-7. generation-1 and generation-2 parent/source digests, verification results,
-   Evidence Set, Acceptance Decision, and Closeout bindings;
-8. process failure, approval, Compact, cancellation, restart, strict-reopen,
+6. the deterministic fixture source, Candidate, verifier, authority-home, and
+   no-network identities;
+7. its generation-1 and generation-2 parent/source digests, verification
+   results, Evidence Set, Acceptance Decision, and Closeout bindings;
+8. the live fixture source, Candidate, verifier, authority-home, controlled
+   Codex state, selected first-verification branch, generation digests, and
+   allowed external-network identities without secrets;
+9. process failure, approval, Compact, cancellation, restart, strict-reopen,
    and no-redispatch outcomes;
-9. source-checkout, authority-isolation, cleanup-scope, credential-redaction,
+10. source-checkout, Git-metadata, authority-isolation, cleanup-scope,
+   credential-redaction,
    and no-external-effect proofs;
-10. every finding, including an explicit zero count when none exist;
-11. skipped or unavailable checks, both explicitly zero for `PASS`;
-12. M2 non-claims, including Goal Intake, arbitrary-project support, product
+11. every finding, including an explicit zero count when none exist;
+12. skipped or unavailable checks, both explicitly zero for `PASS`;
+13. M2 non-claims, including Goal Intake, arbitrary-project support, product
     completion, and external effects; and
-13. final `PASS`, `FAIL`, or `BLOCKED`, reiterating that the report is not a
+14. final `PASS`, `FAIL`, or `BLOCKED`, reiterating that the report is not a
     technical `ACCEPT` decision or Promotion authorization.
 
 ## 12. Gate to M2.5

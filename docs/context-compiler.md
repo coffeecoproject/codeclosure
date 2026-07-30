@@ -292,6 +292,23 @@ The choice is a runtime policy because all critical state is recompiled. A
 fresh Thread does not mean lost state, and a resumed Thread does not make its
 history authoritative.
 
+### M2 App Server input closure — planned
+
+An App Server may add effective instructions or tools from Codex configuration,
+project guidance, user state, or managed requirements. Those inputs are not
+implicitly part of the current Goal-bound Context Package and cannot bypass its
+Manifest merely because Codex loaded them.
+
+Before an M2 Turn starts, every effective instruction source and tool surface
+must be disabled or bound by exact identity and digest through the selected
+Execution Profile and Context policy. The Runtime must compare App
+Server-reported instruction sources and effective non-secret settings with that
+binding. An unknown source, an unbound tool, a widened permission, or a changed
+configuration digest blocks dispatch. Managed host policy may constrain the
+grant before the Execution Profile is bound or make that profile unavailable.
+After binding, a changed or mismatched managed-requirements identity blocks
+dispatch; it cannot silently narrow, widen, or replace Worker authority.
+
 ## Codex Compact Interaction
 
 Codex currently supports manual and automatic compaction by replacing model

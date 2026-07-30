@@ -569,6 +569,17 @@ Worker, Draft, Confirmation, Acceptance, or persistence semantics. M2
 implements and validates the Worker branch only; Goal Intake is not an M2 exit
 condition.
 
+For the planned M2 branch, Codex configuration and state are execution inputs,
+not ambient host truth. Trusted composition must either disable or exactly bind
+every effective config layer, instruction source, tool surface, state root, and
+non-secret model/runtime option to the Workflow's installed Execution Profile.
+Managed requirements are resolved before that profile is bound and may
+constrain which profile can be installed. After Workflow start, a missing or
+changed requirements identity blocks execution; it cannot silently narrow or
+widen the bound profile. Credentials remain separately injected secrets and
+must not enter profile digests, Candidate command environments, audit, or
+Evidence.
+
 Application `CommandId` values and worker-delivery `WorkerEventId` values are
 also separate authority domains. The Codex adapter may report a worker event;
 it cannot choose or impersonate the runtime command that admits that event.

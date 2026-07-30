@@ -135,7 +135,10 @@ the M1 authority boundary.
   so later adapters can reuse protocol transport without inheriting Worker
   authority;
 - initialization plus Thread/Turn lifecycle;
-- installed-version discovery and generated TypeScript schema snapshot;
+- installed-version discovery and a canonically comparable generated protocol
+  snapshot;
+- controlled App Server configuration, state, instruction-source, and tool
+  exposure identity;
 - per-phase cwd, sandbox/permissions, and approval routing;
 - stream Item observations without treating `turn/completed` as Goal complete;
 - thread interruption and backend failure mapping;
@@ -155,18 +158,27 @@ the M1 authority boundary.
 - rich TUI, multiple agents, cloud, or multi-user behavior; and
 - merge, release, deployment, or other external-effect authority.
 
-### Required Demonstration
+### Required Demonstrations
 
-For one bounded repository fixture:
+M2 requires two complementary proofs. The deterministic proof uses a controlled
+Worker or App Server fixture with the real Candidate and Verification paths:
 
-1. Codex edits a Candidate;
-2. Codex claims completion;
-3. a required test fails;
-4. CodeClosure rejects closeout and creates a repair generation;
-5. Codex repairs the new generation;
-6. source is frozen and evidence rebuilt;
-7. Acceptance passes and CodeClosure closes the Goal;
-8. the accepted record identifies exact Candidate and evidence digests.
+1. the controlled Worker edits an isolated Candidate and claims completion;
+2. a required real check deterministically fails;
+3. CodeClosure rejects closeout and creates a repair generation;
+4. the controlled repair edits only the new generation;
+5. fresh verification passes; and
+6. Acceptance and Runtime closeout bind the exact repaired Candidate and
+   Evidence digests.
+
+The separate live proof uses the supported installed Codex App Server:
+
+1. Codex edits only an isolated Candidate and claims completion;
+2. independent real verification determines the first post-edit result;
+3. a first-pass `PASS` proceeds normally without a fabricated rejection;
+4. a `FAIL` enters the same governed repair-generation path; and
+5. the bounded run can close only through current passing Evidence and technical
+   Acceptance.
 
 ### Exit Criteria
 
@@ -175,11 +187,17 @@ For one bounded repository fixture:
 - control state is inaccessible from the worker-writable Candidate;
 - frozen-source mutation is detected and invalidates evidence;
 - restart and new Thread recovery preserve Goal/Workflow authority;
-- protocol schemas are version-bound rather than hand-copied into core;
+- protocol schemas are version-bound and compared under one deterministic
+  canonical snapshot profile rather than hand-copied into core;
+- ambient Codex configuration, instruction sources, tools, and state cannot
+  silently widen or replace the Workflow-bound execution profile;
 - dependency and contract tests prove that the App Server client is reusable
   without importing WorkerPort, Workflow, Candidate, or Intake domain
   semantics;
-- one complete adversarial fixture proves reject/repair/accept behavior.
+- one deterministic real-Candidate/verifier fixture proves
+  reject/repair/accept behavior; and
+- one bounded live Codex path proves actual adapter execution without requiring
+  a deliberately failing first edit.
 
 M2 completion proves the real Codex execution branch under the M1 control
 plane. It does not prove that CodeClosure can form a Goal from an incomplete

@@ -19,15 +19,37 @@ M2 will replace `FakeWorker` for an explicitly selected real execution path with
 Codex App Server Worker Adapter while retaining CodeClosure as the only control
 and technical-completion authority.
 
-The milestone must prove one bounded real-project path in which Codex edits an
-isolated Candidate and claims completion, independent verification fails,
-CodeClosure rejects closeout and creates a repair generation, Codex repairs the
-new generation, fresh verification passes, and only then the Acceptance Engine
-and Workflow Runtime close the Goal.
+The milestone must prove two complementary paths. A deterministic controlled
+Worker or App Server fixture must exercise a real isolated Candidate and real
+Verification Runner through fail, rejection, repair generation, fresh pass,
+Acceptance, and closeout. A separate bounded live Codex path must prove actual
+App Server editing and independent verification. The live path follows its real
+first post-edit result: a correct first pass proceeds normally, while a failure
+enters the governed repair path. M2 must not manufacture a live failure merely
+to demonstrate rejection.
 
 M2 does not prove Goal Intake, product completion, production readiness, or
 permission to merge, release, deploy, communicate, purchase, or otherwise
 change an external real-world state.
+
+### User-visible behavior
+
+From the user's point of view, M2 should behave plainly:
+
+- Codex works in a disposable Candidate, so the user's project is not edited in
+  place.
+- CodeClosure runs the required check itself; a Codex claim that the work is
+  complete is never enough.
+- If the first checked result passes, the run proceeds directly to Acceptance
+  and closeout. The system does not create a fake failure or an unnecessary
+  repair round.
+- If the check fails, the failed generation is preserved, the reason remains
+  visible, and repair happens only in a new Candidate generation.
+- If effective configuration, instructions, tools, workspace identity, or
+  backend state cannot be verified, the run stops visibly instead of silently
+  inheriting ambient machine behavior.
+- Passing M2 still does not create a natural-language Goal Intake flow; that
+  remains the separate M2.5 milestone.
 
 ## 2. Current slice status
 
@@ -115,7 +137,10 @@ The bounded implementation includes:
 - a lower-level local App Server process/protocol client;
 - a separate Goal-bound Codex Worker Adapter implementing the existing
   `WorkerPort` contract;
-- an exact installed-version and generated-schema binding;
+- an exact installed-version and canonically comparable generated-schema
+  binding;
+- a controlled App Server configuration, state, instruction-source, and tool
+  exposure profile;
 - stable App Server initialization, request/response correlation,
   server-initiated request handling, and streamed lifecycle handling;
 - explicitly selected Worker-backed phases, including the real `IMPLEMENT`
@@ -125,7 +150,7 @@ The bounded implementation includes:
   identities;
 - one local command Verification Runner path with closed specifications;
 - independent Evidence creation and deterministic Acceptance replay;
-- one repair generation after failed required verification;
+- one deterministic repair generation after failed required verification;
 - interruption, process failure, Compact, Thread start/resume, and restart
   behavior; and
 - a basic local CLI/composition path and a repeatable acceptance harness.
@@ -211,13 +236,27 @@ Slice 1 must add a deterministic generation/check command that:
 1. resolves the exact `codex` executable without shell alias inference;
 2. records its normalized launcher path, `codex --version`, launcher SHA-256,
    and delegated platform-executable path/digest when the launcher uses one;
-3. generates TypeScript bindings and JSON Schema into a unique temporary
-   directory;
-4. normalizes only generator-declared nondeterministic metadata, if any;
-5. compares the result byte-for-byte with the checked-in snapshot;
-6. records the snapshot digest and supported protocol profile; and
-7. fails when the binary, generated files, required stable methods, or checked
-   compatibility fixture differs.
+3. generates TypeScript bindings and JSON Schema into unique temporary
+   directories at least twice for the generator-stability check;
+4. compares the TypeScript file set and raw file bytes exactly;
+5. validates every JSON file, rejects duplicate object keys, and canonicalizes
+   it as UTF-8 with the exact RFC 8785 JSON Canonicalization Scheme under the
+   versioned `codex-schema-snapshot-v1` profile;
+6. compares the JSON file set and canonical bytes exactly while preserving
+   parsed scalar values and array order;
+7. records a manifest of raw TypeScript digests, canonical JSON digests, the
+   normalization-profile identity, and the aggregate snapshot digest; and
+8. fails when the binary, generated semantic content, file set, required stable
+   methods, or checked compatibility fixture differs.
+
+`codex-schema-snapshot-v1` uses exact RFC 8785 canonical JSON bytes as required
+by [ADR 0006](../adr/0006-canonical-serialization-and-digest-profiles.md). It
+removes no field, changes no parsed scalar value, reorders no array, and does
+not normalize TypeScript. Raw aggregate JSON bundle bytes are diagnostic rather
+than identity because the 2026-07-30 review observed the same `codex-cli
+0.145.0` emit semantically equal aggregate bundles with different
+definition-member order. A raw-order difference with identical RFC 8785 bytes
+is not protocol drift; any canonical content difference is.
 
 M2 will use the stable protocol surface. Experimental API capability is disabled
 unless a focused accepted ADR identifies a required method, risk, fallback,
@@ -225,9 +264,10 @@ and compatibility test. Unknown fields may be retained for diagnostics only;
 unknown required shapes, methods, request types, or incompatible variants fail
 closed.
 
-The supported-version declaration binds one exact CLI version and schema
-digest. A different installed version is `BLOCKED` until its generated diff is
-reviewed and the compatibility declaration is deliberately updated.
+The supported-version declaration binds one exact CLI version, normalization
+profile, and canonical schema-snapshot digest. A different installed version is
+`BLOCKED` until its generated diff is reviewed and the compatibility declaration
+is deliberately updated.
 
 ## 9. App Server client contract
 
@@ -252,6 +292,59 @@ cover:
   process exit, and host cancellation; and
 - drain or reject every pending request deterministically during shutdown.
 
+### Controlled configuration, instructions, tools, and state
+
+Codex configuration and state are execution inputs. The
+[official configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic.md#configuration-precedence)
+allows command overrides, project configuration, profile files, user
+configuration, system configuration, and built-in defaults. `CODEX_HOME` also
+contains configuration, authentication, logs, sessions, skills, and other state.
+M2 therefore cannot treat the operator's ambient Codex installation as the
+Workflow's effective Execution Profile.
+
+Slice 0 must finalize a versioned, protocol-neutral execution-config contract.
+Its non-secret canonical projection must bind at least:
+
+- resolved Codex launcher and delegated executable identity;
+- protocol and schema-snapshot profile;
+- requested model, provider policy, reasoning effort, and response-schema
+  profile;
+- cwd, sandbox or permission profile, writable roots, command-network policy,
+  approval policy, and approval reviewer;
+- Thread fresh/resume policy and controlled Codex state-root identity;
+- project-instruction and other instruction-source policy;
+- Web Search, MCP, apps/connectors, plugins, hooks, skills, subagent, dynamic
+  tool, telemetry, and history/retention policy; and
+- effective managed-requirements identity, environment allowlist, and the
+  redacted non-secret configuration digest.
+
+Trusted composition must use isolated state/config roots, explicit supported
+overrides, or an outer process boundary selected in Slice 0 so ambient user or
+project configuration cannot widen the binding. M2 defaults disable every tool,
+integration, hook, telemetry exporter, or network surface not required for the
+bounded model-service and authentication traffic of the live proof. Managed
+requirements are resolved before profile binding and may constrain the profile
+that can be installed. An incompatible requirement, or a requirements-identity
+change after binding, blocks execution. If the selected stable App Server
+surface cannot prove the required isolation, M2 stops for an ADR,
+supported-version change, or outer-sandbox decision rather than inheriting a
+default.
+
+Credentials are injected separately from the canonical profile. They must be
+available to the App Server only as required for authentication and excluded
+from Candidate command environments, logs, audit, Evidence, and reports. Codex
+session state required for an authorized resume must live in a controlled root
+with explicit ownership and retention; other ambient history cannot be resumed.
+
+`thread/start`, `thread/resume`, and `thread/fork` report effective
+`instructionSources`. The adapter must compare those sources and their permitted
+content identities with the Runtime binding before starting a Turn. Every
+effective instruction or tool source is either disabled or exactly bound;
+unknown, changed, or additional input fails closed. Adversarial fixtures must
+poison user and project config, instructions, hooks, skills, MCP, plugins, apps,
+Web Search, provider defaults, and environment secrets to prove that none can
+silently enter or widen the M2 execution.
+
 The client MUST NOT retry a Turn, restart a process, answer an approval, resume
 a Thread, or infer success on its own. Those actions require an adapter request
 that was already authorized by Runtime policy. Hidden retry would violate the
@@ -269,13 +362,16 @@ Thread/Turn interaction and emits only closed-schema Worker events.
 For each invocation it must:
 
 1. validate the Runtime-created Worker Request before external work;
-2. derive cwd, sandbox, network, approval, model, effort, and response schema
-   only from the installed Execution Profile and current capability grant;
+2. derive cwd, sandbox or permissions, network, approval, model/provider,
+   effort, response schema, effective configuration, instruction policy, and
+   tool exposure only from the installed Execution Profile and current
+   capability grant;
 3. bind the exact Attempt, Worker Session, Context Manifest, package,
-   Candidate generation when present, and protocol profile to the external
-   execution observation;
+   Candidate workspace lease when present, execution-config digest, and
+   protocol profile to the external execution observation;
 4. start or resume a Thread only under the Runtime-selected Thread policy;
-5. start one Turn with the current Context Package and phase response schema;
+5. verify the effective settings and instruction sources, then start one Turn
+   with the current Context Package and phase response schema;
 6. treat Item and delta streams as diagnostic observations, not authoritative
    state;
 7. accept a final model payload only through bounded JSON parsing and the
@@ -305,6 +401,8 @@ it binds:
 - Context Manifest and package digests;
 - Execution Profile, Policy, protocol profile, and Codex binary/schema
   identity;
+- execution-config, effective-instruction-source, and controlled Codex
+  state-root identities;
 - requested Thread policy;
 - observed Thread and Turn identifiers when available;
 - Candidate generation and cwd identity when present;
@@ -315,6 +413,16 @@ Only the Runtime may persist or change this record. The client and adapter
 return observations and receive no Store capability. Missing, conflicting, or
 cross-Attempt backend identity prevents admission but cannot mutate Workflow by
 itself.
+
+The current M1 `WorkerPort` exposes only a request, an `AbortSignal`, and an
+untrusted event stream. Before Slice 1, Slice 0 must define a protocol-neutral
+external-execution lifecycle contract that preserves that boundary while
+allowing Runtime to record intent and observed process, Thread, and Turn
+identities. The decision must specify every crash window, Store transaction,
+duplicate observation, late event, and restart disposition. An external action
+cannot occur before the applicable durable intent, and an observed identifier
+cannot be trusted or resumed before Runtime admission. The adapter receives no
+Store or mutation callback.
 
 The conservative M2 Thread rules are:
 
@@ -386,6 +494,21 @@ the following:
 - restart can distinguish owned, retained, orphaned, and unsafe-to-delete
   paths without guessing.
 
+The current M1 `WorkerRequest` identifies a Candidate generation but does not
+carry a trusted Candidate filesystem locator; its Goal project path names the
+user source checkout and must never be reused as Worker cwd. Slice 0 must define
+a Runtime-issued, protocol-neutral Candidate workspace lease or equivalent
+narrow resolver contract. It binds the exact generation, resolved root identity,
+allowed paths, access mode, and lifecycle, can resolve only through trusted
+workspace composition, and gives the adapter neither Store access nor authority
+to choose another path.
+
+Before selecting worktree or copy, the source-manifest profile must state
+whether source-checkout byte identity includes Git control metadata and which
+Runtime-owned metadata changes, if any, are separately permitted and audited.
+The black-box source-isolation assertion must use that exact projection rather
+than an undefined meaning of “byte-identical.”
+
 Filesystem read-only flags are defense in depth, not source identity. The exact
 manifest digest is the authority. Cleanup is a separate Runtime-owned command
 or reconciliation action and must never use an unresolved root, broad glob, or
@@ -417,6 +540,13 @@ runner crash, malformed observation, or specification mismatch prevents
 eligible passing Evidence. Passing command output remains insufficient without
 the exact Evidence and Acceptance bindings.
 
+The M1 public contracts currently admit only logical `M1_LOGICAL` environment
+identity and fake verification observations. Slice 0 must choose the versioned
+`CheckSpecification`, Verification Request/Result, environment identity,
+Evidence observation, codec, persistence, and migration evolution required for
+the real runner. No M2 adapter may overload an M1 fake discriminator with real
+process evidence.
+
 ## 15. Trusted composition and CLI boundary
 
 M2 will extend the trusted composition root; ordinary CLI handlers still receive
@@ -424,7 +554,8 @@ only narrow application capabilities and read views. Composition must:
 
 - verify the SQLite authority home before constructing worker-writable paths;
 - install an immutable M2 Policy and Execution Profile with an exact digest;
-- resolve the supported Codex binary and generated protocol profile;
+- resolve the supported Codex binary, canonical generated protocol profile,
+  controlled execution-config profile, and Codex state root;
 - construct workspace, verifier, client, and Worker adapters without exposing
   them to handlers;
 - perform startup reconciliation before publishing Goal commands;
@@ -437,9 +568,10 @@ selection or a bounded M2 demo command, but it may not add “mark complete,” 
 Workflow mutation, generic approval, Intake, promotion, or effectful project
 application commands.
 
-Human and JSON views must identify requested/observed Codex version, current
-phase, Candidate generation, verification result, Acceptance result, blocker,
-and recovery state without presenting a Turn completion as Goal completion.
+Human and JSON views must identify requested/observed Codex version and model
+policy, execution-config identity, effective-instruction status, current phase,
+Candidate generation, verification result, Acceptance result, blocker, and
+recovery state without presenting a Turn completion as Goal completion.
 
 ## 16. Slice execution plan
 
@@ -451,19 +583,38 @@ Work:
 
 - inventory the current public Worker, Candidate, Verification, recovery,
   composition, Store, and audit contracts;
-- generate and diff the selected installed App Server schemas in temporary
-  output;
+- generate the selected installed App Server schemas repeatedly and prove the
+  canonical snapshot profile distinguishes semantic drift from raw JSON member
+  ordering;
 - spike stdio initialization, one Thread/Turn, interruption, one server
   request, and controlled process exit without changing product authority;
-- choose the Candidate workspace mechanism through containment probes;
-- finalize backend execution binding, Thread policy, source manifest profile,
-  and cleanup ownership; and
+- choose and adversarially probe the Codex configuration/state isolation
+  mechanism, effective-instruction policy, tool-disable policy, and credential
+  separation;
+- choose the Candidate workspace mechanism and Runtime-issued workspace
+  lease/resolver contract through containment probes;
+- finalize the protocol-neutral external-execution lifecycle state machine,
+  backend binding, Thread policy, source manifest projection, Git metadata
+  treatment, and cleanup ownership;
+- finalize the real Verification/CheckSpecification/Evidence contract versions
+  and migration impact; and
 - accept any required ADR before product code depends on the decision.
 
 Exit proof:
 
 - no product source imports generated protocol types yet;
-- every open decision has an owner, chosen rule, test obligation, and ADR need;
+- the canonical schema snapshot, controlled Codex config/state profile,
+  effective-instruction policy, and poisoning-test matrix are exact;
+- the Candidate lease cannot resolve the user source path, authority home, or
+  another generation as Worker cwd;
+- the external-execution state machine names durable intent, observed process,
+  Thread, Turn, terminal/failure, crash, duplicate, and restart rules without a
+  Store capability in the adapter;
+- real verification uses selected new contract discriminators rather than M1
+  fake identities;
+- source-checkout byte identity and Git metadata treatment are unambiguous;
+- every remaining open decision has an owner, chosen rule, test obligation, and
+  ADR need;
 - the selected design preserves every M1 invariant and ADR 0026's client seam;
   and
 - the plan and acceptance matrix are updated if the accepted decision changes
@@ -476,7 +627,9 @@ Entry: Slice 0 decisions are accepted.
 Work:
 
 - add the lower client package and generated protocol snapshot;
-- add binary/schema identity and regeneration checks;
+- add binary/schema identity and canonical regeneration checks;
+- implement the selected controlled config/state launch contract and poisoned
+  ambient-config fixtures;
 - implement bounded JSONL, request correlation, initialization, notifications,
   server requests, cancellation, and shutdown;
 - implement deterministic fake-server fixtures for malformed, reordered,
@@ -486,6 +639,9 @@ Work:
 Exit proof:
 
 - stable initialization and one fixture Thread/Turn pass;
+- repeated generation has one stable canonical snapshot identity;
+- ambient user/project config, instruction, tool, provider, history, and secret
+  fixtures cannot widen the process contract;
 - every pending request reaches one deterministic terminal outcome;
 - unsupported or malformed protocol input fails closed;
 - protocol drift is detected before a live Worker dispatch; and
@@ -500,7 +656,10 @@ binary.
 Work:
 
 - implement phase-specific prompt/response projection over current Context;
-- map exact Runtime grants to cwd, sandbox, network, and approval settings;
+- map exact Runtime grants and the Candidate workspace lease to cwd, sandbox or
+  permissions, network, and approval settings;
+- map the bound model/provider, effort, response, config, instruction-source,
+  tool, and state-root policy and reject effective drift;
 - implement Thread/Turn selection and backend execution observations;
 - validate final structured payloads and emit one bounded Worker event;
 - map interruption, declined requests, backend/protocol failure, invalid-only
@@ -513,6 +672,8 @@ Exit proof:
   output cannot close or advance a Goal;
 - wrong Attempt, Session, Manifest, package, phase, Candidate, or backend
   binding fails closed;
+- a source-project path, stale workspace lease, unexpected instruction source,
+  or ambient config/tool injection fails before a Turn can acquire authority;
 - duplicate and conflicting Worker events retain ADR 0025 semantics; and
 - the adapter cannot reach the Store, internal Runtime kernel, Candidate
   mutation, Acceptance, or Intake capability.
@@ -525,7 +686,8 @@ Work:
 
 - create a mutable Candidate from an exact bounded Git fixture;
 - resolve and enforce project, workspace, and allowed-path containment;
-- expose only the Candidate root as Worker cwd/write scope;
+- issue the selected exact workspace lease and expose only its Candidate root as
+  Worker cwd/write scope;
 - freeze to an immutable generation manifest and digest;
 - create repair generations from exact eligible parents;
 - implement owned-path retention and restart reconciliation; and
@@ -547,6 +709,8 @@ Entry: frozen Candidate identity is available through the public Runtime port.
 Work:
 
 - implement one exact local command-check path;
+- land the selected real verification contract versions, codecs, Store schema,
+  and migration guards;
 - bind argv, cwd, environment, timeout, output limit, runner, Candidate, and
   source identity;
 - capture bounded observations and create Evidence only through Runtime;
@@ -563,13 +727,14 @@ Exit proof:
 
 ### Slice 5 — Reject, repair, and accept orchestration
 
-Entry: the real Worker, Candidate, and Verification paths pass their focused
-contracts.
+Entry: the controlled Worker/App Server fixture, real Candidate, and real
+Verification paths pass their focused contracts.
 
 Work:
 
 - compose the exact M2 Policy and Execution Profile;
-- drive one real Candidate through source freeze and required verification;
+- drive one deterministic controlled execution through a real Candidate,
+  source freeze, and required verification;
 - preserve a failed Acceptance Decision and exact repair authority;
 - create and dispatch a new repair generation;
 - rebuild Evidence from the repaired frozen source; and
@@ -622,8 +787,8 @@ Work:
   creation;
 - add subprocess coverage for usage, status, governed rejection, repair,
   closeout, cancellation, audit, restart, and adapter failure;
-- run the exact live reject/repair/accept fixture through the installed Codex
-  App Server; and
+- run the exact bounded live edit/verify fixture through the installed Codex App
+  Server without prescribing its first post-edit result; and
 - render backend lifecycle as execution detail, never completion authority.
 
 Exit proof:
@@ -631,7 +796,9 @@ Exit proof:
 - ordinary CLI modules cannot import or receive raw Store, client, workspace,
   verifier, or internal Runtime capabilities;
 - the project fixture and authority home are isolated and reopen correctly;
-- one live Codex path proves the required failure and repair cycle; and
+- one live Codex path proves actual isolated editing, completion-request
+  admission, independent verification, and the correct first-pass or repair
+  branch without a fabricated failure; and
 - unavailable auth, network, model, binary, or protocol compatibility produces
   a typed blocked/failure result rather than a skipped success.
 
@@ -642,8 +809,9 @@ Entry: every prior slice is implemented with recorded focused evidence.
 Work:
 
 - add the canonical `accept:m2` runner required by the acceptance plan;
-- combine the full quality gate, offline adversarial suites, live proof, public
-  black-box checks, and opening/closing source identity;
+- combine the full quality gate, offline adversarial suites, deterministic real
+  Candidate/verifier reject-repair proof, live Codex proof, public black-box
+  checks, and opening/closing source identity;
 - add new canonical invariants only together with executable test metadata;
 - review README, Architecture, domain status sections, ADR index, milestone
   boundary, and this status table;
@@ -670,15 +838,19 @@ M2 will use three distinct layers:
 
 1. deterministic unit, property, Store, and fake-App-Server tests for complete
    malformed and adversarial coverage;
-2. process and filesystem integration tests for the real local Codex binary,
-   Candidate isolation, verification, restart, and CLI boundaries; and
-3. one bounded live model demonstration for the actual edit/fail/repair/pass
-   path.
+2. deterministic process/filesystem integration using a controlled Worker or
+   App Server fixture with the real Candidate, Verification, rejection, repair,
+   restart, and CLI paths; and
+3. one bounded live model demonstration for actual isolated editing and
+   independent verification, following either the real first-pass or governed
+   repair branch.
 
-The live run does not replace deterministic negative tests. Model output may
-vary; acceptance asserts CodeClosure's persisted authority chain and exact
-fixture outcome, not a specific prose response. A mandatory live case that
-cannot run is `BLOCKED`, not skipped and not passed through a fake.
+The live run does not replace deterministic negative or repair-path tests. Model
+output may vary, so acceptance must not require a deliberately incorrect first
+edit. It asserts CodeClosure's persisted authority chain, exact fixture outcome,
+and correct branch for the observed verification result, not a specific prose
+response. A mandatory live case that cannot run is `BLOCKED`, not skipped and
+not passed through a fake.
 
 Every Node test invocation must report zero failed, cancelled, skipped, and
 todo tests. Fault injection must cover every new compound Store transaction and

@@ -46,8 +46,11 @@ MUST NOT leak into the domain or Workflow Runtime, and Codex Thread, Turn,
 process, or model output MUST NOT become Goal, Workflow, Acceptance, or
 closeout authority.
 
-M2 must prove one bounded real-project reject, repair, and accept path without
-bypassing M1 guards. Do not expand M2 into a rich TUI, multiple agents, cloud or
+M2 must prove a deterministic real-Candidate and real-verifier reject, repair,
+and accept path without bypassing M1 guards, plus a separate bounded live Codex
+path whose first post-edit verification result is not prescribed. A correct
+first-pass Codex edit MUST NOT be forced through an artificial failure merely to
+exercise repair. Do not expand M2 into a rich TUI, multiple agents, cloud or
 multi-user execution, full Fact Graph traversal, or release and deployment
 authority.
 
