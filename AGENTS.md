@@ -34,11 +34,22 @@ Record a new ADR when a durable architectural decision changes.
 
 ## Current Milestone Boundary
 
-The repository begins with M0 documentation. M1 builds a deterministic skeleton
-with a `FakeWorker`. Do not integrate Codex, build a rich TUI, add multiple
-agents, or implement cloud execution before the M1 exit criteria are proven.
+The M0 architecture baseline and the bounded M1 deterministic skeleton are
+complete. M1's `FakeWorker` control plane, authority boundaries, and acceptance
+evidence are the regression baseline and MUST remain valid.
 
-M1 must prove the control plane independently of model behavior.
+M2 — Codex Vertical Slice — is the current milestone boundary. Its planned
+implementation will replace `FakeWorker` for selected phases with a direct
+Codex App Server adapter while preserving the M1 domain, Workflow, persistence,
+Candidate, Evidence, and Acceptance authority boundaries. Codex protocol types
+MUST NOT leak into the domain or Workflow Runtime, and Codex Thread, Turn,
+process, or model output MUST NOT become Goal, Workflow, Acceptance, or
+closeout authority.
+
+M2 must prove one bounded real-project reject, repair, and accept path without
+bypassing M1 guards. Do not expand M2 into a rich TUI, multiple agents, cloud or
+multi-user execution, full Fact Graph traversal, or release and deployment
+authority.
 
 ## Engineering Rules
 
