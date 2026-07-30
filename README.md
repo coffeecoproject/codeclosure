@@ -11,22 +11,21 @@ complete.
 
 ## Status
 
-The M0 architecture baseline is complete and tracked. The deterministic M1
-skeleton is implemented and audited with `FakeWorker` only. The
-[M1 implementation plan](docs/plans/m1-deterministic-skeleton.md) is the
-detailed implementation and evidence record; the
-[milestone document](docs/milestones.md) defines the bounded M1 scope and exit
-criteria.
+The M0 architecture baseline and bounded M1 deterministic skeleton are
+complete. M2 is planned as the current implementation milestone, but its
+implementation has not started. The
+[M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
+status source; the [milestone document](docs/milestones.md) defines the bounded
+scope and exit criteria.
 
 This README intentionally does not duplicate the rolling slice, feature, or
-test inventory. M1 completion is not product completion or a release claim.
-M1 does not integrate Codex, edit a real project, perform real project
-verification, or authorize merge, release, deployment, or other external
-effects.
+test inventory. M1 remains the regression baseline. M2 completion will require
+an independent exit review and will not prove Goal Intake, product completion,
+or authority to merge, release, deploy, or perform another external effect.
 
 ## Development
 
-The M1 workspace requires Node.js `>=22.22.0 <23` and pnpm `11.1.3` through
+The workspace requires Node.js `>=22.22.0 <23` and pnpm `11.1.3` through
 Corepack.
 
 ```sh
@@ -103,7 +102,7 @@ Worker Adapter
 Codex App Server (M2)
 ```
 
-The M1 public entry is `codeclosure`. Codex remains a later execution backend,
+The public entry is `codeclosure`. Codex is the planned M2 execution backend,
 not the product entry and not the completion authority.
 
 ## Canonical Documents
@@ -116,31 +115,25 @@ not the product entry and not the completion authority.
 - [Context compiler](docs/context-compiler.md)
 - [Acceptance engine](docs/acceptance-engine.md)
 - [Evidence model](docs/evidence-model.md)
+- [Goal Intake](docs/goal-intake.md)
 - [Milestones](docs/milestones.md)
 - [M1 deterministic-skeleton plan](docs/plans/m1-deterministic-skeleton.md)
 - [M1 completion review](docs/reviews/m1-completion-review.md)
+- [M2 Codex vertical-slice plan](docs/plans/m2-codex-vertical-slice.md)
+- [M2 milestone acceptance plan](docs/plans/m2-acceptance-plan.md)
 - [M0 architecture review](docs/reviews/m0-architecture-review.md)
 - [Accepted ADR index](docs/adr/README.md)
 
 Repository instructions and document precedence are defined in
 [AGENTS.md](AGENTS.md).
 
-## M1 Boundary
+## Current Milestone Boundary
 
-M1 is deliberately narrow:
-
-- one local user;
-- one target repository;
-- one goal at a time;
-- deterministic state transitions;
-- SQLite-backed authoritative state;
-- append-only audit events;
-- a `FakeWorker` only;
-- restart and resume;
-- tests proving a worker cannot close a goal.
-
-Codex App Server integration, full Fact Graph traversal, rich TUI, multi-agent
-coordination, cloud execution, and automated release are later milestones.
+M1 proved the deterministic local control plane with `FakeWorker` and remains
+the required regression baseline. M2 is limited to a real Codex execution,
+Candidate, verification, repair, and recovery vertical slice under those same
+authority rules. Goal Intake remains a separate M2.5 milestone that can begin
+only after M2 passes its exit review.
 
 ## Non-Goals
 

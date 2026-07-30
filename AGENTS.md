@@ -51,6 +51,10 @@ bypassing M1 guards. Do not expand M2 into a rich TUI, multiple agents, cloud or
 multi-user execution, full Fact Graph traversal, or release and deployment
 authority.
 
+M2 implementation follows `docs/plans/m2-codex-vertical-slice.md` and its exit
+claim follows `docs/plans/m2-acceptance-plan.md`. Goal Intake is not M2 scope;
+M2.5 implementation MUST NOT begin until the independent M2 exit review passes.
+
 ## Engineering Rules
 
 - Keep the domain and workflow runtime independent of Codex protocol types.
@@ -80,7 +84,9 @@ Once M1 scaffolding exists:
 
 - use repository scripts through `pnpm`;
 - run focused tests while iterating;
-- run the complete M1 quality gate before claiming the milestone is ready;
+- keep the complete M1 quality gate green as the regression baseline;
+- run the complete current-milestone acceptance procedure before claiming that
+  milestone is ready;
 - keep TypeScript strict and avoid unsafe casts at authority boundaries;
 - validate persistence migrations and restart behavior, not only in-memory
   behavior.
@@ -100,12 +106,13 @@ Once M1 scaffolding exists:
   repository-relative Git path; a Markdown-named symbolic link MUST fail rather
   than be followed or silently skipped. `pnpm docs:check` is the executable
   check for these rules.
-- Treat `docs/plans/m1-deterministic-skeleton.md` as the detailed per-slice
-  implementation-status record and `docs/milestones.md` as the milestone
-  boundary. The root README MUST contain exactly one level-two `Status` section,
+- Treat `docs/plans/m2-codex-vertical-slice.md` as the current detailed
+  per-slice implementation-status record and `docs/milestones.md` as the
+  milestone boundary. The completed M1 plan and review remain historical
+  evidence. The root README MUST contain exactly one level-two `Status` section,
   that section MUST contain prose paragraphs only, and its only links MUST point
-  to those two records. The README MUST NOT contain a numbered rolling-slice
-  status anywhere.
+  to the current M2 plan and milestone records. The README MUST NOT contain a
+  numbered rolling-slice status anywhere.
 - The root README MUST NOT duplicate a rolling feature or test inventory.
   Because semantic equivalence is not mechanically decidable from prose, the
   slice-close documentation review owns this check; `pnpm docs:check` enforces
@@ -113,7 +120,8 @@ Once M1 scaffolding exists:
 - When a slice is marked implemented, the same change MUST review the root
   README, the `ARCHITECTURE.md` status section, relevant domain-document status
   sections, the ADR index, and the milestone boundary for consistency.
-- Update links and the M0/M1 review matrix when canonical documents move.
+- Update links, historical M0/M1 review records, and the current milestone
+  acceptance matrix when canonical documents move.
 
 ## Completion Claims
 

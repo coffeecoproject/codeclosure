@@ -20,6 +20,10 @@ dependency graph, and invariant coverage. Real candidate isolation and real
 project verification remain M2 work. Components marked for later milestones
 are architectural boundaries, not current implementation claims.
 
+The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
+[independent acceptance plan](docs/plans/m2-acceptance-plan.md) are prepared;
+no M2 implementation slice has started.
+
 The pre-Goal Intake and Goal Materialization target is accepted in
 [ADR 0026](docs/adr/0026-pre-goal-intake-and-goal-materialization-authority.md)
 but is not implemented. M2 must preserve a reusable Codex App Server client

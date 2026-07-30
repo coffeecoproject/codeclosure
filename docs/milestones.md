@@ -118,7 +118,10 @@ promotion consent, or a release claim.
 
 ## M2 — Codex Vertical Slice
 
-Status: Not started. The scope below is planned behavior.
+Status: Planned; implementation has not started. The detailed work sequence and
+status are in the
+[M2 implementation plan](plans/m2-codex-vertical-slice.md), and the independent
+exit procedure is in the [M2 acceptance plan](plans/m2-acceptance-plan.md).
 
 ### Objective
 
