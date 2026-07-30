@@ -8,7 +8,9 @@ its exact per-slice evidence remain recorded in the
 [`M1 implementation plan`](plans/m1-deterministic-skeleton.md); the bounded
 completion result is recorded in the
 [`M1 completion review`](reviews/m1-completion-review.md). Target structures
-outside that subset remain planned behavior.
+outside that subset remain planned behavior. The accepted pre-Goal Intake
+records below are planned for M2.5 and are not part of the implemented M1
+schema or Runtime.
 
 ## Design Rules
 
@@ -64,6 +66,57 @@ At minimum, M1 uses distinct opaque identifiers for:
 Implementations must not interchange these as untyped strings inside the
 domain.
 
+The planned M2.5 Intake boundary adds distinct `RawRequestId`, `IntakeRunId`,
+`GoalDraftId`, `GoalDraftRevision`, `ClarificationQuestionId`,
+`GoalConfirmationId`, and `GoalMaterializationId` types. They MUST NOT be
+interchanged with Goal, Workflow, Attempt, Worker, Command, or Acceptance
+identity.
+
+## Pre-Goal Intake — planned M2.5
+
+Goal Intake records the path from user input to a confirmed formal Goal without
+creating Workflow authority early. Its minimal record relationship is:
+
+```text
+RawRequest
+  └── IntakeRun
+        └── GoalDraft revision 1
+              └── GoalDraft revision 2
+                    └── GoalConfirmation
+                          └── GoalMaterializationRecord
+                                ├── Formal Goal revision 1
+                                └── DISCOVERY / READY Workflow
+```
+
+The semantic distinctions are:
+
+```text
+RawRequest
+= what the user actually submitted
+
+GoalDraft
+= a validated system proposal, not authoritative intent
+
+GoalConfirmation
+= the user's exact confirmation of one Draft revision and digest
+
+GoalMaterializationRecord
+= the immutable binding from confirmed Draft authority to formal Goal/Workflow
+```
+
+`GoalDraft` revisions are immutable and use a versioned canonical Draft digest.
+A change to objective, criteria, scope, non-goals, assumptions, or another
+confirmation-bearing field creates a new Draft revision and makes an earlier
+Confirmation stale for new Materialization.
+
+The Goal Intake Coordinator owns IntakeRun sequencing and validated Draft
+record creation. The Confirmation Gateway owns typed confirmation capture. The
+Goal Manager validates formal intent, while the Workflow Runtime remains the
+only Workflow writer. The trusted application transaction atomically persists
+the formal Goal, initial Workflow, Materialization Record, audits, and command
+outcome. See [ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md)
+and [Goal Intake](goal-intake.md).
+
 ## Goal
 
 The Goal is the externalized unit of intent.
@@ -92,6 +145,12 @@ Goal
 Changing objective, success criteria, or scope creates a new Goal revision and
 invalidates dependent plans, contexts, candidates, evidence, and acceptance as
 required by policy.
+
+Goal Materialization creates formal Goal revision 1 only from exact current
+Draft and Confirmation authority. `GoalDraftRevision` remains a separate
+pre-Goal type and never becomes `GoalRevision` by renaming or copying model
+identity. Direct explicit `CreateGoal` continues to create revision 1 under the
+same Goal Manager validation without synthesizing Intake records.
 
 In M1, `Goal.status` is a user-facing projection of the Goal's unique Workflow
 run status. Goal intent and revision remain owned by the Goal Manager; only the
@@ -1027,6 +1086,11 @@ describes.
 
 | Record | Proposal source | Validation owner | Mutation owner |
 | --- | --- | --- | --- |
+| Raw Request — planned M2.5 | user / trusted client | Intake input policy | Goal Intake Coordinator, immutable persistence |
+| Intake Run — planned M2.5 | user command / Intake policy | Goal Intake Coordinator | Goal Intake Coordinator through audited versioned transaction |
+| Goal Draft revision — planned M2.5 | user input plus assistant proposal | Goal Intake Coordinator and Draft policy | Goal Intake Coordinator, immutable revision persistence |
+| Goal Confirmation — planned M2.5 | exact user action | Confirmation Gateway and confirmation policy | Confirmation Gateway through Runtime-authored immutable persistence |
+| Goal Materialization — planned M2.5 | current confirmed Draft | Goal Manager, Workflow Runtime, and Store backstops | Runtime application compound transaction, immutable record |
 | Goal intent and revision | user / CLI | Goal Manager | Goal Manager through runtime transaction |
 | Goal lifecycle projection | Workflow run status | Workflow Runtime | Persistence synchronization inside the Workflow transaction |
 | Execution Profile | trusted composition definition | Runtime and Store profile validation | Runtime installer, immutable Store persistence |

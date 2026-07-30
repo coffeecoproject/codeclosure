@@ -8,7 +8,9 @@ implementation provides the deterministic subset described under
 fail-closed source subset, exact digest binding, atomic Attempt binding,
 `FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
 Retrieval, relevance packing, a full Fact Graph, and Codex Thread policy remain
-planned for later milestones.
+planned for later milestones. This is the Goal-bound Worker Context Compiler;
+the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
+that are not implemented.
 
 ## Purpose
 
@@ -323,6 +325,35 @@ including:
 
 An in-flight worker may finish, but its result is evaluated against the current
 Attempt and manifest. Stale results cannot advance the workflow.
+
+## Intake Context Boundary — planned M2.5
+
+The existing Context contract requires a formal `GoalId`, `GoalRevision`,
+`WorkflowId`, Workflow phase/version, `AttemptId`, Policy binding, Execution
+Profile binding, response contract, and capability grant. Pre-Goal Intake has
+none of those authorities and MUST NOT fabricate them to call the Worker
+Context Compiler.
+
+The planned Intake path instead uses:
+
+```text
+Raw Request + current Goal Draft + clarification state
+  + optional bounded project observations
+  + Intake policy and assistant response contract
+  -> Intake Package + Intake Manifest
+  -> Goal Draft Proposal
+```
+
+An Intake Manifest binds only IntakeRun, Raw Request, Draft revision/digest,
+question, project/scope, policy, adapter, provenance, omission, and budget
+identity. It cannot be used as a Goal-bound Context Manifest, Worker dispatch
+claim, Evidence input, or Acceptance input.
+
+Canonical projection, rendering, digest, byte-budget, redaction, and protocol
+utilities MAY be shared below both compilers. Their domain records, codecs,
+freshness rules, and authority labels remain separate. See
+[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md) and
+[Goal Intake](goal-intake.md).
 
 ## M1 Boundary
 

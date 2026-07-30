@@ -63,7 +63,8 @@ The initial user is one developer working locally in a software repository who
 wants Codex-level implementation capability without delegating completion
 authority to the model.
 
-The user should be able to state a goal in natural language and see:
+The user should be able to state a request in natural language, inspect the
+exact proposed Goal before execution, and then see:
 
 - the active goal;
 - its explicit required success criteria;
@@ -82,6 +83,7 @@ workflow stages manually.
 ### User owns
 
 - the real goal and priority;
+- confirmation that one exact proposed Goal Draft represents that intent;
 - business facts that cannot be derived from project evidence;
 - preferences between materially different valid product outcomes;
 - consent to a concrete external or irreversible real-world effect;
@@ -90,6 +92,8 @@ workflow stages manually.
 ### CodeClosure owns
 
 - authoritative goal and workflow state;
+- Raw Request provenance, Goal Draft revisions, exact Confirmation bindings,
+  and Goal Materialization authority for the planned Intake path;
 - technical routing and phase transitions;
 - allowed-action enforcement;
 - fact provenance and unresolved-fact tracking;
@@ -113,6 +117,11 @@ Worker output is untrusted input until CodeClosure validates and records it. A
 Worker may report a closed failure reason; CodeClosure alone maps that reason to
 retry and recovery classification.
 
+The planned Goal Intake Assistant is a separate adapter role rather than a
+Goal-bound Worker. It may propose a Draft or clarification question but owns no
+Draft identity, user Confirmation, formal Goal, Workflow, Acceptance, or
+closeout authority. See [ADR 0026](docs/adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
+
 ### Verification runner owns
 
 - executing an exact, versioned check specification;
@@ -132,9 +141,28 @@ runner does not author those bindings.
 
 ## Core User Loop
 
+The target natural-language front door forms a formal Goal before governed
+execution:
+
 ```text
-state a goal and required success criteria
-  -> inspect and compile relevant facts
+state a request in natural language
+  -> inspect a proposed Goal Draft
+  -> resolve material questions
+  -> confirm the exact Draft revision and digest
+  -> materialize the formal Goal and Workflow atomically
+```
+
+This planned Goal Intake path does not require the user to write a complete
+Criterion at the first message, and it cannot silently decide a business
+outcome for the user. The accepted direct `CreateGoal` path remains available
+for callers that already provide an explicit objective, project, and required
+criteria. The complete target contract is in
+[Goal Intake](docs/goal-intake.md).
+
+Once a formal Goal exists, the governed engineering loop remains:
+
+```text
+inspect and compile relevant facts
   -> plan the bounded change
   -> build an isolated candidate
   -> freeze the candidate
@@ -195,6 +223,15 @@ M1 and M2 should make these claims measurable:
 - acceptance can be replayed from recorded inputs with the same result;
 - the user can identify the dominant blocker without reading the full agent
   transcript.
+
+M2.5 should additionally make these Goal-formation claims measurable:
+
+- model output cannot create or revise a formal Goal;
+- a stale or mismatched Draft Confirmation cannot materialize a Goal;
+- a successful Materialization creates one exact Goal and Workflow atomically;
+  and
+- the user can distinguish what they stated, what the system proposed, what
+  remains unresolved, and what exact Draft they confirmed.
 
 ## Explicit Non-Goals for the Initial Product
 

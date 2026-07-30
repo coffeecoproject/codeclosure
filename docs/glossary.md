@@ -26,6 +26,12 @@ freeze time. Evidence and acceptance bind to this digest.
 The successful technical terminal phase for one accepted Goal revision and
 Candidate. Closeout is not merge, release, deployment, or production consent.
 
+## Clarification Question
+
+A versioned, scoped pre-Goal question whose answer may materially change a Goal
+Draft's objective, criteria, scope, non-goals, project identity, or risk. It is
+not a Workflow blocker because no formal Workflow exists yet.
+
 ## Completion Request
 
 A worker proposal that the current phase or implementation may be ready to
@@ -75,11 +81,49 @@ criteria, scope, revisions, and lifecycle status independent of any Codex
 thread. A Codex thread-scoped goal or plan is disposable worker execution state
 and is not this authoritative product object.
 
+## Goal Confirmation
+
+An immutable user-authored confirmation bound to one exact Goal Draft identity,
+revision, canonical digest, principal, and project or scope. It authorizes only
+Goal Materialization and is neither technical Acceptance nor external-effect
+consent.
+
+## Goal Draft
+
+One immutable, digest-bound proposed interpretation of a Raw Request. A Goal
+Draft is created by the Goal Intake Coordinator after validating untrusted
+proposal input; it is not formal user intent or a CodeClosure Goal.
+
+## Goal Intake
+
+The planned pre-Goal product flow that records a Raw Request, develops a Goal
+Draft, resolves material questions, captures exact user Confirmation, and may
+materialize a formal Goal. It is not the `DISCOVERY` Workflow phase.
+
+## Goal Materialization
+
+The atomic Runtime application operation that consumes one current exact Goal
+Confirmation and creates the formal Goal, initial Workflow,
+GoalMaterializationRecord, audits, and command outcome. It is distinct from
+post-closeout Promotion.
+
+## Goal Revision Proposal
+
+A non-authoritative proposal raised after formal execution begins when newly
+discovered ambiguity may require changing Goal intent. Only exact user
+confirmation and the Goal Manager can create the later Goal revision.
+
 ## Human Decision
 
 A typed, scoped record of a business fact, product preference, unavailable
 external fact, or exact real-world consent. It is an acceptance input, not a
 technical-gate bypass.
+
+## Intake Run
+
+A versioned pre-Goal lifecycle that owns Drafting, clarification, confirmation,
+Materialization, abandonment, or failure status. Its statuses are not Workflow
+phases or run statuses.
 
 ## Policy Bundle
 
@@ -97,6 +141,18 @@ configuring another Policy does not replace this binding.
 Any action that applies, merges, releases, deploys, or otherwise moves an
 accepted candidate into another real state. Promotion is outside initial
 technical closeout and needs separate authority.
+
+## Project-assisted Intake
+
+Optional policy-authorized Goal Intake that uses bounded, read-only project
+exploration to propose Draft changes or questions. Its observations are not
+formal Goal Facts or Acceptance Evidence without fresh Goal-bound validation.
+
+## Raw Request
+
+The immutable, provenance-bearing record of what a user actually submitted to
+Goal Intake before any assistant interpretation. It may contain incomplete or
+ambiguous intent and is not itself a formal Goal.
 
 ## Reconciliation
 

@@ -18,7 +18,8 @@ implemented with isolated authority, scenario-specific terminal assertions,
 Goal-owned audit checks, and strict reopen comparison. The
 [M1 completion review](reviews/m1-completion-review.md) records the final
 quality and invariant evidence. Real project editing and Codex integration are
-not implemented in M1.
+not implemented in M1. Goal Intake is an accepted pre-Goal target for M2.5; it
+is not implemented and does not add another Workflow phase.
 
 ## Purpose
 
@@ -39,6 +40,31 @@ CodeClosure separates:
 This prevents an operational failure or user wait from being confused with a
 new engineering phase.
 
+## Pre-Goal Flow — planned M2.5
+
+Goal Intake precedes this state machine and owns no `WorkflowPhase`,
+`RunStatus`, or `Attempt`. Its independent planned flow is:
+
+```text
+Raw Request
+  -> DRAFTING
+  -> NEEDS_CLARIFICATION
+  -> DRAFTING
+  -> READY_FOR_CONFIRMATION
+  -> CONFIRMED
+  -> MATERIALIZED
+  -> formal Goal revision 1 plus initial Workflow
+  -> DISCOVERY / READY
+```
+
+The uppercase Intake statuses belong to a versioned `IntakeRun`, not to the
+Workflow enum. A validated Draft remains a proposal. Only an exact current Goal
+Confirmation, Goal Manager validation, and the Runtime's atomic
+Materialization transaction may create the formal Goal plus initial Workflow.
+The accepted boundary is defined by
+[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md) and
+[Goal Intake](goal-intake.md).
+
 ## Public and Internal Command Boundary
 
 The public product boundary operates by `GoalId`. `StartGoal`, `ResumeGoal`,
@@ -51,6 +77,12 @@ operation. It requires explicit success criteria and atomically creates one
 Goal plus its unique `DISCOVERY`/`READY` Workflow; it does not dispatch work.
 The first Context-bound `StartGoal` transaction binds one installed Execution
 Profile. Resume cannot select another profile.
+
+The planned M2.5 `MaterializeGoal` application command adds exact Raw Request,
+Draft revision/digest, Confirmation, Intake version, and project/scope guards
+before converging on the same Goal Manager validation and atomic Goal/Workflow
+creation primitive. It does not change or wrap the implemented direct
+`CreateGoal` contract.
 
 The implemented CLI creation adapter requires an explicit objective, project,
 and at least one non-blank criterion. Lifecycle adapters read current Goal and
@@ -226,6 +258,9 @@ atomically. See
 [ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 ## Main Phase Graph
+
+This graph begins only after a formal Goal and its initial Workflow exist.
+Intake statuses are not inserted before `DISCOVERY` in the phase enum.
 
 ```text
 DISCOVERY
@@ -503,6 +538,26 @@ identify:
 After a decision arrives, the runtime does not blindly continue. It revises the
 relevant facts/Goal when needed, invalidates dependent inputs, and reevaluates
 the phase guard.
+
+### Goal Revision Proposal — planned M3
+
+When execution reveals ambiguity that would change objective, required
+criteria, scope, or non-goals, a Worker may propose the issue but cannot revise
+the Goal. The later planned path is:
+
+```text
+DISCOVERY / PLAN / IMPLEMENT
+  -> WAITING_FOR_INPUT
+  -> Goal Revision Proposal
+  -> exact user confirmation
+  -> Goal Manager creates a new Goal revision
+  -> affected Plan, Context, Candidate, Evidence, and Acceptance authority
+     becomes stale or invalid according to policy
+  -> Runtime reconciles before continuation
+```
+
+This is distinct from reopening the original IntakeRun. It is not required for
+M2 or the basic M2.5 Goal Intake vertical slice.
 
 ## Cancellation
 

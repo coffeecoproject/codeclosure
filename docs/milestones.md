@@ -128,6 +128,9 @@ the M1 authority boundary.
 ### Scope
 
 - direct Codex App Server v2 adapter over stdio;
+- lower-level App Server client separated from Goal-bound WorkerPort semantics
+  so later adapters can reuse protocol transport without inheriting Worker
+  authority;
 - initialization plus Thread/Turn lifecycle;
 - installed-version discovery and generated TypeScript schema snapshot;
 - per-phase cwd, sandbox/permissions, and approval routing;
@@ -139,6 +142,15 @@ the M1 authority boundary.
 - acceptance rejection and repair generation loop;
 - fresh-thread and resumed-thread policies;
 - Compact event handling with no loss of authoritative state.
+
+### Explicit Non-Scope
+
+- Goal Intake user flow, Raw Request, Goal Draft, clarification, Confirmation,
+  or Goal Materialization;
+- changes to the accepted direct M1 `CreateGoal` command;
+- full Fact Graph traversal or execution-time Goal revision;
+- rich TUI, multiple agents, cloud, or multi-user behavior; and
+- merge, release, deployment, or other external-effect authority.
 
 ### Required Demonstration
 
@@ -161,7 +173,90 @@ For one bounded repository fixture:
 - frozen-source mutation is detected and invalidates evidence;
 - restart and new Thread recovery preserve Goal/Workflow authority;
 - protocol schemas are version-bound rather than hand-copied into core;
+- dependency and contract tests prove that the App Server client is reusable
+  without importing WorkerPort, Workflow, Candidate, or Intake domain
+  semantics;
 - one complete adversarial fixture proves reject/repair/accept behavior.
+
+M2 completion proves the real Codex execution branch under the M1 control
+plane. It does not prove that CodeClosure can form a Goal from an incomplete
+natural-language request.
+
+## M2.5 — Goal Intake and Materialization Vertical Slice
+
+Status: Not started. The scope below is planned behavior governed by
+[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
+M2.5 implementation MUST NOT begin until M2 has passed its exit review.
+
+### Objective
+
+Turn one natural-language Raw Request into an exactly confirmed formal Goal
+without giving the assistant Goal, Workflow, Acceptance, or confirmation
+authority.
+
+### Scope
+
+- immutable Raw Request and versioned IntakeRun;
+- immutable Goal Draft revisions and canonical Draft digests;
+- Goal Intake Assistant Adapter over the reusable App Server client;
+- bounded Clarification Questions and typed user answers;
+- exact Goal Confirmation bound to Draft revision, digest, principal, and
+  project or scope;
+- atomic Goal Materialization through the Goal Manager and Workflow Runtime;
+- one formal Goal revision 1 and one `DISCOVERY / READY` Workflow;
+- immutable Goal Materialization Record, audit, command idempotency, and strict
+  reopen validation;
+- basic CLI/read views for request, Draft, question, confirmation, and
+  Materialization status; and
+- stale, concurrent, replay, partial-write, forged-authority, restart, and
+  adapter-boundary adversarial tests.
+
+### Explicit Non-Scope
+
+- full Fact Graph or broad project/business discovery;
+- large-scale or write-capable project exploration;
+- automatic or execution-time Goal revision;
+- rich TUI or complete Human Decision UX;
+- multiple Intake agents or model-voting pipelines;
+- long-term business knowledge base; and
+- technical Acceptance or post-closeout Promotion changes.
+
+### Required Demonstration
+
+For one bounded local request:
+
+1. the user submits an incomplete Raw Request;
+2. the Intake Assistant returns a Goal Draft Proposal and one material
+   clarification;
+3. CodeClosure validates and persists Draft revision 1;
+4. the user answer produces Draft revision 2;
+5. a stale confirmation of revision 1 is rejected without a formal Goal;
+6. the user confirms the exact revision-2 digest;
+7. Goal Materialization atomically creates Goal revision 1, its unique
+   `DISCOVERY / READY` Workflow, the Materialization Record, audits, and command
+   outcome; and
+8. strict reopen returns the identical Intake-to-Goal authority chain.
+
+### Exit Criteria
+
+- model output, transcript text, Codex lifecycle, or a generic approval cannot
+  create a Draft Confirmation or formal Goal;
+- changing a confirmation-bearing Draft field invalidates earlier
+  Confirmation authority;
+- direct `CreateGoal` remains unchanged and creates no synthetic Intake
+  records;
+- exact command replay produces one materialization effect, while conflicting
+  reuse and concurrent losers fail closed;
+- injected failure at every compound-write boundary leaves no partial Goal or
+  Workflow authority;
+- Intake authority survives restart without conversation reconstruction;
+- the Intake Adapter has no WorkerPort, Candidate-write, Store-mutation,
+  Acceptance, or external-effect capability;
+- Intake observations cannot satisfy formal Goal Evidence without fresh
+  Goal-bound verification;
+- the planned proposal-self-materialization invariant and its executable tests
+  enter `RUNTIME_INVARIANTS.md` together; and
+- every M1 and M2 regression gate remains green.
 
 ## M3 — Full Fact Graph and Context Compiler
 
@@ -173,11 +268,16 @@ runtime state.
 ### Scope
 
 - provenance-bearing Fact Graph;
+- project-assisted Goal Intake with exact read-only project provenance;
+- Raw Request/Draft relationships to Fact and Business Scenario sources;
 - business-scenario discovery and applicability;
 - code/business relationship mapping;
 - Context Compiler relevance selection and hard budgets;
 - Context Manifest omission decisions;
 - decision and unresolved-fact gateway;
+- Goal Revision Proposal and exact user confirmation;
+- dependency invalidation after a formal Goal revision;
+- Intake Context relevance selection, omission records, and hard budgets;
 - scenario-to-obligation-to-evidence trace;
 - clean-context phase and review sessions.
 
@@ -201,10 +301,16 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - bounded retry and repair budgets;
 - robust crash/restart reconciliation;
 - Human Decision Gateway UX;
+- complete Goal Intake and clarification UX;
+- Raw Request and sensitive Intake-content retention controls;
 - richer status surface;
 - candidate retention and cleanup policy;
 - CodeClosure builds selected CodeClosure changes;
-- escaped-defect and false-acceptance tracking.
+- escaped-defect and false-acceptance tracking;
+- Goal Draft edit/confirmation rate, clarification burden, and execution-time
+  Goal-revision frequency;
+- requirement-misunderstanding rework and missed-scenario tracking; and
+- Intake quality comparison across supported model versions.
 
 ### Exit Criteria
 
@@ -214,6 +320,11 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - false completion attempts remain rejected;
 - operator can see Goal, phase, scenario coverage, blocker, and next action
   without reading raw transcripts.
+- operators can see which Intake content was user-stated, project-observed,
+  model-proposed, unresolved, and exactly confirmed;
+- Intake privacy and retention policy is inspectable and enforced; and
+- Intake quality metrics do not become Goal, Acceptance, or model-selection
+  authority by themselves.
 
 ## M5 — Hardening and Additional Workers
 

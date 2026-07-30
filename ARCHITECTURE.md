@@ -20,6 +20,12 @@ dependency graph, and invariant coverage. Real candidate isolation and real
 project verification remain M2 work. Components marked for later milestones
 are architectural boundaries, not current implementation claims.
 
+The pre-Goal Intake and Goal Materialization target is accepted in
+[ADR 0026](docs/adr/0026-pre-goal-intake-and-goal-materialization-authority.md)
+but is not implemented. M2 must preserve a reusable Codex App Server client
+boundary; the Intake Coordinator, Draft/Confirmation authority, and Intake
+Assistant Adapter remain planned for M2.5.
+
 ## Architectural Goal
 
 CodeClosure places a deterministic host runtime between the user and a
@@ -28,15 +34,29 @@ candidate identity, evidence, and acceptance. The worker owns only permitted
 execution.
 
 ```text
-                     User
-                      |
-                      v
-              CodeClosure CLI / App
-                      |
-                      v
+                         User
+                          |
+                          v
+                  CodeClosure CLI / App
+                    /              \
+                   v                v
+       natural-language request   explicit CreateGoal
+                   |                |
+                   v                |
+        Goal Intake Coordinator     |
+            (M2.5 planned)           |
+          |-- Intake Assistant       |
+          |-- Draft Store            |
+          `-- Confirmation Gateway   |
+                   |                |
+                   | exact confirmed Draft
+                   +--------+-------+
+                            |
+                            v
         +--------------------------------+
         | CodeClosure Control Runtime    |
         |                                |
+        | Runtime App / Goal Manager     |
         | Goal / Fact / Decision Store   |
         | Workflow Runtime               |
         | Context Compiler               |
@@ -52,13 +72,13 @@ execution.
              +----------+-----------+
              |                      |
              v                      v
-        FakeWorker (M1)       Codex Adapter (M2)
+        FakeWorker (M1)    Codex Worker Adapter (M2)
+                                     |
+                                     v
+                          Codex App Server Client
                                      |
                                      v
                              Codex App Server
-                                     |
-                                     v
-                                Codex Core
 ```
 
 ## Architectural Planes
@@ -70,6 +90,11 @@ evidence summaries. It sends typed Goal commands to the Runtime application
 facade and renders Runtime-owned read views. It does not write or query the
 control database directly, sequence internal Workflow commands, or infer
 successful completion from a worker transcript.
+
+The planned Intake surface separately presents Raw Request, Draft revision,
+material questions, exact Confirmation, and Materialization status. It does
+not render a proposal as a formal Goal or reuse a Goal status view before
+Materialization.
 
 ### Control Plane
 
@@ -100,8 +125,12 @@ own records make external reality true.
 
 ### Boundary A — User to Control Runtime
 
-Natural-language input is parsed into proposals. A Goal revision or Human
-Decision becomes authoritative only after the runtime validates and persists a
+Natural-language input first becomes an immutable Raw Request. Assistant output
+is an untrusted Goal Draft Proposal. The Intake Coordinator may validate and
+persist a Draft revision, but only an exact user Confirmation plus Goal Manager
+validation and the Runtime's atomic Materialization transaction can create a
+formal Goal and Workflow. A Goal revision or Human Decision becomes
+authoritative only after the owning runtime boundary validates and persists its
 typed record.
 
 ### Boundary B — Control Runtime to Worker
@@ -140,6 +169,20 @@ promotion, merge, release, deployment, paid action, or irreversible data change
 requires a separate gateway and policy.
 
 ## Logical Components
+
+### Goal Intake Coordinator — planned M2.5
+
+Owns the pre-Goal IntakeRun lifecycle and validated Raw Request, Goal Draft,
+Clarification Question, and Confirmation records. It compiles Intake-specific
+packages, invokes an Intake Assistant through a narrow port, validates all
+assistant output as untrusted input, and derives immutable Draft identity,
+revision, provenance, and digest authority.
+
+It cannot create a formal Goal, mutate a Workflow, dispatch a Goal-bound
+Worker, issue technical Acceptance, or authorize an external effect. Goal
+Materialization crosses into the Runtime application boundary, where the Goal
+Manager validates formal intent and the Workflow Runtime remains the only
+Workflow writer. See [Goal Intake](docs/goal-intake.md).
 
 ### Runtime Application Coordinator
 
@@ -341,8 +384,11 @@ Converts CodeClosure worker requests into backend protocol actions and maps
 backend events into typed observations. The core domain never imports
 backend-specific Thread, Turn, Item, approval, or sandbox types.
 
-M2 initially targets Codex App Server v2 over stdio. The adapter records the
-Codex version and uses schemas generated for that installed version.
+M2 initially targets Codex App Server v2 over stdio. The Codex Worker Adapter
+records the Codex version and uses schemas generated for that installed
+version. Its lower-level App Server client MUST remain separable from
+WorkerPort semantics so a later Intake Assistant Adapter can reuse protocol
+transport and lifecycle without receiving Goal-bound authority.
 
 ### Verification Runner
 
@@ -503,6 +549,22 @@ Codex compaction replaces model history with a compacted representation and
 re-injects selected initial context. Therefore no CodeClosure authority may
 exist only inside Codex history.
 
+The target adapter layering is:
+
+```text
+Codex App Server Client
+├── Codex Worker Adapter
+│   └── Goal-bound WorkerPort requests and events
+└── Goal Intake Assistant Adapter (M2.5 planned)
+    └── pre-Goal IntakePackage and GoalDraftProposal
+```
+
+The client owns protocol process, transport, initialization, generated schema,
+stream, interruption, and compatibility mechanics. It owns no Goal, Workflow,
+Worker, Draft, Confirmation, Acceptance, or persistence semantics. M2
+implements and validates the Worker branch only; Goal Intake is not an M2 exit
+condition.
+
 Application `CommandId` values and worker-delivery `WorkerEventId` values are
 also separate authority domains. The Codex adapter may report a worker event;
 it cannot choose or impersonate the runtime command that admits that event.
@@ -559,7 +621,10 @@ M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside
 `domain` and `runtime`. Slice 6 implements that control without introducing a
 separate package or a worker-facing completion path.
 
-Codex protocol DTOs must remain inside `adapter-codex`.
+Codex protocol DTOs must remain inside the App Server client/adapter boundary.
+Domain and Runtime packages import neither those DTOs nor Thread, Turn, Item,
+approval, or sandbox protocol types. Worker and Intake adapters may share the
+client but not each other's domain contracts or authority labels.
 
 ## Failure and Recovery Model
 

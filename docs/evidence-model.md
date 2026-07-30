@@ -7,7 +7,8 @@ implementation provides logical Candidate-freeze Evidence, independent fake
 verification observations, monotonic eligibility, and canonical Evidence Sets.
 The deterministic Acceptance Engine consumes those records through a separate
 authority boundary; Evidence still cannot approve itself. A real verifier
-remains M2 work.
+remains M2 work. Pre-Goal Intake observations are not part of the implemented
+Evidence model and cannot satisfy a formal Goal's Acceptance.
 
 ## Purpose
 
@@ -340,6 +341,26 @@ not make the review authoritative.
   Evidence `INELIGIBLE`;
 - cleanup unproven -> evidence cannot satisfy isolation-dependent obligations;
 - required payload missing -> fail closed.
+
+## Intake Observation Boundary — planned M2.5
+
+An Intake Assistant or optional read-only project explorer may return a bounded
+observation to help produce a Goal Draft or clarification question. That record
+is pre-Goal proposal context, not Acceptance Evidence, because it has no formal
+Goal revision, Workflow, Candidate, Check Specification, Verification
+Obligation, current project identity, or Evidence producer binding.
+
+Persisting an Intake observation or showing it to the user MUST NOT create an
+`EvidenceRecord`, `EvidenceSet`, satisfied Criterion, or technical closeout
+input. If a later formal Goal depends on the same claim, CodeClosure must
+reobserve or revalidate it under that Goal's current revision and bind it to the
+exact Candidate, Check Specification, runner, environment, and project/source
+identity required by the Evidence contract.
+
+Historical Intake provenance MAY remain linked for explanation, but it cannot
+replace fresh formal verification. See
+[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md) and
+[Goal Intake](goal-intake.md).
 
 ## M1 Boundary
 

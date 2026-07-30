@@ -8,6 +8,8 @@ implementation provides the deterministic rule set under
 SQLite persistence, current-input replay validation, transactional closeout,
 and immutable exact repair-generation authority. It still uses only logical
 Candidate and fake Evidence inputs; real project verification remains M2 work.
+Goal Draft confirmation and Goal Materialization are a separate pre-Goal
+authority and are not implemented by the Acceptance Engine.
 
 ## Purpose
 
@@ -38,6 +40,13 @@ The Acceptance Engine:
 - may not invoke an implementation worker;
 - may not mutate Workflow phase or Goal status;
 - may not authorize release or another real-world effect.
+
+It also does not judge whether a Goal Draft represents the user's true intent,
+record Goal Confirmation, or approve Goal Materialization. Those pre-Goal
+decisions depend on structural validation, provenance, exact Draft
+revision/digest, explicit user Confirmation, Goal Manager validation, and the
+Runtime's atomic creation transaction. They are not technical `ACCEPT`. See
+[ADR 0026](adr/0026-pre-goal-intake-and-goal-materialization-authority.md).
 
 The Workflow Runtime is the only component that consumes a current `ACCEPT`
 and transactionally transitions to `CLOSEOUT`.
