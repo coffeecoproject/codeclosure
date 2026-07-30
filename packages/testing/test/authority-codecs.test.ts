@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  AttemptFailureClass,
+  AttemptStatus,
   CandidateGenerationState,
+  RunStatus,
   WorkflowPhase,
   acceptanceDecisionId,
   aggregateVersion,
@@ -16,6 +19,7 @@ import {
   createWorkflow,
   decodeAttemptSnapshot,
   decodeAcceptanceRepairRecord,
+  decodeAttemptEvent,
   decodeCandidateGeneration,
   decodeExecutionProfile,
   decodeExecutionProfileBinding,
@@ -190,6 +194,86 @@ void test('[I-006] authority codecs materialize immutable canonical snapshots', 
   assert.equal(Object.isFrozen(decodedProfile), true);
   assert.equal(Object.isFrozen(decodedProfileBinding), true);
   assert.equal(Object.isFrozen(decodedPolicyBinding), true);
+});
+
+void test('[I-006][I-028] Attempt Event codec enforces the exact M1 failure-state policy', () => {
+  const expected = new Map<AttemptFailureClass, RunStatus>([
+    [AttemptFailureClass.TRANSIENT_BACKEND, RunStatus.BLOCKED],
+    [AttemptFailureClass.TIMEOUT, RunStatus.BLOCKED],
+    [AttemptFailureClass.ABRUPT_TERMINATION, RunStatus.BLOCKED],
+    [AttemptFailureClass.PROTOCOL_ERROR, RunStatus.FAILED],
+    [AttemptFailureClass.INTEGRITY_VIOLATION, RunStatus.FAILED],
+    [AttemptFailureClass.PERMANENT_BACKEND, RunStatus.FAILED],
+    [AttemptFailureClass.UNKNOWN, RunStatus.FAILED],
+  ]);
+
+  for (const [failureClass, expectedRunStatus] of expected) {
+    for (const resultingRunStatus of [
+      RunStatus.READY,
+      RunStatus.BLOCKED,
+      RunStatus.FAILED,
+    ] as const) {
+      const encoded = {
+        type: 'ATTEMPT_FINISHED',
+        commandId: 'command_codec-failure-event',
+        workflowId: workflow.id,
+        attemptId: attempt.id,
+        phase: WorkflowPhase.DISCOVERY,
+        fromWorkflowVersion: 2,
+        toWorkflowVersion: 3,
+        fromStatus: AttemptStatus.RUNNING,
+        toStatus: AttemptStatus.FAILED,
+        resultingRunStatus,
+        failureClass,
+        terminationReason: 'codec failure policy review',
+        occurredAt: '2026-07-27T03:00:00.001Z',
+      };
+
+      if (resultingRunStatus === expectedRunStatus) {
+        const decoded = decodeAttemptEvent(encoded);
+        assert.equal(decoded.type, 'ATTEMPT_FINISHED');
+        assert.equal(decoded.resultingRunStatus, expectedRunStatus);
+      } else {
+        assert.throws(() => decodeAttemptEvent(encoded), /invalid terminal fields/);
+      }
+    }
+  }
+});
+
+void test('[I-006][I-008] Attempt Event codec enforces interruption ownership and status', () => {
+  for (const [terminationReason, resultingRunStatus, accepted] of [
+    ['RECOVERY_RECONCILIATION:restart requires inspection', RunStatus.BLOCKED, true],
+    ['RECOVERY_RECONCILIATION:restart requires inspection', RunStatus.READY, false],
+    ['USER_REQUEST:operator paused work', RunStatus.READY, true],
+    ['USER_REQUEST:operator paused work', RunStatus.BLOCKED, true],
+    ['RUNTIME_SHUTDOWN:bounded shutdown', RunStatus.READY, true],
+    ['RUNTIME_SHUTDOWN:bounded shutdown', RunStatus.BLOCKED, true],
+    ['WORKFLOW_CANCELLED:owning Goal was cancelled', RunStatus.BLOCKED, false],
+    ['UNSCOPED_INTERRUPTION:free-form authority', RunStatus.BLOCKED, false],
+  ] as const) {
+    const encoded = {
+      type: 'ATTEMPT_FINISHED',
+      commandId: 'command_codec-interruption-event',
+      workflowId: workflow.id,
+      attemptId: attempt.id,
+      phase: WorkflowPhase.DISCOVERY,
+      fromWorkflowVersion: 2,
+      toWorkflowVersion: 3,
+      fromStatus: AttemptStatus.RUNNING,
+      toStatus: AttemptStatus.INTERRUPTED,
+      resultingRunStatus,
+      terminationReason,
+      occurredAt: '2026-07-27T03:00:00.001Z',
+    };
+
+    if (accepted) {
+      const decoded = decodeAttemptEvent(encoded);
+      assert.equal(decoded.type, 'ATTEMPT_FINISHED');
+      assert.equal(decoded.resultingRunStatus, resultingRunStatus);
+    } else {
+      assert.throws(() => decodeAttemptEvent(encoded), /invalid terminal fields/);
+    }
+  }
 });
 
 void test('[I-006][I-013] Acceptance repair authority has one strict immutable shape', () => {

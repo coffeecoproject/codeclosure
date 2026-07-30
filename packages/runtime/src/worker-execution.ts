@@ -9,7 +9,6 @@ import {
   type WorkflowRuntimeKernelDependencies,
 } from './workflow-runtime.js';
 import {
-  WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
   WorkerPortFailureReasonCode,
   type WorkerDispatchResult,
@@ -149,8 +148,7 @@ class WorkerExecutionCoordinator implements WorkerExecutionApplication {
       !admissions.some(
         (admission) =>
           admission.status === 'ADMITTED' ||
-          (admission.status === 'DUPLICATE' &&
-            admission.originalDisposition === WorkerEventDisposition.ADMITTED),
+          (admission.status === 'DUPLICATE' && admission.terminalForCurrentDispatch),
       ) &&
       !admissions.some(
         (admission) =>

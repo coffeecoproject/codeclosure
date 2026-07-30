@@ -25,8 +25,11 @@ import {
   deriveCapabilityGrant,
   goalId,
   goalRevision,
+  hasExactWorkflowActiveAttemptAuthority,
   isCanonicalCapabilityGrant,
   isoTimestamp,
+  isTerminalAttemptWorkflowRunStatusAuthorized,
+  assertWorkflowActiveAttemptAuthority,
   workerSessionId,
   workflowId,
   workflowVersion,
@@ -117,6 +120,29 @@ void test('[I-008][I-023] beginning an Attempt advances the owning Workflow vers
   assert.equal(isCanonicalCapabilityGrant(running.attempt.capabilityGrant), true);
 });
 
+void test('[I-008] active Attempt authority includes exact Workflow phase ownership', () => {
+  const running = begin();
+  assert.equal(hasExactWorkflowActiveAttemptAuthority(running.workflow, running.attempt), true);
+  assert.doesNotThrow(() =>
+    assertWorkflowActiveAttemptAuthority(running.workflow, running.attempt),
+  );
+
+  const wrongPhaseAttempt = Object.freeze({
+    ...running.attempt,
+    phase: WorkflowPhase.PLAN,
+    capabilityGrant: deriveCapabilityGrant(WorkflowPhase.PLAN),
+  });
+  assert.equal(hasExactWorkflowActiveAttemptAuthority(running.workflow, wrongPhaseAttempt), false);
+  assert.throws(
+    () => assertWorkflowActiveAttemptAuthority(running.workflow, wrongPhaseAttempt),
+    /one exact running authority/,
+  );
+
+  const ready = readyWorkflow();
+  assert.equal(hasExactWorkflowActiveAttemptAuthority(ready, undefined), true);
+  assert.equal(hasExactWorkflowActiveAttemptAuthority(ready, running.attempt), false);
+});
+
 void test('[I-004][I-019] a Worker Session cannot exist without Context authority', () => {
   const workflow = readyWorkflow();
   const decision = decideAttempt(workflow, undefined, {
@@ -154,9 +180,17 @@ void test('[I-002] recording a worker result does not advance phase or imply suc
   assert.equal(finished.workflow.runStatus, RunStatus.READY);
   assert.equal(finished.workflow.activeAttemptId, undefined);
   assert.equal(finished.workflow.version, 3);
+  assert.equal(
+    isTerminalAttemptWorkflowRunStatusAuthorized(finished.attempt, RunStatus.READY),
+    true,
+  );
+  assert.equal(
+    isTerminalAttemptWorkflowRunStatusAuthorized(finished.attempt, RunStatus.FAILED),
+    false,
+  );
 });
 
-void test('[I-027] failure classes produce explicit retry, reconciliation, or terminal states', () => {
+void test('[I-027][I-028] failure classes preserve classification while M1 stops without an automatic retry policy', () => {
   const expected = new Map<
     AttemptFailureClass,
     readonly [
@@ -164,7 +198,7 @@ void test('[I-027] failure classes produce explicit retry, reconciliation, or te
       typeof RunStatus.READY | typeof RunStatus.BLOCKED | typeof RunStatus.FAILED,
     ]
   >([
-    [AttemptFailureClass.TRANSIENT_BACKEND, [RetryClassification.RETRYABLE, RunStatus.READY]],
+    [AttemptFailureClass.TRANSIENT_BACKEND, [RetryClassification.RETRYABLE, RunStatus.BLOCKED]],
     [AttemptFailureClass.TIMEOUT, [RetryClassification.RECONCILE_FIRST, RunStatus.BLOCKED]],
     [
       AttemptFailureClass.ABRUPT_TERMINATION,
@@ -198,6 +232,13 @@ void test('[I-027] failure classes produce explicit retry, reconciliation, or te
     assert.equal(classifyAttemptFailure(failureClass), classification);
     assert.equal(failed.attempt.status, AttemptStatus.FAILED);
     assert.equal(failed.workflow.runStatus, runStatus);
+    assert.equal(isTerminalAttemptWorkflowRunStatusAuthorized(failed.attempt, runStatus), true);
+    assert.equal(
+      failed.workflow.suspendedReason,
+      runStatus === RunStatus.BLOCKED || runStatus === RunStatus.FAILED
+        ? `observed ${failureClass}`
+        : undefined,
+    );
   }
 });
 
@@ -221,6 +262,38 @@ void test('[I-008] interruption closes one Attempt and releases the Workflow exp
   assert.equal(interrupted.attempt.status, AttemptStatus.INTERRUPTED);
   assert.equal(interrupted.workflow.runStatus, RunStatus.BLOCKED);
   assert.match(interrupted.attempt.terminationReason, /^RECOVERY_RECONCILIATION:/);
+  assert.equal(
+    isTerminalAttemptWorkflowRunStatusAuthorized(interrupted.attempt, RunStatus.BLOCKED),
+    true,
+  );
+  assert.equal(
+    isTerminalAttemptWorkflowRunStatusAuthorized(interrupted.attempt, RunStatus.READY),
+    false,
+  );
+});
+
+void test('[I-008] generic interruption cannot impersonate cancellation or unsafe recovery', () => {
+  const running = begin();
+  for (const [interruptionReason, resultingRunStatus] of [
+    [AttemptInterruptionReason.WORKFLOW_CANCELLED, RunStatus.BLOCKED],
+    [AttemptInterruptionReason.RECOVERY_RECONCILIATION, RunStatus.READY],
+  ] as const) {
+    const decision = decideAttempt(running.workflow, running.attempt, {
+      type: 'INTERRUPT_ATTEMPT',
+      commandId: commandId(
+        `command_invalid-interruption-${interruptionReason.toLowerCase().replaceAll('_', '-')}`,
+      ),
+      workflowId: running.workflow.id,
+      expectedWorkflowVersion: running.workflow.version,
+      attemptId: running.attempt.id,
+      interruptionReason,
+      resultingRunStatus,
+      occurredAt: finishedAt,
+      reason: 'authority must remain explicit',
+    });
+    assert.equal(decision.accepted, false);
+    assert.equal(decision.rejection.code, AttemptRejectionCode.INVALID_INTERRUPTION_AUTHORITY);
+  }
 });
 
 void test('[I-008] stale, non-active, and terminal Attempt commands fail closed', () => {
@@ -467,6 +540,13 @@ void test('[I-008] result and cancellation share one Workflow version so only on
   );
   assert.equal(cancellationWon.workflow.runStatus, RunStatus.CANCELLED);
   assert.equal(cancellationWon.attempt?.status, AttemptStatus.INTERRUPTED);
+  assert.equal(
+    isTerminalAttemptWorkflowRunStatusAuthorized(
+      cancellationWon.attempt,
+      cancellationWon.workflow.runStatus,
+    ),
+    true,
+  );
   assert.throws(
     () => applyAttemptEvent(cancellationWon.workflow, cancellationWon.attempt, resultEvent),
     /identity or version/,

@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 import {
   AcceptanceOutcome,
-  AttemptStatus,
   CandidateGenerationState,
   GoalStatus,
   RunStatus,
@@ -28,6 +27,7 @@ import {
   executionProfileBindingProjection,
   goalId,
   goalRevision,
+  hasExactWorkflowActiveAttemptAuthority,
   isoTimestamp,
   recoveryReconciliationProjection,
   sha256Digest,
@@ -481,13 +481,7 @@ export function decodeStatusAuthority(
 
   const activeAttempt =
     parsed.activeAttempt === undefined ? undefined : decodeAttemptSnapshot(parsed.activeAttempt);
-  if (
-    (workflow.activeAttemptId === undefined) !== (activeAttempt === undefined) ||
-    (activeAttempt !== undefined &&
-      (activeAttempt.id !== workflow.activeAttemptId ||
-        activeAttempt.workflowId !== workflow.id ||
-        activeAttempt.status !== AttemptStatus.RUNNING))
-  ) {
+  if (!hasExactWorkflowActiveAttemptAuthority(workflow, activeAttempt)) {
     throw new TypeError('Goal status active Attempt does not match current Workflow authority');
   }
 

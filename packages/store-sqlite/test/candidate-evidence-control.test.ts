@@ -226,7 +226,7 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: workflow.activeAttemptId,
-      reason: 'discovery fixture complete',
+      reason: 'WORKER_RESULT:PROPOSALS',
     }).status,
     'APPLIED',
   );
@@ -261,7 +261,7 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: workflow.activeAttemptId,
-      reason: 'plan fixture complete',
+      reason: 'WORKER_RESULT:PROPOSALS',
     }).status,
     'APPLIED',
   );
@@ -314,7 +314,7 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: workflow.activeAttemptId,
-      reason: 'implementation fixture complete',
+      reason: 'WORKER_RESULT:COMPLETION_REQUEST',
     }).status,
     'APPLIED',
   );

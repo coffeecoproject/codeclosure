@@ -29,6 +29,8 @@ supersedes it.
 | [0021](0021-m1-execution-profile-and-cli-composition.md) | Bind M1 execution profiles and define local CLI composition | Accepted |
 | [0022](0022-immutable-workflow-policy-binding.md) | Bind one immutable Policy identity to each started Workflow | Accepted |
 | [0023](0023-verified-sqlite-authority-activation.md) | Activate SQLite authority through a verified isolation bootstrap | Accepted |
+| [0024](0024-stop-m1-transient-failure-without-retry-authority.md) | Stop M1 after transient Worker failure without retry authority | Accepted |
+| [0025](0025-separate-worker-event-idempotency-from-current-dispatch-termination.md) | Separate Worker event idempotency from current-dispatch termination | Accepted |
 
 ## ADR lifecycle
 

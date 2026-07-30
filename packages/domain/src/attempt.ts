@@ -180,8 +180,7 @@ export interface AttemptResultRecorded extends AttemptFinishedBase {
 
 export interface AttemptFailed extends AttemptFinishedBase {
   readonly toStatus: typeof AttemptStatus.FAILED;
-  readonly resultingRunStatus:
-    typeof RunStatus.READY | typeof RunStatus.BLOCKED | typeof RunStatus.FAILED;
+  readonly resultingRunStatus: typeof RunStatus.BLOCKED | typeof RunStatus.FAILED;
   readonly failureClass: AttemptFailureClass;
 }
 
@@ -210,6 +209,7 @@ export const AttemptRejectionCode = {
   INVALID_SEQUENCE: 'INVALID_SEQUENCE',
   INVALID_TIMESTAMP_ORDER: 'INVALID_TIMESTAMP_ORDER',
   INVALID_CONTEXT_BINDING: 'INVALID_CONTEXT_BINDING',
+  INVALID_INTERRUPTION_AUTHORITY: 'INVALID_INTERRUPTION_AUTHORITY',
   EMPTY_REASON: 'EMPTY_REASON',
 } as const;
 export type AttemptRejectionCode = (typeof AttemptRejectionCode)[keyof typeof AttemptRejectionCode];
@@ -242,17 +242,79 @@ export function classifyAttemptFailure(failureClass: AttemptFailureClass): Retry
   }
 }
 
-function resultingStatusForFailure(
+export function resultingRunStatusForFailure(
   failureClass: AttemptFailureClass,
-): AttemptFinished['resultingRunStatus'] {
+): AttemptFailed['resultingRunStatus'] {
   const classification = classifyAttemptFailure(failureClass);
   if (classification === RetryClassification.RETRYABLE) {
-    return RunStatus.READY;
+    // Retry eligibility is not retry authority. M1 has no persisted
+    // reason-scoped budget or backoff policy, so it must stop explicitly.
+    return RunStatus.BLOCKED;
   }
   if (classification === RetryClassification.RECONCILE_FIRST) {
     return RunStatus.BLOCKED;
   }
   return RunStatus.FAILED;
+}
+
+function interruptionReasonFromTerminationReason(
+  terminationReason: string,
+): AttemptInterruptionReason | undefined {
+  return Object.values(AttemptInterruptionReason).find((reason) => {
+    const prefix = `${reason}:`;
+    return (
+      terminationReason.startsWith(prefix) &&
+      terminationReason.slice(prefix.length).trim().length > 0
+    );
+  });
+}
+
+/**
+ * Validates an interruption produced by the generic ATTEMPT_FINISHED path.
+ * Workflow cancellation is deliberately excluded because only the owning
+ * Workflow cancellation event may authorize a CANCELLED projection.
+ */
+export function isAttemptFinishedInterruptionRunStatusAuthorized(
+  terminationReason: string,
+  runStatus: RunStatusType,
+): runStatus is AttemptInterrupted['resultingRunStatus'] {
+  switch (interruptionReasonFromTerminationReason(terminationReason)) {
+    case AttemptInterruptionReason.RECOVERY_RECONCILIATION:
+      return runStatus === RunStatus.BLOCKED;
+    case AttemptInterruptionReason.USER_REQUEST:
+    case AttemptInterruptionReason.RUNTIME_SHUTDOWN:
+      return runStatus === RunStatus.READY || runStatus === RunStatus.BLOCKED;
+    case AttemptInterruptionReason.WORKFLOW_CANCELLED:
+    case undefined:
+      return false;
+  }
+}
+
+/**
+ * Validates the Workflow status produced by one terminal Attempt transition.
+ * This is a historical relation: callers may compare it with the command
+ * outcome recorded when the Attempt ended without requiring the current
+ * Workflow to still be at that version.
+ */
+export function isTerminalAttemptWorkflowRunStatusAuthorized(
+  attempt: Attempt,
+  runStatus: RunStatusType,
+): boolean {
+  switch (attempt.status) {
+    case AttemptStatus.RUNNING:
+      return false;
+    case AttemptStatus.RESULT_RECORDED:
+      return runStatus === RunStatus.READY;
+    case AttemptStatus.FAILED:
+      return runStatus === resultingRunStatusForFailure(attempt.failureClass);
+    case AttemptStatus.INTERRUPTED: {
+      const interruptionReason = interruptionReasonFromTerminationReason(attempt.terminationReason);
+      if (interruptionReason === AttemptInterruptionReason.WORKFLOW_CANCELLED) {
+        return runStatus === RunStatus.CANCELLED;
+      }
+      return isAttemptFinishedInterruptionRunStatusAuthorized(attempt.terminationReason, runStatus);
+    }
+  }
 }
 
 function isAttemptFailureClass(value: unknown): value is AttemptFailureClass {
@@ -302,12 +364,24 @@ export function assertAttemptInvariant(attempt: UnvalidatedAttempt): asserts att
       }
       return;
     case AttemptStatus.RESULT_RECORDED:
-    case AttemptStatus.INTERRUPTED:
       if (
         Object.hasOwn(attempt, 'failureClass') ||
         !Object.hasOwn(attempt, 'terminationReason') ||
         attempt.terminationReason === undefined ||
         attempt.terminationReason.trim().length === 0 ||
+        !Object.hasOwn(attempt, 'endedAt') ||
+        attempt.endedAt === undefined ||
+        attempt.endedAt < attempt.startedAt
+      ) {
+        throw new DomainInvariantError('Terminal Attempt lifecycle fields are inconsistent');
+      }
+      return;
+    case AttemptStatus.INTERRUPTED:
+      if (
+        Object.hasOwn(attempt, 'failureClass') ||
+        !Object.hasOwn(attempt, 'terminationReason') ||
+        attempt.terminationReason === undefined ||
+        interruptionReasonFromTerminationReason(attempt.terminationReason) === undefined ||
         !Object.hasOwn(attempt, 'endedAt') ||
         attempt.endedAt === undefined ||
         attempt.endedAt < attempt.startedAt
@@ -334,6 +408,42 @@ export function assertAttemptInvariant(attempt: UnvalidatedAttempt): asserts att
   }
 }
 
+/**
+ * A Workflow snapshot and its separately loaded active Attempt must form one
+ * exact authority projection. Historical terminal Attempts are deliberately
+ * outside this relation and must not be passed as the active Attempt.
+ */
+export function hasExactWorkflowActiveAttemptAuthority(
+  workflow: WorkflowInstance,
+  activeAttempt: Attempt | undefined,
+): boolean {
+  if (workflow.runStatus !== RunStatus.RUNNING) {
+    return workflow.activeAttemptId === undefined && activeAttempt === undefined;
+  }
+  return (
+    workflow.activeAttemptId !== undefined &&
+    activeAttempt?.id === workflow.activeAttemptId &&
+    activeAttempt.workflowId === workflow.id &&
+    activeAttempt.phase === workflow.phase &&
+    activeAttempt.status === AttemptStatus.RUNNING
+  );
+}
+
+export function assertWorkflowActiveAttemptAuthority(
+  workflow: WorkflowInstance,
+  activeAttempt: Attempt | undefined,
+): void {
+  assertWorkflowInvariant(workflow);
+  if (activeAttempt !== undefined) {
+    assertAttemptInvariant(activeAttempt);
+  }
+  if (!hasExactWorkflowActiveAttemptAuthority(workflow, activeAttempt)) {
+    throw new DomainInvariantError(
+      'Workflow and active Attempt do not form one exact running authority',
+    );
+  }
+}
+
 interface AttemptFinishedPayloadView {
   readonly toStatus: AttemptStatusType;
   readonly resultingRunStatus: RunStatusType;
@@ -351,13 +461,15 @@ function hasInvalidAttemptFinishedPayload(event: AttemptFinishedPayloadView): bo
     case AttemptStatus.FAILED:
       return (
         event.failureClass === undefined ||
-        event.resultingRunStatus !== resultingStatusForFailure(event.failureClass)
+        event.resultingRunStatus !== resultingRunStatusForFailure(event.failureClass)
       );
     case AttemptStatus.INTERRUPTED:
       return (
         Object.hasOwn(event, 'failureClass') ||
-        (event.resultingRunStatus !== RunStatus.READY &&
-          event.resultingRunStatus !== RunStatus.BLOCKED)
+        !isAttemptFinishedInterruptionRunStatusAuthorized(
+          event.terminationReason,
+          event.resultingRunStatus,
+        )
       );
     case AttemptStatus.RUNNING:
       return true;
@@ -508,6 +620,18 @@ export function decideAttempt(
   if (reason.length === 0) {
     return reject(AttemptRejectionCode.EMPTY_REASON, 'Attempt terminal reason must not be empty');
   }
+  if (
+    command.type === 'INTERRUPT_ATTEMPT' &&
+    !isAttemptFinishedInterruptionRunStatusAuthorized(
+      `${command.interruptionReason}:${reason}`,
+      command.resultingRunStatus,
+    )
+  ) {
+    return reject(
+      AttemptRejectionCode.INVALID_INTERRUPTION_AUTHORITY,
+      'Attempt interruption reason does not authorize its resulting Workflow status',
+    );
+  }
 
   const eventBase = {
     type: 'ATTEMPT_FINISHED' as const,
@@ -534,7 +658,7 @@ export function decideAttempt(
       event = Object.freeze({
         ...eventBase,
         toStatus: AttemptStatus.FAILED,
-        resultingRunStatus: resultingStatusForFailure(command.failureClass),
+        resultingRunStatus: resultingRunStatusForFailure(command.failureClass),
         failureClass: command.failureClass,
       });
       break;
@@ -598,6 +722,7 @@ export function applyAttemptEvent(
   if (event.occurredAt < workflow.updatedAt) {
     throw new DomainInvariantError('Attempt event time cannot precede current Workflow state');
   }
+  assertWorkflowActiveAttemptAuthority(workflow, currentAttempt);
 
   if (event.type === 'ATTEMPT_STARTED') {
     assertAttemptInvariant(event.attempt);
@@ -701,6 +826,7 @@ export function applyWorkflowCancellationToAttempt(
   event: WorkflowCancelled,
 ): AppliedAttemptEvent | { readonly workflow: WorkflowInstance; readonly attempt?: undefined } {
   const nextWorkflow = applyWorkflowEvent(workflow, event);
+  assertWorkflowActiveAttemptAuthority(workflow, currentAttempt);
   if (event.interruptedAttemptId === undefined) {
     if (currentAttempt !== undefined) {
       throw new DomainInvariantError('Cancellation without an active Attempt received an Attempt');

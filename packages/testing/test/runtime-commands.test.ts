@@ -239,6 +239,12 @@ class InMemoryWorkflowStore implements WorkerControlStore {
     return undefined;
   }
 
+  public getWorkerEventReplayAuthority(): ReturnType<
+    WorkerControlStore['getWorkerEventReplayAuthority']
+  > {
+    return undefined;
+  }
+
   public getPolicyBundle(
     identifier: Parameters<WorkerControlStore['getPolicyBundle']>[0],
   ): InstalledPolicyBundle | undefined {
@@ -753,7 +759,7 @@ function readyFixtureExecution(
     workflowId: running.workflow.id,
     expectedWorkflowVersion: running.workflow.version,
     attemptId: running.attempt.id,
-    reason: 'Fixture completed the first Context-bound Attempt',
+    reason: 'WORKER_RESULT:PROPOSALS',
   });
   assert.equal(result.status, 'APPLIED', JSON.stringify(result));
   const workflow = fixtureValue.store.getWorkflow(running.workflow.id);
@@ -1059,7 +1065,7 @@ void test('[I-008] runtime handlers start, replay, route a result, and advance b
     workflowId: workflow.id,
     expectedWorkflowVersion: running.version,
     attemptId: activeAttempt.id,
-    reason: 'validated result routed',
+    reason: 'WORKER_RESULT:PROPOSALS',
   });
   assert.equal(result.status, 'APPLIED');
   assert.equal(result.output.phase, WorkflowPhase.DISCOVERY);
@@ -1190,7 +1196,7 @@ void test('[I-008] deterministic rejection replays after Workflow state changes'
     workflowId: workflow.id,
     expectedWorkflowVersion: running.version,
     attemptId: running.activeAttemptId,
-    reason: 'advance state after the stored rejection',
+    reason: 'WORKER_RESULT:PROPOSALS',
   });
   assert.equal(finished.status, 'APPLIED');
 

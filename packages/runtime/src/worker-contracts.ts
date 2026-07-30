@@ -171,7 +171,14 @@ export type WorkerEventAdmissionResult =
   | {
       readonly status: 'DUPLICATE';
       readonly eventId: WorkerEventId;
-      readonly originalDisposition: WorkerEventDisposition;
+      readonly originalDisposition: typeof WorkerEventDisposition.ADMITTED;
+      readonly terminalForCurrentDispatch: boolean;
+    }
+  | {
+      readonly status: 'DUPLICATE';
+      readonly eventId: WorkerEventId;
+      readonly originalDisposition: typeof WorkerEventDisposition.IGNORED;
+      readonly terminalForCurrentDispatch: false;
     }
   | {
       readonly status: 'IGNORED';

@@ -185,15 +185,27 @@ applicable, audit events, processed command, and Manifest in one transaction. A
 digest-valid package that disagrees with source authority is invalid; a digest
 proves identity, not correctness or authorization.
 
+That binding remains mandatory after execution. Every retained Worker-phase
+Attempt MUST still carry its Context Manifest identity and Worker Session. Its
+Manifest response-contract digest is recomputed from the phase-owned M1
+contract, and a terminal result reason MUST name a kind that contract permits:
+`PROPOSALS` for `DISCOVERY`/`PLAN`, or `COMPLETION_REQUEST` for `IMPLEMENT`.
+Driver decoding, Runtime replay, and Store reads share this validation; a
+missing binding or phase-incompatible result fails closed before it can advance
+the Workflow.
+
 After commit, an immutable dispatch claim revalidates the active Workflow
 version, bound Execution Profile, and all request digests before `WorkerPort`
 is invoked. Cancellation and dispatch serialize on that version. Worker events
 are deduplicated by an independent `WorkerEventId`; a current event is admitted
 transactionally, while a stale or mismatched event can create only an ignored
-delivery receipt. See
+delivery receipt. Same ID plus the same canonical payload remains a duplicate,
+but only a duplicate bound to the exact current dispatch can satisfy terminal
+stream accounting. See
 [ADR 0014](adr/0014-context-bound-worker-dispatch-and-event-admission.md) and
 [ADR 0021](adr/0021-m1-execution-profile-and-cli-composition.md) plus
-[ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
+[ADR 0022](adr/0022-immutable-workflow-policy-binding.md) and
+[ADR 0025](adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
 
 M1 has no durable resolver that can prove the status, scope, revision, and
 provenance of a selected Fact, Human Decision, or project source. The Runtime

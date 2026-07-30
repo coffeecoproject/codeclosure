@@ -240,6 +240,33 @@ it may enter a terminal Attempt status only once. Its mutation timestamp cannot
 precede the owning Workflow state, and a terminal timestamp cannot precede the
 Attempt start.
 
+At every committed boundary, a `RUNNING` Workflow MUST identify one exact
+owning `RUNNING` Attempt, and every `RUNNING` Attempt MUST be that owning
+Workflow's exact active Attempt in the same phase. The Store terminalizes the
+Attempt before it releases the Workflow, but those two writes are one
+transaction and the intermediate state is not authority. SQLite rejects the
+reverse Workflow-first write order, while migration and Store
+startup/pre/post checks reject either direction of a retained half-state.
+
+Terminal release uses one closed Domain-owned matrix. `RESULT_RECORDED` moves
+the Workflow to `READY`. `TRANSIENT_BACKEND`, `TIMEOUT`, and
+`ABRUPT_TERMINATION` failures move it to `BLOCKED`; `PROTOCOL_ERROR`,
+`INTEGRITY_VIOLATION`, `PERMANENT_BACKEND`, and `UNKNOWN` move it to `FAILED`.
+`RECOVERY_RECONCILIATION` interruption moves it only to `BLOCKED`, while
+`USER_REQUEST` and `RUNTIME_SHUTDOWN` may move it to `READY` or `BLOCKED`.
+`WORKFLOW_CANCELLED` is reserved for the owning Workflow cancellation event,
+which atomically projects the Attempt to `INTERRUPTED` and the Workflow to
+`CANCELLED`; the generic Attempt-finish command MUST NOT impersonate it.
+
+Every retained terminal Attempt MUST have one exact paired Attempt/Workflow
+audit and one `APPLIED` processed-command outcome preserving the Workflow
+version, phase, and run status from the instant it ended. This is historical
+authority and remains valid after the Workflow advances. Separately, the
+current Workflow row MUST match the one Runtime audit and processed outcome for
+its current version. Migration preflights both relationships before it records
+success; Store startup and transaction boundaries revalidate them, and the
+status read revalidates current Workflow authority.
+
 The Attempt shape is a discriminated state union. A `RUNNING` Attempt cannot
 carry terminal fields, every terminal Attempt has `terminationReason` and
 `endedAt`, and only a `FAILED` Attempt has `failureClass`. Public constructors,
@@ -251,12 +278,30 @@ cannot be written and discovered only on a later read.
 
 Worker failure payloads do not carry `failureClass`. They report a closed
 reason code; the Runtime owns the exhaustive M1 reason-to-class mapping. The
-Store and SQLite reject a known Worker reason paired with another persisted
-class, so retry/recovery policy cannot be co-authored by the Worker.
+Store and SQLite reject both a known Worker reason paired with another
+persisted class and any Worker-bound `FAILED` Attempt with an open-ended reason,
+so retry/recovery policy cannot be co-authored by the Worker.
+
+`TRANSIENT_BACKEND` maps to the `RETRYABLE` classification, but a classification
+MUST NOT authorize an immediate retry. M1 has no persisted reason-scoped retry
+budget or backoff policy. Its first transient Worker failure therefore MUST
+leave the terminal Attempt `FAILED` while moving the owning Workflow to
+`BLOCKED`; the Runtime does not create a replacement Attempt from
+classification alone. No later Attempt in any phase may exist without separate
+retry authority, which M1 does not model. After that failure the Workflow may
+only remain in the failed phase with run status `BLOCKED` or `CANCELLED`. One
+Domain-owned mapping defines the resulting Workflow status for every failure
+class and MUST be applied by both Attempt Event construction and the owning
+Event codec. Persisted automatic-retry budgets and backoff belong to M4.
 
 `RESULT_RECORDED` is deliberately not named `SUCCEEDED`: a worker operation
 ending normally or returning a Completion Request grants no acceptance or
-closeout authority.
+closeout authority. A Worker-bound `RESULT_RECORDED` Attempt nevertheless MUST
+prove its Context Manifest identity, Worker Session, exact phase response
+contract, and a phase-allowed result kind. `DISCOVERY` and `PLAN` accept only
+`PROPOSALS`; `IMPLEMENT` accepts only `COMPLETION_REQUEST`. The same retained
+authority validator is used by Driver, Runtime replay, and Store reads, with a
+SQLite migration and trigger as persistence backstops.
 
 See [ADR 0007](adr/0007-workflow-owned-attempt-lifecycle.md) for the aggregate
 boundary and concurrency rationale.
@@ -391,9 +436,20 @@ Every Worker receipt has a prior immutable dispatch claim for the same Attempt,
 Workflow, and Context Manifest. An admitted receipt matches the claim's exact
 version, Worker Session, and digests. An ignored receipt may preserve the
 mismatched Worker fields that explain its rejection, but it still cannot exist
-without dispatch causality. Deterministic FakeWorker IDs include request
-identity plus fixture and ordinal; unrelated Attempts never share an ID merely
-because they use the same fixture. See
+without dispatch causality. A replay authority snapshot always carries that
+receipt, claim, and Context Manifest together. The `ADMITTED` variant also
+carries the immutable terminal Attempt and processed command; the `IGNORED`
+variant cannot carry either. A duplicate result is derived only after this
+historical snapshot validates independently of the newly delivered event. An
+equal `WorkerEventId` and canonical payload always remains `DUPLICATE`; only a
+different payload is an ID conflict. `terminalForCurrentDispatch` is a separate
+classification: `IGNORED` is always non-terminal, while `ADMITTED` is terminal
+only for its exact current dispatch and remains non-terminal under another
+valid Workflow or Attempt. Payload-equal contradictions among copied receipt
+fields or retained control records are control-plane failures. See
+[ADR 0025](adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
+Deterministic FakeWorker IDs include request identity plus fixture and ordinal;
+unrelated Attempts never share an ID merely because they use the same fixture. See
 [ADR 0015](adr/0015-close-m1-worker-authority-causality.md).
 
 ## Transition Request and Transition Record

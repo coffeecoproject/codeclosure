@@ -428,6 +428,18 @@ function assertApplied(result: { readonly status: string }): void {
   assert.equal(result.status, 'APPLIED', JSON.stringify(result));
 }
 
+function workerResultReason(phase: WorkflowInstance['phase']): string {
+  switch (phase) {
+    case WorkflowPhase.DISCOVERY:
+    case WorkflowPhase.PLAN:
+      return 'WORKER_RESULT:PROPOSALS';
+    case WorkflowPhase.IMPLEMENT:
+      return 'WORKER_RESULT:COMPLETION_REQUEST';
+    default:
+      throw new TypeError(`Phase ${phase} has no M1 Worker result fixture`);
+  }
+}
+
 function finishActiveAttempt(harness: Harness, label: string): void {
   const workflow = currentWorkflow(harness);
   assert.ok(workflow.activeAttemptId);
@@ -437,7 +449,7 @@ function finishActiveAttempt(harness: Harness, label: string): void {
       workflowId: workflow.id,
       expectedWorkflowVersion: workflow.version,
       attemptId: workflow.activeAttemptId,
-      reason: `${label} fixture complete`,
+      reason: workerResultReason(workflow.phase),
     }),
   );
 }
@@ -1064,7 +1076,7 @@ void test('[I-005][I-008] source drift during freeze atomically invalidates the 
     workflowId: workflow.id,
     expectedWorkflowVersion: workflow.version,
     attemptId: freeze.attemptId,
-    reason: 'attempt to bypass Candidate Manager completion',
+    reason: 'WORKER_RESULT:COMPLETION_REQUEST',
   });
   assert.equal(genericCompletion.status, 'REJECTED');
   assert.equal(harness.store.getAttempt(freeze.attemptId)?.status, AttemptStatus.RUNNING);

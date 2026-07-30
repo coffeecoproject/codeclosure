@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AcceptanceOutcome,
   AttemptFailureClass,
+  AttemptStatus,
   AttemptRejectionCode,
   AttemptInterruptionReason,
   CandidateGenerationState,
@@ -12,6 +13,7 @@ import {
   EvidenceKind,
   GuardOutcome,
   RunStatus,
+  WorkerResultKind,
   WorkflowGuard,
   WorkflowPhase,
   WorkflowRejectionCode,
@@ -64,6 +66,7 @@ import {
   latestIsoTimestamp,
   policyBundleId,
   policyBundleProjection,
+  resultingRunStatusForFailure,
   sha256Digest,
   workflowPolicyBindingProjection,
   workflowId,
@@ -129,6 +132,7 @@ import type {
   IdGenerator,
   StoreCommandResult,
   WorkerControlStore,
+  WorkerEventReplayAuthoritySnapshot,
   WorkerIdentityGenerator,
   WorkflowControlStore,
 } from './ports.js';
@@ -173,6 +177,7 @@ import {
 import {
   WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
+  WorkerFailureReasonCode,
   attemptFailureClassForWorkerPortReasonCode,
   attemptFailureClassForWorkerReasonCode,
   assertWorkerDispatchClaimBindsRequest,
@@ -197,6 +202,7 @@ import {
   m1PhaseObjective,
   m1WorkerResponseContract,
 } from './context-compiler.js';
+import { assertM1WorkerPhaseAttemptAuthority } from './context-authority.js';
 
 interface WorkflowCommandRequest {
   readonly commandId: CommandId;
@@ -485,6 +491,7 @@ function isWorkerControlStore(store: WorkflowControlStore): store is WorkerContr
     'getWorkerDispatchClaim',
     'claimWorkerDispatch',
     'getWorkerEventReceipt',
+    'getWorkerEventReplayAuthority',
     'commitWorkerAttemptEvent',
     'recordIgnoredWorkerEvent',
     'installPolicyBundle',
@@ -634,8 +641,40 @@ const workerEventStoreResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('APPLIED'), receipt: z.unknown(), value: z.unknown() }).strict(),
   z.object({ status: z.literal('REPLAYED'), receipt: z.unknown() }).strict(),
   z.object({ status: z.literal('VERSION_CONFLICT'), message: z.string().min(1) }).strict(),
+  z.object({ status: z.literal('COMMAND_CONFLICT'), message: z.string().min(1) }).strict(),
   z.object({ status: z.literal('WORKER_EVENT_CONFLICT'), message: z.string().min(1) }).strict(),
 ]);
+const workerEventReplayAuthoritySchema = z.union([
+  z
+    .object({
+      receipt: z.looseObject({}),
+      dispatchClaim: z.looseObject({}),
+      contextManifest: z.looseObject({}),
+    })
+    .strict(),
+  z
+    .object({
+      receipt: z.looseObject({}),
+      dispatchClaim: z.looseObject({}),
+      contextManifest: z.looseObject({}),
+      terminalAttempt: z.looseObject({}),
+      processedCommand: z.looseObject({}),
+    })
+    .strict(),
+]);
+
+type WorkerEventReplayClassification =
+  | { readonly status: 'EVENT_ID_CONFLICT' }
+  | {
+      readonly status: 'DUPLICATE';
+      readonly originalDisposition: typeof WorkerEventDisposition.IGNORED;
+      readonly terminalForCurrentDispatch: false;
+    }
+  | {
+      readonly status: 'DUPLICATE';
+      readonly originalDisposition: typeof WorkerEventDisposition.ADMITTED;
+      readonly terminalForCurrentDispatch: boolean;
+    };
 const installedPolicyBundleSchema = z
   .object({ bundle: z.unknown(), installedAt: z.string() })
   .strict();
@@ -793,6 +832,33 @@ function decodeProcessedCommandView(
   });
 }
 
+function decodeWorkerEventReplayAuthority(value: unknown): WorkerEventReplayAuthoritySnapshot {
+  const parsed = workerEventReplayAuthoritySchema.parse(value);
+  const receipt = decodeWorkerEventReceipt(parsed.receipt);
+  const dispatchClaim = decodeWorkerDispatchClaim(parsed.dispatchClaim);
+  const contextManifest = decodeContextManifest(parsed.contextManifest);
+  if (receipt.disposition === WorkerEventDisposition.IGNORED) {
+    if ('terminalAttempt' in parsed || 'processedCommand' in parsed) {
+      throw new TypeError('Ignored Worker replay authority carries admitted records');
+    }
+    return Object.freeze({ receipt, dispatchClaim, contextManifest });
+  }
+  if (!('terminalAttempt' in parsed) || !('processedCommand' in parsed)) {
+    throw new TypeError('Admitted Worker replay authority is incomplete');
+  }
+  const terminalAttempt = decodeAttemptSnapshot(parsed.terminalAttempt);
+  if (terminalAttempt.status === AttemptStatus.RUNNING) {
+    throw new TypeError('Admitted Worker replay authority carries a running Attempt');
+  }
+  return Object.freeze({
+    receipt,
+    dispatchClaim,
+    contextManifest,
+    terminalAttempt,
+    processedCommand: decodeProcessedCommandView(parsed.processedCommand),
+  });
+}
+
 function decodeStoreCommandResult(value: unknown): StoreCommandResult<unknown> {
   const parsed = storeCommandResultSchema.parse(value);
   switch (parsed.status) {
@@ -876,6 +942,7 @@ const domainRejectionIsStale: Readonly<Record<RuntimeDomainRejectionCode, boolea
     [AttemptRejectionCode.INVALID_SEQUENCE]: false,
     [AttemptRejectionCode.INVALID_TIMESTAMP_ORDER]: false,
     [AttemptRejectionCode.INVALID_CONTEXT_BINDING]: false,
+    [AttemptRejectionCode.INVALID_INTERRUPTION_AUTHORITY]: false,
     [AttemptRejectionCode.EMPTY_REASON]: false,
     [WorkflowRejectionCode.STALE_VERSION]: true,
     [WorkflowRejectionCode.RUN_STATUS_NOT_READY]: false,
@@ -1224,6 +1291,14 @@ export class WorkflowRuntimeKernel {
 
     try {
       const payloadDigest = this.digest(operationId, event, 'WORKER_EVENT_PAYLOAD_DIGEST_FAILURE');
+      const currentPackageDigest = this.digest(
+        operationId,
+        request.contextPackage,
+        'WORKER_CONTEXT_PACKAGE_DIGEST_FAILURE',
+      );
+      if (currentPackageDigest !== request.packageDigest) {
+        throw new TypeError('Worker request Context Package does not match its declared digest');
+      }
       for (let attemptNumber = 0; attemptNumber < 2; attemptNumber += 1) {
         const workerStore = this.requireWorkerStore();
         const rawDispatchClaim = this.storeOperation(
@@ -1259,32 +1334,31 @@ export class WorkflowRuntimeKernel {
             nonAdmissionClass: WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
           });
         }
-        const rawExisting = this.storeOperation(
+        const existingAuthority = this.readWorkerEventReplayAuthority(
           operationId,
-          'WORKER_EVENT_RECEIPT_READ_FAILURE',
-          () => workerStore.getWorkerEventReceipt(event.id),
+          workerStore,
+          event.id,
         );
-        if (rawExisting !== undefined) {
-          const existing = this.decodeStoreSnapshot(
+        if (existingAuthority !== undefined) {
+          const replay = this.classifyWorkerEventReplayAuthority(
             operationId,
-            'WORKER_EVENT_RECEIPT_INVALID',
-            () => decodeWorkerEventReceipt(rawExisting),
+            event,
+            payloadDigest,
+            request,
+            dispatchClaim,
+            currentPackageDigest,
+            existingAuthority,
           );
-          return this.workerEventMatchesReceipt(event, payloadDigest, existing)
-            ? Object.freeze({
-                status: 'DUPLICATE',
-                eventId: event.id,
-                originalDisposition: existing.disposition,
-              })
+          return replay.status === 'DUPLICATE'
+            ? this.duplicateWorkerEventAdmission(event.id, replay)
             : Object.freeze({
                 status: 'REJECTED',
                 eventId: event.id,
                 reasonCode: 'WORKER_EVENT_ID_CONFLICT',
-                message: `Worker Event ${event.id} was reused with different payload`,
+                message: `Worker Event ${event.id} was reused with a different payload`,
                 nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
               });
         }
-
         const authority = this.resolveAuthority(
           operationId,
           workflowTarget(request.contextPackage.workflowId),
@@ -1343,11 +1417,6 @@ export class WorkflowRuntimeKernel {
         } catch {
           ignoredReason = 'WORKER_REQUEST_BINDING_MISMATCH';
         }
-        const currentPackageDigest = this.digest(
-          operationId,
-          request.contextPackage,
-          'WORKER_CONTEXT_PACKAGE_DIGEST_FAILURE',
-        );
         const currentManifestDigest = this.digest(
           operationId,
           contextManifestDigestProjection(manifest),
@@ -1425,7 +1494,27 @@ export class WorkflowRuntimeKernel {
           if (ignoredStoreResult.status === 'VERSION_CONFLICT' && attemptNumber === 0) {
             continue;
           }
+          if (ignoredStoreResult.status === 'COMMAND_CONFLICT') {
+            throw new TypeError(ignoredStoreResult.message);
+          }
           if (ignoredStoreResult.status === 'WORKER_EVENT_CONFLICT') {
+            const replayAuthority = this.requireWorkerEventReplayAuthority(
+              operationId,
+              workerStore,
+              event.id,
+            );
+            const replay = this.classifyWorkerEventReplayAuthority(
+              operationId,
+              event,
+              payloadDigest,
+              request,
+              dispatchClaim,
+              currentPackageDigest,
+              replayAuthority,
+            );
+            if (replay.status === 'DUPLICATE') {
+              throw new TypeError('Store reported a Worker Event conflict for matching authority');
+            }
             return Object.freeze({
               status: 'REJECTED',
               eventId: event.id,
@@ -1436,21 +1525,41 @@ export class WorkflowRuntimeKernel {
           }
           if (ignoredStoreResult.status === 'REPLAYED') {
             const receipt = decodeWorkerEventReceipt(ignoredStoreResult.receipt);
-            return Object.freeze({
-              status: 'DUPLICATE',
-              eventId: event.id,
-              originalDisposition: receipt.disposition,
-            });
+            const replayAuthority = this.requireWorkerEventReplayAuthority(
+              operationId,
+              workerStore,
+              event.id,
+            );
+            const replay = this.classifyStoreReplayedWorkerEventAuthority(
+              operationId,
+              event,
+              payloadDigest,
+              request,
+              dispatchClaim,
+              currentPackageDigest,
+              receipt,
+              replayAuthority,
+            );
+            if (replay.status === 'EVENT_ID_CONFLICT') {
+              return Object.freeze({
+                status: 'REJECTED',
+                eventId: event.id,
+                reasonCode: 'WORKER_EVENT_ID_CONFLICT',
+                message: `Worker Event ${event.id} was reused with a different payload`,
+                nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
+              });
+            }
+            return this.duplicateWorkerEventAdmission(event.id, replay);
           }
           if (ignoredStoreResult.status === 'APPLIED') {
             const receipt = decodeWorkerEventReceipt(ignoredStoreResult.receipt);
-            if (receipt.disposition !== WorkerEventDisposition.IGNORED) {
-              throw new TypeError('Store returned a non-ignored receipt for ignored delivery');
+            if (canonicalizeJson(receipt) !== canonicalizeJson(ignored)) {
+              throw new TypeError('Store ignored Worker Event receipt disagrees with the delivery');
             }
             return Object.freeze({
               status: 'IGNORED',
               eventId: event.id,
-              reasonCode: receipt.reasonCode,
+              reasonCode: ignored.reasonCode,
               receiptRecorded: true,
               nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
             });
@@ -1541,7 +1650,27 @@ export class WorkflowRuntimeKernel {
         if (storeResult.status === 'VERSION_CONFLICT' && attemptNumber === 0) {
           continue;
         }
+        if (storeResult.status === 'COMMAND_CONFLICT') {
+          throw new TypeError(storeResult.message);
+        }
         if (storeResult.status === 'WORKER_EVENT_CONFLICT') {
+          const replayAuthority = this.requireWorkerEventReplayAuthority(
+            operationId,
+            workerStore,
+            event.id,
+          );
+          const replay = this.classifyWorkerEventReplayAuthority(
+            operationId,
+            event,
+            payloadDigest,
+            request,
+            dispatchClaim,
+            currentPackageDigest,
+            replayAuthority,
+          );
+          if (replay.status === 'DUPLICATE') {
+            throw new TypeError('Store reported a Worker Event conflict for matching authority');
+          }
           return Object.freeze({
             status: 'REJECTED',
             eventId: event.id,
@@ -1552,11 +1681,31 @@ export class WorkflowRuntimeKernel {
         }
         if (storeResult.status === 'REPLAYED') {
           const replayedReceipt = decodeWorkerEventReceipt(storeResult.receipt);
-          return Object.freeze({
-            status: 'DUPLICATE',
-            eventId: event.id,
-            originalDisposition: replayedReceipt.disposition,
-          });
+          const replayAuthority = this.requireWorkerEventReplayAuthority(
+            operationId,
+            workerStore,
+            event.id,
+          );
+          const replay = this.classifyStoreReplayedWorkerEventAuthority(
+            operationId,
+            event,
+            payloadDigest,
+            request,
+            dispatchClaim,
+            currentPackageDigest,
+            replayedReceipt,
+            replayAuthority,
+          );
+          if (replay.status === 'EVENT_ID_CONFLICT') {
+            return Object.freeze({
+              status: 'REJECTED',
+              eventId: event.id,
+              reasonCode: 'WORKER_EVENT_ID_CONFLICT',
+              message: `Worker Event ${event.id} was reused with a different payload`,
+              nonAdmissionClass: WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY,
+            });
+          }
+          return this.duplicateWorkerEventAdmission(event.id, replay);
         }
         if (storeResult.status === 'APPLIED') {
           const admittedReceipt = decodeWorkerEventReceipt(storeResult.receipt);
@@ -1571,10 +1720,11 @@ export class WorkflowRuntimeKernel {
             Reflect.get(storeResult.value, 'workflow'),
           );
           const resultingAttempt = decodeAttemptSnapshot(Reflect.get(storeResult.value, 'attempt'));
+          const expectedResult = applyAttemptEvent(workflow, currentAttempt, attemptEvent);
           if (
-            resultingWorkflow.version !== attemptEvent.toWorkflowVersion ||
-            resultingAttempt.id !== attemptEvent.attemptId ||
-            resultingAttempt.status === 'RUNNING'
+            canonicalizeJson(admittedReceipt) !== canonicalizeJson(receipt) ||
+            canonicalizeJson(resultingWorkflow) !== canonicalizeJson(expectedResult.workflow) ||
+            canonicalizeJson(resultingAttempt) !== canonicalizeJson(expectedResult.attempt)
           ) {
             throw new TypeError('Store Worker Event result disagrees with the committed event');
           }
@@ -4586,20 +4736,296 @@ export class WorkflowRuntimeKernel {
     return claim;
   }
 
-  private workerEventMatchesReceipt(
+  private readWorkerEventReplayAuthority(
+    commandIdentifier: CommandId,
+    workerStore: WorkerControlStore,
+    eventIdentifier: WorkerEvent['id'],
+  ): WorkerEventReplayAuthoritySnapshot | undefined {
+    const raw = this.storeOperation(
+      commandIdentifier,
+      'WORKER_EVENT_REPLAY_AUTHORITY_READ_FAILURE',
+      () => workerStore.getWorkerEventReplayAuthority(eventIdentifier),
+    );
+    return raw === undefined
+      ? undefined
+      : this.decodeStoreSnapshot(commandIdentifier, 'WORKER_EVENT_REPLAY_AUTHORITY_INVALID', () =>
+          decodeWorkerEventReplayAuthority(raw),
+        );
+  }
+
+  private requireWorkerEventReplayAuthority(
+    commandIdentifier: CommandId,
+    workerStore: WorkerControlStore,
+    eventIdentifier: WorkerEvent['id'],
+  ): WorkerEventReplayAuthoritySnapshot {
+    const authority = this.readWorkerEventReplayAuthority(
+      commandIdentifier,
+      workerStore,
+      eventIdentifier,
+    );
+    if (authority === undefined) {
+      throw new TypeError(`Replayed Worker Event ${eventIdentifier} has no retained authority`);
+    }
+    return authority;
+  }
+
+  private assertWorkerEventReplayAuthorityIntegrity(
+    commandIdentifier: CommandId,
+    expectedEventId: WorkerEvent['id'],
+    authority: WorkerEventReplayAuthoritySnapshot,
+  ): void {
+    const { receipt, dispatchClaim, contextManifest } = authority;
+    const expectedManifestDigest = this.digest(
+      commandIdentifier,
+      contextManifestDigestProjection(contextManifest),
+      'WORKER_EVENT_REPLAY_MANIFEST_DIGEST_FAILURE',
+    );
+    if (
+      receipt.eventId !== expectedEventId ||
+      receipt.workflowId !== dispatchClaim.workflowId ||
+      receipt.attemptId !== dispatchClaim.attemptId ||
+      receipt.contextManifestId !== dispatchClaim.contextManifestId ||
+      receipt.receivedAt < dispatchClaim.claimedAt ||
+      receipt.observedWorkflowVersion < dispatchClaim.workflowVersion ||
+      contextManifest.id !== dispatchClaim.contextManifestId ||
+      contextManifest.workflowId !== dispatchClaim.workflowId ||
+      contextManifest.workflowVersion !== dispatchClaim.workflowVersion ||
+      contextManifest.attemptId !== dispatchClaim.attemptId ||
+      contextManifest.manifestDigest !== dispatchClaim.contextManifestDigest ||
+      contextManifest.manifestDigest !== expectedManifestDigest ||
+      contextManifest.packageDigest !== dispatchClaim.packageDigest ||
+      contextManifest.executionProfileId !== dispatchClaim.executionProfileId ||
+      contextManifest.executionProfileDigest !== dispatchClaim.executionProfileDigest ||
+      dispatchClaim.claimedAt < contextManifest.createdAt
+    ) {
+      throw new TypeError('Replayed Worker Event has invalid retained dispatch authority');
+    }
+    if (!('terminalAttempt' in authority)) {
+      return;
+    }
+
+    const { terminalAttempt, processedCommand } = authority;
+    const admittedReceipt = authority.receipt;
+    if (
+      receipt.observedWorkflowVersion !== dispatchClaim.workflowVersion ||
+      receipt.workerSessionId !== dispatchClaim.workerSessionId ||
+      receipt.contextManifestDigest !== dispatchClaim.contextManifestDigest ||
+      receipt.packageDigest !== dispatchClaim.packageDigest
+    ) {
+      throw new TypeError('Admitted Worker Event replay has incomplete dispatch authority');
+    }
+
+    let expectedRunStatus: RunStatus;
+    if (terminalAttempt.status === AttemptStatus.RESULT_RECORDED) {
+      const validReasons = Object.values(WorkerResultKind).map((kind) => `WORKER_RESULT:${kind}`);
+      if (!validReasons.includes(terminalAttempt.terminationReason)) {
+        throw new TypeError('Admitted Worker result replay has an unknown terminal reason');
+      }
+      expectedRunStatus = RunStatus.READY;
+    } else if (terminalAttempt.status === AttemptStatus.FAILED) {
+      if (
+        terminalAttempt.terminationReason !== WorkerFailureReasonCode.BACKEND_FAILURE ||
+        terminalAttempt.failureClass !==
+          attemptFailureClassForWorkerReasonCode(WorkerFailureReasonCode.BACKEND_FAILURE)
+      ) {
+        throw new TypeError('Admitted Worker failure replay has an invalid terminal mapping');
+      }
+      expectedRunStatus = resultingRunStatusForFailure(terminalAttempt.failureClass);
+    } else {
+      throw new TypeError('Admitted Worker Event replay Attempt is not terminal admission');
+    }
+    const expectedCapabilityGrantDigest = this.digest(
+      commandIdentifier,
+      { schemaVersion: 1, capabilityGrant: terminalAttempt.capabilityGrant },
+      'WORKER_EVENT_REPLAY_CAPABILITY_DIGEST_FAILURE',
+    );
+    const expectedResponseContractDigest = this.digest(
+      commandIdentifier,
+      {
+        schemaVersion: 1,
+        responseContract: m1WorkerResponseContract(terminalAttempt.phase),
+      },
+      'WORKER_EVENT_REPLAY_RESPONSE_CONTRACT_DIGEST_FAILURE',
+    );
+    assertM1WorkerPhaseAttemptAuthority(
+      contextManifest,
+      terminalAttempt,
+      expectedCapabilityGrantDigest,
+      expectedResponseContractDigest,
+    );
+    if (
+      terminalAttempt.id !== receipt.attemptId ||
+      terminalAttempt.workflowId !== receipt.workflowId ||
+      terminalAttempt.workerSessionRef !== receipt.workerSessionId ||
+      dispatchClaim.claimedAt < terminalAttempt.startedAt ||
+      terminalAttempt.endedAt !== receipt.receivedAt
+    ) {
+      throw new TypeError('Admitted Worker Event replay has no exact terminal Attempt');
+    }
+
+    const expectedInputDigest = this.digest(
+      admittedReceipt.internalCommandId,
+      {
+        schemaVersion: 1,
+        type: 'ADMIT_WORKER_EVENT',
+        commandId: admittedReceipt.internalCommandId,
+        workerEventId: admittedReceipt.eventId,
+        payloadDigest: admittedReceipt.payloadDigest,
+      },
+      'WORKER_EVENT_REPLAY_COMMAND_DIGEST_FAILURE',
+    );
+    const expectedTarget = workflowTarget(admittedReceipt.workflowId);
+    if (
+      processedCommand.commandId !== admittedReceipt.internalCommandId ||
+      processedCommand.inputDigest !== expectedInputDigest ||
+      processedCommand.aggregateType !== expectedTarget.aggregateType ||
+      processedCommand.aggregateId !== expectedTarget.aggregateId ||
+      processedCommand.completedAt !== receipt.receivedAt
+    ) {
+      throw new TypeError('Admitted Worker Event replay has no exact processed command');
+    }
+    const outcome = decodeStoredCommandOutcome(processedCommand.outcome);
+    assertStoredCommandOutcomeBinding(
+      outcome,
+      admittedReceipt.internalCommandId,
+      expectedTarget,
+      contextManifest.goalId,
+      admittedReceipt.workflowId,
+      StoredCommandDisposition.APPLIED,
+    );
+    if (outcome.disposition !== StoredCommandDisposition.APPLIED) {
+      throw new TypeError('Admitted Worker Event replay command was not applied');
+    }
+    const expectedWorkflowVersion = workflowVersion(dispatchClaim.workflowVersion + 1);
+    if (
+      outcome.workflow.version !== expectedWorkflowVersion ||
+      outcome.workflow.phase !== contextManifest.phase ||
+      outcome.workflow.runStatus !== expectedRunStatus ||
+      outcome.output.workflowVersion !== expectedWorkflowVersion ||
+      outcome.output.phase !== contextManifest.phase ||
+      outcome.output.runStatus !== expectedRunStatus
+    ) {
+      throw new TypeError('Admitted Worker Event replay has no exact successful outcome');
+    }
+  }
+
+  private classifyWorkerEventReplayAuthority(
+    commandIdentifier: CommandId,
     event: WorkerEvent,
     payloadDigest: ReturnType<typeof sha256Digest>,
-    receipt: WorkerEventReceipt,
-  ): boolean {
-    return (
-      receipt.eventId === event.id &&
-      receipt.payloadDigest === payloadDigest &&
-      receipt.workerSessionId === event.workerSessionId &&
-      receipt.attemptId === event.attemptId &&
-      receipt.contextManifestId === event.contextManifestId &&
-      receipt.contextManifestDigest === event.contextManifestDigest &&
-      receipt.packageDigest === event.packageDigest
+    request: WorkerRequest,
+    currentDispatchClaim: WorkerDispatchClaim,
+    currentPackageDigest: ReturnType<typeof sha256Digest>,
+    authority: WorkerEventReplayAuthoritySnapshot,
+  ): WorkerEventReplayClassification {
+    this.assertWorkerEventReplayAuthorityIntegrity(commandIdentifier, event.id, authority);
+    const { receipt } = authority;
+    if (receipt.payloadDigest !== payloadDigest) {
+      return Object.freeze({ status: 'EVENT_ID_CONFLICT' });
+    }
+    if (
+      receipt.eventId !== event.id ||
+      receipt.workerSessionId !== event.workerSessionId ||
+      receipt.attemptId !== event.attemptId ||
+      receipt.contextManifestId !== event.contextManifestId ||
+      receipt.contextManifestDigest !== event.contextManifestDigest ||
+      receipt.packageDigest !== event.packageDigest
+    ) {
+      throw new TypeError(
+        'Retained Worker Event receipt contradicts its payload-bound delivery fields',
+      );
+    }
+    if (!('terminalAttempt' in authority)) {
+      return Object.freeze({
+        status: 'DUPLICATE',
+        originalDisposition: WorkerEventDisposition.IGNORED,
+        terminalForCurrentDispatch: false,
+      });
+    }
+
+    const { terminalAttempt } = authority;
+    const terminalMatchesEvent =
+      event.type === 'WORKER_FAILURE'
+        ? terminalAttempt.status === AttemptStatus.FAILED &&
+          terminalAttempt.failureClass ===
+            attemptFailureClassForWorkerReasonCode(event.reasonCode) &&
+          terminalAttempt.terminationReason === event.reasonCode
+        : terminalAttempt.status === AttemptStatus.RESULT_RECORDED &&
+          terminalAttempt.terminationReason === `WORKER_RESULT:${event.result.kind}`;
+    if (!terminalMatchesEvent) {
+      throw new TypeError(
+        'Retained terminal Attempt contradicts the payload-bound Worker Event result',
+      );
+    }
+
+    try {
+      assertWorkerEventBindsRequest(event, request);
+    } catch {
+      return Object.freeze({
+        status: 'DUPLICATE',
+        originalDisposition: WorkerEventDisposition.ADMITTED,
+        terminalForCurrentDispatch: false,
+      });
+    }
+
+    if (
+      currentPackageDigest !== request.packageDigest ||
+      currentPackageDigest !== authority.contextManifest.packageDigest ||
+      canonicalizeJson(currentDispatchClaim) !== canonicalizeJson(authority.dispatchClaim)
+    ) {
+      throw new TypeError(
+        'Current dispatch contradicts retained authority for its exact admitted duplicate',
+      );
+    }
+    return Object.freeze({
+      status: 'DUPLICATE',
+      originalDisposition: WorkerEventDisposition.ADMITTED,
+      terminalForCurrentDispatch: true,
+    });
+  }
+
+  private classifyStoreReplayedWorkerEventAuthority(
+    commandIdentifier: CommandId,
+    event: WorkerEvent,
+    payloadDigest: ReturnType<typeof sha256Digest>,
+    request: WorkerRequest,
+    currentDispatchClaim: WorkerDispatchClaim,
+    currentPackageDigest: ReturnType<typeof sha256Digest>,
+    returnedReceipt: WorkerEventReceipt,
+    authority: WorkerEventReplayAuthoritySnapshot,
+  ): WorkerEventReplayClassification {
+    if (canonicalizeJson(returnedReceipt) !== canonicalizeJson(authority.receipt)) {
+      throw new TypeError('Store replayed Worker Event receipt disagrees with retained authority');
+    }
+    return this.classifyWorkerEventReplayAuthority(
+      commandIdentifier,
+      event,
+      payloadDigest,
+      request,
+      currentDispatchClaim,
+      currentPackageDigest,
+      authority,
     );
+  }
+
+  private duplicateWorkerEventAdmission(
+    eventIdentifier: WorkerEvent['id'],
+    replay: Exclude<WorkerEventReplayClassification, { readonly status: 'EVENT_ID_CONFLICT' }>,
+  ): WorkerEventAdmissionResult {
+    if (replay.originalDisposition === WorkerEventDisposition.IGNORED) {
+      return Object.freeze({
+        status: 'DUPLICATE',
+        eventId: eventIdentifier,
+        originalDisposition: WorkerEventDisposition.IGNORED,
+        terminalForCurrentDispatch: false,
+      });
+    }
+    return Object.freeze({
+      status: 'DUPLICATE',
+      eventId: eventIdentifier,
+      originalDisposition: WorkerEventDisposition.ADMITTED,
+      terminalForCurrentDispatch: replay.terminalForCurrentDispatch,
+    });
   }
 
   private resolveConfiguredExecutionProfile(

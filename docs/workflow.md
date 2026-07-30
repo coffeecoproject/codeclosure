@@ -91,6 +91,14 @@ Manifest digest, and package digest. A cancellation that commits first prevents
 the claim; after a claim, cancellation commits the Workflow interruption before
 the Runtime aborts the active Worker signal.
 
+A Worker-phase Attempt is not complete merely because a Store snapshot labels
+it `RESULT_RECORDED`. It MUST retain both its Context Manifest identity and
+Worker Session, resolve the exact Manifest, match the phase-owned response
+contract digest, and use a result kind allowed by that phase: `PROPOSALS` for
+`DISCOVERY`/`PLAN` and `COMPLETION_REQUEST` for `IMPLEMENT`. Runtime, Driver,
+and Store reads apply the same rule before the result can authorize further
+workflow work.
+
 Worker delivery uses `WorkerEventId`, not caller- or Worker-selected
 `CommandId`. Before considering any event, the Runtime reloads and exactly
 binds the request to its durable dispatch claim. Only a current, schema-valid,
@@ -520,14 +528,15 @@ order. See [ADR 0012](adr/0012-causal-control-timestamps.md).
 
 ## Retry and Repair
 
-Retries repeat an operation against the same valid inputs after a transient
-failure. Repairs create a new candidate generation after a semantic or
-implementation rejection. They are not interchangeable.
+Retries, when authorized by a retry policy, repeat an operation against the
+same valid inputs after a transient failure. Repairs create a new candidate
+generation after a semantic or implementation rejection. They are not
+interchangeable.
 
-A retry creates a new child Attempt under the same Workflow aggregate. It does
-not reopen or mutate the terminal Attempt it replaces.
+An authorized retry creates a new child Attempt under the same Workflow
+aggregate. It does not reopen or mutate the terminal Attempt it replaces.
 
-Each automatic retry records:
+Each automatic retry MUST record:
 
 - failure class;
 - attempt number;
@@ -535,12 +544,90 @@ Each automatic retry records:
 - backoff;
 - whether external reality must be reconciled first.
 
-In the current classification, `PROTOCOL_ERROR` is non-retryable and moves the
-Workflow to `FAILED`. `ABRUPT_TERMINATION` requires reconciliation and moves it
-to `BLOCKED`. A persistence or Runtime admission failure retains its own
-control-plane category so recovery can inspect the still-running Attempt.
-Worker payloads report only closed reasons. The Runtime maps each known reason
-to exactly one class, and Store/SQLite reject a conflicting direct write.
+M1 has no persisted retry budget or backoff policy; automatic retry budgets are
+owned by M4. In M1, `TRANSIENT_BACKEND` remains classified as `RETRYABLE`, but
+that classification is eligibility information, not immediate retry authority.
+The first transient Worker failure MUST record a terminal `FAILED` Attempt,
+move the Workflow to `BLOCKED`, and stop the Driver without creating another
+Attempt. The status view exposes `WORKFLOW_BLOCKED` with detail
+`WORKER_BACKEND_FAILURE` and sets `nextSafeAction` to `INSPECT_BLOCKER`.
+No later Attempt in any phase may be admitted without separate retry authority,
+which M1 does not model. After the failure, the Workflow may only remain
+in that phase with run status `BLOCKED` or `CANCELLED`. The Domain owns one
+exact failure-class-to-run-status mapping; Attempt Event construction and
+decoding MUST both apply it.
+
+`PROTOCOL_ERROR` is non-retryable and moves the Workflow to `FAILED`.
+`ABRUPT_TERMINATION` requires reconciliation and moves it to `BLOCKED`. A
+persistence or Runtime admission failure retains its own control-plane category
+so recovery can inspect the still-running Attempt. Worker payloads report only
+closed reasons. The Runtime maps each known reason to exactly one class, and
+Store/SQLite reject both a conflicting class and an open-ended reason on a
+Worker-bound failed Attempt. A result moves the Workflow only to `READY`;
+non-retryable failures move it only to `FAILED`; transient, timeout, and abrupt
+failures move it only to `BLOCKED`. Recovery interruption moves it only to
+`BLOCKED`. User-request and runtime-shutdown interruption may return it to
+`READY` or leave it `BLOCKED`. Workflow cancellation is not a generic Attempt
+interruption command: only the owning cancellation event may atomically produce
+`INTERRUPTED` plus `CANCELLED`.
+
+SQLite migration `0018_m1_retry_boundary_closure.sql` atomically refuses
+legacy authority containing any later Attempt in any phase after a transient
+failure. It also refuses a latest transient failure unless its Workflow remains
+in the failed phase with run status `BLOCKED` or `CANCELLED`. It does not
+rewrite a Workflow or synthesize retry or audit history. Migration
+`0019_m1_attempt_authority_closure.sql` independently refuses either direction
+of a committed Workflow/Attempt `RUNNING` mismatch, a phase-incompatible Worker
+result, an open-ended Worker failure, a terminal Attempt without its exact
+historical audit/outcome projection, or a current Workflow that disagrees with
+its current Runtime audit/outcome. It completes those checks before recording
+the migration or installing its triggers. The supported Store sequence
+terminalizes the Attempt first and then releases the Workflow in one
+transaction. SQLite permits that transaction-internal intermediate only long
+enough to require an exact result/failure/interruption projection when the
+Workflow is released; it rejects Workflow-first release and wrong terminal
+status mappings. Store startup and pre/post-mutation checks reject retained
+half-states or broken historical authority, while status reads reject a current
+Workflow/outcome mismatch. Concurrent readers cannot observe the Attempt-first
+intermediate row inside the Store transaction. Retry-specific triggers also
+reject Workflow continuation, creation of any later Attempt, and a reverse edit
+that makes an earlier Attempt transient after later history already exists.
+
+Driver decoding validates only the current authority snapshot visible through
+its narrow port before recovery or dispatch; it does not independently
+reconstruct prior-phase Attempt history. A Driver snapshot MUST explicitly
+contain the latest current-phase Attempt and Context Manifest or `null`; an
+active Attempt MUST be the latest one, and omission or a contradictory `null`
+is not accepted as proof that no Attempt exists. When both active and latest
+views name the same Attempt, their complete snapshots MUST also match. If the
+visible Worker-phase Attempt omits its Context Manifest identity or Worker
+Session, or its Manifest does not bind the exact Attempt phase, start time,
+capability grant, phase response-contract digest, legal M1 Candidate shape,
+applicable Workflow version, and phase-allowed terminal result, the snapshot
+MUST fail closed. A Worker failure reason must likewise map to its exact closed
+failure class. If the visible latest Attempt is `FAILED` with class
+`TRANSIENT_BACKEND`, the Workflow MUST be `BLOCKED` or `CANCELLED`. For an
+`APPLIED` Worker event operation, the Runtime requires the Store receipt to
+exactly match its proposed receipt and, for admission, reapplies the event and
+requires the returned Workflow and Attempt to match. For replay, the Store MUST return one consistent authority
+snapshot containing the receipt, dispatch claim, and Context Manifest. An
+`ADMITTED` replay MUST additionally contain its terminal Attempt and processed
+command with the exact applied outcome. Before replay lookup, the Runtime MUST
+compute and validate the current Context Package digest once and validate the
+current request claim. It MUST then validate the historical closure without
+borrowing authority from that current request. The same `WorkerEventId` and
+canonical payload MUST always return `DUPLICATE`; only the same ID with another
+payload is a Worker Event ID conflict. An exact `IGNORED` duplicate is never
+terminal. An exact `ADMITTED` duplicate is terminal only when its
+`terminalForCurrentDispatch` classification proves the exact current dispatch;
+under another valid Workflow or Attempt it remains a non-terminal duplicate.
+Missing, malformed, contradictory, or payload-equal-but-field-contradictory
+replay records are a control-plane failure. A historical observed
+Workflow version, receipt time, or disposition may differ from a legitimate
+concurrent loser's proposal, but the retained records MUST still bind their
+exact dispatch cause. See
+[ADR 0024](adr/0024-stop-m1-transient-failure-without-retry-authority.md) and
+[ADR 0025](adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
 
 ## Crash Recovery
 

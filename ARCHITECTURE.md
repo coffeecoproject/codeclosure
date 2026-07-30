@@ -594,6 +594,77 @@ remains interruption. Worker non-admission results distinguish untrusted
 delivery from control-plane failure, so a Store or Runtime failure is never
 relabelled as a Worker protocol defect simply because no event committed.
 
+`TRANSIENT_BACKEND` retains the `RETRYABLE` classification, but classification
+is not immediate retry or redispatch authority. M1 has no persisted
+reason-scoped retry budget or backoff policy, so the first transient Worker
+failure terminalizes its Attempt as `FAILED`, moves the Workflow to `BLOCKED`,
+and stops the driver. The Runtime status view retains the Worker failure as the
+dominant blocker and directs the operator to `INSPECT_BLOCKER`; it does not
+present the blocked Workflow as ready to continue. One Domain-owned mapping
+defines the resulting Workflow status for every failure class; both event
+construction and the owning Attempt Event codec enforce that exact mapping.
+
+SQLite migration `0018_m1_retry_boundary_closure.sql` refuses legacy authority
+that either contains any later Attempt in any phase after a transient failure,
+or retains a latest transient failure while the Workflow is not in the failed
+phase with run status `BLOCKED` or `CANCELLED`. Migration failure is atomic and
+does not invent a retry authorization, `BLOCKED` transition, or audit history
+for retained data. Migration `0019_m1_attempt_authority_closure.sql` separately
+refuses either direction of a committed Workflow/Attempt `RUNNING` mismatch,
+any Worker-bound result kind incompatible with its phase, any open-ended
+Worker-bound failure mapping, any terminal Attempt without its exact historical
+paired audits and processed outcome, and any current Workflow that disagrees
+with its current Runtime audit/outcome. The migration completes every preflight
+before its success record or triggers can commit. The Store's only supported
+completion order terminalizes the Attempt first and then releases the Workflow
+inside the same transaction. SQLite requires that release to match the exact
+Domain result/failure/interruption status matrix and rejects a Workflow-first
+release while its active Attempt is still `RUNNING`. The Store rechecks active,
+terminal-history, and current-command authority at startup and at both ends of
+every mutation; status reads also close the current Workflow projection. A raw
+SQLite writer is not a supported authority boundary, and reopen fails closed
+after a committed half-state or authority rewrite. Concurrent readers cannot
+observe the Store's Attempt-first intermediate row. The retry-specific triggers
+additionally reject Workflow continuation, creation of any later Attempt, and
+reverse edits that would turn earlier history into a transient failure.
+
+The Driver does not receive complete Attempt history; it validates the current
+snapshot subset before recovery or dispatch. Its
+snapshot MUST explicitly carry the latest current-phase Attempt and Context
+Manifest or `null`; an active Attempt MUST be that latest exact Attempt
+snapshot, and omission, a contradictory `null`, or two differing copies of the
+same Attempt identity is invalid. Every visible Worker-phase Attempt MUST carry
+its Context Manifest identity and Worker Session and resolve the exact
+Manifest. That Manifest MUST bind the Attempt phase, start time, capability
+grant, phase-owned response-contract digest, legal M1 Candidate shape, and
+applicable Workflow version. A `RESULT_RECORDED` reason MUST name a result kind
+allowed by that phase; a `FAILED` reason MUST have the exact Runtime-owned
+failure classification. Driver, Runtime replay, and Store retained-row reads
+share this Worker-phase authority rule. When the visible latest Attempt is a
+transient failure, the Workflow MUST be `BLOCKED` or `CANCELLED`. For an
+`APPLIED` Worker event operation, the Runtime requires the Store receipt to
+exactly match its proposed receipt and, for admission, reapplies the event and
+requires the returned Workflow and Attempt to match too. Worker replay uses one
+consistent Store snapshot containing the receipt, dispatch claim, and Context
+Manifest; an `ADMITTED` snapshot also contains its immutable terminal Attempt
+and processed-command outcome. The Runtime first computes and validates the
+current Context Package digest once and validates the current request claim.
+It then validates the historical replay closure independently. The same
+`WorkerEventId` and canonical payload is always `DUPLICATE`; only the same ID
+with another payload is a Worker Event ID conflict. An exact `IGNORED`
+duplicate is never terminal. An exact `ADMITTED` duplicate sets
+`terminalForCurrentDispatch` only when it binds the current dispatch; under
+another valid Workflow or Attempt it remains a non-terminal duplicate. Missing,
+malformed, self-contradictory, or payload-equal-but-field-contradictory replay
+authority is a control-plane failure. A legitimate concurrent winner may have
+a historical observed Workflow version, receipt time, or disposition different
+from the losing proposal, but the retained authority MUST still bind its exact
+dispatch claim. See
+[ADR 0024](docs/adr/0024-stop-m1-transient-failure-without-retry-authority.md)
+and
+[ADR 0025](docs/adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
+Persisted budgets, backoff, and automatic retry policy remain M4 work.
+
 The implemented Slice 7 startup sequence:
 
 1. lets trusted composition activate and migrate the control Store through the

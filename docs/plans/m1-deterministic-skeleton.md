@@ -729,6 +729,52 @@ installation record, including its original installation time. The other
 adversarial scenarios prove that worker claims, missing/failing evidence, and
 Candidate drift cannot manufacture closeout.
 
+M1 transient-failure handling also preserves `TRANSIENT_BACKEND` as a
+`RETRYABLE` classification without treating it as retry authority. Because M1
+has no persisted reason-scoped budget or backoff, the first such Worker failure
+records a `FAILED` Attempt, leaves the Workflow `BLOCKED`, stops the Driver,
+and makes status expose `WORKER_BACKEND_FAILURE` and direct the operator to
+`INSPECT_BLOCKER`; it does not create a second Attempt. SQLite migration
+`0018_m1_retry_boundary_closure.sql` atomically refuses any unprovable later
+Attempt in any phase and refuses a latest `TRANSIENT_BACKEND` failure unless
+the Workflow remains in the failed phase with run status `BLOCKED` or
+`CANCELLED`, without rewriting that database. The Domain Event codec shares the
+reducer's exact failure-state mapping. Migration
+`0019_m1_attempt_authority_closure.sql` atomically refuses bidirectional
+Workflow/Attempt `RUNNING` mismatches, phase-incompatible Worker results,
+open-ended Worker failures, broken terminal Attempt audit/outcome history, and
+current Workflow/audit/outcome disagreement before its success record or
+triggers can commit. The Store uses only Attempt-first completion inside one
+transaction; SQLite requires the subsequent Workflow release to match the exact
+Domain terminal-status matrix and rejects Workflow-first release. Store startup
+and pre/post-write validation close retained active and historical authority,
+while status reads close the current Workflow projection. Migration isolation,
+wrong-status, history-rewrite, trigger-removal/reopen, and long-lived-Store tests
+prove the independent defenses, and concurrent readers do not observe the
+Store's intermediate write. Retry-specific triggers continue to reject invalid
+continuation, later-Attempt creation, and reverse-history rewrites.
+
+Driver authority decoding enforces the current snapshot subset exposed by its
+narrow port: explicit latest authority, exact active/latest agreement, required
+Worker Session and Manifest identity, phase-owned response-contract digest,
+phase-allowed terminal result, exact visible Manifest/Attempt bindings, and
+`BLOCKED` or `CANCELLED` when the latest Attempt is a transient failure. The
+same Worker-phase validator protects Runtime replay and Store retained reads.
+Proxy-poison, direct-SQL, migration, and trigger-removal/reopen tests cover the
+independent boundaries. Runtime also requires Store-returned
+applied receipts to match exactly. Replayed delivery is accepted only after one
+consistent receipt/claim/Manifest snapshot independently closes its historical
+authority; `ADMITTED` replay additionally proves the terminal Attempt and
+processed-command outcome. Runtime computes the current Context Package digest
+once and validates the current request claim before replay lookup. Same ID and
+same canonical payload is always `DUPLICATE`; a distinct payload is the only ID
+conflict. `IGNORED` and cross-dispatch `ADMITTED` duplicates are non-terminal;
+only an exact current-dispatch `ADMITTED` duplicate is terminal. Incomplete or
+self-contradictory historical authority remains a control-plane failure. See
+[ADR 0024](../adr/0024-stop-m1-transient-failure-without-retry-authority.md)
+and [ADR 0025](../adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
+Persisted automatic-retry budgets and backoff remain M4 work.
+
 - Runtime application facade for create/start/resume/cancel and read queries;
 - Runtime-owned deterministic workflow driver with one persisted operation per
   re-entry boundary;
@@ -775,7 +821,7 @@ visible and block the corresponding claim.
 | I-019–I-021 | canonical minimal Context Manifest, stale result, and transcript-independence tests |
 | I-022 | explicit scenario-reference contract test; graph traversal remains M3 |
 | I-023–I-026 | capability-policy tests in Slice 3; typed dispatch/frozen verification, promotion non-command, and decision-type tests in later owning slices |
-| I-027–I-030 | unknown/error fail-closed, retry budget, recovery reconcile, and proof-label tests |
+| I-027–I-030 | unknown/error fail-closed, retry classification/no-automatic-retry boundary, recovery reconcile, and proof-label tests |
 | I-031 | immutable Workflow Policy binding, substitution refusal, migration, and resume-preflight tests |
 
 Test names carry invariant metadata such as `[I-003]`. Slice 8 checks that every

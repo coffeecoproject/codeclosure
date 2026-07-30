@@ -68,12 +68,14 @@ import {
   deriveGoalStatus,
   goalId,
   goalRevision,
+  hasExactWorkflowActiveAttemptAuthority,
   evidenceId,
   evidenceSetDigestProjection,
   executionProfileBindingProjection,
   executionProfileId,
   executionProfileProjection,
   isoTimestamp,
+  isTerminalAttemptWorkflowRunStatusAuthorized,
   policyBundleId,
   policyBundleProjection,
   workflowPolicyBindingProjection,
@@ -149,8 +151,10 @@ import {
   validateM1CandidateEvidencePolicy,
   verifyM1AcceptanceDecision,
   verifyEvidenceSetAuthority,
+  assertM1WorkerPhaseAttemptAuthority,
   assertStoredCommandOutcomeBinding,
   StoredCommandDisposition,
+  WorkerEventDisposition,
   storedCommandOutcomeToJson,
   type CommandTarget,
   type AdmittedWorkerEventReceipt,
@@ -203,6 +207,7 @@ import {
   type WorkerDispatchClaim,
   type WorkerDispatchClaimResult,
   type WorkerEventReceipt,
+  type WorkerEventReplayAuthoritySnapshot,
   type WorkerEventStoreResult,
   verifyEvidenceRecordDigests,
 } from '@codeclosure/runtime';
@@ -1364,8 +1369,12 @@ export class SqliteControlStore
         options.now ?? systemNow,
       );
       const store = new SqliteControlStore(database, migrations, options.transactionProbe);
+      store.assertRetainedWorkflowAttemptLifecycleClosure();
       store.assertRetainedWorkflowStartAuthorityClosure();
+      store.assertRetainedM1RetryBoundaryClosure();
       store.assertRetainedWorkerAuthorityClosure();
+      store.assertRetainedTerminalAttemptAuthorityClosure();
+      store.assertRetainedCurrentWorkflowCommandClosure();
       store.assertRetainedCandidateEvidenceAuthorityClosure();
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
@@ -1410,8 +1419,12 @@ export class SqliteControlStore
         options.transactionProbe,
         isolationLease,
       );
+      store.assertRetainedWorkflowAttemptLifecycleClosure();
       store.assertRetainedWorkflowStartAuthorityClosure();
+      store.assertRetainedM1RetryBoundaryClosure();
       store.assertRetainedWorkerAuthorityClosure();
+      store.assertRetainedTerminalAttemptAuthorityClosure();
+      store.assertRetainedCurrentWorkflowCommandClosure();
       store.assertRetainedCandidateEvidenceAuthorityClosure();
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
@@ -1543,6 +1556,12 @@ export class SqliteControlStore
           `Workflow ${workflow.id} has no readable active Attempt authority`,
         );
       }
+      if (!hasExactWorkflowActiveAttemptAuthority(workflow, activeAttempt)) {
+        throw new StoreInvariantError(
+          `Workflow ${workflow.id} has no exact active Attempt authority`,
+        );
+      }
+      this.assertCurrentWorkflowCommandClosure(workflow);
       const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
       const closeout = this.getCloseoutForWorkflow(workflow.id);
       const latestRecoveryReconciliation = this.getLatestRecoveryReconciliation(workflow.id);
@@ -1703,8 +1722,8 @@ export class SqliteControlStore
         ...status,
         ...(installedPolicyBundle === undefined ? {} : { installedPolicyBundle }),
         ...(installedExecutionProfile === undefined ? {} : { installedExecutionProfile }),
-        ...(latestPhaseAttempt === undefined ? {} : { latestPhaseAttempt }),
-        ...(latestPhaseContextManifest === undefined ? {} : { latestPhaseContextManifest }),
+        latestPhaseAttempt: latestPhaseAttempt ?? null,
+        latestPhaseContextManifest: latestPhaseContextManifest ?? null,
         verificationObligations,
         evidence,
       });
@@ -2455,6 +2474,72 @@ export class SqliteControlStore
       .prepare('SELECT * FROM worker_event_receipts WHERE event_id = ?')
       .get(eventIdentifier);
     return row === undefined ? undefined : decodeWorkerEventReceiptRow(row);
+  }
+
+  public getWorkerEventReplayAuthority(
+    rawWorkerEventIdentifier: WorkerEventId,
+  ): WorkerEventReplayAuthoritySnapshot | undefined {
+    this.assertOpen();
+    const eventIdentifier = workerEventId(rawWorkerEventIdentifier);
+    return this.runRead(() => {
+      const receiptRow = this.#database
+        .prepare('SELECT * FROM worker_event_receipts WHERE event_id = ?')
+        .get(eventIdentifier);
+      if (receiptRow === undefined) {
+        return undefined;
+      }
+      const receipt = decodeWorkerEventReceiptRow(receiptRow);
+      const claimRow = this.#database
+        .prepare('SELECT * FROM worker_dispatch_claims WHERE attempt_id = ?')
+        .get(receipt.attemptId);
+      const dispatchClaim =
+        claimRow === undefined ? undefined : decodeWorkerDispatchClaimRow(claimRow);
+      if (dispatchClaim === undefined) {
+        throw new StoreInvariantError(
+          `Worker Event ${receipt.eventId} has no replay dispatch authority`,
+        );
+      }
+      const manifestRow = this.#database
+        .prepare('SELECT * FROM context_manifests WHERE id = ?')
+        .get(receipt.contextManifestId);
+      if (manifestRow === undefined) {
+        throw new StoreInvariantError(
+          `Worker Event ${receipt.eventId} has no replay Context Manifest`,
+        );
+      }
+      const contextManifest = this.decodeVerifiedContextManifestRow(manifestRow);
+      if (receipt.disposition === WorkerEventDisposition.IGNORED) {
+        return Object.freeze({ receipt, dispatchClaim, contextManifest });
+      }
+      const attemptRow = this.#database
+        .prepare('SELECT * FROM attempts WHERE id = ?')
+        .get(receipt.attemptId);
+      const terminalAttempt = attemptRow === undefined ? undefined : decodeAttempt(attemptRow);
+      const processedRow = this.#database
+        .prepare('SELECT * FROM processed_commands WHERE command_id = ?')
+        .get(receipt.internalCommandId);
+      const processedCommand =
+        processedRow === undefined ? undefined : decodeProcessedCommand(processedRow);
+      if (processedCommand !== undefined) {
+        this.validateProcessedCommandRecord(processedCommand);
+      }
+      if (
+        terminalAttempt === undefined ||
+        terminalAttempt.status === AttemptStatus.RUNNING ||
+        processedCommand === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Admitted Worker Event ${receipt.eventId} has incomplete replay authority`,
+        );
+      }
+      return Object.freeze({
+        receipt,
+        dispatchClaim,
+        contextManifest,
+        terminalAttempt,
+        processedCommand,
+      });
+    });
   }
 
   public nextAttemptSequence(rawWorkflowIdentifier: WorkflowId): number {
@@ -3223,7 +3308,7 @@ export class SqliteControlStore
       const result = this.commitAttemptEventInsideTransaction(input);
       if (result.status === 'REPLAYED' || result.status === 'COMMAND_CONFLICT') {
         return {
-          status: 'WORKER_EVENT_CONFLICT',
+          status: 'COMMAND_CONFLICT',
           message: `Internal command ${input.receipt.internalCommandId} is already in use`,
         };
       }
@@ -7119,6 +7204,258 @@ export class SqliteControlStore
     }
   }
 
+  private assertRetainedWorkflowAttemptLifecycleClosure(): void {
+    if (!this.hasTable('workflows') || !this.hasTable('attempts')) {
+      return;
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT owner_id AS id
+           FROM (
+             SELECT workflow.id AS owner_id
+               FROM workflows AS workflow
+              WHERE (
+                    workflow.run_status = 'RUNNING'
+                    AND NOT EXISTS (
+                      SELECT 1
+                        FROM attempts AS attempt
+                       WHERE attempt.id = workflow.active_attempt_id
+                         AND attempt.workflow_id = workflow.id
+                         AND attempt.phase = workflow.phase
+                         AND attempt.status = 'RUNNING'
+                    )
+                  )
+                 OR (
+                    workflow.run_status <> 'RUNNING'
+                    AND workflow.active_attempt_id IS NOT NULL
+                  )
+             UNION ALL
+             SELECT attempt.workflow_id AS owner_id
+               FROM attempts AS attempt
+               LEFT JOIN workflows AS workflow ON workflow.id = attempt.workflow_id
+              WHERE attempt.status = 'RUNNING'
+                AND (
+                  workflow.id IS NULL
+                  OR workflow.run_status <> 'RUNNING'
+                  OR workflow.active_attempt_id IS NOT attempt.id
+                  OR workflow.phase IS NOT attempt.phase
+                )
+           )
+          ORDER BY owner_id
+          LIMIT 1`,
+      )
+      .get();
+    if (row === undefined) {
+      return;
+    }
+    const identifier = workflowId(authorityIdentifierRowSchema.parse(row).id);
+    throw new StoreInvariantError(
+      `Workflow ${identifier} has no exact bidirectional RUNNING Attempt authority`,
+    );
+  }
+
+  private assertRetainedM1RetryBoundaryClosure(): void {
+    if (!this.hasTable('workflows') || !this.hasTable('attempts')) {
+      return;
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT workflow.id
+           FROM workflows AS workflow
+          WHERE EXISTS (
+              SELECT 1
+                FROM attempts AS failed
+               WHERE failed.workflow_id = workflow.id
+                 AND failed.status = 'FAILED'
+                 AND failed.failure_class = 'TRANSIENT_BACKEND'
+                 AND EXISTS (
+                   SELECT 1
+                     FROM attempts AS later
+                    WHERE later.workflow_id = failed.workflow_id
+                      AND later.sequence > failed.sequence
+                 )
+            )
+             OR (
+              EXISTS (
+              SELECT 1
+                FROM attempts AS attempt
+               WHERE attempt.workflow_id = workflow.id
+                 AND attempt.status = 'FAILED'
+                 AND attempt.failure_class = 'TRANSIENT_BACKEND'
+                 AND NOT EXISTS (
+                   SELECT 1
+                     FROM attempts AS later
+                    WHERE later.workflow_id = attempt.workflow_id
+                      AND later.sequence > attempt.sequence
+                 )
+                 AND (
+                   workflow.phase <> attempt.phase
+                   OR workflow.run_status NOT IN ('BLOCKED', 'CANCELLED')
+                 )
+              )
+            )
+          ORDER BY workflow.id
+          LIMIT 1`,
+      )
+      .get();
+    if (row === undefined) {
+      return;
+    }
+    const identifier = workflowId(authorityIdentifierRowSchema.parse(row).id);
+    throw new StoreInvariantError(
+      `Workflow ${identifier} retains unprovable M1 transient retry authority`,
+    );
+  }
+
+  private assertCurrentWorkflowCommandClosure(workflow: WorkflowInstance): void {
+    if (!this.hasM1AttemptAuthorityClosureMigration()) {
+      return;
+    }
+    const currentAudits = this.listAuditEvents('WORKFLOW', workflow.id).filter(
+      (audit) => audit.afterVersion === workflow.version,
+    );
+    const audit = currentAudits[0];
+    const command =
+      audit?.commandId === undefined ? undefined : this.getProcessedCommand(audit.commandId);
+    const outcome = command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+    if (
+      currentAudits.length !== 1 ||
+      audit?.actorType !== 'RUNTIME' ||
+      audit.commandId === undefined ||
+      audit.occurredAt !== workflow.updatedAt ||
+      (workflow.version === 1
+        ? audit.beforeVersion !== undefined
+        : audit.beforeVersion !== workflow.version - 1) ||
+      command?.completedAt !== workflow.updatedAt ||
+      outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+      outcome.goalId !== workflow.goalId ||
+      outcome.workflow.id !== workflow.id ||
+      outcome.workflow.version !== workflow.version ||
+      outcome.workflow.phase !== workflow.phase ||
+      outcome.workflow.runStatus !== workflow.runStatus
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} current state has no exact command and audit authority`,
+      );
+    }
+  }
+
+  private assertRetainedCurrentWorkflowCommandClosure(): void {
+    if (
+      !this.hasM1AttemptAuthorityClosureMigration() ||
+      !this.hasTable('workflows') ||
+      !this.hasTable('audit_events') ||
+      !this.hasTable('processed_commands')
+    ) {
+      return;
+    }
+    const rows = this.#database.prepare('SELECT * FROM workflows ORDER BY id').all();
+    for (const row of rows) {
+      this.assertCurrentWorkflowCommandClosure(decodeWorkflow(row));
+    }
+  }
+
+  private assertRetainedTerminalAttemptAuthorityClosure(): void {
+    if (
+      !this.hasM1AttemptAuthorityClosureMigration() ||
+      !this.hasTable('attempts') ||
+      !this.hasTable('workflows') ||
+      !this.hasTable('audit_events') ||
+      !this.hasTable('processed_commands')
+    ) {
+      return;
+    }
+    const rows = this.#database
+      .prepare("SELECT * FROM attempts WHERE status <> 'RUNNING' ORDER BY id")
+      .all();
+    for (const row of rows) {
+      const attempt = decodeAttempt(row);
+      if (attempt.status === AttemptStatus.RUNNING) {
+        throw new StoreInvariantError(`Terminal Attempt query returned ${attempt.id} as RUNNING`);
+      }
+      const workflow = this.getWorkflow(attempt.workflowId);
+      const cancelledByWorkflow =
+        attempt.status === AttemptStatus.INTERRUPTED &&
+        attempt.terminationReason.startsWith(`${AttemptInterruptionReason.WORKFLOW_CANCELLED}:`);
+      const expectedAttemptEventType = cancelledByWorkflow
+        ? 'ATTEMPT_INTERRUPTED_BY_WORKFLOW_CANCELLATION'
+        : 'ATTEMPT_FINISHED';
+      const expectedWorkflowEventType = cancelledByWorkflow
+        ? 'WORKFLOW_CANCELLED'
+        : 'WORKFLOW_ATTEMPT_FINISHED';
+      const terminalAudits = this.listAuditEvents('ATTEMPT', attempt.id).filter((audit) =>
+        ['ATTEMPT_FINISHED', 'ATTEMPT_INTERRUPTED_BY_WORKFLOW_CANCELLATION'].includes(
+          audit.eventType,
+        ),
+      );
+      const attemptAudit = terminalAudits[0];
+      const workflowAudits =
+        workflow === undefined || attemptAudit?.commandId === undefined
+          ? []
+          : this.listAuditEvents('WORKFLOW', workflow.id).filter(
+              (audit) =>
+                ['WORKFLOW_ATTEMPT_FINISHED', 'WORKFLOW_CANCELLED'].includes(audit.eventType) &&
+                audit.commandId === attemptAudit.commandId &&
+                audit.beforeVersion === attemptAudit.beforeVersion &&
+                audit.afterVersion === attemptAudit.afterVersion,
+            );
+      const workflowAudit = workflowAudits[0];
+      const command =
+        attemptAudit?.commandId === undefined
+          ? undefined
+          : this.getProcessedCommand(attemptAudit.commandId);
+      const outcome =
+        command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+      const expectedAggregateType = cancelledByWorkflow ? 'GOAL' : 'WORKFLOW';
+      const expectedAggregateId = cancelledByWorkflow ? workflow?.goalId : workflow?.id;
+      const workerBound =
+        attempt.contextManifestId !== undefined ||
+        attempt.workerSessionRef !== undefined ||
+        this.#database
+          .prepare('SELECT 1 FROM context_manifests WHERE attempt_id = ?')
+          .get(attempt.id) !== undefined;
+      const expectedWorkerFailureClass =
+        workerBound && attempt.status === AttemptStatus.FAILED
+          ? attemptFailureClassForKnownWorkerReasonCode(attempt.terminationReason)
+          : undefined;
+      if (
+        workflow === undefined ||
+        terminalAudits.length !== 1 ||
+        attemptAudit?.eventType !== expectedAttemptEventType ||
+        attemptAudit.actorType !== 'RUNTIME' ||
+        attemptAudit.commandId === undefined ||
+        attemptAudit.beforeVersion === undefined ||
+        attemptAudit.afterVersion !== attemptAudit.beforeVersion + 1 ||
+        attemptAudit.occurredAt !== attempt.endedAt ||
+        workflowAudits.length !== 1 ||
+        workflowAudit?.eventType !== expectedWorkflowEventType ||
+        workflowAudit.actorType !== 'RUNTIME' ||
+        workflowAudit.payloadDigest !== attemptAudit.payloadDigest ||
+        workflowAudit.occurredAt !== attempt.endedAt ||
+        command?.aggregateType !== expectedAggregateType ||
+        command.aggregateId !== expectedAggregateId ||
+        command.completedAt !== attempt.endedAt ||
+        outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+        outcome.target.aggregateType !== expectedAggregateType ||
+        outcome.target.aggregateId !== expectedAggregateId ||
+        outcome.goalId !== workflow.goalId ||
+        outcome.workflow.id !== workflow.id ||
+        outcome.workflow.version !== attemptAudit.afterVersion ||
+        outcome.workflow.phase !== attempt.phase ||
+        !isTerminalAttemptWorkflowRunStatusAuthorized(attempt, outcome.workflow.runStatus) ||
+        workflow.version < attemptAudit.afterVersion ||
+        workflow.updatedAt < attempt.endedAt ||
+        (workerBound &&
+          attempt.status === AttemptStatus.FAILED &&
+          expectedWorkerFailureClass !== attempt.failureClass)
+      ) {
+        throw new StoreInvariantError(
+          `Terminal Attempt ${attempt.id} has no exact command, audit, and Workflow outcome authority`,
+        );
+      }
+    }
+  }
+
   private decodeVerifiedContextManifestRow(row: unknown): ContextManifest {
     const manifest = decodeContextManifestRow(row);
     if (
@@ -7281,6 +7618,21 @@ export class SqliteControlStore
         responseContract: expectedPackage.responseContract,
       }),
     );
+    try {
+      assertM1WorkerPhaseAttemptAuthority(
+        manifest,
+        attempt,
+        expectedCapabilityGrantDigest,
+        expectedResponseContractDigest,
+      );
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new StoreInvariantError(
+          `Context Manifest ${manifest.id} has invalid Worker-phase Attempt authority`,
+        );
+      }
+      throw error;
+    }
     if (
       manifest.packageDigest !== expectedPackageDigest ||
       manifest.capabilityGrantDigest !== expectedCapabilityGrantDigest ||
@@ -8519,6 +8871,10 @@ export class SqliteControlStore
     );
   }
 
+  private hasM1AttemptAuthorityClosureMigration(): boolean {
+    return this.#appliedMigrations.some((migration) => migration.version === 19);
+  }
+
   private readCount(sql: string, ...parameters: readonly unknown[]): number {
     const row = this.#database.prepare(sql).get(...parameters);
     if (
@@ -8650,8 +9006,16 @@ export class SqliteControlStore
     this.#database.exec('BEGIN IMMEDIATE');
     try {
       this.#authorityIsolationLease?.assertCurrent();
+      this.assertRetainedWorkflowAttemptLifecycleClosure();
+      this.assertRetainedM1RetryBoundaryClosure();
+      this.assertRetainedTerminalAttemptAuthorityClosure();
+      this.assertRetainedCurrentWorkflowCommandClosure();
       const result = operation();
+      this.assertRetainedWorkflowAttemptLifecycleClosure();
       this.assertRetainedWorkflowStartAuthorityClosure();
+      this.assertRetainedM1RetryBoundaryClosure();
+      this.assertRetainedTerminalAttemptAuthorityClosure();
+      this.assertRetainedCurrentWorkflowCommandClosure();
       this.#authorityIsolationLease?.assertCurrent();
       this.#database.exec('COMMIT');
       return result;
@@ -8687,7 +9051,7 @@ export class SqliteControlStore
         return { status: 'VERSION_CONFLICT', message: error.message };
       }
       if (error instanceof CommandIdConflictError) {
-        return { status: 'WORKER_EVENT_CONFLICT', message: error.message };
+        return { status: 'COMMAND_CONFLICT', message: error.message };
       }
       throw error;
     }

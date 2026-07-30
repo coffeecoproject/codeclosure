@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   AcceptanceOutcome,
+  AttemptFailureClass,
   AttemptStatus,
   CandidateGenerationState,
   EvidenceEligibilityState,
@@ -38,7 +39,8 @@ import type { CandidateEvidenceIdentityGenerator } from './candidate-evidence-co
 import type { CandidateSourcePort, VerificationPort } from './candidate-evidence-contracts.js';
 import type { RuntimeCommandResult } from './contracts.js';
 import { RuntimeErrorCode } from './contracts.js';
-import { contextManifestDigestProjection } from './context-compiler.js';
+import { contextManifestDigestProjection, m1WorkerResponseContract } from './context-compiler.js';
+import { assertM1WorkerPhaseAttemptAuthority } from './context-authority.js';
 import { verifyEvidenceRecordDigests } from './evidence-factory.js';
 import type {
   AcceptanceIdentityGenerator,
@@ -51,6 +53,7 @@ import type {
   WorkflowDriverControlStore,
 } from './ports.js';
 import type { RecoveryCommandCapability, ResumeGoalRequest } from './recovery.js';
+import { canonicalizeJson } from './canonical-json.js';
 import {
   WorkflowRuntimeKernel,
   type AttemptContextFactory,
@@ -59,7 +62,6 @@ import {
   type StartGoalRequest,
 } from './workflow-runtime.js';
 import {
-  WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
   WorkerPortFailureReasonCode,
   type WorkerEventAdmissionResult,
@@ -68,6 +70,8 @@ import {
 const installedExecutionProfileSchema = z
   .object({ profile: z.unknown(), installedAt: z.string() })
   .strict();
+
+const authorityObjectOrNullSchema = z.union([z.null(), z.looseObject({})]);
 
 const installedPolicyBundleSchema = z
   .object({ bundle: z.unknown(), installedAt: z.string() })
@@ -92,8 +96,8 @@ const driverAuthoritySchema = z
     latestRecoveryReconciliation: z.unknown().optional(),
     installedPolicyBundle: installedPolicyBundleSchema.optional(),
     installedExecutionProfile: installedExecutionProfileSchema.optional(),
-    latestPhaseAttempt: z.unknown().optional(),
-    latestPhaseContextManifest: z.unknown().optional(),
+    latestPhaseAttempt: authorityObjectOrNullSchema,
+    latestPhaseContextManifest: authorityObjectOrNullSchema,
     verificationObligations: z.array(z.unknown()),
     evidence: z.array(z.object({ record: z.unknown(), eligibility: z.unknown() }).strict()),
   })
@@ -371,21 +375,73 @@ function decodeDriverAuthority(value: unknown, digests: DigestProvider): Decoded
   }
 
   const latestPhaseAttempt =
-    parsed.latestPhaseAttempt === undefined
+    parsed.latestPhaseAttempt === null
       ? undefined
       : decodeAttemptSnapshot(parsed.latestPhaseAttempt);
   if (
-    latestPhaseAttempt !== undefined &&
-    (latestPhaseAttempt.workflowId !== status.workflow.id ||
-      latestPhaseAttempt.phase !== status.workflow.phase ||
-      (status.activeAttempt !== undefined && latestPhaseAttempt.id !== status.activeAttempt.id))
+    (latestPhaseAttempt !== undefined &&
+      (latestPhaseAttempt.workflowId !== status.workflow.id ||
+        latestPhaseAttempt.phase !== status.workflow.phase)) ||
+    (status.activeAttempt !== undefined &&
+      (latestPhaseAttempt === undefined ||
+        canonicalizeJson(latestPhaseAttempt) !== canonicalizeJson(status.activeAttempt))) ||
+    (latestPhaseAttempt?.status === AttemptStatus.RUNNING &&
+      status.activeAttempt?.id !== latestPhaseAttempt.id)
   ) {
     throw new TypeError('Driver latest Attempt does not bind the current Workflow phase');
   }
+  if (
+    latestPhaseAttempt?.status === AttemptStatus.FAILED &&
+    latestPhaseAttempt.failureClass === AttemptFailureClass.TRANSIENT_BACKEND &&
+    status.workflow.runStatus !== RunStatus.BLOCKED &&
+    status.workflow.runStatus !== RunStatus.CANCELLED
+  ) {
+    throw new TypeError(
+      'M1 Workflow must remain BLOCKED or CANCELLED after its latest transient Attempt failure',
+    );
+  }
   const latestPhaseContextManifest =
-    parsed.latestPhaseContextManifest === undefined
+    parsed.latestPhaseContextManifest === null
       ? undefined
       : decodeContextManifest(parsed.latestPhaseContextManifest);
+  if (
+    latestPhaseAttempt !== undefined &&
+    workerBackedPhase(latestPhaseAttempt.phase) &&
+    (latestPhaseAttempt.contextManifestId === undefined ||
+      latestPhaseAttempt.workerSessionRef === undefined ||
+      latestPhaseContextManifest === undefined)
+  ) {
+    throw new TypeError('Driver Worker-phase Attempt has incomplete dispatch authority');
+  }
+  if (latestPhaseContextManifest !== undefined && latestPhaseAttempt !== undefined) {
+    assertM1WorkerPhaseAttemptAuthority(
+      latestPhaseContextManifest,
+      latestPhaseAttempt,
+      sha256Digest(
+        digests.digest({
+          schemaVersion: 1,
+          capabilityGrant: latestPhaseAttempt.capabilityGrant,
+        }),
+      ),
+      sha256Digest(
+        digests.digest({
+          schemaVersion: 1,
+          responseContract: m1WorkerResponseContract(latestPhaseAttempt.phase),
+        }),
+      ),
+    );
+  }
+  // A terminal IMPLEMENT Attempt can belong to an earlier visit and Candidate
+  // generation. That mismatch is safe only because phaseAttemptCompleted
+  // treats it as unfinished; a RUNNING Attempt must bind the current Candidate.
+  const runningImplementContextIsStale =
+    latestPhaseContextManifest?.phase === WorkflowPhase.IMPLEMENT &&
+    latestPhaseAttempt?.status === AttemptStatus.RUNNING &&
+    (status.candidateAuthority === undefined ||
+      latestPhaseContextManifest.candidateGenerationId !==
+        status.candidateAuthority.generation.id ||
+      latestPhaseContextManifest.candidateDigest !==
+        status.candidateAuthority.generation.baseDigest);
   if (
     (latestPhaseAttempt?.contextManifestId === undefined) !==
       (latestPhaseContextManifest === undefined) ||
@@ -398,6 +454,10 @@ function decodeDriverAuthority(value: unknown, digests: DigestProvider): Decoded
         latestPhaseContextManifest.goalId !== status.goal.id ||
         latestPhaseContextManifest.goalRevision !== status.goal.revision ||
         latestPhaseContextManifest.workflowId !== status.workflow.id ||
+        (latestPhaseAttempt.status === AttemptStatus.RUNNING
+          ? latestPhaseContextManifest.workflowVersion !== status.workflow.version
+          : latestPhaseContextManifest.workflowVersion >= status.workflow.version) ||
+        runningImplementContextIsStale ||
         latestPhaseContextManifest.policyBundleId !== status.policyBinding.policyBundleId ||
         latestPhaseContextManifest.policyBundleDigest !== status.policyBinding.policyBundleDigest ||
         latestPhaseContextManifest.executionProfileId !==
@@ -1137,8 +1197,7 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
     const admitted = admissions.some(
       (admission) =>
         admission.status === 'ADMITTED' ||
-        (admission.status === 'DUPLICATE' &&
-          admission.originalDisposition === WorkerEventDisposition.ADMITTED),
+        (admission.status === 'DUPLICATE' && admission.terminalForCurrentDispatch),
     );
     const controlPlaneFailure = admissions.some(
       (admission) =>

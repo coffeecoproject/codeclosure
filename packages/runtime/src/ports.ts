@@ -110,6 +110,20 @@ interface ProcessedCommandBase {
 
 export type ProcessedCommandView = ProcessedCommandBase & CommandTarget;
 
+export type WorkerEventReplayAuthoritySnapshot =
+  | {
+      readonly receipt: IgnoredWorkerEventReceipt;
+      readonly dispatchClaim: WorkerDispatchClaim;
+      readonly contextManifest: ContextManifest;
+    }
+  | {
+      readonly receipt: AdmittedWorkerEventReceipt;
+      readonly dispatchClaim: WorkerDispatchClaim;
+      readonly contextManifest: ContextManifest;
+      readonly terminalAttempt: Exclude<Attempt, { readonly status: 'RUNNING' }>;
+      readonly processedCommand: ProcessedCommandView;
+    };
+
 export interface GoalWorkflowView {
   readonly goal: Goal;
   readonly workflow: WorkflowInstance;
@@ -139,8 +153,8 @@ export interface GoalStatusAuthoritySnapshot extends GoalWorkflowView {
 export interface WorkflowDriverAuthoritySnapshot extends GoalStatusAuthoritySnapshot {
   readonly installedPolicyBundle?: InstalledPolicyBundle;
   readonly installedExecutionProfile?: InstalledExecutionProfile;
-  readonly latestPhaseAttempt?: Attempt;
-  readonly latestPhaseContextManifest?: ContextManifest;
+  readonly latestPhaseAttempt: Attempt | null;
+  readonly latestPhaseContextManifest: ContextManifest | null;
   readonly verificationObligations: readonly VerificationObligation[];
   readonly evidence: readonly {
     readonly record: EvidenceRecord;
@@ -466,6 +480,7 @@ export type WorkerEventStoreResult<Value> =
     }
   | { readonly status: 'REPLAYED'; readonly receipt: WorkerEventReceipt }
   | { readonly status: 'VERSION_CONFLICT'; readonly message: string }
+  | { readonly status: 'COMMAND_CONFLICT'; readonly message: string }
   | { readonly status: 'WORKER_EVENT_CONFLICT'; readonly message: string };
 
 export type PolicyInstallResult =
@@ -511,6 +526,9 @@ export interface WorkerControlStore extends WorkflowControlStore {
   getContextManifest(contextManifestId: ContextManifestId): ContextManifest | undefined;
   getWorkerDispatchClaim(attemptId: AttemptId): WorkerDispatchClaim | undefined;
   getWorkerEventReceipt(workerEventId: WorkerEventId): WorkerEventReceipt | undefined;
+  getWorkerEventReplayAuthority(
+    workerEventId: WorkerEventId,
+  ): WorkerEventReplayAuthoritySnapshot | undefined;
   getPolicyBundle(policyBundleId: PolicyBundleId): InstalledPolicyBundle | undefined;
   getExecutionProfile(
     executionProfileId: ExecutionProfileId,

@@ -3,11 +3,11 @@ import { z } from 'zod';
 import {
   AttemptFailureClass,
   assertAttemptInvariant,
+  isAttemptFinishedInterruptionRunStatusAuthorized,
+  resultingRunStatusForFailure,
   type Attempt,
   type AttemptEvent,
-  type AttemptFailed,
   type AttemptFinished,
-  type AttemptInterrupted,
   type AttemptStarted,
   type UnvalidatedAttempt,
 } from './attempt.js';
@@ -880,7 +880,7 @@ function materializeAttemptFinished(
     case AttemptStatus.FAILED:
       if (
         parsed.failureClass === undefined ||
-        !isFailedResultingRunStatus(parsed.resultingRunStatus)
+        parsed.resultingRunStatus !== resultingRunStatusForFailure(parsed.failureClass)
       ) {
         throw new TypeError('Failed Attempt has invalid terminal fields');
       }
@@ -893,7 +893,10 @@ function materializeAttemptFinished(
     case AttemptStatus.INTERRUPTED:
       if (
         parsed.failureClass !== undefined ||
-        !isInterruptedResultingRunStatus(parsed.resultingRunStatus)
+        !isAttemptFinishedInterruptionRunStatusAuthorized(
+          parsed.terminationReason,
+          parsed.resultingRunStatus,
+        )
       ) {
         throw new TypeError('Interrupted Attempt has invalid terminal fields');
       }
@@ -903,18 +906,6 @@ function materializeAttemptFinished(
         resultingRunStatus: parsed.resultingRunStatus,
       });
   }
-}
-
-function isFailedResultingRunStatus(
-  value: RunStatus,
-): value is AttemptFailed['resultingRunStatus'] {
-  return value === RunStatus.READY || value === RunStatus.BLOCKED || value === RunStatus.FAILED;
-}
-
-function isInterruptedResultingRunStatus(
-  value: RunStatus,
-): value is AttemptInterrupted['resultingRunStatus'] {
-  return value === RunStatus.READY || value === RunStatus.BLOCKED;
 }
 
 export function decodeAttemptEvent(value: unknown): AttemptEvent {

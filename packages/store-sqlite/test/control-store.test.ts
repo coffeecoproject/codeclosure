@@ -80,6 +80,7 @@ const transitionedAt = isoTimestamp('2026-07-27T00:00:00.001Z');
 const attemptStartedAt = isoTimestamp('2026-07-27T00:00:00.002Z');
 const attemptFinishedAt = isoTimestamp('2026-07-27T00:00:00.003Z');
 const afterCancellationAt = isoTimestamp('2026-07-27T00:00:00.004Z');
+const legacyRetryFinishedAt = isoTimestamp('2026-07-27T00:00:00.005Z');
 
 function digest(character: string): Sha256Digest {
   return sha256Digest(`sha256:${character.repeat(64)}`);
@@ -297,14 +298,18 @@ function planGuardResults(): readonly GuardResult[] {
   }));
 }
 
-function planEvent(workflow: WorkflowInstance, namespace: string): WorkflowEvent {
+function planEvent(
+  workflow: WorkflowInstance,
+  namespace: string,
+  occurredAt = transitionedAt,
+): WorkflowEvent {
   return acceptedEvent(
     decideWorkflow(workflow, {
       type: 'REQUEST_PHASE_TRANSITION',
       commandId: commandId(`command_plan-${namespace}`),
       workflowId: workflow.id,
       expectedVersion: workflow.version,
-      occurredAt: transitionedAt,
+      occurredAt,
       reason: 'discovery proof is complete',
       requestedPhase: WorkflowPhase.PLAN,
       guardResults: planGuardResults(),
@@ -312,8 +317,12 @@ function planEvent(workflow: WorkflowInstance, namespace: string): WorkflowEvent
   );
 }
 
-function transitionInput(workflow: WorkflowInstance, namespace: string): CommitWorkflowEventInput {
-  const event = planEvent(workflow, namespace);
+function transitionInput(
+  workflow: WorkflowInstance,
+  namespace: string,
+  occurredAt = transitionedAt,
+): CommitWorkflowEventInput {
+  const event = planEvent(workflow, namespace, occurredAt);
   const target = Object.freeze({ aggregateType: 'WORKFLOW' as const, aggregateId: workflow.id });
   return {
     inputDigest: digest('c'),
@@ -365,7 +374,7 @@ function resultAttemptInput(
       expectedWorkflowVersion: workflow.version,
       attemptId: attempt.id,
       occurredAt: attemptFinishedAt,
-      reason: 'worker result validated and routed',
+      reason: 'WORKER_RESULT:PROPOSALS',
     }),
   );
   const target = Object.freeze({ aggregateType: 'WORKFLOW' as const, aggregateId: workflow.id });
@@ -459,6 +468,178 @@ function seedReady(store: SqliteControlStore, namespace: string) {
   return Object.freeze({ creation: running.creation, authority });
 }
 
+function migrationsBefore(t: TestContext, boundary: string, directoryPrefix: string): string {
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), directoryPrefix));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) => candidate.endsWith('.sql') && candidate < boundary,
+  )) {
+    writeFileSync(
+      join(migrationsDirectory, name),
+      readFileSync(join(sourceDirectory, name), 'utf8'),
+      'utf8',
+    );
+  }
+  return migrationsDirectory;
+}
+
+function addMigration(migrationsDirectory: string, migrationName: string): void {
+  writeFileSync(
+    join(migrationsDirectory, migrationName),
+    readFileSync(join(defaultMigrationsDirectory(), migrationName), 'utf8'),
+    'utf8',
+  );
+}
+
+function recordTransientFailure(
+  store: SqliteControlStore,
+  authority: ReturnType<typeof startWorkflowAuthorityFixture>,
+  namespace: string,
+): void {
+  const failure = authority.kernel.recordAttemptFailure({
+    commandId: commandId(`command_transient-failure-${namespace}`),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: authority.workflow.version,
+    attemptId: authority.attempt.id,
+    failureClass: AttemptFailureClass.TRANSIENT_BACKEND,
+    reason: 'WORKER_BACKEND_FAILURE',
+  });
+  assert.equal(failure.status, 'APPLIED');
+  assert.equal(store.getAttempt(authority.attempt.id)?.status, AttemptStatus.FAILED);
+  assert.equal(
+    store.getAttempt(authority.attempt.id)?.failureClass,
+    AttemptFailureClass.TRANSIENT_BACKEND,
+  );
+  assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+}
+
+function recordProtocolFailure(
+  store: SqliteControlStore,
+  authority: ReturnType<typeof startWorkflowAuthorityFixture>,
+  namespace: string,
+): WorkflowInstance {
+  const failure = authority.kernel.recordAttemptFailure({
+    commandId: commandId(`command_protocol-failure-${namespace}`),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: authority.workflow.version,
+    attemptId: authority.attempt.id,
+    failureClass: AttemptFailureClass.PROTOCOL_ERROR,
+    reason: 'WORKER_STREAM_NO_TERMINAL_EVENT',
+  });
+  assert.equal(failure.status, 'APPLIED');
+  assert.equal(store.getAttempt(authority.attempt.id)?.status, AttemptStatus.FAILED);
+  const workflow = store.getWorkflow(authority.workflow.id);
+  if (workflow === undefined) {
+    assert.fail('Protocol failure fixture must retain its Workflow');
+  }
+  assert.equal(workflow.runStatus, RunStatus.FAILED);
+  return workflow;
+}
+
+function rewriteBlockedTransientWorkflowReady(
+  filename: string,
+  workflowIdentifier: ReturnType<typeof workflowId>,
+  phase: WorkflowPhase = WorkflowPhase.DISCOVERY,
+): void {
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    const update = database
+      .prepare(
+        `UPDATE workflows
+            SET phase = ?, run_status = 'READY', active_attempt_id = NULL, suspended_reason = NULL
+          WHERE id = ? AND run_status = 'BLOCKED'`,
+      )
+      .run(phase, workflowIdentifier);
+    assert.equal(update.changes, 1);
+  } finally {
+    database.close();
+  }
+}
+
+function appendRawLegacySuccessfulRetry(
+  filename: string,
+  workflowIdentifier: ReturnType<typeof workflowId>,
+  namespace: string,
+): ReturnType<typeof attemptId> {
+  const retryAttemptId = attemptId(`attempt_legacy-retry-${namespace}`);
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    database.transaction(() => {
+      database
+        .prepare(
+          `INSERT INTO attempts(
+             id, workflow_id, phase, sequence, context_manifest_id,
+             capability_grant_json, worker_session_ref, status, failure_class,
+             termination_reason, started_at, ended_at
+           ) VALUES (?, ?, 'DISCOVERY', 2, NULL, ?, NULL, 'RUNNING', NULL, NULL, ?, NULL)`,
+        )
+        .run(
+          retryAttemptId,
+          workflowIdentifier,
+          JSON.stringify(deriveCapabilityGrant(WorkflowPhase.DISCOVERY)),
+          afterCancellationAt,
+        );
+      database
+        .prepare(
+          `UPDATE workflows
+              SET run_status = 'RUNNING', version = version + 1,
+                  active_attempt_id = ?, suspended_reason = NULL, updated_at = ?
+            WHERE id = ? AND run_status = 'READY'`,
+        )
+        .run(retryAttemptId, afterCancellationAt, workflowIdentifier);
+      database
+        .prepare(
+          `UPDATE attempts
+              SET status = 'RESULT_RECORDED', termination_reason = ?, ended_at = ?
+            WHERE id = ? AND status = 'RUNNING'`,
+        )
+        .run(
+          'legacy retry completed without M1 retry authority',
+          legacyRetryFinishedAt,
+          retryAttemptId,
+        );
+      database
+        .prepare(
+          `UPDATE workflows
+              SET run_status = 'READY', version = version + 1,
+                  active_attempt_id = NULL, suspended_reason = NULL, updated_at = ?
+            WHERE id = ? AND run_status = 'RUNNING'`,
+        )
+        .run(legacyRetryFinishedAt, workflowIdentifier);
+    })();
+  } finally {
+    database.close();
+  }
+  return retryAttemptId;
+}
+
+function rewriteRecordedAttemptAsEarlierTransientFailure(
+  filename: string,
+  attemptIdentifier: ReturnType<typeof attemptId>,
+): void {
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER attempts_terminal_immutable');
+    database.exec('DROP TRIGGER attempts_lifecycle_guard');
+    database.exec('DROP TRIGGER attempts_m1_retry_boundary_history_update_guard');
+    database.exec('DROP TRIGGER attempts_m1_retry_boundary_update_guard');
+    const update = database
+      .prepare(
+        `UPDATE attempts
+            SET status = 'FAILED', failure_class = 'TRANSIENT_BACKEND',
+                termination_reason = 'WORKER_BACKEND_FAILURE', ended_at = ?
+          WHERE id = ? AND status = 'RESULT_RECORDED'`,
+      )
+      .run(legacyRetryFinishedAt, attemptIdentifier);
+    assert.equal(update.changes, 1);
+  } finally {
+    database.close();
+  }
+}
+
 void test('[I-006][I-009] ordered migration creates the complete control schema and reopens', (t) => {
   const filename = temporaryDatabase(t);
   const store = openSqliteControlStore({ filename, now: () => createdAt });
@@ -484,6 +665,8 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0015_execution_profile_authority.sql',
       '0016_recovery_reconciliation_authority.sql',
       '0017_workflow_policy_binding_authority.sql',
+      '0018_m1_retry_boundary_closure.sql',
+      '0019_m1_attempt_authority_closure.sql',
     ],
   );
   store.close();
@@ -779,6 +962,1271 @@ void test('[I-006][I-008] migration 0017 atomically refuses legacy unbound execu
     0,
   );
   assert.equal(inspected.prepare('SELECT COUNT(*) FROM attempts').pluck().get(), 1);
+});
+
+void test('[I-006][I-008][I-028] migration 0018 atomically refuses a legacy retry-ready transient failure', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-refusal.sqlite');
+  const migrationsDirectory = migrationsBefore(t, '0018_', 'codeclosure-retry-boundary-refusal-');
+  const oldStore = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const { authority } = seedRunning(oldStore, 'retry-boundary-refusal');
+  recordTransientFailure(oldStore, authority, 'retry-boundary-refusal');
+  oldStore.close();
+
+  rewriteBlockedTransientWorkflowReady(filename, authority.workflow.id);
+  const migrationName = '0018_m1_retry_boundary_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-unbounded-retry-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_m1_retry_boundary_update_guard', 'attempts_m1_retry_boundary_insert_guard', 'attempts_m1_retry_boundary_history_update_guard', 'attempts_m1_retry_boundary_update_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name = 'm1_retry_boundary_migration_guard') OR (type = 'trigger' AND name = 'm1_retry_boundary_migration_guard_reject')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.READY,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT failure_class FROM attempts WHERE id = ?')
+      .pluck()
+      .get(authority.attempt.id),
+    AttemptFailureClass.TRANSIENT_BACKEND,
+  );
+});
+
+void test('[I-006][I-008][I-028] migration 0018 atomically refuses a cross-phase continuation', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-cross-phase-refusal.sqlite');
+  const migrationsDirectory = migrationsBefore(
+    t,
+    '0018_',
+    'codeclosure-retry-boundary-cross-phase-refusal-',
+  );
+  const oldStore = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const { authority } = seedRunning(oldStore, 'retry-boundary-cross-phase-refusal');
+  recordTransientFailure(oldStore, authority, 'retry-boundary-cross-phase-refusal');
+  oldStore.close();
+
+  rewriteBlockedTransientWorkflowReady(filename, authority.workflow.id, WorkflowPhase.PLAN);
+  const migrationName = '0018_m1_retry_boundary_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-unbounded-retry-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.deepEqual(
+    inspected
+      .prepare('SELECT phase, run_status FROM workflows WHERE id = ?')
+      .get(authority.workflow.id),
+    { phase: WorkflowPhase.PLAN, run_status: RunStatus.READY },
+  );
+});
+
+void test('[I-006][I-008][I-028] migration 0018 atomically refuses unprovable successful retry history', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-success-history.sqlite');
+  const migrationsDirectory = migrationsBefore(
+    t,
+    '0018_',
+    'codeclosure-retry-boundary-success-history-',
+  );
+  const oldStore = openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt });
+  const { authority } = seedRunning(oldStore, 'retry-boundary-success-history');
+  recordTransientFailure(oldStore, authority, 'retry-boundary-success-history');
+  oldStore.close();
+
+  rewriteBlockedTransientWorkflowReady(filename, authority.workflow.id);
+  const retryAttemptId = appendRawLegacySuccessfulRetry(
+    filename,
+    authority.workflow.id,
+    'retry-boundary-success-history',
+  );
+
+  const migrationName = '0018_m1_retry_boundary_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-unbounded-retry-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT failure_class FROM attempts WHERE id = ?')
+      .pluck()
+      .get(authority.attempt.id),
+    AttemptFailureClass.TRANSIENT_BACKEND,
+  );
+  assert.equal(
+    inspected.prepare('SELECT status FROM attempts WHERE id = ?').pluck().get(retryAttemptId),
+    AttemptStatus.RESULT_RECORDED,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.READY,
+  );
+});
+
+void test('[I-006][I-008][I-009][I-028] migration 0018 preserves valid blocked and cancelled transient history', async (t) => {
+  for (const finalStatus of [RunStatus.BLOCKED, RunStatus.CANCELLED] as const) {
+    await t.test(finalStatus, (subtest) => {
+      const namespace = `retry-boundary-valid-${finalStatus.toLowerCase()}`;
+      const filename = temporaryDatabase(subtest, `${namespace}.sqlite`);
+      const migrationsDirectory = migrationsBefore(subtest, '0018_', `codeclosure-${namespace}-`);
+      const oldStore = openSqliteControlStore({
+        filename,
+        migrationsDirectory,
+        now: () => createdAt,
+      });
+      const { authority } = seedRunning(oldStore, namespace);
+      recordTransientFailure(oldStore, authority, namespace);
+      if (finalStatus === RunStatus.CANCELLED) {
+        const blocked = oldStore.getWorkflow(authority.workflow.id);
+        assert.ok(blocked);
+        const cancelled = authority.kernel.cancelGoal({
+          commandId: commandId(`command_${namespace}-cancel`),
+          goalId: authority.goal.id,
+          expectedGoalRevision: authority.goal.revision,
+          expectedWorkflowVersion: blocked.version,
+          reason: 'operator cancelled retained transient blocker',
+        });
+        assert.equal(cancelled.status, 'APPLIED');
+      }
+      oldStore.close();
+
+      const migrationName = '0018_m1_retry_boundary_closure.sql';
+      addMigration(migrationsDirectory, migrationName);
+      const migrated = openSqliteControlStore({
+        filename,
+        migrationsDirectory,
+        now: () => transitionedAt,
+      });
+      assert.equal(migrated.getWorkflow(authority.workflow.id)?.phase, WorkflowPhase.DISCOVERY);
+      assert.equal(migrated.getWorkflow(authority.workflow.id)?.runStatus, finalStatus);
+      assert.equal(
+        migrated.getAttempt(authority.attempt.id)?.failureClass,
+        AttemptFailureClass.TRANSIENT_BACKEND,
+      );
+      migrated.close();
+
+      const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+      assert.equal(
+        inspected
+          .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+          .pluck()
+          .get(migrationName),
+        1,
+      );
+      assert.equal(
+        inspected
+          .prepare(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_m1_retry_boundary_update_guard', 'attempts_m1_retry_boundary_insert_guard', 'attempts_m1_retry_boundary_history_update_guard', 'attempts_m1_retry_boundary_update_guard')",
+          )
+          .pluck()
+          .get(),
+        4,
+      );
+      inspected.close();
+
+      const reopened = openSqliteControlStore({
+        filename,
+        migrationsDirectory,
+        now: () => afterCancellationAt,
+      });
+      subtest.after(() => reopened.close());
+      assert.equal(reopened.getWorkflow(authority.workflow.id)?.runStatus, finalStatus);
+      assert.equal(reopened.nextAttemptSequence(authority.workflow.id), 2);
+    });
+  }
+});
+
+void test('[I-006][I-008][I-009] migration 0019 atomically refuses a legacy Workflow-first half-state', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-migration-half-state.sqlite');
+  const migrationsDirectory = migrationsBefore(
+    t,
+    '0019_',
+    'codeclosure-attempt-authority-refusal-',
+  );
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const { authority } = seedRunning(oldStore, 'attempt-authority-migration-half-state');
+  oldStore.close();
+
+  const legacy = new Database(filename);
+  legacy
+    .prepare(
+      `UPDATE workflows
+            SET run_status = 'BLOCKED', active_attempt_id = NULL,
+                suspended_reason = 'WORKER_BACKEND_FAILURE',
+                version = version + 1, updated_at = ?
+          WHERE id = ?`,
+    )
+    .run(attemptFinishedAt, authority.workflow.id);
+  legacy.close();
+
+  const migrationName = '0019_m1_attempt_authority_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-m1-attempt-authority-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_running_attempt_release_guard', 'workflows_m1_active_attempt_phase_insert_guard', 'workflows_m1_active_attempt_phase_update_guard', 'attempts_m1_worker_result_kind_guard', 'attempts_m1_worker_failure_mapping_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name = 'm1_attempt_authority_migration_guard') OR (type = 'trigger' AND name = 'm1_attempt_authority_migration_guard_reject')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.BLOCKED,
+  );
+  assert.equal(
+    inspected.prepare('SELECT status FROM attempts WHERE id = ?').pluck().get(authority.attempt.id),
+    AttemptStatus.RUNNING,
+  );
+});
+
+void test('[I-006][I-008][I-009] migration 0019 atomically refuses a legacy Attempt-first half-state', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-migration-attempt-first.sqlite');
+  const migrationsDirectory = migrationsBefore(
+    t,
+    '0019_',
+    'codeclosure-attempt-authority-attempt-first-refusal-',
+  );
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const { authority } = seedRunning(oldStore, 'attempt-authority-migration-attempt-first');
+  oldStore.close();
+
+  const legacy = new Database(filename);
+  legacy
+    .prepare(
+      `UPDATE attempts
+          SET status = 'RESULT_RECORDED', termination_reason = ?, ended_at = ?
+        WHERE id = ?`,
+    )
+    .run('WORKER_RESULT:PROPOSALS', attemptFinishedAt, authority.attempt.id);
+  legacy.close();
+
+  const migrationName = '0019_m1_attempt_authority_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-m1-attempt-authority-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_running_attempt_release_guard', 'workflows_m1_active_attempt_phase_insert_guard', 'workflows_m1_active_attempt_phase_update_guard', 'attempts_m1_worker_result_kind_guard', 'attempts_m1_worker_failure_mapping_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name = 'm1_attempt_authority_migration_guard') OR (type = 'trigger' AND name = 'm1_attempt_authority_migration_guard_reject')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.RUNNING,
+  );
+  assert.equal(
+    inspected.prepare('SELECT status FROM attempts WHERE id = ?').pluck().get(authority.attempt.id),
+    AttemptStatus.RESULT_RECORDED,
+  );
+});
+
+void test('[I-006][I-008][I-009] migration 0019 atomically refuses an active Attempt from another phase', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-migration-phase-mismatch.sqlite');
+  const migrationsDirectory = migrationsBefore(
+    t,
+    '0019_',
+    'codeclosure-attempt-authority-phase-refusal-',
+  );
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const { authority } = seedRunning(oldStore, 'attempt-authority-migration-phase-mismatch');
+  oldStore.close();
+
+  const legacy = new Database(filename);
+  legacy
+    .prepare('UPDATE workflows SET phase = ? WHERE id = ?')
+    .run(WorkflowPhase.PLAN, authority.workflow.id);
+  legacy.close();
+
+  const migrationName = '0019_m1_attempt_authority_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-m1-attempt-authority-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_running_attempt_release_guard', 'workflows_m1_active_attempt_phase_insert_guard', 'workflows_m1_active_attempt_phase_update_guard', 'attempts_m1_worker_result_kind_guard', 'attempts_m1_worker_failure_mapping_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.deepEqual(
+    inspected
+      .prepare(
+        `SELECT workflow.phase AS workflow_phase, attempt.phase AS attempt_phase
+           FROM workflows AS workflow
+           JOIN attempts AS attempt ON attempt.id = workflow.active_attempt_id
+          WHERE workflow.id = ?`,
+      )
+      .get(authority.workflow.id),
+    { workflow_phase: WorkflowPhase.PLAN, attempt_phase: WorkflowPhase.DISCOVERY },
+  );
+});
+
+void test('[I-006][I-008][I-009] migration 0019 atomically refuses a rewritten current terminal status', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-migration-terminal-status.sqlite');
+  const migrationsDirectory = migrationsBefore(
+    t,
+    '0019_',
+    'codeclosure-attempt-authority-terminal-status-refusal-',
+  );
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const { authority } = seedRunning(oldStore, 'attempt-authority-migration-terminal-status');
+  recordProtocolFailure(oldStore, authority, 'attempt-authority-migration-terminal-status');
+  oldStore.close();
+
+  const legacy = new Database(filename);
+  const rewrite = legacy
+    .prepare("UPDATE workflows SET run_status = 'BLOCKED' WHERE id = ? AND run_status = 'FAILED'")
+    .run(authority.workflow.id);
+  assert.equal(rewrite.changes, 1);
+  legacy.close();
+
+  const migrationName = '0019_m1_attempt_authority_closure.sql';
+  addMigration(migrationsDirectory, migrationName);
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => transitionedAt }),
+    /legacy-m1-attempt-authority-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_running_attempt_release_guard', 'workflows_m1_active_attempt_phase_insert_guard', 'workflows_m1_active_attempt_phase_update_guard', 'attempts_m1_worker_result_kind_guard', 'attempts_m1_worker_failure_mapping_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.BLOCKED,
+  );
+});
+
+void test('[I-008][I-009][I-028] Store attempt-first completion persists and reopens a transient blocker', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-blocked-reopen.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'retry-boundary-blocked-reopen');
+
+  recordTransientFailure(store, authority, 'retry-boundary-blocked-reopen');
+  assert.equal(store.getWorkflow(authority.workflow.id)?.suspendedReason, 'WORKER_BACKEND_FAILURE');
+  store.close();
+
+  const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+  assert.equal(reopened.getWorkflow(authority.workflow.id)?.activeAttemptId, undefined);
+  assert.equal(reopened.getAttempt(authority.attempt.id)?.status, AttemptStatus.FAILED);
+  assert.equal(
+    reopened.getAttempt(authority.attempt.id)?.failureClass,
+    AttemptFailureClass.TRANSIENT_BACKEND,
+  );
+});
+
+void test('[I-006][I-008][I-028] Store transaction never exposes attempt-first transient half-state', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-reader-isolation.sqlite');
+  const readerState: {
+    observer?: Database.Database;
+    authorityId?: Attempt['id'];
+    workflowIdentifier?: WorkflowInstance['id'];
+  } = {};
+  let observedAttemptFirstWrite = false;
+  const store = openSqliteControlStore({
+    filename,
+    now: () => createdAt,
+    transactionProbe: (step) => {
+      const { observer, authorityId, workflowIdentifier } = readerState;
+      if (
+        observer === undefined ||
+        authorityId === undefined ||
+        workflowIdentifier === undefined ||
+        observedAttemptFirstWrite ||
+        step !== TransactionStep.AFTER_ATTEMPT_STATE_WRITE
+      ) {
+        return;
+      }
+      observedAttemptFirstWrite = true;
+      assert.equal(
+        observer.prepare('SELECT status FROM attempts WHERE id = ?').pluck().get(authorityId),
+        AttemptStatus.RUNNING,
+      );
+      assert.equal(
+        observer
+          .prepare('SELECT run_status FROM workflows WHERE id = ?')
+          .pluck()
+          .get(workflowIdentifier),
+        RunStatus.RUNNING,
+      );
+    },
+  });
+  t.after(() => store.close());
+  const { authority } = seedRunning(store, 'retry-boundary-reader-isolation');
+  const authorityId = authority.attempt.id;
+  const workflowIdentifier = authority.workflow.id;
+  const observer = new Database(filename, { readonly: true, fileMustExist: true });
+  Object.assign(readerState, { observer, authorityId, workflowIdentifier });
+  t.after(() => observer.close());
+
+  recordTransientFailure(store, authority, 'retry-boundary-reader-isolation');
+
+  assert.equal(observedAttemptFirstWrite, true);
+  assert.equal(
+    observer.prepare('SELECT status FROM attempts WHERE id = ?').pluck().get(authorityId),
+    AttemptStatus.FAILED,
+  );
+  assert.equal(
+    observer
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(workflowIdentifier),
+    RunStatus.BLOCKED,
+  );
+});
+
+void test('[I-006][I-008][I-009][I-028] reopen rejects a committed raw transient half-state', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-raw-half-state.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'retry-boundary-raw-half-state');
+  store.close();
+
+  const database = new Database(filename);
+  database.pragma('foreign_keys = ON');
+  const rawWrite = database
+    .prepare(
+      `UPDATE attempts
+          SET status = 'FAILED', failure_class = 'TRANSIENT_BACKEND',
+              termination_reason = 'WORKER_BACKEND_FAILURE', ended_at = ?
+        WHERE id = ?`,
+    )
+    .run(attemptFinishedAt, authority.attempt.id);
+  assert.equal(rawWrite.changes, 1);
+  assert.equal(
+    database
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.RUNNING,
+  );
+  database.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /exact bidirectional RUNNING Attempt authority/,
+  );
+});
+
+void test('[I-006][I-008] SQLite rejects Workflow-first completion before it can strand a RUNNING Attempt', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-workflow-first.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'attempt-authority-workflow-first');
+  store.close();
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  database.pragma('foreign_keys = ON');
+  const finish = database.transaction(() => {
+    database
+      .prepare(
+        `UPDATE workflows
+              SET run_status = 'BLOCKED', version = version + 1,
+                  active_attempt_id = NULL, suspended_reason = 'WORKER_BACKEND_FAILURE',
+                  updated_at = ?
+            WHERE id = ?`,
+      )
+      .run(attemptFinishedAt, authority.workflow.id);
+    database
+      .prepare(
+        `UPDATE attempts
+              SET status = 'FAILED', failure_class = 'TRANSIENT_BACKEND',
+                  termination_reason = 'WORKER_BACKEND_FAILURE', ended_at = ?
+            WHERE id = ?`,
+      )
+      .run(attemptFinishedAt, authority.attempt.id);
+  });
+
+  assert.throws(finish, /Workflow cannot release a RUNNING Attempt/);
+  assert.deepEqual(
+    database
+      .prepare('SELECT run_status, active_attempt_id FROM workflows WHERE id = ?')
+      .get(authority.workflow.id),
+    { run_status: RunStatus.RUNNING, active_attempt_id: authority.attempt.id },
+  );
+  assert.deepEqual(
+    database
+      .prepare('SELECT status, failure_class FROM attempts WHERE id = ?')
+      .get(authority.attempt.id),
+    { status: AttemptStatus.RUNNING, failure_class: null },
+  );
+});
+
+void test('[I-006][I-008] SQLite rejects a non-retryable failure projected as BLOCKED', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-terminal-projection.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'attempt-authority-terminal-projection');
+  store.close();
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  database.pragma('foreign_keys = ON');
+  const finish = database.transaction(() => {
+    database
+      .prepare(
+        `UPDATE attempts
+            SET status = 'FAILED', failure_class = 'PROTOCOL_ERROR',
+                termination_reason = 'WORKER_STREAM_NO_TERMINAL_EVENT', ended_at = ?
+          WHERE id = ?`,
+      )
+      .run(attemptFinishedAt, authority.attempt.id);
+    database
+      .prepare(
+        `UPDATE workflows
+            SET run_status = 'BLOCKED', version = version + 1,
+                active_attempt_id = NULL,
+                suspended_reason = 'WORKER_STREAM_NO_TERMINAL_EVENT', updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(attemptFinishedAt, authority.workflow.id);
+  });
+
+  assert.throws(finish, /exact terminal projection/);
+  assert.deepEqual(
+    database
+      .prepare('SELECT run_status, version, active_attempt_id FROM workflows WHERE id = ?')
+      .get(authority.workflow.id),
+    {
+      run_status: RunStatus.RUNNING,
+      version: authority.workflow.version,
+      active_attempt_id: authority.attempt.id,
+    },
+  );
+  assert.deepEqual(
+    database
+      .prepare('SELECT status, failure_class FROM attempts WHERE id = ?')
+      .get(authority.attempt.id),
+    { status: AttemptStatus.RUNNING, failure_class: null },
+  );
+});
+
+void test('[I-006][I-008] SQLite rejects changing a RUNNING Workflow away from its active Attempt phase', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-phase-trigger.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'attempt-authority-phase-trigger');
+  store.close();
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  assert.throws(
+    () =>
+      database
+        .prepare('UPDATE workflows SET phase = ? WHERE id = ?')
+        .run(WorkflowPhase.PLAN, authority.workflow.id),
+    /active Attempt does not belong to its current phase/,
+  );
+  assert.equal(
+    database.prepare('SELECT phase FROM workflows WHERE id = ?').pluck().get(authority.workflow.id),
+    WorkflowPhase.DISCOVERY,
+  );
+});
+
+void test('[I-006][I-008][I-009][I-010] active phase mismatch fails closed on reads, commands, and reopen', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-phase-poison.sqlite');
+  let probeCalls = 0;
+  const store = openSqliteControlStore({
+    filename,
+    now: () => createdAt,
+    transactionProbe: () => {
+      probeCalls += 1;
+    },
+  });
+  t.after(() => store.close());
+  const { authority } = seedRunning(store, 'attempt-authority-phase-poison');
+
+  const database = new Database(filename);
+  database.exec('DROP TRIGGER workflows_m1_active_attempt_phase_update_guard');
+  database
+    .prepare('UPDATE workflows SET phase = ? WHERE id = ?')
+    .run(WorkflowPhase.PLAN, authority.workflow.id);
+  database.close();
+
+  assert.throws(
+    () => store.getGoalStatusAuthority(authority.goal.id),
+    /no exact active Attempt authority/,
+  );
+
+  probeCalls = 0;
+  const cancellation = authority.kernel.cancelGoal({
+    commandId: commandId('command_attempt-authority-phase-poison-cancel'),
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: authority.workflow.version,
+    reason: 'operator requested cancellation after retained corruption',
+  });
+  assert.equal(cancellation.status, 'REJECTED');
+  assert.equal(cancellation.output.ok, false);
+  assert.equal(cancellation.output.error.code, RuntimeErrorCode.PERSISTENCE_FAILURE);
+  assert.match(cancellation.output.error.message, /bidirectional RUNNING Attempt authority/);
+  assert.equal(probeCalls, 0);
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /bidirectional RUNNING Attempt authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009] Store reopen rejects a committed Workflow-first half-state even without its trigger', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-reopen-half-state.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'attempt-authority-reopen-half-state');
+  store.close();
+
+  const database = new Database(filename);
+  database.exec('DROP TRIGGER workflows_running_attempt_release_guard');
+  database
+    .prepare(
+      `UPDATE workflows
+            SET run_status = 'BLOCKED', active_attempt_id = NULL,
+                suspended_reason = 'WORKER_BACKEND_FAILURE'
+          WHERE id = ?`,
+    )
+    .run(authority.workflow.id);
+  database.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /exact bidirectional RUNNING Attempt authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009][I-010] a rewritten current terminal status fails closed on reads, commands, and reopen', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-current-terminal-poison.sqlite');
+  let probeCalls = 0;
+  const store = openSqliteControlStore({
+    filename,
+    now: () => createdAt,
+    transactionProbe: () => {
+      probeCalls += 1;
+    },
+  });
+  t.after(() => store.close());
+  const { creation, authority } = seedRunning(store, 'attempt-authority-current-terminal-poison');
+  const failedWorkflow = recordProtocolFailure(
+    store,
+    authority,
+    'attempt-authority-current-terminal-poison',
+  );
+
+  const database = new Database(filename);
+  const rewrite = database
+    .prepare("UPDATE workflows SET run_status = 'BLOCKED' WHERE id = ? AND run_status = 'FAILED'")
+    .run(authority.workflow.id);
+  assert.equal(rewrite.changes, 1);
+  database.close();
+
+  assert.throws(
+    () => store.getGoalStatusAuthority(creation.goal.id),
+    /current state has no exact command and audit authority/,
+  );
+
+  probeCalls = 0;
+  const cancellation = authority.kernel.cancelGoal({
+    commandId: commandId('command_attempt-authority-current-terminal-poison-cancel'),
+    goalId: creation.goal.id,
+    expectedGoalRevision: creation.goal.revision,
+    expectedWorkflowVersion: failedWorkflow.version,
+    reason: 'operator requested cancellation after retained corruption',
+  });
+  assert.equal(cancellation.status, 'REJECTED');
+  assert.equal(cancellation.output.ok, false);
+  assert.equal(cancellation.output.error.code, RuntimeErrorCode.PERSISTENCE_FAILURE);
+  assert.match(
+    cancellation.output.error.message,
+    /current state has no exact command and audit authority/,
+  );
+  assert.equal(probeCalls, 0);
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /current state has no exact command and audit authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009] reopen rejects rewritten historical terminal outcome authority', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-historical-outcome-poison.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'attempt-authority-historical-outcome-poison');
+  const resultInput = resultAttemptInput(
+    authority.workflow,
+    authority.attempt,
+    'attempt-authority-historical-outcome-poison',
+  );
+  const finished = store.commitAttemptEvent(resultInput);
+  assert.equal(finished.status, 'APPLIED');
+  const transition = transitionInput(
+    finished.value.workflow,
+    'attempt-authority-historical-outcome-poison',
+    afterCancellationAt,
+  );
+  assert.equal(store.commitWorkflowEvent(transition).status, 'APPLIED');
+  store.close();
+
+  const database = new Database(filename);
+  database.exec('DROP TRIGGER processed_commands_no_update');
+  const rewrite = database
+    .prepare(
+      `UPDATE processed_commands
+          SET outcome_json = json_set(
+            outcome_json,
+            '$.workflow.runStatus', 'FAILED',
+            '$.output.runStatus', 'FAILED'
+          )
+        WHERE command_id = ?`,
+    )
+    .run(resultInput.event.commandId);
+  assert.equal(rewrite.changes, 1);
+  database.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => afterCancellationAt }),
+    /Terminal Attempt .* has no exact command, audit, and Workflow outcome authority/,
+  );
+});
+
+void test('[I-006][I-008][I-010] Store refuses cancellation before mutating a retained Workflow-first half-state', (t) => {
+  const filename = temporaryDatabase(t, 'attempt-authority-pre-operation.sqlite');
+  let probeCalls = 0;
+  const store = openSqliteControlStore({
+    filename,
+    now: () => createdAt,
+    transactionProbe: () => {
+      probeCalls += 1;
+    },
+  });
+  t.after(() => store.close());
+  const { authority } = seedRunning(store, 'attempt-authority-pre-operation');
+
+  const database = new Database(filename);
+  database.exec('DROP TRIGGER workflows_running_attempt_release_guard');
+  database
+    .prepare(
+      `UPDATE workflows
+            SET run_status = 'BLOCKED', active_attempt_id = NULL,
+                suspended_reason = 'WORKER_BACKEND_FAILURE'
+          WHERE id = ?`,
+    )
+    .run(authority.workflow.id);
+  database.close();
+
+  const corrupted = store.getWorkflow(authority.workflow.id);
+  assert.ok(corrupted);
+  assert.equal(corrupted.runStatus, RunStatus.BLOCKED);
+  probeCalls = 0;
+  const cancellation = authority.kernel.cancelGoal({
+    commandId: commandId('command_attempt-authority-pre-operation-cancel'),
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: corrupted.version,
+    reason: 'operator requested cancellation after retained corruption',
+  });
+
+  assert.equal(cancellation.status, 'REJECTED');
+  assert.equal(cancellation.output.ok, false);
+  assert.equal(cancellation.output.error.code, RuntimeErrorCode.PERSISTENCE_FAILURE);
+  assert.match(cancellation.output.error.message, /exact bidirectional RUNNING Attempt authority/);
+  assert.equal(probeCalls, 0);
+  assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+  assert.equal(store.getAttempt(authority.attempt.id)?.status, AttemptStatus.RUNNING);
+});
+
+void test('[I-006][I-008][I-028] SQLite rejects both write orders that leave a transient failure READY', async (t) => {
+  for (const order of ['attempt-first', 'workflow-first'] as const) {
+    await t.test(order, (subtest) => {
+      const filename = temporaryDatabase(subtest, `retry-boundary-${order}.sqlite`);
+      const store = openSqliteControlStore({ filename, now: () => createdAt });
+      const { authority } = seedRunning(store, `retry-boundary-${order}`);
+      store.close();
+
+      const database = new Database(filename);
+      subtest.after(() => database.close());
+      database.pragma('foreign_keys = ON');
+      const finishAttempt = (): void => {
+        database
+          .prepare(
+            `UPDATE attempts
+                SET status = 'FAILED', failure_class = 'TRANSIENT_BACKEND',
+                    termination_reason = 'WORKER_BACKEND_FAILURE', ended_at = ?
+              WHERE id = ?`,
+          )
+          .run(attemptFinishedAt, authority.attempt.id);
+      };
+      const leaveWorkflowReady = (): void => {
+        database
+          .prepare(
+            `UPDATE workflows
+                SET run_status = 'READY', version = version + 1,
+                    active_attempt_id = NULL, suspended_reason = NULL, updated_at = ?
+              WHERE id = ?`,
+          )
+          .run(attemptFinishedAt, authority.workflow.id);
+      };
+      const unsafeWrite = database.transaction(() => {
+        if (order === 'attempt-first') {
+          finishAttempt();
+          leaveWorkflowReady();
+        } else {
+          leaveWorkflowReady();
+          finishAttempt();
+        }
+      });
+
+      assert.throws(
+        unsafeWrite,
+        /M1 transient failure cannot (authorize Workflow continuation|bind invalid Workflow state)|Workflow cannot release a RUNNING Attempt/,
+      );
+      assert.equal(
+        database
+          .prepare('SELECT run_status FROM workflows WHERE id = ?')
+          .pluck()
+          .get(authority.workflow.id),
+        RunStatus.RUNNING,
+      );
+      assert.equal(
+        database
+          .prepare('SELECT active_attempt_id FROM workflows WHERE id = ?')
+          .pluck()
+          .get(authority.workflow.id),
+        authority.attempt.id,
+      );
+      assert.equal(
+        database
+          .prepare('SELECT status FROM attempts WHERE id = ?')
+          .pluck()
+          .get(authority.attempt.id),
+        AttemptStatus.RUNNING,
+      );
+      assert.equal(
+        database
+          .prepare('SELECT failure_class FROM attempts WHERE id = ?')
+          .pluck()
+          .get(authority.attempt.id),
+        null,
+      );
+    });
+  }
+});
+
+void test('[I-006][I-008][I-028] SQLite rejects phase advancement after a transient failure', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-phase-advance.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'retry-boundary-phase-advance');
+  recordTransientFailure(store, authority, 'retry-boundary-phase-advance');
+  store.close();
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `UPDATE workflows
+              SET phase = 'PLAN', run_status = 'READY', version = version + 1,
+                  active_attempt_id = NULL, suspended_reason = NULL, updated_at = ?
+            WHERE id = ?`,
+        )
+        .run(afterCancellationAt, authority.workflow.id),
+    /M1 transient failure cannot authorize Workflow continuation/,
+  );
+  assert.deepEqual(
+    database
+      .prepare('SELECT phase, run_status FROM workflows WHERE id = ?')
+      .get(authority.workflow.id),
+    { phase: WorkflowPhase.DISCOVERY, run_status: RunStatus.BLOCKED },
+  );
+});
+
+void test('[I-006][I-008][I-028] SQLite rejects a later cross-phase Attempt after a transient failure', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-later-attempt.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'retry-boundary-later-attempt');
+  recordTransientFailure(store, authority, 'retry-boundary-later-attempt');
+  store.close();
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  database.pragma('foreign_keys = ON');
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `INSERT INTO attempts(
+             id, workflow_id, phase, sequence, context_manifest_id,
+             capability_grant_json, worker_session_ref, status, failure_class,
+             termination_reason, started_at, ended_at
+           ) VALUES (?, ?, 'PLAN', 2, NULL, ?, NULL, 'RUNNING', NULL, NULL, ?, NULL)`,
+        )
+        .run(
+          'attempt_retry-boundary-later-attempt-2',
+          authority.workflow.id,
+          JSON.stringify(deriveCapabilityGrant(WorkflowPhase.PLAN)),
+          afterCancellationAt,
+        ),
+    /M1 transient failure cannot authorize another Attempt/,
+  );
+  assert.equal(
+    database
+      .prepare('SELECT COUNT(*) FROM attempts WHERE workflow_id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    1,
+  );
+});
+
+void test('[I-008][I-028] a transient blocker may still be cancelled without continuation authority', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-cancellation.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'retry-boundary-cancellation');
+  recordTransientFailure(store, authority, 'retry-boundary-cancellation');
+  const blocked = store.getWorkflow(authority.workflow.id);
+  assert.ok(blocked);
+
+  const cancelled = authority.kernel.cancelGoal({
+    commandId: commandId('command_retry-boundary-cancellation'),
+    goalId: authority.goal.id,
+    expectedGoalRevision: authority.goal.revision,
+    expectedWorkflowVersion: blocked.version,
+    reason: 'operator cancelled the blocked M1 workflow',
+  });
+  assert.equal(cancelled.status, 'APPLIED');
+  assert.equal(cancelled.output.runStatus, RunStatus.CANCELLED);
+  store.close();
+
+  const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getWorkflow(authority.workflow.id)?.phase, WorkflowPhase.DISCOVERY);
+  assert.equal(reopened.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.CANCELLED);
+  assert.equal(reopened.nextAttemptSequence(authority.workflow.id), 2);
+});
+
+void test('[I-006][I-008][I-028] Store rejects retained retry corruption before running a new transaction operation', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-pre-operation.sqlite');
+  let probeCalls = 0;
+  const store = openSqliteControlStore({
+    filename,
+    now: () => createdAt,
+    transactionProbe: () => {
+      probeCalls += 1;
+    },
+  });
+  t.after(() => store.close());
+  const { authority } = seedRunning(store, 'retry-boundary-pre-operation');
+  recordTransientFailure(store, authority, 'retry-boundary-pre-operation');
+
+  const database = new Database(filename);
+  database.exec('DROP TRIGGER workflows_m1_retry_boundary_update_guard');
+  database.exec('DROP TRIGGER attempts_m1_retry_boundary_insert_guard');
+  database
+    .prepare(
+      `UPDATE workflows
+          SET phase = 'PLAN', run_status = 'READY',
+              active_attempt_id = NULL, suspended_reason = NULL
+        WHERE id = ?`,
+    )
+    .run(authority.workflow.id);
+  database.close();
+
+  const corrupted = store.getWorkflow(authority.workflow.id);
+  assert.ok(corrupted);
+  assert.equal(corrupted.phase, WorkflowPhase.PLAN);
+  assert.equal(corrupted.runStatus, RunStatus.READY);
+  probeCalls = 0;
+  const retry = authority.kernel.beginAttempt({
+    commandId: commandId('command_retry-boundary-pre-operation-retry'),
+    workflowId: corrupted.id,
+    expectedWorkflowVersion: corrupted.version,
+  });
+
+  assert.equal(retry.status, 'REJECTED');
+  assert.equal(retry.output.ok, false);
+  assert.equal(retry.output.error.code, RuntimeErrorCode.PERSISTENCE_FAILURE);
+  assert.equal(retry.output.error.detailCode, 'COMMAND_COMMIT_FAILURE');
+  assert.match(retry.output.error.message, /unprovable M1 transient retry authority/);
+  assert.equal(probeCalls, 0);
+  assert.equal(store.nextAttemptSequence(authority.workflow.id), 2);
+});
+
+void test('[I-006][I-009][I-028] Store startup rejects retained cross-phase continuation even without SQLite triggers', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-startup-defense.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedRunning(store, 'retry-boundary-startup-defense');
+  recordTransientFailure(store, authority, 'retry-boundary-startup-defense');
+  store.close();
+
+  const database = new Database(filename);
+  database.exec('DROP TRIGGER workflows_m1_retry_boundary_update_guard');
+  database.exec('DROP TRIGGER attempts_m1_retry_boundary_update_guard');
+  database
+    .prepare(
+      `UPDATE workflows
+          SET phase = 'PLAN', run_status = 'READY',
+              active_attempt_id = NULL, suspended_reason = NULL
+        WHERE id = ?`,
+    )
+    .run(authority.workflow.id);
+  database.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /unprovable M1 transient retry authority/,
+  );
+});
+
+void test('[I-006][I-009][I-028] Store startup rejects retained later-Attempt retry history', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-startup-history.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedReady(store, 'retry-boundary-startup-history');
+  const secondStart = authority.kernel.beginAttempt({
+    commandId: commandId('command_retry-boundary-startup-history-second-start'),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: authority.workflow.version,
+  });
+  assert.equal(secondStart.status, 'APPLIED');
+  const running = store.getWorkflow(authority.workflow.id);
+  assert.ok(running?.activeAttemptId);
+  const secondFinish = authority.kernel.recordAttemptResult({
+    commandId: commandId('command_retry-boundary-startup-history-second-finish'),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: running.version,
+    attemptId: running.activeAttemptId,
+    reason: 'WORKER_RESULT:PROPOSALS',
+  });
+  assert.equal(secondFinish.status, 'APPLIED');
+  store.close();
+
+  rewriteRecordedAttemptAsEarlierTransientFailure(filename, authority.attempt.id);
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => transitionedAt }),
+    /unprovable M1 transient retry authority/,
+  );
+});
+
+void test('[I-006][I-008][I-028] SQLite history guard rejects turning an earlier Attempt into a transient failure', (t) => {
+  const filename = temporaryDatabase(t, 'retry-boundary-history-update-guard.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { authority } = seedReady(store, 'retry-boundary-history-update-guard');
+  const secondStart = authority.kernel.beginAttempt({
+    commandId: commandId('command_retry-boundary-history-update-guard-second-start'),
+    workflowId: authority.workflow.id,
+    expectedWorkflowVersion: authority.workflow.version,
+  });
+  assert.equal(secondStart.status, 'APPLIED');
+  const running = store.getWorkflow(authority.workflow.id);
+  assert.ok(running?.activeAttemptId);
+  assert.equal(
+    authority.kernel.recordAttemptResult({
+      commandId: commandId('command_retry-boundary-history-update-guard-second-finish'),
+      workflowId: authority.workflow.id,
+      expectedWorkflowVersion: running.version,
+      attemptId: running.activeAttemptId,
+      reason: 'WORKER_RESULT:PROPOSALS',
+    }).status,
+    'APPLIED',
+  );
+  store.close();
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  database.exec('DROP TRIGGER attempts_terminal_immutable');
+  database.exec('DROP TRIGGER attempts_lifecycle_guard');
+  assert.equal(
+    database
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'attempts_m1_retry_boundary_history_update_guard'",
+      )
+      .pluck()
+      .get(),
+    1,
+  );
+  const rewrite = database.transaction(() => {
+    database
+      .prepare(
+        `UPDATE workflows
+            SET run_status = 'BLOCKED', suspended_reason = 'WORKER_BACKEND_FAILURE',
+                version = version + 1, updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(afterCancellationAt, authority.workflow.id);
+    database
+      .prepare(
+        `UPDATE attempts
+            SET status = 'FAILED', failure_class = 'TRANSIENT_BACKEND',
+                termination_reason = 'WORKER_BACKEND_FAILURE', ended_at = ?
+          WHERE id = ?`,
+      )
+      .run(legacyRetryFinishedAt, authority.attempt.id);
+  });
+
+  assert.throws(rewrite, /M1 transient failure cannot authorize another Attempt/);
+  assert.equal(
+    database
+      .prepare('SELECT run_status FROM workflows WHERE id = ?')
+      .pluck()
+      .get(authority.workflow.id),
+    RunStatus.READY,
+  );
+  assert.equal(
+    database.prepare('SELECT status FROM attempts WHERE id = ?').pluck().get(authority.attempt.id),
+    AttemptStatus.RESULT_RECORDED,
+  );
 });
 
 void test('[I-006][I-009] reopen refuses retained authority with a missing owner', (t) => {
@@ -2437,11 +3885,7 @@ void test('[I-006][I-008] SQLite rejects an Attempt end before current Workflow 
               SET status = 'RESULT_RECORDED', termination_reason = ?, ended_at = ?
             WHERE id = ?`,
         )
-        .run(
-          'forged completion before current Workflow state',
-          attemptStartedAt,
-          authority.attempt.id,
-        ),
+        .run('WORKER_RESULT:PROPOSALS', attemptStartedAt, authority.attempt.id),
     /Attempt cannot end before current Workflow state/,
   );
   assert.equal(

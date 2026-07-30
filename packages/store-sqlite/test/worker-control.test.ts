@@ -34,6 +34,7 @@ import {
   policyBundleId,
   policyBundleProjection,
   successCriterionId,
+  workerEventId,
   workerSessionId,
   workflowId,
   workflowVersion,
@@ -58,9 +59,12 @@ import {
   createCodeClosureApplication,
   createExecutionProfileInstaller,
   createPolicyInstaller,
+  decodeStoredCommandOutcome,
   decodeWorkerEvent,
   decodeWorkerEventReceipt,
+  decodeWorkerRequest,
   deriveContextManifestEntries,
+  storedCommandOutcomeToJson,
   type Clock,
   type ResumeGoalRequest,
   type WorkerPort,
@@ -612,7 +616,7 @@ void test('[I-006][I-008][I-019] a started Workflow cannot replay or continue wi
       workflowId: running.id,
       expectedWorkflowVersion: running.version,
       attemptId: running.activeAttemptId,
-      reason: 'finish the original profile attempt',
+      reason: 'WORKER_RESULT:PROPOSALS',
     }).status,
     'APPLIED',
   );
@@ -737,10 +741,522 @@ void test('[I-002][I-004][I-009] duplicate WorkerEventId delivery mutates author
   if (admitted?.status !== 'ADMITTED') {
     assert.fail('Duplicate fixture must admit its first delivery');
   }
+  const duplicate = execution.admissions[1];
+  if (duplicate?.status !== 'DUPLICATE') {
+    assert.fail('Duplicate fixture must classify its repeated delivery');
+  }
+  assert.equal(duplicate.originalDisposition, 'ADMITTED');
+  assert.equal(duplicate.terminalForCurrentDispatch, true);
   assert.equal(store.getWorkflow(authority.workflow.id)?.version, workflowVersion(3));
   assert.equal(store.getWorkerEventReceipt(admitted.eventId)?.disposition, 'ADMITTED');
   assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
   assert.equal(rowCount(filename, 'processed_commands'), 3);
+});
+
+void test('[I-002][I-006][I-009] admitted Worker failure replay proves its exact terminal mapping', async (t) => {
+  const filename = temporaryDatabase(t, 'duplicate-worker-failure.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'duplicate-worker-failure');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.FAILURE });
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'duplicate-worker-failure'),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'duplicate-worker-failure')).status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Worker failure replay fixture must prepare an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Worker failure replay fixture must prepare a Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+
+  assert.equal(kernel.admitWorkerEvent(event, request).status, 'ADMITTED');
+  const replay = kernel.admitWorkerEvent(event, request);
+  assert.equal(replay.status, 'DUPLICATE');
+  assert.equal(replay.originalDisposition, 'ADMITTED');
+  assert.equal(replay.terminalForCurrentDispatch, true);
+  const attempt = store.getAttempt(request.attemptId);
+  assert.equal(attempt?.status, AttemptStatus.FAILED);
+  assert.equal(attempt.failureClass, AttemptFailureClass.TRANSIENT_BACKEND);
+  assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+});
+
+void test('[I-002][I-006][I-009] a complete replay authority keeps payload reuse classified as an ID conflict', async (t) => {
+  const filename = temporaryDatabase(t, 'worker-event-payload-conflict.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'worker-event-payload-conflict');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'worker-event-payload-conflict'),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'worker-event-payload-conflict')).status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Worker payload conflict fixture must prepare an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Worker payload conflict fixture must prepare a Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+  assert.equal(kernel.admitWorkerEvent(event, request).status, 'ADMITTED');
+  const conflictingEvent = decodeWorkerEvent({
+    ...event,
+    observedAt: isoTimestamp('2026-07-28T00:00:00.000Z'),
+  });
+
+  const conflict = kernel.admitWorkerEvent(conflictingEvent, request);
+
+  assert.equal(conflict.status, 'REJECTED');
+  assert.equal(conflict.reasonCode, 'WORKER_EVENT_ID_CONFLICT');
+  assert.equal(conflict.nonAdmissionClass, WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+  assert.equal(rowCount(filename, 'processed_commands'), 3);
+});
+
+void test('[I-002][I-006][I-009] exact EventId replay across valid Attempts is duplicate but non-terminal', async (t) => {
+  const filename = temporaryDatabase(t, 'worker-event-cross-attempt-conflict.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'worker-event-cross-attempt-conflict');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'worker-event-cross-attempt-conflict'),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'worker-event-cross-attempt-conflict')).status,
+    'APPLIED',
+  );
+  const firstRunning = store.getWorkflow(authority.workflow.id);
+  if (firstRunning?.activeAttemptId === undefined) {
+    assert.fail('Cross-Attempt EventId fixture must prepare its first Attempt');
+  }
+  const firstRequest = kernel.takePreparedWorkerRequest(firstRunning.activeAttemptId);
+  if (firstRequest === undefined) {
+    assert.fail('Cross-Attempt EventId fixture must prepare its first Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(firstRequest).status, 'CLAIMED');
+  const firstEvents: unknown[] = [];
+  for await (const rawEvent of worker.run(firstRequest, new AbortController().signal)) {
+    firstEvents.push(rawEvent);
+  }
+  const firstEvent = decodeWorkerEvent(firstEvents[0]);
+  assert.equal(kernel.admitWorkerEvent(firstEvent, firstRequest).status, 'ADMITTED');
+
+  const ready = store.getWorkflow(authority.workflow.id);
+  if (ready === undefined) {
+    assert.fail('Cross-Attempt EventId fixture lost its Workflow');
+  }
+  assert.equal(
+    kernel.beginAttempt({
+      commandId: commandId('command_worker-event-cross-attempt-retry'),
+      workflowId: ready.id,
+      expectedWorkflowVersion: ready.version,
+    }).status,
+    'APPLIED',
+  );
+  const secondRunning = store.getWorkflow(authority.workflow.id);
+  if (secondRunning?.activeAttemptId === undefined) {
+    assert.fail('Cross-Attempt EventId fixture must prepare its second Attempt');
+  }
+  const secondRequest = kernel.takePreparedWorkerRequest(secondRunning.activeAttemptId);
+  if (secondRequest === undefined) {
+    assert.fail('Cross-Attempt EventId fixture must prepare its second Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(secondRequest).status, 'CLAIMED');
+  const crossDispatchReplay = kernel.admitWorkerEvent(firstEvent, secondRequest);
+  assert.equal(crossDispatchReplay.status, 'DUPLICATE');
+  assert.equal(crossDispatchReplay.originalDisposition, 'ADMITTED');
+  assert.equal(crossDispatchReplay.terminalForCurrentDispatch, false);
+  assert.equal(store.getAttempt(secondRequest.attemptId)?.status, AttemptStatus.RUNNING);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+  const secondEvents: unknown[] = [];
+  for await (const rawEvent of worker.run(secondRequest, new AbortController().signal)) {
+    secondEvents.push(rawEvent);
+  }
+  const secondEvent = decodeWorkerEvent(secondEvents[0]);
+  const reusedEventId = decodeWorkerEvent({ ...secondEvent, id: firstEvent.id });
+
+  const conflict = kernel.admitWorkerEvent(reusedEventId, secondRequest);
+
+  assert.equal(conflict.status, 'REJECTED');
+  assert.equal(conflict.reasonCode, 'WORKER_EVENT_ID_CONFLICT');
+  assert.equal(conflict.nonAdmissionClass, WorkerEventNonAdmissionClass.UNTRUSTED_DELIVERY);
+  assert.equal(store.getAttempt(secondRequest.attemptId)?.status, AttemptStatus.RUNNING);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+});
+
+void test('[I-006][I-009][I-010] an exact stale ignored event remains idempotent across Attempts', async (t) => {
+  const filename = temporaryDatabase(t, 'ignored-event-cross-attempt-replay.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'ignored-event-cross-attempt-replay');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'ignored-event-cross-attempt-replay'),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'ignored-event-cross-attempt-replay')).status,
+    'APPLIED',
+  );
+  const firstRunning = store.getWorkflow(authority.workflow.id);
+  if (firstRunning?.activeAttemptId === undefined) {
+    assert.fail('Ignored cross-Attempt replay fixture must prepare its first Attempt');
+  }
+  const firstRequest = kernel.takePreparedWorkerRequest(firstRunning.activeAttemptId);
+  if (firstRequest === undefined) {
+    assert.fail('Ignored cross-Attempt replay fixture must prepare its first Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(firstRequest).status, 'CLAIMED');
+  const firstEvents: unknown[] = [];
+  for await (const rawEvent of worker.run(firstRequest, new AbortController().signal)) {
+    firstEvents.push(rawEvent);
+  }
+  const staleEvent = decodeWorkerEvent(firstEvents[0]);
+  const terminalEvent = decodeWorkerEvent({
+    ...staleEvent,
+    id: workerEventId('worker-event_ignored-cross-attempt-terminal'),
+  });
+  assert.equal(kernel.admitWorkerEvent(terminalEvent, firstRequest).status, 'ADMITTED');
+
+  const ready = store.getWorkflow(authority.workflow.id);
+  if (ready === undefined) {
+    assert.fail('Ignored cross-Attempt replay fixture lost its Workflow');
+  }
+  assert.equal(
+    kernel.beginAttempt({
+      commandId: commandId('command_ignored-cross-attempt-retry'),
+      workflowId: ready.id,
+      expectedWorkflowVersion: ready.version,
+    }).status,
+    'APPLIED',
+  );
+  const secondRunning = store.getWorkflow(authority.workflow.id);
+  if (secondRunning?.activeAttemptId === undefined) {
+    assert.fail('Ignored cross-Attempt replay fixture must prepare its second Attempt');
+  }
+  const secondRequest = kernel.takePreparedWorkerRequest(secondRunning.activeAttemptId);
+  if (secondRequest === undefined) {
+    assert.fail('Ignored cross-Attempt replay fixture must prepare its second Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(secondRequest).status, 'CLAIMED');
+
+  const ignored = kernel.admitWorkerEvent(staleEvent, secondRequest);
+  assert.equal(ignored.status, 'IGNORED', JSON.stringify(ignored));
+  assert.equal(ignored.receiptRecorded, true);
+  const duplicate = kernel.admitWorkerEvent(staleEvent, secondRequest);
+
+  assert.equal(duplicate.status, 'DUPLICATE', JSON.stringify(duplicate));
+  assert.equal(duplicate.originalDisposition, 'IGNORED');
+  assert.equal(duplicate.terminalForCurrentDispatch, false);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 2);
+});
+
+void test('[I-006][I-009][I-010] exact ignored replay remains duplicate across Workflows', async (t) => {
+  const filename = temporaryDatabase(t, 'ignored-event-cross-workflow-replay.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const firstAuthority = seedAuthority(store, 'ignored-cross-workflow-first');
+  const secondAuthority = seedAuthority(store, 'ignored-cross-workflow-second');
+  const ignoredWorker = new FakeWorker({ fixture: FakeWorkerFixture.STALE_CONTEXT });
+  const firstKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, ignoredWorker, firstAuthority, 'ignored-cross-workflow-first'),
+  );
+  assert.equal(
+    firstKernel.startGoal(startRequest(firstAuthority, 'ignored-cross-workflow-first')).status,
+    'APPLIED',
+  );
+  const firstRunning = store.getWorkflow(firstAuthority.workflow.id);
+  if (firstRunning?.activeAttemptId === undefined) {
+    assert.fail('Cross-Workflow ignored replay fixture must prepare its first Attempt');
+  }
+  const firstRequest = firstKernel.takePreparedWorkerRequest(firstRunning.activeAttemptId);
+  if (firstRequest === undefined) {
+    assert.fail('Cross-Workflow ignored replay fixture must prepare its first Worker Request');
+  }
+  assert.equal(firstKernel.claimWorkerDispatch(firstRequest).status, 'CLAIMED');
+  const firstEvents: unknown[] = [];
+  for await (const rawEvent of ignoredWorker.run(firstRequest, new AbortController().signal)) {
+    firstEvents.push(rawEvent);
+  }
+  const ignoredEvent = decodeWorkerEvent(firstEvents[0]);
+  assert.equal(firstKernel.admitWorkerEvent(ignoredEvent, firstRequest).status, 'IGNORED');
+
+  const secondKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      secondAuthority,
+      'ignored-cross-workflow-second',
+    ),
+  );
+  assert.equal(
+    secondKernel.startGoal(startRequest(secondAuthority, 'ignored-cross-workflow-second')).status,
+    'APPLIED',
+  );
+  const secondRunning = store.getWorkflow(secondAuthority.workflow.id);
+  if (secondRunning?.activeAttemptId === undefined) {
+    assert.fail('Cross-Workflow ignored replay fixture must prepare its second Attempt');
+  }
+  const secondRequest = secondKernel.takePreparedWorkerRequest(secondRunning.activeAttemptId);
+  if (secondRequest === undefined) {
+    assert.fail('Cross-Workflow ignored replay fixture must prepare its second Worker Request');
+  }
+  assert.equal(secondKernel.claimWorkerDispatch(secondRequest).status, 'CLAIMED');
+
+  const duplicate = secondKernel.admitWorkerEvent(ignoredEvent, secondRequest);
+
+  assert.equal(duplicate.status, 'DUPLICATE', JSON.stringify(duplicate));
+  assert.equal(duplicate.originalDisposition, 'IGNORED');
+  assert.equal(duplicate.terminalForCurrentDispatch, false);
+  assert.equal(store.getAttempt(secondRequest.attemptId)?.status, AttemptStatus.RUNNING);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+});
+
+void test('[I-006][I-009][I-010] exact admitted replay remains non-terminal across Workflows', async (t) => {
+  const filename = temporaryDatabase(t, 'admitted-event-cross-workflow-replay.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const firstAuthority = seedAuthority(store, 'admitted-cross-workflow-first');
+  const secondAuthority = seedAuthority(store, 'admitted-cross-workflow-second');
+  const firstWorker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const firstKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, firstWorker, firstAuthority, 'admitted-cross-workflow-first'),
+  );
+  assert.equal(
+    firstKernel.startGoal(startRequest(firstAuthority, 'admitted-cross-workflow-first')).status,
+    'APPLIED',
+  );
+  const firstRunning = store.getWorkflow(firstAuthority.workflow.id);
+  if (firstRunning?.activeAttemptId === undefined) {
+    assert.fail('Cross-Workflow admitted replay fixture must prepare its first Attempt');
+  }
+  const firstRequest = firstKernel.takePreparedWorkerRequest(firstRunning.activeAttemptId);
+  if (firstRequest === undefined) {
+    assert.fail('Cross-Workflow admitted replay fixture must prepare its first Worker Request');
+  }
+  assert.equal(firstKernel.claimWorkerDispatch(firstRequest).status, 'CLAIMED');
+  const firstEvents: unknown[] = [];
+  for await (const rawEvent of firstWorker.run(firstRequest, new AbortController().signal)) {
+    firstEvents.push(rawEvent);
+  }
+  const admittedEvent = decodeWorkerEvent(firstEvents[0]);
+  assert.equal(firstKernel.admitWorkerEvent(admittedEvent, firstRequest).status, 'ADMITTED');
+
+  const secondKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      secondAuthority,
+      'admitted-cross-workflow-second',
+    ),
+  );
+  assert.equal(
+    secondKernel.startGoal(startRequest(secondAuthority, 'admitted-cross-workflow-second')).status,
+    'APPLIED',
+  );
+  const secondRunning = store.getWorkflow(secondAuthority.workflow.id);
+  if (secondRunning?.activeAttemptId === undefined) {
+    assert.fail('Cross-Workflow admitted replay fixture must prepare its second Attempt');
+  }
+  const secondRequest = secondKernel.takePreparedWorkerRequest(secondRunning.activeAttemptId);
+  if (secondRequest === undefined) {
+    assert.fail('Cross-Workflow admitted replay fixture must prepare its second Worker Request');
+  }
+  assert.equal(secondKernel.claimWorkerDispatch(secondRequest).status, 'CLAIMED');
+
+  const duplicate = secondKernel.admitWorkerEvent(admittedEvent, secondRequest);
+
+  assert.equal(duplicate.status, 'DUPLICATE', JSON.stringify(duplicate));
+  assert.equal(duplicate.originalDisposition, 'ADMITTED');
+  assert.equal(duplicate.terminalForCurrentDispatch, false);
+  assert.equal(store.getAttempt(secondRequest.attemptId)?.status, AttemptStatus.RUNNING);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+});
+
+void test('[I-006][I-008][I-009] replay validates the current Context Package digest before early return', async (t) => {
+  const filename = temporaryDatabase(t, 'worker-event-forged-current-package.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'worker-event-forged-current-package');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'worker-event-forged-current-package'),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'worker-event-forged-current-package')).status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Forged Context Package fixture must prepare an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Forged Context Package fixture must prepare a Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+  assert.equal(kernel.admitWorkerEvent(event, request).status, 'ADMITTED');
+  const forgedRequest = decodeWorkerRequest({
+    ...request,
+    contextPackage: {
+      ...request.contextPackage,
+      phaseObjective: `${request.contextPackage.phaseObjective} forged`,
+    },
+  });
+
+  const rejected = kernel.admitWorkerEvent(event, forgedRequest);
+
+  assert.equal(rejected.status, 'REJECTED');
+  assert.equal(rejected.reasonCode, 'WORKER_EVENT_INTERNAL_FAILURE');
+  assert.equal(rejected.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+});
+
+void test('[I-006][I-008][I-009] one replay admission digests the current Context Package once', async (t) => {
+  const filename = temporaryDatabase(t, 'worker-event-single-package-digest.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'worker-event-single-package-digest');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const committingKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'worker-event-single-package-digest-commit'),
+  );
+  assert.equal(
+    committingKernel.startGoal(startRequest(authority, 'worker-event-single-package-digest'))
+      .status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Single package digest fixture must prepare an active Attempt');
+  }
+  const request = committingKernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Single package digest fixture must prepare a Worker Request');
+  }
+  assert.equal(committingKernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+  assert.equal(committingKernel.admitWorkerEvent(event, request).status, 'ADMITTED');
+
+  let packageDigestCalls = 0;
+  const statefulDigests = Object.freeze({
+    digest: (value: unknown) => {
+      const valueDigest = digests.digest(value);
+      if (valueDigest !== request.packageDigest) {
+        return valueDigest;
+      }
+      packageDigestCalls += 1;
+      return packageDigestCalls === 1
+        ? valueDigest
+        : digests.digest({ schemaVersion: 1, poison: 'second-package-digest-call' });
+    },
+  });
+  const replayKernel = new WorkflowRuntimeKernel({
+    ...runtimeDependencies(store, worker, authority, 'worker-event-single-package-digest-replay'),
+    digests: statefulDigests,
+  });
+
+  const replay = replayKernel.admitWorkerEvent(event, request);
+
+  assert.equal(replay.status, 'DUPLICATE', JSON.stringify(replay));
+  assert.equal(replay.originalDisposition, 'ADMITTED');
+  assert.equal(replay.terminalForCurrentDispatch, true);
+  assert.equal(packageDigestCalls, 1);
+});
+
+void test('[I-002][I-006][I-009] a concurrent admitted winner remains a duplicate after the losing read becomes stale', async (t) => {
+  const filename = temporaryDatabase(t, 'concurrent-worker-event-replay.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'concurrent-worker-event-replay');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const winnerKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'concurrent-worker-event-winner'),
+  );
+  assert.equal(
+    winnerKernel.startGoal(startRequest(authority, 'concurrent-worker-event-replay')).status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Concurrent Worker Event fixture must prepare an active Attempt');
+  }
+  const request = winnerKernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Concurrent Worker Event fixture must prepare a Worker Request');
+  }
+  assert.equal(winnerKernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+  let winnerAdmission: ReturnType<WorkflowRuntimeKernel['admitWorkerEvent']> | undefined;
+  let injectedWinner = false;
+  const racingStore = new Proxy(store, {
+    get: (target, property) => {
+      if (property === 'getWorkerEventReplayAuthority') {
+        return (
+          eventIdentifier: Parameters<SqliteControlStore['getWorkerEventReplayAuthority']>[0],
+        ): ReturnType<SqliteControlStore['getWorkerEventReplayAuthority']> => {
+          const existing = target.getWorkerEventReplayAuthority(eventIdentifier);
+          if (!injectedWinner && existing === undefined) {
+            injectedWinner = true;
+            winnerAdmission = winnerKernel.admitWorkerEvent(event, request);
+          }
+          return existing;
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+    },
+  });
+  const losingKernel = new WorkflowRuntimeKernel({
+    ...runtimeDependencies(store, worker, authority, 'concurrent-worker-event-loser'),
+    store: racingStore,
+  });
+
+  const replay = losingKernel.admitWorkerEvent(event, request);
+  const persistedReceipt = store.getWorkerEventReceipt(event.id);
+
+  assert.equal(winnerAdmission?.status, 'ADMITTED');
+  assert.equal(replay.status, 'DUPLICATE', JSON.stringify(replay));
+  assert.equal(replay.originalDisposition, 'ADMITTED');
+  assert.equal(replay.terminalForCurrentDispatch, true);
+  assert.equal(persistedReceipt?.disposition, 'ADMITTED');
+  assert.equal(persistedReceipt.observedWorkflowVersion, workflowVersion(2));
+  assert.equal(store.getWorkflow(authority.workflow.id)?.version, workflowVersion(3));
+  assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
 });
 
 void test('[I-002][I-009] FakeWorker event identity is deterministic per dispatched request', async (t) => {
@@ -811,6 +1327,547 @@ void test('[I-008][I-009][I-019] stale Context is durably ignored before stream 
   );
   assert.equal(rowCount(filename, 'processed_commands'), 3);
   assert.equal(rowCount(filename, 'acceptance_decisions'), 0);
+});
+
+void test('[I-006][I-009][I-028] Runtime rejects poisoned Store receipts for ignored Worker events', async (t) => {
+  for (const storeStatus of ['APPLIED', 'REPLAYED'] as const) {
+    await t.test(storeStatus, async (subtest) => {
+      const namespace = `ignored-receipt-${storeStatus.toLowerCase()}`;
+      const filename = temporaryDatabase(subtest, `${namespace}.sqlite`);
+      const store = openSqliteControlStore({ filename, now: () => createdAt });
+      subtest.after(() => store.close());
+      const authority = seedAuthority(store, namespace);
+      const poisonedStore = new Proxy(store, {
+        get: (target, property) => {
+          if (property === 'recordIgnoredWorkerEvent') {
+            return (
+              input: Parameters<SqliteControlStore['recordIgnoredWorkerEvent']>[0],
+            ): ReturnType<SqliteControlStore['recordIgnoredWorkerEvent']> => {
+              const recorded = target.recordIgnoredWorkerEvent(input);
+              if (recorded.status !== 'APPLIED') {
+                return recorded;
+              }
+              if (storeStatus === 'REPLAYED') {
+                return Object.freeze({
+                  status: 'REPLAYED',
+                  receipt: Object.freeze({
+                    ...input.receipt,
+                    workflowId: workflowId('workflow_poisoned-ignored-replay'),
+                  }),
+                });
+              }
+              return Object.freeze({
+                ...recorded,
+                receipt: Object.freeze({
+                  ...input.receipt,
+                  reasonCode: 'POISONED_IGNORED_REASON',
+                }),
+              });
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+        },
+      });
+      const application = createWorkerExecutionApplication({
+        ...runtimeDependencies(
+          store,
+          new FakeWorker({ fixture: FakeWorkerFixture.STALE_CONTEXT }),
+          authority,
+          namespace,
+        ),
+        store: poisonedStore,
+      });
+
+      const execution = await application.startGoal(startRequest(authority, namespace));
+      const admission = execution.admissions[0];
+
+      assert.equal(admission?.status, 'REJECTED');
+      assert.equal(admission.reasonCode, 'WORKER_EVENT_INTERNAL_FAILURE');
+      assert.equal(admission.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+      assert.equal(execution.workerFailure, undefined);
+      if (admission.eventId === undefined) {
+        assert.fail('Rejected ignored receipt must preserve the Worker Event identity');
+      }
+      const storedReceipt = store.getWorkerEventReceipt(admission.eventId);
+      assert.equal(storedReceipt?.disposition, 'IGNORED');
+      assert.equal(storedReceipt.reasonCode, 'WORKER_REQUEST_BINDING_MISMATCH');
+      assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.RUNNING);
+      assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+    });
+  }
+});
+
+void test('[I-006][I-009][I-010] ignored replay needs dispatch causality but no terminal command proof', async (t) => {
+  const filename = temporaryDatabase(t, 'ignored-replay-authority.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'ignored-replay-authority');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.STALE_CONTEXT });
+  const committingKernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(store, worker, authority, 'ignored-replay-authority-commit'),
+  );
+  assert.equal(
+    committingKernel.startGoal(startRequest(authority, 'ignored-replay-authority')).status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Ignored replay fixture must prepare an active Attempt');
+  }
+  const request = committingKernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Ignored replay fixture must prepare a Worker Request');
+  }
+  assert.equal(committingKernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+  const ignored = committingKernel.admitWorkerEvent(event, request);
+  assert.equal(ignored.status, 'IGNORED');
+  const retained = store.getWorkerEventReplayAuthority(event.id);
+  assert.ok(retained);
+  assert.equal(retained.receipt.disposition, 'IGNORED');
+  assert.ok(retained.dispatchClaim);
+  assert.equal(retained.contextManifest.id, request.contextManifestId);
+  assert.equal('terminalAttempt' in retained, false);
+  assert.equal('processedCommand' in retained, false);
+  assert.deepEqual(retained.dispatchClaim, store.getWorkerDispatchClaim(request.attemptId));
+  assert.equal(digests.digest(request.contextPackage), retained.contextManifest.packageDigest);
+  assert.equal(retained.receipt.eventId, event.id);
+  assert.equal(retained.receipt.payloadDigest, digests.digest(event));
+  assert.equal(retained.receipt.workerSessionId, event.workerSessionId);
+  assert.equal(retained.receipt.workflowId, request.contextPackage.workflowId);
+  assert.equal(retained.receipt.attemptId, event.attemptId);
+  assert.equal(retained.receipt.contextManifestId, event.contextManifestId);
+  assert.equal(retained.receipt.contextManifestDigest, event.contextManifestDigest);
+  assert.equal(retained.receipt.packageDigest, event.packageDigest);
+  const duplicate = committingKernel.admitWorkerEvent(event, request);
+  assert.equal(duplicate.status, 'DUPLICATE', JSON.stringify(duplicate));
+  assert.equal(duplicate.originalDisposition, 'IGNORED');
+  assert.equal(duplicate.terminalForCurrentDispatch, false);
+
+  const poisonedStore = new Proxy(store, {
+    get: (target, property) => {
+      if (property === 'getWorkerEventReplayAuthority') {
+        return () => Object.freeze({ ...retained, dispatchClaim: null });
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+    },
+  });
+  const replayKernel = new WorkflowRuntimeKernel({
+    ...runtimeDependencies(store, worker, authority, 'ignored-replay-authority-replay'),
+    store: poisonedStore,
+  });
+  const rejected = replayKernel.admitWorkerEvent(event, request);
+  assert.equal(rejected.status, 'REJECTED');
+  assert.equal(rejected.reasonCode, 'WORKER_EVENT_REPLAY_AUTHORITY_INVALID');
+  assert.equal(rejected.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+});
+
+void test('[I-006][I-009][I-028] Runtime rejects a same-identity replay receipt without committed authority', async (t) => {
+  const filename = temporaryDatabase(t, 'poisoned-admitted-replay.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'poisoned-admitted-replay');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const poisonedStore = new Proxy(store, {
+    get: (target, property) => {
+      if (property === 'commitWorkerAttemptEvent') {
+        return (
+          input: Parameters<SqliteControlStore['commitWorkerAttemptEvent']>[0],
+        ): ReturnType<SqliteControlStore['commitWorkerAttemptEvent']> =>
+          Object.freeze({
+            status: 'REPLAYED',
+            receipt: input.receipt,
+          });
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+    },
+  });
+  const kernel = new WorkflowRuntimeKernel({
+    ...runtimeDependencies(store, worker, authority, 'poisoned-admitted-replay'),
+    store: poisonedStore,
+  });
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'poisoned-admitted-replay')).status,
+    'APPLIED',
+  );
+  const workflow = store.getWorkflow(authority.workflow.id);
+  if (workflow?.activeAttemptId === undefined) {
+    assert.fail('Poisoned replay fixture must prepare an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(workflow.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Poisoned replay fixture must prepare a Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const event of worker.run(request, new AbortController().signal)) {
+    events.push(event);
+  }
+  const event = decodeWorkerEvent(events[0]);
+
+  const admission = kernel.admitWorkerEvent(event, request);
+
+  assert.equal(admission.status, 'REJECTED');
+  assert.equal(admission.reasonCode, 'WORKER_EVENT_INTERNAL_FAILURE');
+  assert.equal(admission.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+  assert.equal(store.getWorkerEventReceipt(event.id), undefined);
+  assert.equal(store.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.RUNNING);
+  assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RUNNING);
+});
+
+void test('[I-006][I-008][I-009] an internal CommandId collision is not blamed on the Worker EventId', async (t) => {
+  const namespace = 'worker-internal-command-conflict';
+  const filename = temporaryDatabase(t, `${namespace}.sqlite`);
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, namespace);
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const start = startRequest(authority, namespace);
+  const dependencies = runtimeDependencies(store, worker, authority, namespace);
+  if (dependencies.workerContext === undefined) {
+    assert.fail('Internal CommandId collision fixture requires Worker Context dependencies');
+  }
+  const generatedWorkerIds = new DeterministicIds(`${namespace}-worker`);
+  const kernel = new WorkflowRuntimeKernel({
+    ...dependencies,
+    workerContext: Object.freeze({
+      ...dependencies.workerContext,
+      identities: Object.freeze({
+        nextCommandId: () => start.commandId,
+        nextContextManifestId: () => generatedWorkerIds.nextContextManifestId(),
+        nextWorkerSessionId: () => generatedWorkerIds.nextWorkerSessionId(),
+      }),
+    }),
+  });
+  assert.equal(kernel.startGoal(start).status, 'APPLIED');
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Internal CommandId collision fixture must prepare an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Internal CommandId collision fixture must prepare a Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+
+  const rejected = kernel.admitWorkerEvent(event, request);
+
+  assert.equal(rejected.status, 'REJECTED');
+  assert.equal(rejected.reasonCode, 'WORKER_EVENT_INTERNAL_FAILURE');
+  assert.equal(rejected.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+  assert.equal(store.getWorkerEventReceipt(event.id), undefined);
+  assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RUNNING);
+});
+
+void test('[I-006][I-008][I-009] a fake Worker Event conflict without retained receipt is control-plane failure', async (t) => {
+  const namespace = 'worker-event-fake-conflict';
+  const filename = temporaryDatabase(t, `${namespace}.sqlite`);
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, namespace);
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const poisonedStore = new Proxy(store, {
+    get: (target, property) => {
+      if (property === 'commitWorkerAttemptEvent') {
+        return (): ReturnType<SqliteControlStore['commitWorkerAttemptEvent']> =>
+          Object.freeze({
+            status: 'WORKER_EVENT_CONFLICT',
+            message: 'fabricated conflict without retained authority',
+          });
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+    },
+  });
+  const kernel = new WorkflowRuntimeKernel({
+    ...runtimeDependencies(store, worker, authority, namespace),
+    store: poisonedStore,
+  });
+  assert.equal(kernel.startGoal(startRequest(authority, namespace)).status, 'APPLIED');
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Fake Worker Event conflict fixture must prepare an active Attempt');
+  }
+  const request = kernel.takePreparedWorkerRequest(running.activeAttemptId);
+  if (request === undefined) {
+    assert.fail('Fake Worker Event conflict fixture must prepare a Worker Request');
+  }
+  assert.equal(kernel.claimWorkerDispatch(request).status, 'CLAIMED');
+  const events: unknown[] = [];
+  for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+    events.push(rawEvent);
+  }
+  const event = decodeWorkerEvent(events[0]);
+
+  const rejected = kernel.admitWorkerEvent(event, request);
+
+  assert.equal(rejected.status, 'REJECTED');
+  assert.equal(rejected.reasonCode, 'WORKER_EVENT_INTERNAL_FAILURE');
+  assert.equal(rejected.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+  assert.equal(store.getWorkerEventReceipt(event.id), undefined);
+  assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RUNNING);
+});
+
+void test('[I-006][I-008][I-009] Runtime closes admitted replay authority beyond receipt identity', async (t) => {
+  const poisonCases = [
+    'missing-claim',
+    'missing-context-manifest',
+    'missing-terminal-attempt',
+    'missing-processed-command',
+    'receipt-before-claim',
+    'claim-before-attempt',
+    'attempt-start-manifest-time-mismatch',
+    'manifest-digest-mismatch',
+    'manifest-claim-mismatch',
+    'wrong-observed-version',
+    'receipt-payload-field-mismatch',
+    'terminal-attempt-mismatch',
+    'terminal-reason-payload-mismatch',
+    'processed-input-mismatch',
+    'successful-outcome-mismatch',
+  ] as const;
+
+  for (const poisonCase of poisonCases) {
+    await t.test(poisonCase, async (subtest) => {
+      const namespace = `replay-closure-${poisonCase}`;
+      const filename = temporaryDatabase(subtest, `${namespace}.sqlite`);
+      const store = openSqliteControlStore({ filename, now: () => createdAt });
+      subtest.after(() => store.close());
+      const seeded = seedAuthority(store, namespace);
+      const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+      const committingKernel = new WorkflowRuntimeKernel(
+        runtimeDependencies(store, worker, seeded, `${namespace}-commit`),
+      );
+      assert.equal(committingKernel.startGoal(startRequest(seeded, namespace)).status, 'APPLIED');
+      const running = store.getWorkflow(seeded.workflow.id);
+      if (running?.activeAttemptId === undefined) {
+        assert.fail('Replay closure fixture must prepare an active Attempt');
+      }
+      const request = committingKernel.takePreparedWorkerRequest(running.activeAttemptId);
+      if (request === undefined) {
+        assert.fail('Replay closure fixture must prepare a Worker Request');
+      }
+      assert.equal(committingKernel.claimWorkerDispatch(request).status, 'CLAIMED');
+      const events: unknown[] = [];
+      for await (const rawEvent of worker.run(request, new AbortController().signal)) {
+        events.push(rawEvent);
+      }
+      const event = decodeWorkerEvent(events[0]);
+      assert.equal(committingKernel.admitWorkerEvent(event, request).status, 'ADMITTED');
+
+      const poisonedStore = new Proxy(store, {
+        get: (target, property) => {
+          if (property === 'getWorkerEventReplayAuthority') {
+            return (
+              eventIdentifier: Parameters<SqliteControlStore['getWorkerEventReplayAuthority']>[0],
+            ) => {
+              const retained = target.getWorkerEventReplayAuthority(eventIdentifier);
+              if (
+                retained?.receipt.disposition !== 'ADMITTED' ||
+                !('terminalAttempt' in retained) ||
+                !('processedCommand' in retained)
+              ) {
+                assert.fail('Replay closure fixture requires complete admitted authority');
+              }
+              switch (poisonCase) {
+                case 'missing-claim':
+                  return Object.freeze({ ...retained, dispatchClaim: null });
+                case 'missing-context-manifest':
+                  return Object.freeze({ ...retained, contextManifest: null });
+                case 'missing-terminal-attempt':
+                  return Object.freeze({ ...retained, terminalAttempt: null });
+                case 'missing-processed-command':
+                  return Object.freeze({ ...retained, processedCommand: null });
+                case 'receipt-before-claim':
+                  return Object.freeze({
+                    ...retained,
+                    receipt: Object.freeze({
+                      ...retained.receipt,
+                      receivedAt: isoTimestamp('2026-07-26T23:59:59.000Z'),
+                    }),
+                  });
+                case 'claim-before-attempt':
+                  return Object.freeze({
+                    ...retained,
+                    dispatchClaim: Object.freeze({
+                      ...retained.dispatchClaim,
+                      claimedAt: isoTimestamp('2026-07-26T23:59:59.000Z'),
+                    }),
+                  });
+                case 'attempt-start-manifest-time-mismatch':
+                  return Object.freeze({
+                    ...retained,
+                    terminalAttempt: Object.freeze({
+                      ...retained.terminalAttempt,
+                      startedAt: isoTimestamp('2026-07-26T23:59:59.000Z'),
+                    }),
+                  });
+                case 'manifest-digest-mismatch': {
+                  const forgedDigest = digests.digest({ poisonCase });
+                  return Object.freeze({
+                    ...retained,
+                    receipt: Object.freeze({
+                      ...retained.receipt,
+                      contextManifestDigest: forgedDigest,
+                    }),
+                    dispatchClaim: Object.freeze({
+                      ...retained.dispatchClaim,
+                      contextManifestDigest: forgedDigest,
+                    }),
+                    contextManifest: Object.freeze({
+                      ...retained.contextManifest,
+                      manifestDigest: forgedDigest,
+                    }),
+                  });
+                }
+                case 'manifest-claim-mismatch': {
+                  const forgedAttemptId = new DeterministicIds(
+                    `${namespace}-forged-manifest`,
+                  ).nextAttemptId();
+                  const manifestWithoutDigest = Object.freeze({
+                    ...retained.contextManifest,
+                    attemptId: forgedAttemptId,
+                  });
+                  const forgedManifest = decodeContextManifest({
+                    ...manifestWithoutDigest,
+                    manifestDigest: digests.digest(
+                      contextManifestDigestProjection(manifestWithoutDigest),
+                    ),
+                  });
+                  return Object.freeze({
+                    ...retained,
+                    dispatchClaim: Object.freeze({
+                      ...retained.dispatchClaim,
+                      contextManifestDigest: forgedManifest.manifestDigest,
+                    }),
+                    contextManifest: forgedManifest,
+                  });
+                }
+                case 'wrong-observed-version':
+                  return Object.freeze({
+                    ...retained,
+                    receipt: Object.freeze({
+                      ...retained.receipt,
+                      observedWorkflowVersion: workflowVersion(
+                        retained.receipt.observedWorkflowVersion + 1,
+                      ),
+                    }),
+                  });
+                case 'receipt-payload-field-mismatch': {
+                  const forgedWorkerSessionId = workerSessionId(
+                    `worker_${namespace}-forged-receipt`,
+                  );
+                  return Object.freeze({
+                    ...retained,
+                    receipt: Object.freeze({
+                      ...retained.receipt,
+                      workerSessionId: forgedWorkerSessionId,
+                    }),
+                    dispatchClaim: Object.freeze({
+                      ...retained.dispatchClaim,
+                      workerSessionId: forgedWorkerSessionId,
+                    }),
+                    terminalAttempt: Object.freeze({
+                      ...retained.terminalAttempt,
+                      workerSessionRef: forgedWorkerSessionId,
+                    }),
+                  });
+                }
+                case 'terminal-attempt-mismatch':
+                  return Object.freeze({
+                    ...retained,
+                    terminalAttempt: Object.freeze({
+                      ...retained.terminalAttempt,
+                      endedAt: isoTimestamp('2026-07-28T00:00:00.000Z'),
+                    }),
+                  });
+                case 'terminal-reason-payload-mismatch':
+                  return Object.freeze({
+                    ...retained,
+                    terminalAttempt: Object.freeze({
+                      ...retained.terminalAttempt,
+                      terminationReason:
+                        retained.terminalAttempt.terminationReason === 'WORKER_RESULT:PROPOSALS'
+                          ? 'WORKER_RESULT:COMPLETION_REQUEST'
+                          : 'WORKER_RESULT:PROPOSALS',
+                    }),
+                  });
+                case 'processed-input-mismatch':
+                  return Object.freeze({
+                    ...retained,
+                    processedCommand: Object.freeze({
+                      ...retained.processedCommand,
+                      inputDigest: digests.digest({ poisonCase }),
+                    }),
+                  });
+                case 'successful-outcome-mismatch': {
+                  const outcome = decodeStoredCommandOutcome(retained.processedCommand.outcome);
+                  if (outcome.disposition !== 'APPLIED') {
+                    assert.fail('Replay closure fixture requires an applied command outcome');
+                  }
+                  return Object.freeze({
+                    ...retained,
+                    processedCommand: Object.freeze({
+                      ...retained.processedCommand,
+                      outcome: storedCommandOutcomeToJson(
+                        Object.freeze({
+                          ...outcome,
+                          workflow: Object.freeze({
+                            ...outcome.workflow,
+                            runStatus: RunStatus.FAILED,
+                          }),
+                          output: Object.freeze({
+                            ...outcome.output,
+                            runStatus: RunStatus.FAILED,
+                          }),
+                        }),
+                      ),
+                    }),
+                  });
+                }
+              }
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+        },
+      });
+      const replayKernel = new WorkflowRuntimeKernel({
+        ...runtimeDependencies(store, worker, seeded, `${namespace}-replay`),
+        store: poisonedStore,
+      });
+
+      const replay = replayKernel.admitWorkerEvent(event, request);
+
+      assert.equal(replay.status, 'REJECTED');
+      assert.equal(
+        replay.reasonCode,
+        poisonCase === 'missing-claim' ||
+          poisonCase === 'missing-context-manifest' ||
+          poisonCase === 'missing-terminal-attempt' ||
+          poisonCase === 'missing-processed-command'
+          ? 'WORKER_EVENT_REPLAY_AUTHORITY_INVALID'
+          : 'WORKER_EVENT_INTERNAL_FAILURE',
+      );
+      assert.equal(replay.nonAdmissionClass, WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE);
+      assert.equal(store.getWorkflow(seeded.workflow.id)?.version, workflowVersion(3));
+      assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RESULT_RECORDED);
+      assert.equal(rowCount(filename, 'worker_event_receipts'), 1);
+      assert.equal(rowCount(filename, 'processed_commands'), 3);
+    });
+  }
 });
 
 void test('[I-001][I-002][I-004] Worker shape tricks cannot mutate control or acceptance authority', async (t) => {
@@ -1686,6 +2743,20 @@ void test('[I-006][I-008][I-009] SQLite backstops reject forged dispatch and imm
         .run(request.attemptId),
     /Attempt Context and Worker bindings are immutable/,
   );
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `UPDATE attempts
+              SET status = 'RESULT_RECORDED',
+                  termination_reason = 'WORKER_RESULT:COMPLETION_REQUEST',
+                  ended_at = '2026-07-27T00:00:00.100Z'
+            WHERE id = ?`,
+        )
+        .run(request.attemptId),
+    /Worker result kind is not authorized by its Workflow phase/,
+  );
+  assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RUNNING);
 
   const dispatch = kernel.claimWorkerDispatch(request);
   assert.equal(dispatch.status, 'CLAIMED');
@@ -1732,7 +2803,7 @@ void test('[I-006][I-008][I-009] SQLite backstops reject forged dispatch and imm
             WHERE id = ?`,
         )
         .run(request.attemptId),
-    /Worker failure reason requires its runtime-owned failure class/,
+    /Worker failure reason has no exact M1 failure mapping/,
   );
   assert.equal(store.getAttempt(request.attemptId)?.status, AttemptStatus.RUNNING);
   const bypassCommandId = commandId('command_bypass-dispatch-time');
@@ -1770,7 +2841,7 @@ void test('[I-006][I-008][I-009] SQLite backstops reject forged dispatch and imm
         .prepare(
           `UPDATE attempts
               SET status = 'FAILED', failure_class = 'PROTOCOL_ERROR',
-                  termination_reason = 'forged before claim',
+                  termination_reason = 'WORKER_STREAM_NO_TERMINAL_EVENT',
                   ended_at = '2026-07-27T00:00:00.010Z'
             WHERE id = ?`,
         )
@@ -2339,6 +3410,208 @@ void test('[I-006][I-008] migration 0012 refuses a retained Worker failure class
   );
 });
 
+void test('[I-004][I-006][I-008][I-019] migration 0019 atomically refuses a phase-incompatible retained Worker result', async (t) => {
+  const filename = temporaryDatabase(t, 'worker-result-kind-migration.sqlite');
+  const migrationsDirectory = mkdtempSync(
+    join(tmpdir(), 'codeclosure-worker-result-kind-closure-'),
+  );
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) =>
+      candidate.endsWith('.sql') && candidate < '0019_m1_attempt_authority_closure.sql',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const authority = seedAuthority(oldStore, 'workerresultkindmigration');
+  const execution = await createWorkerExecutionApplication(
+    runtimeDependencies(
+      oldStore,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      authority,
+      'workerresultkindmigration',
+    ),
+  ).startGoal(startRequest(authority, 'workerresultkindmigration'));
+  if (execution.dispatch?.status !== 'CLAIMED') {
+    assert.fail('Worker result migration fixture must retain its dispatch claim');
+  }
+  assert.equal(execution.admissions[0]?.status, 'ADMITTED');
+  const attemptIdentifier = execution.dispatch.claim.attemptId;
+  oldStore.close();
+
+  const raw = new Database(filename);
+  raw.exec('DROP TRIGGER attempts_terminal_immutable');
+  raw
+    .prepare('UPDATE attempts SET termination_reason = ? WHERE id = ?')
+    .run('WORKER_RESULT:COMPLETION_REQUEST', attemptIdentifier);
+  raw.close();
+
+  const migrationName = '0019_m1_attempt_authority_closure.sql';
+  copyFileSync(join(sourceDirectory, migrationName), join(migrationsDirectory, migrationName));
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt }),
+    /legacy-m1-attempt-authority-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_running_attempt_release_guard', 'workflows_m1_active_attempt_phase_insert_guard', 'workflows_m1_active_attempt_phase_update_guard', 'attempts_m1_worker_result_kind_guard', 'attempts_m1_worker_failure_mapping_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' AND name = 'm1_attempt_authority_migration_guard') OR (type = 'trigger' AND name = 'm1_attempt_authority_migration_guard_reject')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT termination_reason FROM attempts WHERE id = ?')
+      .pluck()
+      .get(attemptIdentifier),
+    'WORKER_RESULT:COMPLETION_REQUEST',
+  );
+});
+
+void test('[I-004][I-006][I-008][I-019] migration 0019 atomically refuses an open-ended retained Worker failure', async (t) => {
+  const filename = temporaryDatabase(t, 'worker-failure-mapping-migration.sqlite');
+  const migrationsDirectory = mkdtempSync(
+    join(tmpdir(), 'codeclosure-worker-failure-mapping-closure-'),
+  );
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) =>
+      candidate.endsWith('.sql') && candidate < '0019_m1_attempt_authority_closure.sql',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const authority = seedAuthority(oldStore, 'workerfailuremappingmigration');
+  const execution = await createWorkerExecutionApplication(
+    runtimeDependencies(
+      oldStore,
+      new FakeWorker({ fixture: FakeWorkerFixture.FAILURE }),
+      authority,
+      'workerfailuremappingmigration',
+    ),
+  ).startGoal(startRequest(authority, 'workerfailuremappingmigration'));
+  if (execution.dispatch?.status !== 'CLAIMED') {
+    assert.fail('Worker failure migration fixture must retain its dispatch claim');
+  }
+  assert.equal(execution.admissions[0]?.status, 'ADMITTED');
+  const attemptIdentifier = execution.dispatch.claim.attemptId;
+  assert.equal(oldStore.getAttempt(attemptIdentifier)?.status, AttemptStatus.FAILED);
+  assert.equal(oldStore.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.BLOCKED);
+  oldStore.close();
+
+  const raw = new Database(filename);
+  raw.exec('DROP TRIGGER attempts_terminal_immutable');
+  const rewrite = raw
+    .prepare('UPDATE attempts SET termination_reason = ? WHERE id = ?')
+    .run('LEGACY_RUNTIME_FAILURE', attemptIdentifier);
+  assert.equal(rewrite.changes, 1);
+  raw.close();
+
+  const migrationName = '0019_m1_attempt_authority_closure.sql';
+  copyFileSync(join(sourceDirectory, migrationName), join(migrationsDirectory, migrationName));
+  assert.throws(
+    () => openSqliteControlStore({ filename, migrationsDirectory, now: () => createdAt }),
+    /legacy-m1-attempt-authority-state/,
+  );
+
+  const inspected = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => inspected.close());
+  assert.equal(
+    inspected
+      .prepare('SELECT COUNT(*) FROM schema_migrations WHERE name = ?')
+      .pluck()
+      .get(migrationName),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('workflows_running_attempt_release_guard', 'workflows_m1_active_attempt_phase_insert_guard', 'workflows_m1_active_attempt_phase_update_guard', 'attempts_m1_worker_result_kind_guard', 'attempts_m1_worker_failure_mapping_guard')",
+      )
+      .pluck()
+      .get(),
+    0,
+  );
+  assert.equal(
+    inspected
+      .prepare('SELECT termination_reason FROM attempts WHERE id = ?')
+      .pluck()
+      .get(attemptIdentifier),
+    'LEGACY_RUNTIME_FAILURE',
+  );
+});
+
+void test('[I-004][I-006][I-008][I-019] SQLite rejects an open-ended Worker failure before it becomes authority', (t) => {
+  const filename = temporaryDatabase(t, 'worker-failure-mapping-trigger.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  t.after(() => store.close());
+  const authority = seedAuthority(store, 'workerfailuremappingtrigger');
+  const kernel = new WorkflowRuntimeKernel(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      authority,
+      'workerfailuremappingtrigger',
+    ),
+  );
+  assert.equal(
+    kernel.startGoal(startRequest(authority, 'workerfailuremappingtrigger')).status,
+    'APPLIED',
+  );
+  const running = store.getWorkflow(authority.workflow.id);
+  if (running?.activeAttemptId === undefined) {
+    assert.fail('Worker failure mapping trigger fixture must retain an active Attempt');
+  }
+
+  const database = new Database(filename);
+  t.after(() => database.close());
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `UPDATE attempts
+              SET status = 'FAILED', failure_class = 'TRANSIENT_BACKEND',
+                  termination_reason = 'LEGACY_RUNTIME_FAILURE',
+                  ended_at = '2026-07-27T00:00:00.100Z'
+            WHERE id = ?`,
+        )
+        .run(running.activeAttemptId),
+    /Worker failure reason has no exact M1 failure mapping/,
+  );
+  assert.equal(store.getAttempt(running.activeAttemptId)?.status, AttemptStatus.RUNNING);
+});
+
 void test('[I-005][I-006][I-009] reopen revalidates retained M1 Context source authority', (t) => {
   const filename = temporaryDatabase(t, 'reopen-context-authority.sqlite');
   const store = openSqliteControlStore({ filename, now: () => createdAt });
@@ -2537,6 +3810,41 @@ void test('[I-006][I-008][I-009][I-010] reopen revalidates retained Worker recei
   assert.throws(
     () => openSqliteControlStore({ filename, now: () => createdAt }),
     /has no durable dispatch causality/,
+  );
+});
+
+void test('[I-004][I-006][I-008][I-009][I-019] reopen rejects a phase-incompatible retained Worker result without SQLite guards', async (t) => {
+  const filename = temporaryDatabase(t, 'reopen-worker-result-kind.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const authority = seedAuthority(store, 'reopenworkerresultkind');
+  const execution = await createWorkerExecutionApplication(
+    runtimeDependencies(
+      store,
+      new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+      authority,
+      'reopenworkerresultkind',
+    ),
+  ).startGoal(startRequest(authority, 'reopenworkerresultkind'));
+  if (execution.dispatch?.status !== 'CLAIMED') {
+    assert.fail('Worker result reopen fixture must retain its dispatch claim');
+  }
+  assert.equal(execution.admissions[0]?.status, 'ADMITTED');
+  const attemptIdentifier = execution.dispatch.claim.attemptId;
+  store.close();
+
+  const raw = new Database(filename);
+  raw.exec(`
+      DROP TRIGGER attempts_terminal_immutable;
+      DROP TRIGGER attempts_m1_worker_result_kind_guard;
+    `);
+  raw
+    .prepare('UPDATE attempts SET termination_reason = ? WHERE id = ?')
+    .run('WORKER_RESULT:COMPLETION_REQUEST', attemptIdentifier);
+  raw.close();
+
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => createdAt }),
+    /invalid Worker-phase Attempt authority/,
   );
 });
 

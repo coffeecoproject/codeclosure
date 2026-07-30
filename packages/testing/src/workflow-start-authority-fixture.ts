@@ -215,7 +215,7 @@ export function finishWorkflowAuthorityFixture(
     workflowId: input.workflow.id,
     expectedWorkflowVersion: input.workflow.version,
     attemptId: input.attempt.id,
-    reason: 'Fixture completed the first bounded DISCOVERY Attempt',
+    reason: 'WORKER_RESULT:PROPOSALS',
   });
   if (result.status !== 'APPLIED') {
     throw new TypeError(`Start authority fixture completion failed: ${JSON.stringify(result)}`);
