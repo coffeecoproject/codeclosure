@@ -73,10 +73,11 @@ worker misunderstands an accurate context package.
 - worker-authored summaries;
 - proposed facts;
 - hypotheses and search hints;
-- prior worker reasoning.
+- bounded worker-authored rationale, hypothesis, or search-state summaries.
 
 Non-authoritative inputs must be labelled and cannot override authoritative
-inputs.
+inputs. Raw private reasoning and opaque compaction state are worker-session
+internals, not Context Compiler inputs.
 
 ## Context Package Shape
 
@@ -292,6 +293,32 @@ The choice is a runtime policy because all critical state is recompiled. A
 fresh Thread does not mean lost state, and a resumed Thread does not make its
 history authoritative.
 
+Non-authoritative does not mean operationally disposable. Retaining a bounded,
+policy-selected Thread can preserve hypotheses, eliminated paths, and other
+working continuity that would be expensive or error-prone to reconstruct on
+every Turn. M2 therefore plans these rules:
+
+- one `WorkerRequest` maps to one bounded Turn on one exact Thread, and the
+  App Server-managed tool loop for that Turn remains on that Thread;
+- the adapter MUST NOT start a replacement Thread or worker Turn merely because
+  a tool call, approval request, or compaction lifecycle event occurred;
+- an additional worker Turn or `thread/resume` requires an exact Runtime
+  directive and the Workflow-bound Execution Profile policy;
+- a fresh Worker Session uses a fresh Thread by default; M2 also defaults a new
+  repair generation and a replacement Attempt after restart to a fresh Thread,
+  with exact failure Evidence and `priorAttemptFeedback` recompiled into the
+  new Context;
+- continuation across a phase boundary is allowed only when the bound policy
+  names that boundary and the current Goal, phase, Context, project, and
+  protocol identities still match; and
+- the M2 local Verification Runner does not use a Codex Thread. A future
+  model-based reviewer must use its own explicitly isolated context policy.
+
+Thread retention improves worker continuity; it never becomes a prerequisite
+for safe recovery. If the selected Thread is unavailable or untrusted, Runtime
+must follow its exact fail-closed or fresh-Thread fallback policy and compile
+current Context again.
+
 ### M2 App Server input closure — planned
 
 An App Server may add effective instructions or tools from Codex configuration,
@@ -311,19 +338,37 @@ dispatch; it cannot silently narrow, widen, or replace Worker authority.
 
 ## Codex Compact Interaction
 
-Codex currently supports manual and automatic compaction by replacing model
-history with a compacted history containing selected retained content,
-summaries, and re-injected initial context. CodeClosure treats this as worker
-session maintenance.
+The [Codex App Server protocol](https://learn.chatgpt.com/docs/app-server.md)
+supports automatic history compaction and exposes manual compaction through
+`thread/compact/start`. At the App Server boundary, CodeClosure observes the
+`contextCompaction` Item lifecycle; it does not require a human-readable
+compaction payload. Lower
+[Responses API compaction state](https://developers.openai.com/api/docs/guides/compaction)
+may be opaque machine state and must be passed through by its owning client
+rather than interpreted or edited. CodeClosure leaves that mechanism inside
+Codex and treats it as worker-session maintenance.
+
+An authorized manual compaction may emit App Server `turn/*` progress on the
+same Thread. That maintenance lifecycle is not a new Worker dispatch, Attempt,
+or completion request and MUST NOT be admitted as one.
 
 Rules:
 
-- compact events are logged as worker-session observations;
+- automatic/manual compaction mode and any manual trigger are selected by the
+  Workflow-bound Execution Profile rather than adapter discretion;
+- `contextCompaction` start/completion events are retained only as bounded
+  worker-session observations;
 - compaction does not change Goal, Workflow, Candidate, Fact, or Acceptance
   state;
+- private reasoning and opaque compaction state MUST NOT be copied into a
+  Context Package or Manifest, Store, audit, Evidence, CLI view, or acceptance
+  report;
+- App Server-owned Thread state may remain in the controlled state root only
+  under its explicit retention and privacy policy;
 - after compaction, the next phase-critical turn receives a newly compiled
   package when policy requires it;
-- a compacted summary may be included only as non-authoritative working context;
+- an intentionally exported worker-authored summary may be included only as
+  labelled, bounded, non-authoritative working context; and
 - losing the Codex Thread must not prevent safe resumption.
 
 ## Context Invalidation
@@ -414,4 +459,13 @@ Codex Thread policy belong to later milestones.
   `baseDigest`, and is absent from non-`IMPLEMENT` M1 packages;
 - a factory-labelled Fact or Human Decision without durable source authority
   cannot enter the M1 package;
-- no authority field depends solely on a transcript excerpt.
+- no authority field depends solely on a transcript excerpt;
+- one Worker Request and its App Server-managed tool loop remain on the exact
+  policy-selected Thread/Turn, while every additional start or resume requires
+  Runtime authority;
+- `contextCompaction` lifecycle cannot mutate authority or cause private
+  reasoning or opaque compaction state to enter durable CodeClosure records;
+- a fresh repair or recovery Thread receives current compiled Context and exact
+  prior failure authority without trusting the lost Thread; and
+- changing Thread continuity, compaction, retention, or fallback policy changes
+  the bound Execution Profile identity or fails closed.

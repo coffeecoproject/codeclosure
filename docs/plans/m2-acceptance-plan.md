@@ -47,7 +47,8 @@ The round answers one question:
 
 > Does the identified source tree prove that one exact supported Codex App
 > Server version can edit only an isolated Candidate under a controlled
-> execution configuration, that CodeClosure—not Codex—owns Worker admission,
+> execution configuration and observable working-continuity policy, that
+> CodeClosure—not Codex—owns Worker admission,
 > verification, rejection, repair, Acceptance, and closeout across failure and
 > restart, that a deterministic real-Candidate/real-verifier path proves
 > reject/repair/accept, and that a separate bounded live Codex path follows its
@@ -79,7 +80,7 @@ The mandatory acceptance scope is:
 - one real read-only local Verification Runner path;
 - exact Evidence and deterministic Acceptance bindings;
 - Thread start/resume policy, Compact handling, backend/process failure,
-  cancellation, and CodeClosure restart;
+  same-Thread tool-loop continuity, cancellation, and CodeClosure restart;
 - public CLI/composition isolation and status/audit rendering; and
 - one deterministic real-Candidate/real-verifier demonstration that proves
   failing verification, rejection, repair, passing verification, Acceptance,
@@ -128,9 +129,11 @@ Before the round begins, the operator MUST establish all of the following:
    duplicate-key rejection and exact RFC 8785 UTF-8 canonicalization under the
    accepted normalization profile.
 8. Controlled Codex configuration and state roots are established. Effective
-   instruction sources and tool policy match the M2 Execution Profile, ambient
-   configuration cannot widen authority, and the profile binds the exact
-   identity of all compatible managed requirements.
+   instruction sources, tool policy, Thread/working-continuity policy,
+   compaction policy, fresh-Thread boundaries, retention, and fallback behavior
+   match the M2 Execution Profile, ambient configuration cannot widen
+   authority, and the profile binds the exact identity of all compatible
+   managed requirements.
 9. Local Codex authentication and the selected model are available without
    printing, copying, or persisting credentials into the fixture or report.
 10. The deterministic reject/repair fixture is unique and disposable, uses a
@@ -189,7 +192,8 @@ The live layer MUST:
 - constrain Worker cwd and write access to the current mutable Candidate;
 - disable Candidate command network access and unsupported tools/effects;
 - record requested model plus observed reroute, warning, error, Thread, Turn,
-  Compact, and approval metadata without storing secrets or hidden reasoning;
+  bounded `contextCompaction`, and approval metadata without storing secrets,
+  hidden reasoning, or opaque compaction state;
 - validate all external JSON and model-authored payloads as untrusted input;
 - assert persisted Goal, Workflow, Attempt, Candidate, Evidence, Acceptance,
   Closeout, backend binding, and audit identity independently of transcript
@@ -243,6 +247,7 @@ the report must preserve each row's individual outcome.
 | `M2-B08` | The client performs no hidden Turn retry, process retry, Thread resume, approval, or model fallback | call-trace and source boundary tests |
 | `M2-B09` | Live local stdio initialization and one bounded Thread/Turn conform to the pinned generated schema | live compatibility preflight |
 | `M2-B10` | Explicit argv, environment, configuration roots, state roots, and outer isolation determine App Server inputs; poisoned ambient config, instructions, hooks, skills, MCP, plugins, apps, search, provider, and environment values cannot enter or widen the selected profile | configuration-isolation suite |
+| `M2-B11` | The pinned schema and focused probes classify Thread resume, manual compaction, automatic-compaction configuration, `contextCompaction` lifecycle, post-compaction continuation, and controlled-state behavior without inspecting private reasoning; every capability selected by the installed profile is supported, while unsupported or unknown optional capabilities remain unselected | version-bound capability record, deterministic fixtures, and bounded compatibility preflight |
 
 ### Worker mapping and authority
 
@@ -258,6 +263,7 @@ the report must preserve each row's individual outcome.
 | `M2-C08` | Backend Thread/Turn identity cannot mutate Workflow, issue Acceptance, or substitute for a Runtime Command or Worker Event ID | authority and compile-boundary tests |
 | `M2-C09` | Every durable Worker receipt has its prior dispatch and backend-execution causality, and Store failure is not blamed on Codex | Store fault-injection suite |
 | `M2-C10` | App Server-observed effective settings, managed-requirements identity, and `instructionSources` match the trusted request; an unknown, stale, changed, or widened input blocks admission rather than becoming Context | effective-input admission suite |
+| `M2-C11` | One Worker Request, its bounded worker Turn, and every App Server-managed tool call use one exact Thread; an unexpected split or adapter-authored continuation fails closed, while an authorized manual-compaction maintenance Turn cannot become another Worker dispatch or result | fake-server call trace and adapter policy tests |
 
 ### Candidate workspace
 
@@ -305,7 +311,7 @@ the report must preserve each row's individual outcome.
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-G01` | Compact/context-compaction events do not add, remove, or revise CodeClosure authority | protocol and Runtime comparison test |
+| `M2-G01` | `contextCompaction` lifecycle is admitted only as a bounded worker-session observation and does not add, remove, or revise CodeClosure authority | protocol and Runtime comparison test |
 | `M2-G02` | Thread deletion, wrong Thread, wrong Turn, unavailable resume, and mismatched protocol profile fail closed | Thread policy suite |
 | `M2-G03` | Approval requests beyond exact Candidate capability, session-wide grants, user input, MCP elicitation, connector, dynamic-tool, app, plugin, skill, search, and effect requests are disabled or declined/cancelled | server-request policy suite |
 | `M2-G04` | Runtime cancellation interrupts current work without allowing a late event to close or corrupt the next dispatch | cancellation-order suite |
@@ -316,6 +322,8 @@ the report must preserve each row's individual outcome.
 | `M2-G09` | Credentials, hidden reasoning, unbounded protocol content, and raw environment secrets do not enter Store, audit, CLI JSON, or acceptance report | redaction and retention audit |
 | `M2-G10` | No worker-writable path can reach authority storage or another generation through configured roots or filesystem indirection | containment/security suite |
 | `M2-G11` | Controlled Codex state, config, instructions, telemetry, history, and credentials cannot leak into Candidate commands, Candidate files, logs, audit, Evidence, or the report | state and secret-boundary audit |
+| `M2-G12` | The bound Execution Profile decides every fresh/resume boundary, continuity mode, compaction mode, retention rule, and fallback; adapter discretion or effective-policy drift fails closed | policy projection, call-trace, and mismatch suite |
+| `M2-G13` | An authorized post-compaction continuation can proceed on the selected Thread policy with current compiled Context, while Thread loss follows the exact fail-closed or fresh-Thread recovery path | deterministic compaction/continuation and Thread-loss fixtures |
 
 ### Regression, traceability, and milestone boundary
 
@@ -487,8 +495,9 @@ The dated M2 completion review MUST contain:
 2. OS/architecture, Node, pnpm, resolved Codex path, Codex version, executable
    digest, raw TypeScript-schema digest, canonical JSON-schema digest,
    normalization-profile identity, requested model/provider, controlled config
-   and state identities, managed-requirements identity, effective instruction
-   sources/tools, and observed reroutes or warnings;
+   and state identities, Thread/working-continuity/compaction/retention/fallback
+   policies, capability classifications, managed-requirements identity,
+   effective instruction sources/tools, and observed reroutes or warnings;
 3. the exact canonical command and exit status;
 4. every quality/offline stage with aggregate tests and zero-skip evidence;
 5. every mandatory matrix row and its primary evidence reference;
@@ -499,8 +508,9 @@ The dated M2 completion review MUST contain:
 8. the live fixture source, Candidate, verifier, authority-home, controlled
    Codex state, selected first-verification branch, generation digests, and
    allowed external-network identities without secrets;
-9. process failure, approval, Compact, cancellation, restart, strict-reopen,
-   and no-redispatch outcomes;
+9. process failure, approval, bounded `contextCompaction`, post-compaction
+   continuation, Thread loss, cancellation, restart, strict-reopen, and
+   no-redispatch outcomes without private-state payloads;
 10. source-checkout, Git-metadata, authority-isolation, cleanup-scope,
    credential-redaction,
    and no-external-effect proofs;

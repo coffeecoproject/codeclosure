@@ -46,6 +46,11 @@ records, candidate identities, evidence, acceptance decisions, and blockers are
 persisted by CodeClosure. Chat history, Codex threads, model memory, and
 compacted summaries are non-authoritative.
 
+Non-authoritative does not mean valueless or necessarily short-lived. A bound
+Execution Profile MAY retain controlled worker-session state to preserve
+working continuity, but that state MUST NOT replace the authoritative records
+needed to control, recover, verify, or close the Goal.
+
 ### I-007 — Authoritative state is outside the worker-writable candidate
 
 The control database, policy bundle, and acceptance records must not be stored
@@ -163,8 +168,15 @@ proposal and cannot silently become a confirmed fact.
 
 ### I-021 — Compact cannot destroy authority
 
-Codex compaction may replace model history with a summary. It must not be the
-only copy of any goal, fact, decision, obligation, blocker, or acceptance input.
+Codex compaction may replace model history with a compacted representation,
+including an opaque machine state or a summary. It MUST NOT be the only copy of
+any goal, fact, decision, obligation, blocker, or acceptance input.
+
+CodeClosure MAY observe compaction lifecycle and retain a policy-bound Codex
+Thread, but it MUST NOT interpret, rewrite, or copy private reasoning or opaque
+compaction state into Context authority, audit, Evidence, Acceptance, or
+closeout records. Losing that state MUST remain recoverable from CodeClosure
+authority.
 
 ### I-022 — Business scope is scenario-based
 

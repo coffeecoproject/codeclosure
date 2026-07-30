@@ -38,6 +38,11 @@ From the user's point of view, M2 should behave plainly:
 
 - Codex works in a disposable Candidate, so the user's project is not edited in
   place.
+- Within one bounded Codex invocation, the App Server keeps the tool loop on one
+  controlled Thread so useful working state is not discarded between actions.
+- If that Thread is compacted or lost, CodeClosure retains its authoritative
+  state and follows the exact recovery policy or stops visibly; the user is
+  never asked to trust model memory as the recovery record.
 - CodeClosure runs the required check itself; a Codex claim that the work is
   complete is never enough.
 - If the first checked result passes, the run proceeds directly to Acceptance
@@ -152,7 +157,7 @@ The bounded implementation includes:
 - independent Evidence creation and deterministic Acceptance replay;
 - one deterministic repair generation after failed required verification;
 - interruption, process failure, Compact, Thread start/resume, and restart
-  behavior; and
+  behavior, including an observable working-continuity policy; and
 - a basic local CLI/composition path and a repeatable acceptance harness.
 
 The exact set of Codex-backed phases must be named in the installed M2
@@ -170,6 +175,10 @@ M2 MUST NOT add or claim:
   revision;
 - worker-authored Facts, Evidence, Acceptance, Workflow transitions, or
   recovery decisions;
+- a CodeClosure-owned private-reasoning store, custom model-history compactor,
+  or semantic parser/editor for opaque compaction state;
+- a statistical claim that one Thread/compaction policy improves model quality,
+  cost, or task success across arbitrary projects;
 - automatic transient retry or undisclosed model/Thread replay;
 - an interactive approval path that can exceed the current Runtime capability
   grant;
@@ -311,7 +320,11 @@ Its non-secret canonical projection must bind at least:
   profile;
 - cwd, sandbox or permission profile, writable roots, command-network policy,
   approval policy, and approval reviewer;
-- Thread fresh/resume policy and controlled Codex state-root identity;
+- Thread start/resume and working-continuity policy, fresh-Thread boundaries,
+  resume-failure behavior, controlled Codex state-root identity, and state
+  retention policy;
+- automatic/manual compaction policy, any explicitly configured threshold, and
+  whether a compaction-prompt override is disabled or bound by exact identity;
 - project-instruction and other instruction-source policy;
 - Web Search, MCP, apps/connectors, plugins, hooks, skills, subagent, dynamic
   tool, telemetry, and history/retention policy; and
@@ -344,6 +357,54 @@ unknown, changed, or additional input fails closed. Adversarial fixtures must
 poison user and project config, instructions, hooks, skills, MCP, plugins, apps,
 Web Search, provider defaults, and environment secrets to prove that none can
 silently enter or widen the M2 execution.
+
+### Working continuity and compaction policy
+
+Slice 0 must close this policy through observable App Server behavior rather
+than a claim that private reasoning was retained. Its capability record must
+classify, from the pinned generated schema and focused probes:
+
+- Thread creation and exact-ID resume;
+- one Turn's model/tool-call lifecycle on the same Thread;
+- manual `thread/compact/start` support;
+- automatic compaction configuration and observable `contextCompaction` Item
+  lifecycle;
+- continuation or resume after observed compaction; and
+- controlled state-root persistence and deletion behavior.
+
+Each capability is `SUPPORTED`, `UNSUPPORTED`, or `UNKNOWN` for the selected
+Codex version and protocol profile. `UNKNOWN` cannot be treated as support. The
+record MUST NOT claim that private reasoning content was inspected or prove
+continuity by persisting that content. Every capability selected by the
+installed M2 profile must be `SUPPORTED`; optional `UNSUPPORTED` or `UNKNOWN`
+capabilities remain unselected and cannot be implied by status or reports.
+
+The baseline M2 policy is:
+
+- one `WorkerRequest` starts one bounded Turn on one exact Thread, including
+  its App Server-managed tool loop;
+- a tool call, approval request, or compaction event cannot authorize a new
+  Thread or worker Turn;
+- any later worker Turn or `thread/resume` requires an exact Runtime directive
+  and persisted binding;
+- a fresh Worker Session, new repair generation, and replacement Attempt after
+  restart use a fresh Thread by default;
+- a phase boundary may retain or replace a Thread only as the exact installed
+  Execution Profile specifies;
+- automatic compaction remains App Server-managed, and manual compaction may be
+  requested only when Runtime policy explicitly authorizes the selected stable
+  method;
+- App Server `turn/*` progress produced by authorized manual compaction is
+  classified as maintenance on the same Thread, never as another Worker
+  dispatch, terminal Worker result, or completion request;
+- CodeClosure records bounded Thread, Turn, and `contextCompaction` lifecycle
+  metadata but not raw private reasoning or opaque compaction state; and
+- unsupported or lost continuity degrades only through the profile's explicit
+  fail-closed or fresh-Thread path with newly compiled current Context.
+
+CodeClosure does not implement a second compaction algorithm, edit the Codex
+compaction prompt at adapter discretion, or inject a reconstructed private
+reasoning chain.
 
 The client MUST NOT retry a Turn, restart a process, answer an approval, resume
 a Thread, or infer success on its own. Those actions require an adapter request
@@ -403,8 +464,11 @@ it binds:
   identity;
 - execution-config, effective-instruction-source, and controlled Codex
   state-root identities;
-- requested Thread policy;
+- requested Thread, working-continuity, compaction, retention, and fallback
+  policies;
 - observed Thread and Turn identifiers when available;
+- bounded observed compaction lifecycle and outcome metadata, never its private
+  reasoning or opaque state payload;
 - Candidate generation and cwd identity when present;
 - lifecycle disposition and Runtime-authored timestamps; and
 - causal audit sequence.
@@ -427,6 +491,8 @@ Store or mutation callback.
 The conservative M2 Thread rules are:
 
 - a fresh Thread is the default for a fresh Worker Session;
+- one bounded Turn and its App Server-managed tool loop remain on that exact
+  Thread; the adapter cannot create replacement execution mid-loop;
 - `thread/resume` requires an exact Runtime-issued directive and a persisted
   binding to the same Goal revision, project, phase policy, and protocol
   profile;
@@ -436,6 +502,9 @@ The conservative M2 Thread rules are:
   existing M1 recovery path and is never silently redispatched;
 - `ResumeGoal` creates a fresh Attempt and dispatch claim; the default recovery
   profile uses a fresh Thread;
+- a repair generation also uses a fresh Thread by default and receives the
+  exact failing Evidence plus `priorAttemptFeedback` through current compiled
+  Context;
 - an unavailable, deleted, malformed, or mismatched Thread fails closed or
   falls back to fresh only when the Runtime policy explicitly authorizes that
   choice; and
@@ -588,14 +657,17 @@ Work:
   ordering;
 - spike stdio initialization, one Thread/Turn, interruption, one server
   request, and controlled process exit without changing product authority;
+- build the version-bound working-continuity capability record, including
+  same-Thread tool-loop, resume, automatic/manual compaction, post-compaction
+  continuation, and controlled-state behavior;
 - choose and adversarially probe the Codex configuration/state isolation
   mechanism, effective-instruction policy, tool-disable policy, and credential
   separation;
 - choose the Candidate workspace mechanism and Runtime-issued workspace
   lease/resolver contract through containment probes;
 - finalize the protocol-neutral external-execution lifecycle state machine,
-  backend binding, Thread policy, source manifest projection, Git metadata
-  treatment, and cleanup ownership;
+  backend binding, Thread/working-continuity/compaction policy, source manifest
+  projection, Git metadata treatment, and cleanup ownership;
 - finalize the real Verification/CheckSpecification/Evidence contract versions
   and migration impact; and
 - accept any required ADR before product code depends on the decision.
@@ -608,8 +680,10 @@ Exit proof:
 - the Candidate lease cannot resolve the user source path, authority home, or
   another generation as Worker cwd;
 - the external-execution state machine names durable intent, observed process,
-  Thread, Turn, terminal/failure, crash, duplicate, and restart rules without a
-  Store capability in the adapter;
+  Thread, Turn, compaction, terminal/failure, crash, duplicate, and restart
+  rules without a Store capability in the adapter;
+- the capability record distinguishes supported, unsupported, and unknown
+  continuity behavior without inspecting or persisting private reasoning;
 - real verification uses selected new contract discriminators rather than M1
   fake identities;
 - source-checkout byte identity and Git metadata treatment are unambiguous;
@@ -632,6 +706,8 @@ Work:
   ambient-config fixtures;
 - implement bounded JSONL, request correlation, initialization, notifications,
   server requests, cancellation, and shutdown;
+- implement the selected stable compaction method/Item lifecycle and
+  deterministic post-compaction continuation fixtures;
 - implement deterministic fake-server fixtures for malformed, reordered,
   duplicate, oversized, EOF, stderr, timeout, and process-exit cases; and
 - encode the closed dependency graph and reverse tests.
@@ -639,6 +715,8 @@ Work:
 Exit proof:
 
 - stable initialization and one fixture Thread/Turn pass;
+- the fixture proves compaction lifecycle and later continuation without
+  exposing or storing private reasoning or opaque compaction state;
 - repeated generation has one stable canonical snapshot identity;
 - ambient user/project config, instruction, tool, provider, history, and secret
   fixtures cannot widen the process contract;
@@ -659,8 +737,10 @@ Work:
 - map exact Runtime grants and the Candidate workspace lease to cwd, sandbox or
   permissions, network, and approval settings;
 - map the bound model/provider, effort, response, config, instruction-source,
-  tool, and state-root policy and reject effective drift;
-- implement Thread/Turn selection and backend execution observations;
+  tool, state-root, working-continuity, compaction, retention, and fallback
+  policy and reject effective drift;
+- implement Thread/Turn selection, same-Thread tool-loop enforcement, and
+  bounded backend execution observations;
 - validate final structured payloads and emit one bounded Worker event;
 - map interruption, declined requests, backend/protocol failure, invalid-only
   streams, and no-terminal streams; and
@@ -674,7 +754,9 @@ Exit proof:
   binding fails closed;
 - a source-project path, stale workspace lease, unexpected instruction source,
   or ambient config/tool injection fails before a Turn can acquire authority;
-- duplicate and conflicting Worker events retain ADR 0025 semantics; and
+- duplicate and conflicting Worker events retain ADR 0025 semantics;
+- an unexpected Worker Thread/Turn split, unauthorized resume, or mismatched
+  compaction policy fails closed without storing hidden reasoning; and
 - the adapter cannot reach the Store, internal Runtime kernel, Candidate
   mutation, Acceptance, or Intake capability.
 
@@ -757,7 +839,10 @@ Entry: one in-process end-to-end repair loop is green.
 Work:
 
 - implement the accepted fresh/resume Thread policy;
-- handle context-compaction Items without authority loss;
+- enforce same-Thread continuity for each bounded Turn and every App
+  Server-managed tool call inside it;
+- handle `contextCompaction` Items and authorized post-compaction continuation
+  without authority loss or private-state persistence;
 - interrupt a current Turn on governed cancellation;
 - map process/backend/protocol failure without hidden retry;
 - persist and reopen backend execution observations;
@@ -767,6 +852,11 @@ Work:
 
 Exit proof:
 
+- the exact Execution Profile decides every fresh/resume boundary and
+  compaction mode;
+- one bounded Turn never creates a replacement Thread during its tool loop;
+- an observed compaction can continue under the selected policy while the same
+  authority snapshot remains unchanged;
 - Compact, Thread deletion, process exit, and restart cannot remove or create
   Goal/Workflow/Candidate/Evidence/Acceptance authority;
 - old events cannot terminate the current dispatch;
@@ -855,6 +945,15 @@ not passed through a fake.
 Every Node test invocation must report zero failed, cancelled, skipped, and
 todo tests. Fault injection must cover every new compound Store transaction and
 every external-intent/observed-result persistence boundary introduced by M2.
+
+M2 may record non-authoritative operational observations such as Turn, model
+call, tool-call, compaction, output-token, repeated-search, repair-Attempt, and
+restart outcomes when the selected App Server exposes them safely. These
+observations do not gate M2 on a claimed model-quality uplift. Comparative
+evaluation may later contrast only supported policies, such as retained Thread
+plus App Server compaction against fresh Thread plus compiled Context; direct
+rolling deletion of old history is not a production M2 policy or a required
+test arm.
 
 ## 18. Documentation and review contract
 
