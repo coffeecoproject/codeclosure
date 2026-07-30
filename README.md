@@ -11,18 +11,18 @@ complete.
 
 ## Status
 
-The M0 architecture baseline is complete and tracked. M1 implementation is in
-progress with `FakeWorker` only. The
+The M0 architecture baseline is complete and tracked. The deterministic M1
+skeleton is implemented and audited with `FakeWorker` only. The
 [M1 implementation plan](docs/plans/m1-deterministic-skeleton.md) is the
-detailed record of which implementation slices have been verified; the
-[milestone document](docs/milestones.md) defines the complete M1 scope and exit
+detailed implementation and evidence record; the
+[milestone document](docs/milestones.md) defines the bounded M1 scope and exit
 criteria.
 
 This README intentionally does not duplicate the rolling slice, feature, or
-test inventory. A slice marked implemented in the M1 plan is evidence for that
-bounded slice only. It is not an M1-completion or product-completion claim. M1
-does not integrate Codex, edit a real project, or perform real project
-verification.
+test inventory. M1 completion is not product completion or a release claim.
+M1 does not integrate Codex, edit a real project, perform real project
+verification, or authorize merge, release, deployment, or other external
+effects.
 
 ## Development
 
@@ -40,15 +40,27 @@ Current repository commands are:
 - `pnpm docs:check` — verify repository GitHub Flavored Markdown structure,
   portable Markdown sources, exact portable local links, heading anchors, and
   the structural README status-source contract;
-- `pnpm lint` — run ESLint with type-aware TypeScript rules;
+- `pnpm lint` — run ESLint, CLI authority-boundary checks, and the locked
+  manifest/source package-dependency audit;
 - `pnpm typecheck` — build project references and type-check test sources;
-- `pnpm test` — run workspace tests with Node's test runner;
+- `pnpm test:unit` — run unit/property tests and the no-skip runner contract;
+- `pnpm test:digests` — run canonical digest golden-vector and replay tests;
+- `pnpm test:migrations` — run the exact SQLite migration, schema-fingerprint,
+  integrity, and reopen suite;
+- `pnpm test:authority` — run authority-codec, Store-contract, adversarial, and
+  write/read/reopen closure tests;
+- `pnpm test:cli` — run CLI integration and cross-process restart tests;
+- `pnpm test:demos` — run all named adversarial proof scenarios independently;
+- `pnpm test:invariants` — generate and enforce the invariant-to-test report;
+- `pnpm test` — run all staged test and proof commands above;
 - `pnpm build` — force a clean production compilation pass;
-- `pnpm gate:quality` — run the current checks in required order.
+- `pnpm gate:quality` — run formatting, documentation, lint/audits, typecheck,
+  the seven test/proof stages, and the production build in the required order.
 
-The exact implemented proof coverage is recorded with each slice in the M1
-implementation plan. A green quality command proves only the checks present at
-that source revision; it does not by itself establish M1 completion.
+The exact implemented proof coverage is recorded in the M1 implementation plan
+and completion review. The test runner fails when any invoked test is failed,
+cancelled, skipped, or marked todo. A green quality command proves only the
+checks present at its recorded source identity.
 
 ## Why CodeClosure Exists
 
@@ -91,8 +103,8 @@ Worker Adapter
 Codex App Server (M2)
 ```
 
-The public entry will be `codeclosure`. Codex is an execution backend, not the
-product entry and not the completion authority.
+The M1 public entry is `codeclosure`. Codex remains a later execution backend,
+not the product entry and not the completion authority.
 
 ## Canonical Documents
 
@@ -106,13 +118,14 @@ product entry and not the completion authority.
 - [Evidence model](docs/evidence-model.md)
 - [Milestones](docs/milestones.md)
 - [M1 deterministic-skeleton plan](docs/plans/m1-deterministic-skeleton.md)
+- [M1 completion review](docs/reviews/m1-completion-review.md)
 - [M0 architecture review](docs/reviews/m0-architecture-review.md)
 - [Accepted ADR index](docs/adr/README.md)
 
 Repository instructions and document precedence are defined in
 [AGENTS.md](AGENTS.md).
 
-## Near-Term Scope
+## M1 Boundary
 
 M1 is deliberately narrow:
 

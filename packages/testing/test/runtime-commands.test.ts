@@ -1111,7 +1111,7 @@ void test('[I-008][I-010] runtime cancellation interrupts the active Attempt', (
   assert.equal(store.getGoal(goal.id)?.status, 'CANCELLED');
 });
 
-void test('[I-008] reconciliation primitive blocks replacement work until explicit resume', () => {
+void test('[I-008][I-029] reconciliation blocks replacement work until explicit resume', () => {
   const fixtureValue = fixture();
   const { runtime, store, workflow } = fixtureValue;
   startFixtureExecution(fixtureValue, 'runtime-recovery');

@@ -40,6 +40,10 @@ does not mean CodeClosure is a working product.
 
 ## M1 — Deterministic Skeleton with FakeWorker
 
+Status: Complete as a bounded deterministic-control milestone on 2026-07-30.
+The [M1 completion review](reviews/m1-completion-review.md) records the exact
+source identity, environment, quality-gate output, and exit-criterion evidence.
+
 ### Objective
 
 Prove the authority boundary without any LLM or Codex dependency.
@@ -108,7 +112,13 @@ The demo must also show a failing-evidence path that cannot close.
 - documentation and implementation vocabulary agree;
 - no Codex dependency is present in the domain/runtime packages.
 
+M1 completion proves the local `FakeWorker` control plane and its fail-closed
+authority boundaries. It is not product completion, real-project verification,
+promotion consent, or a release claim.
+
 ## M2 — Codex Vertical Slice
+
+Status: Not started. The scope below is planned behavior.
 
 ### Objective
 

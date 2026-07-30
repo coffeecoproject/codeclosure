@@ -1,7 +1,7 @@
 # M1 Deterministic Skeleton Implementation Plan
 
-- Status: In implementation; Slices 0–7 are implemented and the Slice 8 M1
-  completion audit remains
+- Status: Implemented and audited; Slices 0–8 satisfy the bounded M1 exit
+  criteria
 - Plan date: 2026-07-27
 - Milestone: M1
 - Worker backend: `FakeWorker` only
@@ -679,8 +679,8 @@ than inferring its consumed decision or granted child authority.
 
 ### Slice 7 — CLI, recovery, and proof demos
 
-Implementation status (2026-07-29): implemented; the formal Slice 8 M1 audit
-remains. ADR 0020 through ADR 0023 are accepted. The immutable Execution
+Implementation status (2026-07-29): implemented and included in the completed
+M1 audit. ADR 0020 through ADR 0023 are accepted. The immutable Execution
 Profile installation/binding, public application
 create/resume/cancel and read boundary, exact startup/resume recovery closure,
 SQLite migrations, reopen validation, and adversarial recovery tests are
@@ -801,14 +801,25 @@ activation ordering in
 
 ### Slice 8 — M1 audit
 
+Implementation status (2026-07-30): implemented. The root quality command now
+runs the required twelve stages in order, and its Node test wrapper rejects any
+failed, cancelled, skipped, or todo result. The audit verifies the exact
+manifest/lockfile/source dependency graph, all nineteen ordered SQLite
+migrations and the reopened M1 schema fingerprint, all eight named proof
+scenarios, and executable metadata coverage for all thirty-one runtime
+invariants. Exact source, environment, command, count, and exit-criterion
+evidence is recorded in the
+[M1 completion review](../reviews/m1-completion-review.md).
+
 - full test/quality run;
 - schema and migration inspection;
 - actual package-dependency audit;
 - invariant-to-test report generated from test metadata;
 - M1 completion review with exact command evidence.
 
-Exit: every M1 claim is backed by current test output; skipped checks remain
-visible and block the corresponding claim.
+Exit: satisfied. Every bounded M1 claim is backed by current test output;
+skipped checks are visible and block the quality command and corresponding
+claim.
 
 ## 11. Invariant proof matrix
 
@@ -824,10 +835,10 @@ visible and block the corresponding claim.
 | I-027–I-030 | unknown/error fail-closed, retry classification/no-automatic-retry boundary, recovery reconcile, and proof-label tests |
 | I-031 | immutable Workflow Policy binding, substitution refusal, migration, and resume-preflight tests |
 
-Test names carry invariant metadata such as `[I-003]`. Slice 8 checks that every
-invariant has at least one executable test. Where M1 uses a logical fake instead
-of a real filesystem or runtime, the test proves the control contract and labels
-the stronger operational proof as deferred to M2.
+Test names carry invariant metadata such as `[I-003]`. The Slice 8 audit checks
+that every invariant has at least one executable test. Where M1 uses a logical
+fake instead of a real filesystem or runtime, the test proves the control
+contract and labels the stronger operational proof as deferred to M2.
 
 ## 12. Quality gate
 
@@ -900,9 +911,9 @@ The root quality command must run, in order:
 11. invariant-coverage check;
 12. production build.
 
-The exact script names are established in Slice 0 and documented in the root
-README. A green command is evidence for M1 only when its source revision and
-environment identity are recorded in the M1 review.
+The exact script names are defined by the root package manifest and documented
+in the root README. A green command is evidence for M1 only when its source
+revision and environment identity are recorded in the M1 review.
 
 ## 13. Stop conditions
 

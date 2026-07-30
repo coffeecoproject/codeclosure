@@ -2,8 +2,8 @@
 
 ## Status
 
-This document defines the target Acceptance Engine contract. The current M1
-Slice 6 implementation provides the deterministic rule set under
+This document defines the target Acceptance Engine contract. The audited M1
+implementation provides the deterministic rule set under
 [M1 Rule Set](#m1-rule-set), strict manifest and decision codecs, immutable
 SQLite persistence, current-input replay validation, transactional closeout,
 and immutable exact repair-generation authority. It still uses only logical

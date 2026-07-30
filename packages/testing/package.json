@@ -17,7 +17,9 @@
   "scripts": {
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
-    "test": "pnpm run build && node --test test/*.test.ts",
+    "test": "pnpm run test:unit",
+    "test:digests": "pnpm run build && node ../../scripts/run-node-tests.mjs test/acceptance-engine.test.ts test/authority-codecs.test.ts test/context-compiler.test.ts test/deterministic-fixtures.test.ts test/evidence-authority.test.ts",
+    "test:unit": "pnpm run build && node ../../scripts/run-node-tests.mjs test/*.test.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

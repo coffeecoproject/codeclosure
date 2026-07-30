@@ -20,7 +20,8 @@
   "scripts": {
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
-    "test": "pnpm run build && node --test test/*.test.ts",
+    "test": "pnpm run test:integration",
+    "test:integration": "pnpm run build && node ../../scripts/run-node-tests.mjs test/*.test.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

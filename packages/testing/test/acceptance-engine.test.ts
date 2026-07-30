@@ -364,6 +364,19 @@ void test('[I-006][I-008] Acceptance manifest time cannot predate retained autho
   );
 });
 
+void test('[I-026] retained or generic Human approval cannot bypass M1 Acceptance evidence', () => {
+  const { input } = fixture(EvidenceResultStatus.PASS);
+  assert.throws(
+    () =>
+      compileM1AcceptanceInput(
+        { ...input.authority, retainedDecisionCount: 1 },
+        manifestAt,
+        digests,
+      ),
+    /cannot interpret retained Fact or Human Decision rows/u,
+  );
+});
+
 void test('[I-013][I-016] failing fake Evidence produces a repairable rejection', () => {
   const { input } = fixture(EvidenceResultStatus.FAIL);
   const decision = createM1AcceptanceEngine(digests).issueDecision({

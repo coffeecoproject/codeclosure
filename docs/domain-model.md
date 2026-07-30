@@ -3,10 +3,12 @@
 ## Status
 
 This document defines the canonical semantic contract. A structure appearing
-here is not by itself an implementation claim. Current M1 behavior is limited
-to the slices explicitly marked implemented in the
-[`M1 implementation plan`](plans/m1-deterministic-skeleton.md); the milestone
-boundary remains defined by [`milestones.md`](milestones.md).
+here is not by itself an implementation claim. The implemented M1 subset and
+its exact per-slice evidence remain recorded in the
+[`M1 implementation plan`](plans/m1-deterministic-skeleton.md); the bounded
+completion result is recorded in the
+[`M1 completion review`](reviews/m1-completion-review.md). Target structures
+outside that subset remain planned behavior.
 
 ## Design Rules
 

@@ -2,8 +2,8 @@
 
 ## Status
 
-This document defines the target architecture. The current M1 implementation
-has reached the Acceptance/closeout slice: deterministic domain and Workflow
+This document defines the target architecture. The deterministic M1 skeleton
+is implemented and has passed its bounded completion audit: domain and Workflow
 control, SQLite persistence and audit, minimal Context compilation, typed
 `FakeWorker` dispatch and event admission, logical Candidate generations,
 stable freeze observation, independent fake verification, immutable Evidence,
@@ -13,10 +13,12 @@ startup composition exist. The real CLI now implements Goal
 lifecycle/status and audit commands with closed input validation, versioned
 JSON/human rendering, fixed exit classification, and cross-process SQLite
 reads. All eight named proof scenarios run in isolated temporary authority
-homes and assert exact terminal, audit, and reopen state. The Slice 8 M1 audit
-remains; real candidate isolation and real project verification remain M2
-work. Components marked for later slices or milestones are architectural
-boundaries, not current implementation claims.
+homes and assert exact terminal, audit, and reopen state. The
+[M1 completion review](docs/reviews/m1-completion-review.md) records the exact
+source identity, environment, quality stages, migration/schema inspection,
+dependency graph, and invariant coverage. Real candidate isolation and real
+project verification remain M2 work. Components marked for later milestones
+are architectural boundaries, not current implementation claims.
 
 ## Architectural Goal
 

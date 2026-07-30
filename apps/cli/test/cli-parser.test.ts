@@ -75,6 +75,27 @@ void test('demo parsing accepts only the eight closed M1 proof scenarios', () =>
   );
 });
 
+void test('[I-025] M1 exposes no merge, release, deploy, promotion, or effect command', () => {
+  assert.deepEqual(Object.values(CliOperation), [
+    'goal create',
+    'goal start',
+    'goal status',
+    'goal resume',
+    'goal cancel',
+    'audit show',
+    'demo run',
+  ]);
+  for (const args of [
+    ['goal', 'merge', 'goal_effect'],
+    ['release', 'run', 'goal_effect'],
+    ['deploy', 'run', 'goal_effect'],
+    ['promotion', 'approve', 'goal_effect'],
+    ['effect', 'apply', 'goal_effect'],
+  ]) {
+    assert.throws(() => parseCliInvocation(args), CliUsageError, args.join(' '));
+  }
+});
+
 void test('CLI parsing rejects incomplete, ambiguous, and unknown command input', () => {
   const invalid = [
     ['goal', 'create', '--objective', 'objective', '--project', 'fixture'],

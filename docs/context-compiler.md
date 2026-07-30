@@ -2,9 +2,9 @@
 
 ## Status
 
-This document defines the target Context Compiler contract. The current M1
-implementation through Slice 5 provides the deterministic subset described
-under [M1 Boundary](#m1-boundary): canonical Context Packages and Manifests, a
+This document defines the target Context Compiler contract. The audited M1
+implementation provides the deterministic subset described under
+[M1 Boundary](#m1-boundary): canonical Context Packages and Manifests, a
 fail-closed source subset, exact digest binding, atomic Attempt binding,
 `FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
 Retrieval, relevance packing, a full Fact Graph, and Codex Thread policy remain

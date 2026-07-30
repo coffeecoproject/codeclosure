@@ -9,14 +9,22 @@
     "pnpm": "11.1.3"
   },
   "scripts": {
+    "accept:m1": "node scripts/source-identity.mjs && pnpm gate:quality && node scripts/run-m1-acceptance.mjs && node scripts/source-identity.mjs",
     "build": "tsc -b --force --pretty false",
     "clean": "tsc -b --clean",
-    "docs:check": "node --test scripts/check-docs.test.mjs && node scripts/check-docs.mjs",
+    "docs:check": "node scripts/run-node-tests.mjs scripts/check-docs.test.mjs && node scripts/check-docs.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "gate:quality": "pnpm format:check && pnpm docs:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "lint": "eslint . && node --test scripts/check-cli-boundary.test.mjs && node scripts/check-cli-boundary.mjs",
-    "test": "pnpm -r --if-present test",
+    "gate:quality": "pnpm format:check && pnpm docs:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:digests && pnpm test:migrations && pnpm test:authority && pnpm test:cli && pnpm test:demos && pnpm test:invariants && pnpm build",
+    "lint": "eslint . && node scripts/run-node-tests.mjs scripts/check-cli-boundary.test.mjs scripts/check-dependencies.test.mjs && node scripts/check-cli-boundary.mjs && node scripts/check-dependencies.mjs",
+    "test": "pnpm test:unit && pnpm test:digests && pnpm test:migrations && pnpm test:authority && pnpm test:cli && pnpm test:demos && pnpm test:invariants",
+    "test:authority": "pnpm --filter @codeclosure/store-sqlite test:authority",
+    "test:cli": "pnpm --filter @codeclosure/cli test:integration",
+    "test:demos": "node scripts/run-m1-demos.mjs",
+    "test:digests": "pnpm --filter @codeclosure/testing test:digests",
+    "test:invariants": "node scripts/run-node-tests.mjs scripts/check-invariants.test.mjs && node scripts/check-invariants.mjs",
+    "test:migrations": "pnpm --filter @codeclosure/store-sqlite test:migrations",
+    "test:unit": "node scripts/run-node-tests.mjs scripts/run-node-tests.test.mjs && pnpm --filter @codeclosure/testing test:unit",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false"
   },
   "devDependencies": {

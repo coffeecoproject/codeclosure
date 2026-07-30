@@ -86,7 +86,7 @@ void test('[I-005][I-018] Candidate Source output cannot supply authoritative id
   );
 });
 
-void test('[I-005][I-009] M1 obligation validation is independent of identifier order', () => {
+void test('[I-005][I-009][I-022] M1 scenario obligations are criterion-derived and order-independent', () => {
   const goal = createGoal({
     id: goalId('goal_obligation-order'),
     revision: goalRevision(1),
@@ -152,6 +152,10 @@ void test('[I-005][I-009] M1 obligation validation is independent of identifier 
   assert.deepEqual(
     validated.obligations.map((candidate) => candidate.sourceCriterionRefs[0]),
     goal.successCriteria.map((criterion) => criterion.id),
+  );
+  assert.deepEqual(
+    validated.obligations.map((candidate) => candidate.scenarioRefs),
+    goal.successCriteria.map((criterion) => [`criterion:${criterion.id}`]),
   );
   assert.throws(
     () =>

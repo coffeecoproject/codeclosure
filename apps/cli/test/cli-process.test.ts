@@ -278,7 +278,7 @@ void test('governed Acceptance stop exits 4 and resume refuses to invent repair 
   assert.equal(field(resumeResult, 'drive'), undefined);
 });
 
-void test('a fresh CLI process resumes one interrupted bound profile without redispatch', async (t) => {
+void test('[I-029] a fresh CLI process reconciles and resumes without redispatch', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'codeclosure-cli-process-'));
   const cleanupState: { runningStart: RunningM1ProofChildProcess | undefined } = {
     runningStart: undefined,

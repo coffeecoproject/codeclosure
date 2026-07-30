@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
+import test from 'node:test';
+
+import {
+  auditPackageDependencies,
+  collectModuleSpecifiers,
+  modulePackageName,
+  parsePnpmLockImporters,
+} from './check-dependencies-lib.mjs';
+
+const repositoryRoot = resolve(import.meta.dirname, '..');
+
+void test('module scanning finds static imports, exports, dynamic imports, require, and import types', () => {
+  const specifiers = collectModuleSpecifiers(
+    `
+import value from '@scope/package/subpath';
+export { item } from 'exported-package';
+const dynamic = import('dynamic-package');
+const required = require('required-package');
+type Imported = import('typed-package').Value;
+void value; void dynamic; void required;
+`,
+    '/fixture/source.ts',
+  );
+  assert.deepEqual(specifiers, [
+    '@scope/package/subpath',
+    'dynamic-package',
+    'exported-package',
+    'required-package',
+    'typed-package',
+  ]);
+  assert.equal(modulePackageName('@scope/package/subpath'), '@scope/package');
+  assert.equal(modulePackageName('package/subpath'), 'package');
+});
+
+void test('pnpm lock importer parsing retains direct specifiers and resolved versions', () => {
+  const importers = parsePnpmLockImporters(`
+lockfileVersion: '9.0'
+
+importers:
+
+  packages/example:
+    dependencies:
+      '@scope/dependency':
+        specifier: 1.2.3
+        version: 1.2.3(peer@4.5.6)
+
+packages:
+`);
+  assert.deepEqual(importers.get('packages/example')?.dependencies.get('@scope/dependency'), {
+    specifier: '1.2.3',
+    version: '1.2.3(peer@4.5.6)',
+  });
+});
+
+void test('the M1 manifest, lockfile, and actual source dependency graph are closed', () => {
+  const audit = auditPackageDependencies(repositoryRoot);
+  assert.equal(audit.packageCount, 5);
+  assert.deepEqual(audit.violations, []);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/domain'), ['zod']);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/runtime'), [
+    '@codeclosure/domain',
+    'zod',
+  ]);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/store-sqlite'), [
+    '@codeclosure/domain',
+    '@codeclosure/runtime',
+    'better-sqlite3',
+    'zod',
+  ]);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/testing'), [
+    '@codeclosure/domain',
+    '@codeclosure/runtime',
+  ]);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/cli'), [
+    '@codeclosure/runtime',
+    '@codeclosure/store-sqlite',
+    '@codeclosure/testing',
+    'zod',
+  ]);
+});

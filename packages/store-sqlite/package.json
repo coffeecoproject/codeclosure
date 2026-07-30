@@ -18,7 +18,9 @@
   "scripts": {
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
-    "test": "node --test test/*.test.ts",
+    "test": "pnpm run build && node ../../scripts/run-node-tests.mjs test/*.test.ts",
+    "test:authority": "pnpm run build && node ../../scripts/run-node-tests.mjs test/application-boundary.test.ts test/authority-activation.test.ts test/candidate-evidence-adversarial.test.ts test/candidate-evidence-control.test.ts test/worker-control.test.ts test/workflow-driver.test.ts",
+    "test:migrations": "pnpm run build && node ../../scripts/run-node-tests.mjs test/migration-audit.test.ts test/control-store.test.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

@@ -2,11 +2,12 @@
 
 ## Status
 
-This document defines the target evidence contract. The current M1
+This document defines the target evidence contract. The audited M1
 implementation provides logical Candidate-freeze Evidence, independent fake
 verification observations, monotonic eligibility, and canonical Evidence Sets.
-Slice 6 consumes those records through a separate deterministic Acceptance
-Engine; Evidence still cannot approve itself. A real verifier remains M2 work.
+The deterministic Acceptance Engine consumes those records through a separate
+authority boundary; Evidence still cannot approve itself. A real verifier
+remains M2 work.
 
 ## Purpose
 

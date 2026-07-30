@@ -2,7 +2,7 @@
 
 ## Status
 
-This document defines the target workflow contract. The current M1
+This document defines the target workflow contract. The audited M1
 implementation includes the deterministic state model, transactional Workflow
 and Attempt Runtime, the Context-bound `FakeWorker` proof path, logical
 Candidate preparation and irreversible freeze, independent fake verification,
@@ -15,8 +15,10 @@ implemented. The real CLI currently implements Goal creation, start, status,
 resume, cancellation, and Goal-owned audit, including cross-process SQLite
 reads and exact status rendering. All eight public proof-scenario adapters are
 implemented with isolated authority, scenario-specific terminal assertions,
-Goal-owned audit checks, and strict reopen comparison. The Slice 8 M1 audit,
-real project editing, and Codex integration are not yet implemented.
+Goal-owned audit checks, and strict reopen comparison. The
+[M1 completion review](reviews/m1-completion-review.md) records the final
+quality and invariant evidence. Real project editing and Codex integration are
+not implemented in M1.
 
 ## Purpose
 
