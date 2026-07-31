@@ -118,7 +118,8 @@ M2 inherits every accepted M1 authority rule. In particular:
   process exit, and `turn/completed` state are untrusted execution input;
 - every Worker event remains bound to the current Attempt, Worker Session,
   Context Manifest, package digest, Execution Profile, Policy, and durable
-  dispatch claim;
+  dispatch claim, plus the exact protected Verification Plan when the bound
+  Profile requires it;
 - control state and audit remain outside every worker-writable Candidate;
 - a frozen Candidate is never repaired in place;
 - verification execution is independent of Worker claims and read-only with
@@ -580,9 +581,10 @@ The conservative M2 Thread rules are:
   profile uses a fresh Thread;
 - a repair generation also uses a fresh Thread by default and receives the
   exact current `AcceptanceRepairRecord`, `REJECT_REPAIRABLE` decision,
-  Acceptance Input Manifest, failing Evidence, parent/child Candidate
-  identities, preservation constraints, and bounded `priorAttemptFeedback`
-  through current compiled Context;
+  Acceptance Input Manifest, its exact Evidence Set, selected failing Evidence
+  and eligibility snapshots, parent/child Candidate identities, preservation
+  constraints, and bounded `priorAttemptFeedback` through current compiled
+  Context;
 - required M2 `priorAttemptFeedback` is fixed-schema, source-bound,
   non-authoritative, and deterministically projected from those exact records
   plus the retained Candidate-freeze change-set digest and current Goal
@@ -1154,11 +1156,11 @@ Work:
   default;
 - extend the Context Compiler, Package, Manifest, Runtime, and Store so the
   repair dispatch binds the exact current `AcceptanceRepairRecord`,
-  `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, manifest-selected
-  failing Evidence, parent/child Candidate identities, preservation
-  constraints, retained Candidate-freeze change-set digest, and bounded
-  source-labelled `priorAttemptFeedback` deterministically projected from only
-  those retained sources;
+  `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, its exact Evidence
+  Set, selected failing Evidence and eligibility snapshots, parent/child
+  Candidate identities, preservation constraints, retained Candidate-freeze
+  change-set digest, and bounded source-labelled `priorAttemptFeedback`
+  deterministically projected from only those retained sources;
 - omit decoded changed-file lists, attempted approaches, eliminated directions,
   unrelated project observations, and free-form Worker summaries from the
   bounded M2 repair Context; a later versioned profile and durable source
@@ -1189,8 +1191,9 @@ Exit proof:
 - deletion of the old Thread still permits reconstruction of the same
   authoritative failure projection, while retention of that Thread does not
   inject its full history;
-- the fresh repair Context binds only current failure Evidence and the exact
-  repair child, and non-authoritative feedback cannot override its sources;
+- the fresh repair Context binds only the exact current failure Evidence Set,
+  selected Evidence/eligibility snapshots, and repair child, and
+  non-authoritative feedback cannot override its sources;
 - old events cannot terminate the current dispatch;
 - cancellation and worker terminal events preserve the accepted ordering rule;
 - recovery creates no duplicate Candidate mutation or Turn dispatch; and
@@ -1216,6 +1219,9 @@ Work:
   deterministic full asset-lease, isolation-profile-version-2, and decisive
   Evidence-family boundaries, aligned by ADR 0033 with first-Start atomicity
   and static Check-before-Attempt lease construction;
+- add the protected Context Package/Manifest Plan ID/digest pair and require
+  every protected dispatch claim to revalidate it, without changing M1 or
+  non-protected Context schema meaning;
 - expose a bounded profile/demo selection without changing direct Goal
   creation;
 - add subprocess coverage for usage, status, governed rejection, repair,
@@ -1237,6 +1243,8 @@ Exit proof:
 - ordinary CLI modules cannot import or receive raw Store, client, workspace,
   verifier, or internal Runtime capabilities;
 - the project fixture and authority home are isolated and reopen correctly;
+- every protected Worker Context and dispatch claim binds the exact immutable
+  Plan created by the first Start;
 - a weakened Worker-writable test cannot replace or satisfy the protected
   acceptance-critical Check, while a correct implementation passes that same
   pre-fixed Check;

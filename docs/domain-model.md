@@ -1137,9 +1137,10 @@ inside the first successful `StartGoal` transaction alongside the immutable
 Policy/Profile bindings, first Context Manifest, first Attempt, Workflow/Goal
 projections, command outcome, and their audits. `workflowVersionAtLock` is the
 resulting Workflow version from that transaction, and the first protected
-Context Manifest repeats the plan ID/digest. The plan is immutable for the
-Workflow and reused by repair generations. Worker output cannot create,
-revise, or replace it.
+Context Package/Manifest repeats the plan ID/digest. Every later protected
+Worker Context and dispatch claim binds the same pair. The plan is immutable
+for the Workflow and reused by repair generations. Worker output cannot
+create, revise, or replace it.
 
 Under ADR 0032, a Workflow started with the bounded M2 acceptance-critical
 profile has exactly one such plan. Its ordered Criterion and rule arrays cover
@@ -1198,9 +1199,10 @@ ProtectedAssetReadLease
 The full value is deterministically derived from retained authority and carried
 in the verification request. It is constructed with the concrete Check while
 `EVIDENCE_BUILD` is idle and before its Attempt exists. Its digest is repeated
-by the version-3 Check and Evidence; the request and Evidence independently
-bind the current Workflow version, Attempt, and Obligation. Runtime and Store
-recompute and cross-check those separate identities; M2 does not persist an
+by the version-3 Check and Evidence. The request binds the current Workflow
+version, Attempt, and Obligation; Evidence repeats Attempt and Obligation, while
+the Acceptance Input Manifest binds Workflow version. Runtime and Store
+recompute and cross-check that complete chain; M2 does not persist an
 independently mutable lease row. The protected path uses
 `codeclosure.darwin-seatbelt.local-command` isolation profile version `2` with
 a distinct digest. Version `1` retains its Slice 4 meaning and cannot execute

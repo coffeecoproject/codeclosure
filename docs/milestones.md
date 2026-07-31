@@ -164,9 +164,10 @@ the M1 authority boundary.
 - acceptance rejection and repair generation loop;
 - exact failure Evidence plus bounded structured `priorAttemptFeedback`
   deterministically projected only from the current repair record/decision,
-  its manifest-selected failing Evidence, exact parent/child Candidates,
-  parent Candidate-freeze change-set digest, and Goal preservation constraints,
-  then recompiled into a fresh repair Worker Session and Thread;
+  its Manifest and exact Evidence Set, selected failing Evidence/eligibility
+  snapshots, exact parent/child Candidates, parent Candidate-freeze change-set
+  digest, and Goal preservation constraints, then recompiled into a fresh
+  repair Worker Session and Thread;
 - one bounded live repair handoff whose failed parent is produced by a
   controlled fixture before Codex enters only the repair child;
 - one bounded M2 repair continuation followed by a visible persisted stop if
@@ -213,9 +214,9 @@ Separate deterministic adversarial branches MUST also prove:
    close the Goal, while the correct implementation passes the same protected
    Oracle;
 3. a repair child uses a fresh Thread whose current Context contains the exact
-   failing Evidence and `priorAttemptFeedback` deterministically projected only
-   from the fixed bounded-M2 failure-source set, without requiring the old
-   Thread; and
+   failing Evidence Set, selected Evidence/eligibility snapshots, and
+   `priorAttemptFeedback` deterministically projected only from the fixed
+   bounded-M2 failure-source set, without requiring the old Thread; and
 4. when the bounded repair fails, no generation 3, Thread, Turn, dispatch,
    retry, or model fallback occurs without a new explicit continuation
    authorization bound to the exact current `REJECT_REPAIRABLE` decision,

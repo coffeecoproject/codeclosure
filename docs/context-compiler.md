@@ -18,9 +18,12 @@ policy, and response bindings are revalidated. Slice 5 composes the smaller M1
 Context shape through the deterministic reject/repair/accept path, but it does
 not yet compile exact rejection Evidence or structured `priorAttemptFeedback`
 for a fresh repair Thread. Slice 6 owns that M2 extension using the closed
-bounded-M2 failure-source set defined below. The existing Compiler and Manifest
-authority are otherwise unchanged, and trusted live composition remains later
-M2 work. This is the Goal-bound Worker Context Compiler;
+bounded-M2 failure-source set defined below. Slice 7 will add the protected
+Plan identity pair required by
+[ADR 0033](adr/0033-align-protected-verification-with-start-and-check-lifecycle.md)
+to each protected Package/Manifest and dispatch claim. The existing M1 Compiler
+and Manifest authority are otherwise unchanged, and trusted live composition
+remains later M2 work. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
 that are not implemented.
 
@@ -113,6 +116,8 @@ ContextPackage
     phase
     attemptId
     candidateGenerationId?
+    acceptanceCriticalVerificationPlanId?
+    acceptanceCriticalVerificationPlanDigest?
   phaseObjective
   capabilityGrant
   goal
@@ -132,6 +137,7 @@ ContextPackage
     acceptanceDecisionId
     acceptanceDecisionDigest
     inputManifestDigest
+    evidenceSetDigest
     rejectedCandidateGenerationId
     rejectedCandidateVersion
     rejectedCandidateDigest
@@ -142,6 +148,7 @@ ContextPackage
       evidenceId
       evidenceRecordDigest
       evidenceEligibilityVersion
+      evidenceEligibilityState
       resultStatus
       verificationObligationId
       checkSpecificationId
@@ -172,8 +179,10 @@ projection. The required M2 projection MUST be deterministically derived from
 this fixed source set and no other source class:
 
 - the exact current `AcceptanceRepairRecord` and `REJECT_REPAIRABLE` decision;
-- that decision's `AcceptanceInputManifest`;
-- the failing Evidence records selected by that exact manifest;
+- that decision's `AcceptanceInputManifest` and the exact `EvidenceSet` named
+  by its `evidenceSetDigest`;
+- the failing Evidence records and eligibility version/state snapshots selected
+  by that exact Evidence Set;
 - the exact rejected parent and repair-child Candidate relationship;
 - the parent Candidate-freeze Evidence's `changeSetDigest`; and
 - the current Goal preservation constraints.
@@ -218,6 +227,8 @@ ContextManifest
   attemptId
   candidateGenerationId?
   candidateDigest?
+  acceptanceCriticalVerificationPlanId?
+  acceptanceCriticalVerificationPlanDigest?
   executionProfileId
   executionProfileDigest
   policyBundleId
@@ -229,6 +240,17 @@ ContextManifest
   packageDigest
   manifestDigest
 ```
+
+The planned protected M2 Context schema is additive. Under the bounded
+acceptance-critical Profile, both the Package identity and Manifest MUST carry
+the same `AcceptanceCriticalVerificationPlan` ID/digest from the first Context
+through every later Worker Context. The two fields MUST be present together and
+MUST be absent under M1 or another non-protected Profile. Runtime derives them
+from the Plan committed by the protected first Start, independently
+cross-checks them before persistence, and requires every dispatch claim to
+revalidate the exact pair. A missing, partial, stale, or substituted pair fails
+before Worker dispatch. Existing M1 Context schema and digest meanings remain
+unchanged.
 
 Each entry records:
 
@@ -342,10 +364,11 @@ Reject or label:
 
 For repair compilation, Runtime additionally rejects a missing or non-current
 repair record, a decision other than the exact current `REJECT_REPAIRABLE`,
-Evidence from another Goal or Candidate generation, a parent/child Candidate
-mismatch, an ineligible or changed Evidence record, and feedback whose source
-set or digest no longer matches. The Worker is not dispatched when any required
-repair input cannot be proved.
+an Evidence Set not named by the exact Acceptance Input Manifest, Evidence from
+another Goal or Candidate generation, an eligibility snapshot not selected by
+that Set, a parent/child Candidate mismatch, an ineligible or changed Evidence
+record, and feedback whose source set or digest no longer matches. The Worker
+is not dispatched when any required repair input cannot be proved.
 
 ### 5. Apply budgets
 
@@ -423,8 +446,9 @@ bounded `priorAttemptFeedback`.
 For each repair dispatch, the compiler MUST:
 
 1. load the exact current repair record and `REJECT_REPAIRABLE` decision;
-2. bind its Acceptance Input Manifest, failing Evidence records, exact parent
-   generation, and exact repair child generation;
+2. bind its Acceptance Input Manifest, exact Evidence Set, selected failing
+   Evidence and eligibility snapshots, exact parent generation, and exact
+   repair child generation;
 3. render preservation constraints and a bounded feedback projection with
    explicit source references and digests;
 4. revalidate every identity immediately before dispatch; and
@@ -639,8 +663,9 @@ Store, and restart proof.
   prior failure authority without trusting the lost Thread; and
 - deleting the old Thread does not change the authoritative repair projection,
   while retaining it does not silently inject the complete old conversation;
-- wrong-Goal, wrong-generation, stale, missing, or digest-mismatched failure
-  Evidence and feedback fail before repair dispatch;
+- wrong-Goal, wrong-generation, wrong-Evidence-Set, eligibility-mismatched,
+  stale, missing, or digest-mismatched failure Evidence and feedback fail before
+  repair dispatch;
 - non-authoritative `priorAttemptFeedback` cannot override Goal, Evidence,
   Runtime Decision, Policy, or repair-preservation constraints; and
 - changing Thread continuity, compaction, retention, or fallback policy changes

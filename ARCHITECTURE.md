@@ -27,10 +27,12 @@ The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
 current milestone. Slice 0 decision closure is implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
-and ADR 0028 through ADR 0033 are accepted. Slice 1 is implemented: the
-version-bound lower client, pinned protocol snapshot, deterministic fake
-server, offline adversarial suite, and bounded live compatibility preflight
-pass. The [Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
+and ADR 0028 through ADR 0030 are accepted. ADR 0031 through ADR 0033
+separately govern the protected-verification work planned for Slice 7; they do
+not enlarge Slice 0's historical completion claim. Slice 1 is implemented: the
+version-bound lower client, pinned protocol snapshot, deterministic fake server,
+offline adversarial suite, and bounded live compatibility preflight pass. The
+[Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
 the exact evidence and limitations. Slice 2 is implemented: the separate
 Goal-bound Codex Worker Adapter consumes only the lower client and public
 Worker contracts, validates an immutable external-execution directive and
@@ -437,8 +439,9 @@ port instead of a coding-Worker prompt. See
 
 Slice 6 will extend this smaller package for a fresh repair Worker Session and
 Thread. Runtime will compile the exact current `AcceptanceRepairRecord`,
-`REJECT_REPAIRABLE` decision, Acceptance Input Manifest, failing Evidence,
-parent/child Candidate identities, preservation constraints, and bounded source-labelled
+`REJECT_REPAIRABLE` decision, Acceptance Input Manifest, its exact Evidence
+Set, selected failing Evidence and eligibility snapshots, parent/child
+Candidate identities, and bounded source-labelled
 `priorAttemptFeedback` deterministically projected from those records plus the
 retained Candidate-freeze change-set digest and Goal preservation constraints.
 That list is the closed bounded-M2 source set: decoded changed-file lists,
@@ -449,6 +452,12 @@ the package by default. History retention and Context injection are separate
 policies: deleting the old Thread cannot erase failure authority, while
 retaining it cannot silently make the transcript authoritative. Missing,
 stale, or mismatched repair inputs block dispatch.
+
+Slice 7 will add the exact protected Verification Plan ID/digest to both the
+Context Package and Manifest under the bounded protected Profile. Runtime will
+derive that pair from first-Start authority and require every protected
+dispatch claim to revalidate it; M1 and non-protected Context schemas retain
+their existing meaning.
 
 ### Candidate Manager
 

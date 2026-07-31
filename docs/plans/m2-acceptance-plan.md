@@ -103,10 +103,11 @@ The mandatory acceptance scope is:
   Evidence Set;
 - exact Evidence and deterministic Acceptance bindings;
 - fresh repair Worker Session/Thread creation and a Context Manifest that binds
-  current failure Evidence, parent/child Candidate identity, preservation
-  constraints, retained Candidate-freeze change-set digest, and bounded
-  `priorAttemptFeedback` deterministically projected from retained sources
-  without full old-chat injection;
+  the current failure Evidence Set, selected Evidence/eligibility snapshots,
+  parent/child Candidate identity, preservation constraints, retained
+  Candidate-freeze change-set digest, and bounded `priorAttemptFeedback`
+  deterministically projected from retained sources without full old-chat
+  injection;
 - a visible recoverable stop after the bounded repair fails, with no hidden
   generation, Thread, Turn, dispatch, process retry, model fallback, or replay;
 - Thread start/resume policy, Compact handling, backend/process failure,
@@ -319,7 +320,7 @@ the report must preserve each row's individual outcome.
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
 | `M2-C01` | Runtime-selected phase, Candidate workspace lease, cwd, sandbox, network, approval, model, provider, effort, response schema, configuration, instruction, tool, and state policy map exactly to the App Server execution | adapter projection tests |
-| `M2-C02` | Every emitted Worker event binds the current Attempt, Worker Session, Context Manifest, package, Profile, Policy, Candidate lease when present, and backend execution observation | adapter and Runtime authority tests |
+| `M2-C02` | Every emitted Worker event binds the current Attempt, Worker Session, Context Manifest, package, Profile, Policy, Candidate lease when present, protected Verification Plan when required, and backend execution observation | adapter and Runtime authority tests |
 | `M2-C03` | `turn/completed` without one valid structured payload is a Worker failure, not completion | fake-server adversarial case |
 | `M2-C04` | Free-form “done,” `ACCEPT`, passing-looking logs, plan Items, diff events, and command results cannot advance or close a Goal | lying-worker real-adapter fixtures |
 | `M2-C05` | Malformed, unknown, oversized, multiple-terminal, invalid-only, wrong-phase, and stale payloads fail closed | response-contract suite |
@@ -363,6 +364,7 @@ the report must preserve each row's individual outcome.
 | `M2-E12` | Worker-authored or Worker-modified tests are provenance-labelled supplementary inputs only; even when independently executed, persisted, and passing, they remain outside the bounded acceptance-critical Evidence Set and cannot satisfy or alter its protected obligation mapping | supplementary-Evidence selection and policy adversarial suite |
 | `M2-E13` | A correct implementation passes the same pre-fixed protected Check and can close normally; strict reopen and the acceptance report retain the exact plan, asset, Check, Evidence, and Acceptance identities | positive protected-Oracle and reopen/report proof |
 | `M2-E14` | The Slice 4 Darwin isolation profile version 1 retains its exact meaning and cannot run the protected path; version 2 retains frozen Candidate read-only access and additionally permits only the lease's exact protected-asset realpaths plus explicitly versioned runtime reads, denies protected-root widening and all prohibited write/read/network access, and blocks when unavailable or unenforceable | profile digest/version contract and black-box isolation suite |
+| `M2-E15` | Every protected Context Package and Manifest carries the same Plan ID/digest pair committed by the first Start, and every protected dispatch claim revalidates it; a missing, partial, stale, substituted, or unexpectedly present pair fails before Worker dispatch, while M1 and non-protected Context identities retain their prior meanings | protected Context schema, Start/dispatch binding, mismatch, and regression suite |
 
 ### End-to-end deterministic and live demonstrations
 
@@ -377,7 +379,7 @@ the report must preserve each row's individual outcome.
 | `M2-F07` | The final public result names the exact live branch, Candidate, and Evidence digests and does not present Turn success as Goal authority | CLI JSON/human views |
 | `M2-F08` | No demonstration performs Goal Intake, project promotion, Git push, release, deployment, or another external effect | command traces, fixture inspection, and audit review |
 | `M2-F09` | In a deterministic adversarial fixture, an incorrect implementation weakens a Worker-writable test and that test may genuinely pass, but the pre-fixed protected Oracle still fails and the Goal cannot enter Acceptance or closeout | anti-self-certification fixture and authority trace |
-| `M2-F10` | A repair child receives a new Worker Session and Codex Thread plus newly compiled Context bound to the exact current `AcceptanceRepairRecord`, `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, manifest-selected failing Evidence, parent/child Candidates, parent Candidate-freeze `changeSetDigest`, Goal preservation constraints, and bounded `priorAttemptFeedback` deterministically projected from only that fixed source set; decoded changed-file lists, attempted approaches, eliminated directions, unrelated project observations, and model summaries are absent; a bounded live repair-handoff proves Codex receives and operates on that package without old chat, while only independent verification decides the result | deterministic repair-context trace and bounded live repair-handoff trace |
+| `M2-F10` | A repair child receives a new Worker Session and Codex Thread plus newly compiled Context bound to the exact current `AcceptanceRepairRecord`, `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, its exact Evidence Set, selected failing Evidence and eligibility snapshots, parent/child Candidates, parent Candidate-freeze `changeSetDigest`, Goal preservation constraints, and bounded `priorAttemptFeedback` deterministically projected from only that fixed source set; decoded changed-file lists, attempted approaches, eliminated directions, unrelated project observations, and model summaries are absent; a bounded live repair-handoff proves Codex receives and operates on that package without old chat, while only independent verification decides the result | deterministic repair-context trace and bounded live repair-handoff trace |
 | `M2-F11` | In a separate deterministic branch, generation 2 also fails and the current run stops with no generation 3, replacement Thread/Turn, Worker dispatch, hidden retry, process replay, or model fallback; the assertion is limited to no unauthorized automatic continuation and does not impose a global product repair-count cap | failed-repair-stop fixture and exact call/authority counts |
 
 ### Lifecycle, restart, and security
@@ -398,7 +400,7 @@ the report must preserve each row's individual outcome.
 | `M2-G12` | The bound Execution Profile decides every fresh/resume boundary, continuity mode, compaction mode, retention rule, and fallback; adapter discretion or effective-policy drift fails closed | policy projection, call-trace, and mismatch suite |
 | `M2-G13` | An authorized post-compaction continuation can proceed on the selected Thread policy with current compiled Context, while Thread loss follows the exact fail-closed or fresh-Thread recovery path | deterministic compaction/continuation and Thread-loss fixtures |
 | `M2-G14` | Deleting the old Codex Thread does not prevent reconstruction of the same authoritative failure projection; retaining it does not silently inject full chat, hidden reasoning, KV cache, or raw tool history into the fresh repair Context | paired Thread-deleted/Thread-retained Context Manifest comparison |
-| `M2-G15` | Missing, stale, wrong-Goal, wrong-Candidate, old-decision, digest-mismatched, source-less, or non-allowlisted Evidence/feedback blocks repair dispatch; old chat and unrelated retained records cannot supply missing facts, and non-authoritative `priorAttemptFeedback` cannot override Goal, Evidence, Policy, Runtime Decision, or preservation constraints | Context authority, deterministic-source, and feedback adversarial suite |
+| `M2-G15` | Missing, stale, wrong-Goal, wrong-Candidate, old-decision, wrong-Evidence-Set, eligibility-mismatched, digest-mismatched, source-less, or non-allowlisted Evidence/feedback blocks repair dispatch; old chat and unrelated retained records cannot supply missing facts, and non-authoritative `priorAttemptFeedback` cannot override Goal, Evidence, Policy, Runtime Decision, or preservation constraints | Context authority, deterministic-source, and feedback adversarial suite |
 | `M2-G16` | After a failed bounded repair, strict reopen preserves the same repair-required stop; ordinary `ResumeGoal`, duplicate commands, old Acceptance Decisions, stale Evidence, and late Worker events create no new Candidate or execution | reopen/resume/replay stop suite |
 | `M2-G17` | Generation-1 failure Evidence remains immutable and auditable but cannot close generation 2, whose success would require fresh bound Evidence; CLI, audit, and the report distinguish both generations, the repair Context source, and the stop reason | cross-generation authority and public-view proof |
 
@@ -490,10 +492,10 @@ obtain a real protected-Oracle failure plus exact `REJECT_REPAIRABLE` authority
 before any Codex dispatch. The controlled harness then explicitly invokes
 `BeginAcceptanceRepair`; Runtime consumes that exact authority, creates the
 repair record and child, and starts a fresh Worker Session and Codex Thread. The
-newly compiled Context MUST bind the current failure Evidence, parent/child
-Candidates, preservation constraints, retained Candidate-freeze change-set
-digest, and bounded `priorAttemptFeedback` deterministically projected from
-those retained sources.
+newly compiled Context MUST bind the current failure Evidence Set, selected
+Evidence and eligibility snapshots, parent/child Candidates, preservation
+constraints, retained Candidate-freeze change-set digest, and bounded
+`priorAttemptFeedback` deterministically projected from those retained sources.
 
 Codex is first invoked only for that repair child. The fixture deletes the old
 controlled backend history before dispatch and proves Codex can locate the
@@ -661,8 +663,8 @@ The dated M2 completion review MUST contain:
    first-Start audit identity;
 8. the ordinary deterministic fixture's generation-1 and generation-2
    parent/source digests, verification results, fresh repair Session/Thread,
-   Context Manifest failure-source and `priorAttemptFeedback` bindings,
-   Evidence Set, Acceptance Decision, and Closeout bindings;
+   Context Manifest failure-source, Evidence Set/eligibility, and
+   `priorAttemptFeedback` bindings, Acceptance Decision, and Closeout bindings;
 9. the anti-self-certification fixture's weakened Candidate test, protected
    Oracle failure, paired correct-result pass, and proof that supplementary
    Evidence never became decisive;
