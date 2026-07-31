@@ -9,14 +9,17 @@ fail-closed source subset, exact digest binding, atomic Attempt binding,
 `FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
 Retrieval, relevance packing, and a full Fact Graph remain planned for later
 milestones. ADR 0028 now fixes the planned M2 Thread/configuration boundary, but
-no Codex Context dispatch is implemented. Its bounded 0.146.0 Slice 0 live
+no trusted live Goal-bound Codex Context dispatch is implemented. Its bounded 0.146.0 Slice 0 live
 capability proof passes, and the Slice 1 lower client is implemented without a
 Worker Context mapping. Slice 2 now implements the bounded adapter projection:
 one current `IMPLEMENT` Context Package is rendered into the exact App Server
 Turn prompt and closed output schema, while configured size, lease, profile,
-policy, and response bindings are revalidated. The existing Compiler and
-Manifest authority are unchanged, and trusted live composition remains later
-M2 work. This is the Goal-bound Worker Context Compiler;
+policy, and response bindings are revalidated. Slice 5 composes the smaller M1
+Context shape through the deterministic reject/repair/accept path, but it does
+not yet compile exact rejection Evidence or structured `priorAttemptFeedback`
+for a fresh repair Thread. Slice 6 owns that M2 extension. The existing
+Compiler and Manifest authority are otherwise unchanged, and trusted live
+composition remains later M2 work. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
 that are not implemented.
 
@@ -64,7 +67,10 @@ worker misunderstands an accurate context package.
 - current blockers and unresolved issues;
 - required scenarios and verification obligations;
 - relevant policy identifiers and non-negotiable invariants;
-- prior acceptance failure details when entering a repair generation.
+- the exact current `REJECT_REPAIRABLE` decision, its Acceptance Input
+  Manifest, failing Evidence, and parent/repair Candidate relationship when
+  entering a repair generation; and
+- constraints that a repair MUST preserve.
 
 ### Authoritative or observed project inputs
 
@@ -81,6 +87,7 @@ worker misunderstands an accurate context package.
 - worker-authored summaries;
 - proposed facts;
 - hypotheses and search hints;
+- bounded `priorAttemptFeedback` derived from exact current failure authority;
 - bounded worker-authored rationale, hypothesis, or search-state summaries.
 
 Non-authoritative inputs must be labelled and cannot override authoritative
@@ -115,7 +122,34 @@ ContextPackage
   relevantCode[]
   verificationObligations[]
   blockers[]
+  repairContext?
+    acceptanceRepairDigest
+    acceptanceDecisionId
+    acceptanceDecisionDigest
+    inputManifestDigest
+    rejectedCandidateGenerationId
+    rejectedCandidateVersion
+    rejectedCandidateDigest
+    repairCandidateGenerationId
+    repairCandidateSequence
+    repairCandidateBaseDigest
+    failedEvidence[]
+      evidenceId
+      evidenceRecordDigest
+      evidenceEligibilityVersion
+      resultStatus
+      verificationObligationId
+      checkSpecificationId
+      checkSpecificationDigest
+    constraintsToPreserve[]
   priorAttemptFeedback?
+    schemaVersion
+    items[]
+      kind
+      content
+      sourceRefs[]
+      sourceDigests[]
+    feedbackDigest
   executionProfileId
   executionProfileDigest
   policyBundleId
@@ -125,6 +159,20 @@ ContextPackage
 
 The worker-visible rendering may be Markdown, structured JSON, or a combination.
 The canonical identity is the `ContextManifest`, not presentation formatting.
+
+`repairContext` is authoritative Runtime state. Its fields MUST bind the exact
+current repair authority and failing Evidence retained for the parent
+generation. `priorAttemptFeedback` is a bounded, fixed-schema working
+projection that may describe changed files, attempted approaches, observed
+failure causes, and eliminated directions. Every item MUST cite its source
+records and digests. It remains non-authoritative and cannot override Goal,
+Policy, Evidence, Runtime Decisions, or preservation constraints.
+
+The bound Context policy sets maximum feedback items, maximum canonical bytes
+per item, and maximum total canonical bytes. Required authoritative failure
+records are never truncated into feedback. Optional feedback overflow follows
+one deterministic omission rule recorded in the Manifest, or fails compilation
+when policy marks the item required.
 
 The M1 `responseContract` is compiler-owned and binds the allowed result kinds,
 closed Worker Event schema behavior, and `maxEventBytes`. Admission measures
@@ -170,6 +218,14 @@ ContextManifestEntry
   authorityClass
   renderedDigest
 ```
+
+The M2 repair extension MUST introduce closed authority classes for Runtime
+Decision and Evidence inputs rather than labelling them as model-authored
+working context. The feedback projection retains a distinct
+`NON_AUTHORITATIVE_WORKING` class even when Runtime renders it from
+authoritative sources. The Manifest MUST bind both the authoritative source
+entries and the separate feedback digest so a free-form paragraph cannot be
+substituted without detection.
 
 `omissionDecisions` record intentionally excluded but potentially relevant
 sources, the selection rule, and why exclusion is safe. This makes "minimal
@@ -261,6 +317,13 @@ Reject or label:
 - unsupported model inference;
 - project excerpts whose source digest changed during compilation.
 
+For repair compilation, Runtime additionally rejects a missing or non-current
+repair record, a decision other than the exact current `REJECT_REPAIRABLE`,
+Evidence from another Goal or Candidate generation, a parent/child Candidate
+mismatch, an ineligible or changed Evidence record, and feedback whose source
+set or digest no longer matches. The Worker is not dispatched when any required
+repair input cannot be proved.
+
 ### 5. Apply budgets
 
 Every input class has a hard byte/token budget and deterministic truncation or
@@ -326,6 +389,54 @@ Thread retention improves worker continuity; it never becomes a prerequisite
 for safe recovery. If the selected Thread is unavailable or untrusted, Runtime
 must follow its exact fail-closed or fresh-Thread fallback policy and compile
 current Context again.
+
+### Repair Context continuity — planned Slice 6
+
+File continuity and task-information continuity are different. A repair child
+Candidate starts from the exact frozen parent bytes. A fresh repair Worker
+learns why those bytes failed only through a newly compiled `repairContext` and
+bounded `priorAttemptFeedback`.
+
+For each repair dispatch, the compiler MUST:
+
+1. load the exact current repair record and `REJECT_REPAIRABLE` decision;
+2. bind its Acceptance Input Manifest, failing Evidence records, exact parent
+   generation, and exact repair child generation;
+3. render preservation constraints and a bounded feedback projection with
+   explicit source references and digests;
+4. revalidate every identity immediately before dispatch; and
+5. persist the new package and Manifest with the fresh Attempt, Worker Session,
+   and dispatch claim.
+
+The same authoritative repair projection MUST be derivable when the old Codex
+Thread and its history no longer exist. A fresh Attempt, Session, Thread, and
+package have new identities, so the entire package digest need not equal an
+earlier package digest; the bound failure-source records and their rendered
+authoritative projection MUST be equivalent.
+
+A stale decision, missing Evidence, wrong Candidate, mismatched repair child,
+or feedback without exact source bindings stops before Worker dispatch. Runtime
+MUST NOT ask the Worker to infer the previous failure from inherited files.
+
+### History retention and Context injection — planned Slice 6
+
+Retaining an old Thread or transcript for bounded diagnostics is a separate
+policy from injecting content into a new Context Package. M2 defaults are:
+
+- a bounded Turn within one Attempt retains its exact Thread for the App
+  Server-managed tool loop;
+- a repair generation creates a new Worker Session and fresh Codex Thread;
+- the full old chat, hidden reasoning, KV cache, repeated tool transcript, and
+  duplicate file content are not injected into the repair package;
+- retained history does not change the authoritative repair projection merely
+  because it is available;
+- a policy-selected worker summary may enter only as bounded,
+  provenance-labelled, non-authoritative feedback; and
+- expired or unbound historical content is omitted rather than allowed to
+  override current authority.
+
+M2 does not implement semantic history search, automatic conversation
+summarization, or dynamic relevance selection. Those remain M3 candidates.
 
 ### M2 App Server input closure — planned
 
@@ -477,8 +588,10 @@ Worker Context. See
 [ADR 0016](adr/0016-candidate-and-evidence-authority-boundary.md) and
 [ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
-Code relevance retrieval, full Fact Graph traversal, token-aware packing, and
-Codex Thread policy belong to later milestones.
+Code relevance retrieval, full Fact Graph traversal, and token-aware packing
+belong to later milestones. The M2 repair Context and Thread policy described
+above remain planned until Slice 6 lands their schema, persistence, Runtime,
+Store, and restart proof.
 
 ## Required Tests
 
@@ -500,5 +613,11 @@ Codex Thread policy belong to later milestones.
   reasoning or opaque compaction state to enter durable CodeClosure records;
 - a fresh repair or recovery Thread receives current compiled Context and exact
   prior failure authority without trusting the lost Thread; and
+- deleting the old Thread does not change the authoritative repair projection,
+  while retaining it does not silently inject the complete old conversation;
+- wrong-Goal, wrong-generation, stale, missing, or digest-mismatched failure
+  Evidence and feedback fail before repair dispatch;
+- non-authoritative `priorAttemptFeedback` cannot override Goal, Evidence,
+  Runtime Decision, Policy, or repair-preservation constraints; and
 - changing Thread continuity, compaction, retention, or fallback policy changes
   the bound Execution Profile identity or fails closed.

@@ -51,8 +51,11 @@ read-only lease session before that Attempt and rejects the M1 fake-verification
 entry point. The M2 driver resolves the exact bound Profile before Start,
 Resume, or repair may mutate authority; Resume reuses that preflighted binding
 after the Recovery owner commits. Restart reconstruction of its external
-execution session remains M2 Slice 6. Goal Intake is an accepted pre-Goal target for
-M2.5; it is not implemented and does not add another Workflow phase.
+execution session, fresh repair Context, and failed-repair stop proof remain M2
+Slice 6. ADR 0031's protected acceptance-critical Verification Plan and
+schema-version-3 Check/Evidence family remain Slice 7. Goal Intake is an
+accepted pre-Goal target for M2.5; it is not implemented and does not add
+another Workflow phase.
 
 ## Purpose
 
@@ -296,6 +299,19 @@ under optional `drive`. `CreateGoal`, `CancelGoal`, and read queries remain
 synchronous. A current `REJECT_REPAIRABLE` stops as
 `ACCEPTANCE_REPAIR_REQUIRED`; the M1 driver does not invent user authorization
 or an unbounded retry policy.
+
+M2 plans one controlled continuation for its bounded repair demonstration. A
+repair generation uses a fresh Worker Session and Thread and receives current
+failure authority through a newly compiled Context Package, not through old
+conversation memory. If that repair also reaches `REJECT_REPAIRABLE`, the
+current M2 run stops again at `ACCEPTANCE_REPAIR_REQUIRED`. The driver MUST NOT
+create generation 3, another Thread/Turn/dispatch, a process retry, replay, or a
+model fallback. `ResumeGoal`, retained Thread history, duplicate commands, and
+late Worker events are not continuation authorization. A later repair would
+require a new explicit continuation authorization bound to the exact current
+`REJECT_REPAIRABLE` decision, manifest, and failing Evidence. This is not a
+permanent Domain maximum; M4 owns any automatic multi-round budget and stop
+policy.
 
 Normal Goal commands, normal Workflow commands, and replay use one authority
 resolver. It validates the complete Goal and Workflow snapshots, their owner
@@ -674,6 +690,12 @@ Retries, when authorized by a retry policy, repeat an operation against the
 same valid inputs after a transient failure. Repairs create a new candidate
 generation after a semantic or implementation rejection. They are not
 interchangeable.
+
+`REJECT_REPAIRABLE` and its exact `AcceptanceRepairRecord` preserve why repair
+is possible and which child was authorized; they do not instruct the driver to
+loop until verification passes. Each automatic or user-triggered continuation
+still requires an explicit Runtime command or policy authority over the exact
+current decision, manifest, and failing Evidence.
 
 An authorized retry creates a new child Attempt under the same Workflow
 aggregate. It does not reopen or mutate the terminal Attempt it replaces.

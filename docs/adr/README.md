@@ -36,6 +36,7 @@ supersedes it.
 | [0028](0028-runtime-owned-external-execution-and-codex-profile.md) | Make external execution Runtime-owned and Codex configuration profile-bound | Accepted |
 | [0029](0029-controlled-copy-candidate-workspaces.md) | Use controlled-copy Candidate workspaces for bounded M2 execution | Accepted |
 | [0030](0030-real-local-verification-contract.md) | Add a versioned real local-command verification contract | Accepted |
+| [0031](0031-protect-acceptance-critical-verification-from-worker-writable-assets.md) | Protect acceptance-critical verification from Worker-writable assets | Accepted |
 
 ## ADR lifecycle
 

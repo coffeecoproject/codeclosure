@@ -2,7 +2,7 @@
 
 - Status: Prepared; Slices 0 through 5 are implemented, Slice 6 has not started,
   and milestone acceptance has not started
-- Plan date: 2026-07-30
+- Plan date: 2026-07-30; authority boundary updated 2026-07-31
 - Milestone: M2
 - Implementation record: [M2 Codex vertical slice plan](m2-codex-vertical-slice.md)
 
@@ -42,6 +42,13 @@ cannot override a conflict with a higher-authority record. A durable conflict
 discovered during acceptance forces `FAIL` or `BLOCKED` until the decision is
 resolved through the repository's ADR process.
 
+For verification specifically,
+[ADR 0030](../adr/0030-real-local-verification-contract.md) governs independent
+read-only execution, while
+[ADR 0031](../adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md)
+governs the pre-Worker authority and identity of decisive Check/Oracle assets.
+Passing one boundary does not imply the other.
+
 ## 3. Acceptance question
 
 The round answers one question:
@@ -50,10 +57,13 @@ The round answers one question:
 > Server version can edit only an isolated Candidate under a controlled
 > execution configuration and observable working-continuity policy, that
 > CodeClosure—not Codex—owns Worker admission,
-> verification, rejection, repair, Acceptance, and closeout across failure and
-> restart, that a deterministic real-Candidate/real-verifier path proves
-> reject/repair/accept, and that a separate bounded live Codex path follows its
-> real first verification result without Goal Intake or an external effect?
+> acceptance-critical verification semantics, rejection, repair, Acceptance,
+> and closeout across failure and restart, that a fresh repair Thread receives
+> exact current failure Context without relying on old chat, that a failed
+> bounded repair cannot trigger an unauthorized continuation, that a
+> deterministic real-Candidate/real-verifier path proves reject/repair/accept,
+> and that a separate bounded live Codex path follows its real first
+> verification result without Goal Intake or an external effect?
 
 The accepted unit is the complete identified source tree plus its exact
 canonical generated protocol snapshot, controlled execution-input profile, and
@@ -79,16 +89,28 @@ The mandatory acceptance scope is:
 - real Candidate creation, containment, freeze, parent/repair generation,
   drift, restart, and safe cleanup behavior;
 - one real read-only local Verification Runner path;
+- one immutable pre-Worker acceptance-critical Verification Plan and protected
+  Check/Oracle asset path, with Worker-written tests limited to supplementary
+  Evidence;
 - exact Evidence and deterministic Acceptance bindings;
+- fresh repair Worker Session/Thread creation and a Context Manifest that binds
+  current failure Evidence, parent/child Candidate identity, preservation
+  constraints, and bounded source-labelled `priorAttemptFeedback` without full
+  old-chat injection;
+- a visible recoverable stop after the bounded repair fails, with no hidden
+  generation, Thread, Turn, dispatch, process retry, model fallback, or replay;
 - Thread start/resume policy, Compact handling, backend/process failure,
   same-Thread tool-loop continuity, cancellation, and CodeClosure restart;
-- public CLI/composition isolation and status/audit rendering; and
+- public CLI/composition isolation and status/audit rendering;
 - one deterministic real-Candidate/real-verifier demonstration that proves
   failing verification, rejection, repair, passing verification, Acceptance,
-  and closeout; and
+  and closeout;
 - one separate bounded live Codex edit-and-verify demonstration whose first
   post-edit result is not prescribed: a correct first pass continues normally,
-  while a real failure enters the governed repair branch.
+  while a real failure enters the governed repair branch; and
+- one bounded live repair handoff whose failed parent is created by a
+  controlled real-verification fixture before Codex enters only the fresh
+  repair child; independent protected verification determines its outcome.
 
 The following remain outside M2 and MUST NOT be inferred from `PASS`:
 
@@ -99,6 +121,10 @@ The following remain outside M2 and MUST NOT be inferred from `PASS`:
 - full Fact Graph discovery or execution-time Goal revision;
 - proof that arbitrary models, Codex versions, platforms, repositories, build
   systems, or network environments work;
+- proof that arbitrary project tests or the selected Oracle are complete, a
+  general false-green guarantee, or an independent model-Reviewer policy;
+- automatic multi-round repair, a permanent product-wide repair-count limit,
+  or general repair cost/time/no-progress policy;
 - rich TUI, multiple agents, cloud, multi-user, scheduler, or production
   operations;
 - cleanup of user-owned or ambiguous paths;
@@ -141,20 +167,30 @@ Before the round begins, the operator MUST establish all of the following:
 10. The deterministic reject/repair fixture is unique and disposable, uses a
     real Candidate workspace and Verification Runner, and requires no live
     model or external network.
-11. The live fixture is a unique disposable local Git repository containing no
+11. The anti-self-certification and failed-repair-stop fixtures are unique and
+    disposable, use the real authority path, and require no live model or
+    external network.
+12. Every acceptance-critical fixture has an exact protected Check/Oracle and
+    asset manifest established outside Worker-writable paths before Worker
+    dispatch.
+13. The live fixture is a unique disposable local Git repository containing no
    user work, secret, remote push target, hook, submodule with effects, or
    dependency installation requirement.
-12. The authority home, Candidate workspace root, verifier temporary root,
-    deterministic fixture source, live fixture source, and controlled Codex
-    state root are separate exact paths created for this round.
-13. Candidate commands have network disabled. The only allowed external
+14. The live repair-handoff fixture is unique and disposable. Its controlled
+    failed parent, exact repair authority, repair child, and protected Oracle
+    are established before its first Codex dispatch.
+15. The authority home, Candidate workspace root, verifier temporary root,
+    deterministic fixture source, ordinary live fixture source, live repair
+    handoff source, and controlled Codex state root are separate exact paths
+    created for this round.
+16. Candidate commands have network disabled. The only allowed external
     network use is the bounded App Server model-service and authentication
     traffic required for the live proof.
-14. No required command will merge, commit to a user branch, push, deploy,
+17. No required command will merge, commit to a user branch, push, deploy,
     publish, communicate, purchase, or mutate a non-fixture external system.
-15. The current tree passes the complete offline quality gate before the live
+18. The current tree passes the complete offline quality gate before the live
     case begins.
-16. No known blocking defect or higher-authority conflict is being waived.
+19. No known blocking defect or higher-authority conflict is being waived.
 
 If a required binary, credential, model, service, network path, fixture
 isolation property, or source identity cannot be established, the verdict is
@@ -171,6 +207,13 @@ The deterministic layer MUST:
 - use a separate controlled Worker/App Server fixture with real Candidate and
   Verification Runner boundaries to deterministically prove the complete
   reject/repair/accept branch without relying on model behavior;
+- prove that the acceptance-critical Verification Plan and protected assets
+  are fixed before Worker mutation, and that changing a Worker-writable test
+  cannot replace decisive Evidence;
+- prove fresh repair Context from exact current failure authority both with the
+  old Thread deleted and retained, without full-history injection;
+- make generation 2 fail in a separate branch and prove the persisted stop
+  creates no unauthorized generation or execution before or after reopen;
 - create only unique temporary source, Candidate, verifier, and authority
   directories;
 - use public Runtime/CLI views for authority assertions unless a focused Store
@@ -192,6 +235,8 @@ The live layer MUST:
   and tool exposure observations with the requested profile before admitting
   Worker events;
 - constrain Worker cwd and write access to the current mutable Candidate;
+- keep the acceptance-critical Oracle outside Worker-writable roots and bind
+  its pre-Worker plan, asset, concrete Check, and Evidence identities;
 - disable Candidate command network access and unsupported tools/effects;
 - record requested model plus observed reroute, warning, error, Thread, Turn,
   bounded `contextCompaction`, and approval metadata without storing secrets,
@@ -208,8 +253,14 @@ If the first frozen Candidate passes the required real check, CodeClosure must
 accept that result through the normal evidence path. If it fails, only then may
 the Runtime authorize a distinct repair generation.
 
+If that bounded repair also fails, the live case MUST stop and fail. It cannot
+create a generation 3, restart or replace the model/Thread, or replay the
+process to obtain a more convenient result without a new explicit continuation
+authorization bound to the exact current `REJECT_REPAIRABLE` decision,
+manifest, and failing Evidence.
+
 The dated acceptance report records exact source and environment identity,
-commands, stage summaries, aggregate test counts, every matrix row, both
+commands, stage summaries, aggregate test counts, every matrix row, all
 fixture identities, requested/observed backend and execution-configuration
 metadata, findings, unavailable checks, and verdict. It may summarize Worker
 output but MUST NOT treat a transcript as authority or include credentials,
@@ -286,15 +337,19 @@ the report must preserve each row's individual outcome.
 
 | ID | Required proof | Primary evidence |
 | --- | --- | --- |
-| `M2-E01` | One schema-version-2 `LOCAL_COMMAND` Check Specification binds executable realpath/content digest, ordered argv, contained cwd, environment, timeout/grace, output/retention limits, runner, frozen Candidate, read-only workspace lease, and isolation profile exactly | Verification Runner contract |
+| `M2-E01` | The schema-version-2 `LOCAL_COMMAND` base contract binds executable realpath/content digest, ordered argv, contained cwd, environment, timeout/grace, output/retention limits, runner, frozen Candidate, read-only workspace lease, and isolation profile exactly without changing its Slice 4 meaning | Verification Runner contract |
 | `M2-E02` | The runner invokes no shell and executes under the selected versioned Darwin isolation profile without Candidate write capability, authority/credential read capability, Store or Worker access, or network; an unavailable or unenforceable profile blocks verification | runner boundary and black-box process tests |
 | `M2-E03` | `LOCAL_COMMAND_OBSERVATION_V1` exit/signal, stdout/stderr, timeout, truncation, spawn failure, and environment observations are bounded and validated before Runtime-derived `LOCAL_COMMAND_TEST_RESULT` Evidence; retained payload bytes and their authoritative references commit or roll back together | runner adversarial and SQLite fault-injection suite |
 | `M2-E04` | A failing required check creates current failing Evidence and prevents technical `ACCEPT` and closeout | Runtime integration case |
 | `M2-E05` | A passing check can satisfy only the exact current obligation, Candidate, source, specification, runner, and environment binding | Evidence exact-binding suite |
-| `M2-E06` | Worker-reported tests, App Server command Items, transcript text, and path existence cannot become formal Evidence | authority tests |
+| `M2-E06` | Worker reports that tests passed, App Server command Items, transcript text, and path existence cannot become formal Evidence; only a separate Runtime-admitted execution may create any supplementary test Evidence | authority tests |
 | `M2-E07` | Verification-time mutation, stale Evidence, wrong generation, wrong check, or wrong environment fails closed without a split Attempt/Candidate/Evidence authority state | Evidence adversarial and transaction suite |
 | `M2-E08` | Deterministic Acceptance replay and exact repair authority retain M1 semantics across SQLite reopen | acceptance/reopen suite |
 | `M2-E09` | Final Closeout binds the exact current Candidate and Evidence Set only after the Acceptance Engine issues current `ACCEPT` | black-box closeout proof |
+| `M2-E10` | Before the first Worker dispatch, trusted composition and Runtime persist an immutable acceptance-critical Verification Plan that binds Goal/revision, Workflow, Policy/Profile, required Criterion and rule identities, semantic Check template, and every protected asset's source, digest, length, location, and protection mode | plan creation/audit ordering and Store contract suite |
+| `M2-E11` | Every decisive generation-specific schema-version-3 `LOCAL_COMMAND` Check and matching Evidence record binds the exact pre-Worker plan, protected-asset manifest/read-only lease, Criterion, obligation, Candidate, isolation profile, and Policy; asset deletion, replacement, weakening, aliasing, digest drift, or wrong identity prevents eligible passing Evidence | protected-asset mutation and exact-binding suite |
+| `M2-E12` | Worker-authored or Worker-modified tests are provenance-labelled supplementary inputs only; even when independently executed and passing, they cannot alone satisfy an acceptance-critical Verification Obligation or alter its mapping | supplementary-Evidence and policy adversarial suite |
+| `M2-E13` | A correct implementation passes the same pre-fixed protected Check and can close normally; strict reopen and the acceptance report retain the exact plan, asset, Check, Evidence, and Acceptance identities | positive protected-Oracle and reopen/report proof |
 
 ### End-to-end deterministic and live demonstrations
 
@@ -307,7 +362,10 @@ the report must preserve each row's individual outcome.
 | `M2-F05` | The first live post-edit verification result is not prescribed: `PASS` follows the normal evidence path, while `FAIL` alone authorizes a distinct bounded repair generation; no synthetic failure or needless rejection occurs | live branch trace and policy assertions |
 | `M2-F06` | The selected live branch reaches current passing Evidence, Acceptance, and Runtime closeout within bounded phase/Turn policy | runner, Evidence, Acceptance Decision, Closeout Record, and audit |
 | `M2-F07` | The final public result names the exact live branch, Candidate, and Evidence digests and does not present Turn success as Goal authority | CLI JSON/human views |
-| `M2-F08` | Neither demonstration performs Goal Intake, project promotion, Git push, release, deployment, or another external effect | command traces, fixture inspection, and audit review |
+| `M2-F08` | No demonstration performs Goal Intake, project promotion, Git push, release, deployment, or another external effect | command traces, fixture inspection, and audit review |
+| `M2-F09` | In a deterministic adversarial fixture, an incorrect implementation weakens a Worker-writable test and that test may genuinely pass, but the pre-fixed protected Oracle still fails and the Goal cannot enter Acceptance or closeout | anti-self-certification fixture and authority trace |
+| `M2-F10` | A repair child receives a new Worker Session and Codex Thread plus newly compiled Context bound to the exact current `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, failing Evidence, parent/child Candidates, preservation constraints, and bounded source-labelled `priorAttemptFeedback`; a bounded live repair-handoff proves Codex receives and operates on that package without old chat, while only independent verification decides the result | deterministic repair-context trace and bounded live repair-handoff trace |
+| `M2-F11` | In a separate deterministic branch, generation 2 also fails and the current run stops with no generation 3, replacement Thread/Turn, Worker dispatch, hidden retry, process replay, or model fallback; the assertion is limited to no unauthorized automatic continuation and does not impose a global product repair-count cap | failed-repair-stop fixture and exact call/authority counts |
 
 ### Lifecycle, restart, and security
 
@@ -326,6 +384,10 @@ the report must preserve each row's individual outcome.
 | `M2-G11` | Controlled Codex state, config, instructions, telemetry, history, and credentials cannot leak into Candidate commands, Candidate files, logs, audit, Evidence, or the report | state and secret-boundary audit |
 | `M2-G12` | The bound Execution Profile decides every fresh/resume boundary, continuity mode, compaction mode, retention rule, and fallback; adapter discretion or effective-policy drift fails closed | policy projection, call-trace, and mismatch suite |
 | `M2-G13` | An authorized post-compaction continuation can proceed on the selected Thread policy with current compiled Context, while Thread loss follows the exact fail-closed or fresh-Thread recovery path | deterministic compaction/continuation and Thread-loss fixtures |
+| `M2-G14` | Deleting the old Codex Thread does not prevent reconstruction of the same authoritative failure projection; retaining it does not silently inject full chat, hidden reasoning, KV cache, or raw tool history into the fresh repair Context | paired Thread-deleted/Thread-retained Context Manifest comparison |
+| `M2-G15` | Missing, stale, wrong-Goal, wrong-Candidate, old-decision, or digest-mismatched Evidence/feedback blocks repair dispatch, and non-authoritative `priorAttemptFeedback` cannot override Goal, Evidence, Policy, Runtime Decision, or preservation constraints | Context authority and feedback adversarial suite |
+| `M2-G16` | After a failed bounded repair, strict reopen preserves the same repair-required stop; ordinary `ResumeGoal`, duplicate commands, old Acceptance Decisions, stale Evidence, and late Worker events create no new Candidate or execution | reopen/resume/replay stop suite |
+| `M2-G17` | Generation-1 failure Evidence remains immutable and auditable but cannot close generation 2, whose success would require fresh bound Evidence; CLI, audit, and the report distinguish both generations, the repair Context source, and the stop reason | cross-generation authority and public-view proof |
 
 ### Regression, traceability, and milestone boundary
 
@@ -338,6 +400,7 @@ the report must preserve each row's individual outcome.
 | `M2-H05` | README, Architecture, domain status, ADR index, milestone boundary, plan, and review agree on exact implemented/non-implemented state | final documentation review |
 | `M2-H06` | No source, package, command, schema, migration, view, or demo implements or claims Goal Intake | scope and dependency audit |
 | `M2-H07` | No accepted result authorizes Candidate Promotion or another external effect | CLI surface, audit, and documentation review |
+| `M2-H08` | M2 claims only one bounded protected-Oracle and controlled-repair path; documentation leaves complete traceability to M3 and automatic multi-round repair budgets and stop policy to M4 | milestone/non-claim semantic review |
 
 ## 8. Required acceptance fixtures
 
@@ -353,12 +416,15 @@ fabricate verification or authority records.
 Its persisted chain MUST show:
 
 ```text
-mutable Candidate generation 1
+pre-Worker protected Verification Plan and Oracle identity
+  -> mutable Candidate generation 1
   -> controlled completion request
   -> frozen digest 1
   -> required real verification FAIL
   -> technical rejection / exact repair authority
   -> mutable Candidate generation 2 derived from generation 1
+  -> fresh Worker Session and Thread
+  -> newly compiled exact failure Context and priorAttemptFeedback
   -> controlled repair completion request
   -> frozen digest 2
   -> fresh required real verification PASS
@@ -370,17 +436,73 @@ mutable Candidate generation 1
 This is the stable proof that CodeClosure can govern rejection and repair. It
 MUST make no model or external-network request.
 
+### Anti-self-certification fixture
+
+This deterministic adversarial fixture MUST use a separate disposable source
+and the real Candidate, protected Verification Plan, runner, Evidence, and
+Acceptance boundaries. Its Worker produces an incorrect implementation and
+also weakens a Candidate-local test so that the Worker-writable test genuinely
+passes. The acceptance-critical Oracle is fixed before dispatch and remains
+outside the Candidate.
+
+The protected Oracle MUST still fail, no eligible decisive passing Evidence may
+be formed, and the Goal MUST NOT enter Acceptance or closeout. A paired positive
+case applies the correct implementation and proves that the same protected
+Oracle—not a replacement selected after Worker output—can pass and close
+normally.
+
+### Failed-repair-stop fixture
+
+This separate deterministic fixture follows the normal generation-1 rejection
+and exact repair authority, then deliberately leaves generation 2 incorrect.
+After the second real verification failure it MUST record a visible
+repair-required stop and exact call counts proving no generation 3, Worker
+Session, Thread, Turn, dispatch, process retry, model fallback, or replay was
+created.
+
+The fixture MUST close and strictly reopen SQLite, exercise ordinary
+`ResumeGoal`, duplicate commands, stale prior authority, and late generation-1
+Worker events, and prove that none authorizes continuation. It proves the M2
+automatic-continuation boundary only; it MUST NOT encode a permanent Domain
+rule that all future explicitly authorized repair chains have at most two
+generations.
+
+### Live repair-Context handoff fixture
+
+This bounded fixture MUST create generation 1 through a controlled Worker and
+obtain a real protected-Oracle failure plus exact `REJECT_REPAIRABLE` authority
+before any Codex dispatch. Runtime then creates the exact repair child and a
+fresh Worker Session and Codex Thread. The newly compiled Context MUST bind the
+current failure Evidence, parent/child Candidates, preservation constraints,
+and bounded source-labelled `priorAttemptFeedback`.
+
+Codex is first invoked only for that repair child. The fixture deletes the old
+controlled backend history before dispatch and proves Codex can locate the
+failure in the inherited files using the current Context. A paired retained-
+history Context compilation proves that merely preserving history does not
+change the authoritative Context projection or inject the full conversation.
+
+Codex output proves only that the bounded Turn received and processed the
+request. Fresh independent protected verification determines `PASS` or `FAIL`.
+A `PASS` may follow the ordinary Acceptance path; a `FAIL` fails and stops the
+fixture without an automatic additional repair. This fixture does not
+manufacture a failed first Codex edit because Codex did not create generation
+1; it supplements rather than replaces the ordinary live natural-branch
+fixture.
+
 ### Live Codex fixture
 
 The separate live fixture MUST be deliberately bounded and disposable. It
 contains:
 
 - a minimal Git repository with one small implementation defect;
-- one exact required local check that fails before Codex edits the Candidate
-  and passes after any correct edit;
+- one exact protected required local Check/Oracle, fixed outside the Candidate
+  before Codex dispatch, that fails before Codex edits and passes after any
+  correct edit;
 - no dependency download, network call, credential, Git remote, effectful hook,
   submodule, generated secret, or user-owned file;
-- an explicit allowed-path set containing only the intended source/test paths;
+- an explicit allowed-path set containing only the intended source and
+  supplementary-test paths, never the protected Oracle;
 - a source-manifest digest and separate Git-metadata observation captured
   before and after the complete round; and
 - separate Runtime authority, Candidate workspace, verifier temporary, and
@@ -399,16 +521,20 @@ Codex edits mutable Candidate generation 1
   -> freeze and real verification
       PASS -> current Evidence -> ACCEPT -> CLOSEOUT
       FAIL -> exact repair authority -> new generation
+              -> fresh Worker Session and Thread
+              -> newly compiled exact failure Context
               -> bounded authorized repair Turn
               -> freeze and fresh verification
               -> PASS -> current Evidence -> ACCEPT -> CLOSEOUT
+              -> FAIL -> visible bounded stop; no automatic generation 3
 ```
 
 An alternate model edit that satisfies the exact bounded Goal is allowed. A
 correct first-pass edit MUST NOT be rejected merely to demonstrate repair. If a
 real failure occurs, the old frozen generation and its Evidence MUST NOT be
 reused as current authority. The selected branch must reach a real passing
-check within the bounded phase/Turn policy; otherwise the live case fails.
+check within the bounded phase/Turn policy; otherwise the live case fails and
+stops without another repair.
 
 ## 9. Canonical executable procedure
 
@@ -434,15 +560,18 @@ available. When implemented, it must execute in this order:
    black-box cases;
 7. run the deterministic real-Candidate/real-verifier
    reject/repair/accept fixture;
-8. run the separate bounded live Codex edit-and-verify fixture and follow its
+8. run the deterministic anti-self-certification and failed-repair-stop
+   fixtures;
+9. run the bounded live repair-Context handoff fixture;
+10. run the separate bounded live Codex edit-and-verify fixture and follow its
    natural first verification branch;
-9. close and strictly reopen authority for both demonstrations, then compare
+11. close and strictly reopen authority for every demonstration, then compare
    public status and audit;
-10. prove fixture content projections and non-owned paths are unchanged, and
+12. prove fixture content projections and non-owned paths are unchanged, and
     account separately for Git metadata;
-11. capture closing source, environment, effective App Server input, and state
+13. capture closing source, environment, effective App Server input, and state
     identities; and
-12. emit a machine-readable row-by-row result with aggregate zero-skip counts.
+14. emit a machine-readable row-by-row result with aggregate zero-skip counts.
 
 After the executable command, the operator MUST inspect complete output, run
 `git diff --check`, inspect the actual diff and working-tree status, review the
@@ -461,9 +590,9 @@ The only M2 verdicts are:
 
 - `PASS`: every mandatory matrix row passes on one accepted source and protocol
   identity; every Node test summary has zero failed, cancelled, skipped, and
-  todo tests; both the deterministic and live proofs pass; opening and closing
-  identities match; no mandatory check is unavailable; and no blocking finding
-  remains.
+  todo tests; every deterministic proof and the live proof pass; opening and
+  closing identities match; no mandatory check is unavailable; and no blocking
+  finding remains.
 - `FAIL`: any mandatory assertion, test, schema comparison, dependency rule,
   protocol behavior, Candidate containment property, verification, Evidence,
   Acceptance, recovery, CLI, documentation, live outcome, non-effect claim, or
@@ -505,22 +634,41 @@ The dated M2 completion review MUST contain:
 5. every mandatory matrix row and its primary evidence reference;
 6. the deterministic fixture source, Candidate, verifier, authority-home, and
    no-network identities;
-7. its generation-1 and generation-2 parent/source digests, verification
-   results, Evidence Set, Acceptance Decision, and Closeout bindings;
-8. the live fixture source, Candidate, verifier, authority-home, controlled
-   Codex state, selected first-verification branch, generation digests, and
-   allowed external-network identities without secrets;
-9. process failure, approval, bounded `contextCompaction`, post-compaction
+7. every acceptance-critical Verification Plan, protected-asset manifest and
+   read-only lease, concrete Check, Criterion/obligation, Evidence, Policy, and
+   pre-Worker audit identity;
+8. the ordinary deterministic fixture's generation-1 and generation-2
+   parent/source digests, verification results, fresh repair Session/Thread,
+   Context Manifest failure-source and `priorAttemptFeedback` bindings,
+   Evidence Set, Acceptance Decision, and Closeout bindings;
+9. the anti-self-certification fixture's weakened Candidate test, protected
+   Oracle failure, paired correct-result pass, and proof that supplementary
+   Evidence never became decisive;
+10. the failed-repair fixture's two generation results, persisted stop reason,
+    exact Candidate/Session/Thread/Turn/dispatch counts before and after reopen,
+    and Resume/duplicate/late-event outcomes;
+11. the live repair-handoff source, controlled failed parent, exact repair
+    authority, inherited child, fresh Session/Thread, Context failure-source and
+    feedback bindings, Codex receipt, independent result, and old-history
+    absence/non-injection proof;
+12. the ordinary live fixture source, Candidate, verifier, authority-home,
+    controlled Codex state, selected first-verification branch, generation
+    digests, and allowed external-network identities without secrets;
+13. process failure, approval, bounded `contextCompaction`, post-compaction
    continuation, Thread loss, cancellation, restart, strict-reopen, and
    no-redispatch outcomes without private-state payloads;
-10. source-checkout, Git-metadata, authority-isolation, cleanup-scope,
+14. paired old-Thread-deleted and old-Thread-retained repair Context results,
+    proving the same authoritative failure projection and no silent full-chat
+    injection;
+15. source-checkout, Git-metadata, authority-isolation, cleanup-scope,
    credential-redaction,
    and no-external-effect proofs;
-11. every finding, including an explicit zero count when none exist;
-12. skipped or unavailable checks, both explicitly zero for `PASS`;
-13. M2 non-claims, including Goal Intake, arbitrary-project support, product
-    completion, and external effects; and
-14. final `PASS`, `FAIL`, or `BLOCKED`, reiterating that the report is not a
+16. every finding, including an explicit zero count when none exist;
+17. skipped or unavailable checks, both explicitly zero for `PASS`;
+18. M2 non-claims, including Goal Intake, arbitrary-project validation
+    completeness, automatic multi-round repair, product completion, and
+    external effects; and
+19. final `PASS`, `FAIL`, or `BLOCKED`, reiterating that the report is not a
     technical `ACCEPT` decision or Promotion authorization.
 
 ## 12. Gate to M2.5
@@ -531,6 +679,8 @@ this complete procedure records unconditional M2 `PASS` and the repository
 status documents are updated consistently.
 
 That `PASS` proves only that the reusable App Server client and Goal-bound
-Worker execution branch satisfy M2. It does not prove the future Intake
-Assistant Adapter, Intent Projection/Admission authority, Goal Materialization,
-or Intake-authorized automatic Start path.
+Worker execution branch, one protected acceptance-critical Oracle, one fresh
+repair Context path, and one bounded no-hidden-continuation policy satisfy M2.
+It does not prove arbitrary-project test sufficiency, automatic multi-round
+repair, the future Intake Assistant Adapter, Intent Projection/Admission
+authority, Goal Materialization, or Intake-authorized automatic Start path.

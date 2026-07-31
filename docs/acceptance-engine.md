@@ -10,7 +10,10 @@ and immutable exact repair-generation authority. ADR 0030's bounded real
 local-command verifier and version-2 Evidence are implemented, and Slice 5 now
 selects one complete local Check family as the current deterministic Acceptance
 input. The same M1 rule set maps real `PASS`, `FAIL`, runner-error, and timeout
-status without granting the runner completion authority. Intent Admission and
+status without granting the runner completion authority. ADR 0031 now fixes a
+planned additive acceptance-critical Verification Plan and protected-asset
+rule, but Slice 7 has not implemented that Acceptance input or checker.
+Intent Admission and
 Goal Materialization are a separate
 pre-Goal authority and are not implemented by the Acceptance Engine.
 
@@ -91,6 +94,13 @@ For a started Workflow, `policyBundleId` and `policyBundleDigest` MUST equal
 its immutable `WorkflowPolicyBinding`. The currently configured or most
 recently installed Policy is not a substitute. See
 [ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
+
+For the planned M2 acceptance-critical extension, an additive version of this
+manifest MUST also bind the immutable
+`AcceptanceCriticalVerificationPlan` ID/digest. The referenced Evidence Set
+MUST contain the exact generation-specific Check and protected-asset manifest
+binding required by that plan. Existing M1 manifests and Slice 4/5 inputs keep
+their exact schema and digest semantics.
 
 `manifestDigest` is computed over the semantic fields from `schemaVersion`
 through `policyBundleDigest`. It excludes `createdAt` and `manifestDigest`
@@ -185,6 +195,15 @@ A rule cannot return an untyped success string.
 - required commands/tests/builds/checks have passing observations;
 - runtime/source/environment identities agree;
 - run-owned resource cleanup is proven when applicable.
+
+For the planned M2 acceptance-critical rule, the immutable Policy MUST mark
+which required Criteria and Verification Obligations are acceptance-critical.
+Each such obligation MUST resolve to eligible passing Evidence bound to the
+exact pre-Worker Verification Plan, protected-asset manifest, concrete Check,
+Candidate, and Policy. Missing or changed protected assets, wrong plan or
+Criterion identity, and a mapping containing only Worker-authored
+supplementary tests fail the rule. The Worker, runner, and Evidence record
+cannot change an obligation's criticality or proof-strength requirement.
 
 For the planned M2 `LOCAL_COMMAND_TEST_RESULT`, eligibility additionally
 requires the exact version-2 Check, executable/argv, Candidate and read-only
@@ -374,6 +393,10 @@ project correctness:
 This is enough to prove fail-closed closeout without pretending M1 validates
 real software.
 
+Slice 7 will add the separate M2 acceptance-critical rule without changing the
+M1 rule set or reinterpreting Slice 4/5 decisions. It proves only one bounded
+protected Check/Oracle path, not arbitrary-project validation completeness.
+
 ## Required Adversarial Tests
 
 - worker returns `completed` with no evidence -> reject;
@@ -383,6 +406,12 @@ real software.
 - policy changes after decision -> closeout transition rejected;
 - checker throws -> `ENGINE_ERROR`;
 - one missing required rule -> no `ACCEPT`;
+- only Worker-authored supplementary tests pass while the protected
+  acceptance-critical Check fails or is missing -> no `ACCEPT`;
+- protected Verification Plan, asset manifest, Criterion, obligation, Check,
+  Candidate, or Policy identity differs -> reject;
+- incorrect implementation plus weakened Candidate-local test -> protected
+  Oracle still blocks Acceptance;
 - stale Workflow version races with closeout -> transaction rejected;
 - generic human approval attempts to bypass a failed technical rule -> reject;
 - identical manifest and policy replay to the same semantic decision projection

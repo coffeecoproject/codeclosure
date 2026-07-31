@@ -27,7 +27,7 @@ The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
 current milestone. Slice 0 decision closure is implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
-and ADR 0028 through ADR 0030 are accepted. Slice 1 is implemented: the
+and ADR 0028 through ADR 0031 are accepted. Slice 1 is implemented: the
 version-bound lower client, pinned protocol snapshot, deterministic fake
 server, offline adversarial suite, and bounded live compatibility preflight
 pass. The [Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
@@ -74,8 +74,11 @@ entry point. Verification Evidence cannot predate its
 authorizing Obligation even under clock rollback. The
 [Slice 5 review](docs/reviews/m2-slice5-reject-repair-accept.md) records its
 focused evidence and limitations. External-execution persistence and recovery
-composition, trusted CLI composition, and a live Goal-bound execution remain
-later M2 work.
+composition, fresh repair Context, protected acceptance-critical verification,
+failed-repair stop proof, trusted CLI composition, and a live Goal-bound
+execution remain later M2 work. Slice 4 proves independent read-only execution;
+Slice 5 does not retroactively prove that its Check semantics were outside
+Worker mutation authority.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -432,6 +435,16 @@ authority and independently rechecked by Runtime and Store. `DISCOVERY` and
 port instead of a coding-Worker prompt. See
 [ADR 0016](docs/adr/0016-candidate-and-evidence-authority-boundary.md).
 
+Slice 6 will extend this smaller package for a fresh repair Worker Session and
+Thread. Runtime will compile the exact current `REJECT_REPAIRABLE` decision,
+Acceptance Input Manifest, failing Evidence, parent/child Candidate identities,
+preservation constraints, and bounded source-labelled
+`priorAttemptFeedback`. Full old chat, hidden reasoning, KV cache, and raw tool
+history remain outside the package by default. History retention and Context
+injection are separate policies: deleting the old Thread cannot erase failure
+authority, while retaining it cannot silently make the transcript
+authoritative. Missing, stale, or mismatched repair inputs block dispatch.
+
 ### Candidate Manager
 
 Creates isolated candidate generations, records their base identity, manages
@@ -475,6 +488,14 @@ local-command family becomes the exact verification authority when installed.
 Mixed or partial families fail in Runtime, Store, SQLite triggers, and reopen
 validation.
 
+ADR 0031 requires a later M2 additive authority record before a local-command
+family may be decisive for an acceptance-critical Criterion. Trusted
+composition fixes an immutable pre-Worker Verification Plan and protected-asset
+manifest; each frozen generation's Check and Evidence bind back to that exact
+plan. Worker-authored tests may produce labelled supplementary Evidence but
+cannot alone satisfy the protected obligation. This is planned Slice 7 work,
+not an implemented Slice 5 claim.
+
 ### Acceptance Engine
 
 Evaluates a versioned Policy Bundle against one `AcceptanceInputManifest`. It
@@ -513,6 +534,14 @@ frozen Candidate before and after execution and admits only a closed bounded
 result. The adapter cannot create Evidence, issue `ACCEPT`, or transition a
 Workflow. Slice 5 Runtime composition owns those control steps and keeps the
 adapter observation non-authoritative until validation and atomic persistence.
+
+Independent execution is not independent verification-standard authority.
+Under [ADR 0031](docs/adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md),
+the bounded M2 acceptance-critical Check and Oracle must be fixed before Worker
+mutation and stored outside Worker authority or bound to exact pre-Worker
+content. Asset removal, replacement, weakening, aliasing, or digest drift
+prevents decisive passing Evidence. This boundary permits Worker test changes
+as supplementary work and does not claim general test-suite completeness.
 
 ## Authority and Storage Topology
 
@@ -885,6 +914,19 @@ dispatch claim. See
 and
 [ADR 0025](docs/adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
 Persisted budgets, backoff, and automatic retry policy remain M4 work.
+
+M2 adds one narrower planned repair stop without introducing an automatic
+retry policy. Its bounded demonstration authorizes one exact repair child. If
+that child fails verification, Runtime must finish the current Attempt and
+Worker Session, preserve visible repair-required authority, and create no
+generation 3, Thread, Turn, dispatch, process replay, or model fallback without
+a new explicit continuation authorization bound to the exact current
+`REJECT_REPAIRABLE` decision, manifest, and failing Evidence. Reopen, ordinary
+`ResumeGoal`, duplicate commands, and late Worker events cannot imply that
+authorization. This proves absence of hidden
+continuation; it does not impose a permanent product-wide maximum on future
+explicitly authorized repairs. M3 may retain the facts needed to judge multiple
+rounds, while M4 owns any automatic continuation budget and stop policy.
 
 The implemented M1 Slice 7 startup sequence:
 

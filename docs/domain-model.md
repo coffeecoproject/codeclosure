@@ -12,7 +12,9 @@ outside that subset remain planned behavior. The accepted pre-Goal Intake
 records below are planned for M2.5 and are not part of the implemented M1
 schema or Runtime. M2 Slice 0 has accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
-0028 through ADR 0030. The bounded 0.146.0 live capability probe now passes;
+0028 through ADR 0030. ADR 0031 now fixes the planned acceptance-critical
+Verification Plan and protected-asset authority. The bounded 0.146.0 live
+capability probe now passes;
 the Slice 1 lower client, protocol snapshot, offline fixtures, and live
 compatibility preflight are implemented without allowing a generated Codex
 protocol type to enter the Domain. Slice 2 deliberately adds no Domain
@@ -37,7 +39,8 @@ may become the current Evidence/Acceptance family, exact M1 repair authority is
 retained for each new child generation, and the child receives a fresh local
 family only after its own freeze. Active verification drift is persisted as one
 Attempt/Workflow/Candidate/Evidence compound failure. External execution and
-lease/session persistence remain later M2 work.
+lease/session persistence, the ADR 0031 plan plus schema-version-3
+Check/Evidence variants, and their Acceptance binding remain later M2 work.
 
 ## Design Rules
 
@@ -92,6 +95,11 @@ At minimum, M1 uses distinct opaque identifiers for:
 
 Implementations must not interchange these as untyped strings inside the
 domain.
+
+The planned M2 Slice 7 protected-verification extension adds a distinct
+`AcceptanceCriticalVerificationPlanId`. It MUST NOT be interchanged with a
+Check Specification, Verification Obligation, Evidence, Policy, or Execution
+Profile identity.
 
 The planned M2.5 Intake boundary adds distinct `RawRequestId`,
 `RawRequestRevision`, `IntakeRunId`, `IntentAnalysisProposalId`,
@@ -1091,6 +1099,43 @@ accepted exit codes, payload policy, runner identity, and
 `LOCAL_COMMAND_OBSERVATION_V1`. M1 specifications retain their current version
 and digest meaning.
 
+## Acceptance-Critical Verification Plan — planned M2 Slice 7
+
+```text
+AcceptanceCriticalVerificationPlan
+  schemaVersion: 1
+  id
+  goalId
+  goalRevision
+  workflowId
+  workflowVersionAtLock
+  policyBundleId
+  policyBundleDigest
+  executionProfileId
+  executionProfileDigest
+  acceptanceCriticalCriterionIds[]
+  acceptanceRuleIds[]
+  semanticCheckTemplate
+  protectedAssets[]
+  protectedAssetManifestDigest
+  protectedAssetReadLeasePolicy
+  authoritySource
+  createdAt
+  planDigest
+```
+
+Trusted composition proposes the plan before the first Worker dispatch.
+Runtime validates and digests it, and Store persists it with its creation audit
+atomically. It is immutable for the Workflow and reused by repair generations.
+Worker output cannot create, revise, or replace it.
+
+ADR 0031 adds a schema-version-3 `LOCAL_COMMAND` Check that retains the full
+version-2 projection and adds the plan ID/digest, protected-asset manifest
+digest, and exact Runtime-issued read-only asset-lease digest. The matching
+schema-version-3 `LOCAL_COMMAND_TEST_RESULT` Evidence repeats those bindings.
+Existing version-2 records remain unchanged and cannot be the sole decisive
+Evidence for an acceptance-critical M2 obligation.
+
 ## Verification Obligation
 
 ```text
@@ -1177,6 +1222,12 @@ effects, audit, and command outcome. The additive migration must preserve every
 M1 version-1 record and digest. See
 [ADR 0030](adr/0030-real-local-verification-contract.md).
 
+The planned ADR 0031 version-3 local Evidence additionally binds the immutable
+acceptance-critical Verification Plan, protected-asset manifest, and read-only
+asset lease. Worker-authored tests may be independently executed under a
+separate supplementary obligation, but that Evidence cannot by itself satisfy
+an acceptance-critical obligation.
+
 ## Acceptance Input, Decision, and Repair Authority
 
 ```text
@@ -1245,6 +1296,9 @@ current. The canonical field meanings and digest projections are defined in
 The current M1 Slice 6 implementation strictly decodes the manifest and
 decision, derives their digests from canonical semantic projections, and
 revalidates the exact decision before closeout or repair.
+The planned M2 additive Acceptance Input Manifest also binds the exact
+`AcceptanceCriticalVerificationPlan` ID/digest. Existing M1 and Slice 4/5
+manifest digests are not reinterpreted.
 The repair record is not another decision or state writer. It is immutable
 causality retained by the same atomic repair transaction, and its canonical
 digest is independently recomputed on write and reopen. See
@@ -1319,6 +1373,7 @@ describes.
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
+| Acceptance-critical Verification Plan and protected-asset manifest — planned M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |
 | Evidence eligibility | integrity observation / runtime command | Evidence policy | Evidence Store through an audited monotonic transition |

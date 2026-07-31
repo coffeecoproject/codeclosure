@@ -127,7 +127,10 @@ local runner admission with no M1 fake-verification fallback, causal
 Obligation/Evidence time, atomic active-verification drift failure, fresh
 repair Evidence, deterministic Acceptance, closeout, and strict reopen proof. These
 slices do not yet constitute a trusted live Goal-bound production path; Thread,
-Compact, interruption, and restart composition begin in Slice 6. The
+Compact, interruption, restart composition, fresh repair Context, protected
+acceptance-critical verification, and failed-repair stop proof remain later M2
+work. Slice 4's independent execution and Slice 5's orchestration do not yet
+prove independent verification-standard authority. The
 detailed work sequence and status are in the
 [M2 implementation plan](plans/m2-codex-vertical-slice.md), and the independent
 exit procedure is in the [M2 acceptance plan](plans/m2-acceptance-plan.md).
@@ -154,7 +157,16 @@ the M1 authority boundary.
 - isolated real Candidate workspace/generation;
 - hard freeze digest and mutation detection;
 - one real verification runner path;
+- one pre-Worker protected Check/Oracle path for acceptance-critical
+  verification, with exact asset identity and no sole reliance on
+  Worker-writable tests;
 - acceptance rejection and repair generation loop;
+- exact failure Evidence plus bounded structured `priorAttemptFeedback`
+  recompiled into a fresh repair Worker Session and Thread;
+- one bounded live repair handoff whose failed parent is produced by a
+  controlled fixture before Codex enters only the repair child;
+- one bounded M2 repair continuation followed by a visible persisted stop if
+  repair fails, with no unauthorized automatic continuation;
 - fresh-thread and resumed-thread policies;
 - Compact event handling with no loss of authoritative state.
 
@@ -165,13 +177,18 @@ the M1 authority boundary.
   Goal Materialization, or Intake-authorized automatic Start;
 - changes to the accepted direct M1 `CreateGoal` command;
 - full Fact Graph traversal or execution-time Goal revision;
+- arbitrary-project test completeness, Oracle sufficiency, false-green
+  prevention, or a general independent-Reviewer policy;
+- automatic multi-round repair, a permanent product-wide repair-count limit,
+  or general cost/time/no-progress policy;
 - rich TUI, multiple agents, cloud, or multi-user behavior; and
 - merge, release, deployment, or other external-effect authority.
 
 ### Required Demonstrations
 
-M2 requires two complementary proofs. The deterministic proof uses a controlled
-Worker or App Server fixture with the real Candidate and Verification paths:
+M2 requires two complementary proof layers. The deterministic layer uses a
+controlled Worker or App Server fixture with the real Candidate and
+Verification paths:
 
 1. the controlled Worker edits an isolated Candidate and claims completion;
 2. a required real check deterministically fails;
@@ -181,7 +198,24 @@ Worker or App Server fixture with the real Candidate and Verification paths:
 6. Acceptance and Runtime closeout bind the exact repaired Candidate and
    Evidence digests.
 
-The separate live proof uses the supported installed Codex App Server:
+Separate deterministic adversarial branches MUST also prove:
+
+1. the acceptance-critical Check and protected Oracle are fixed before Worker
+   mutation;
+2. an incorrect implementation plus a weakened Worker-writable test cannot
+   close the Goal, while the correct implementation passes the same protected
+   Oracle;
+3. a repair child uses a fresh Thread whose current Context contains the exact
+   failing Evidence and source-bound `priorAttemptFeedback`, without requiring
+   the old Thread; and
+4. when the bounded repair fails, no generation 3, Thread, Turn, dispatch,
+   retry, or model fallback occurs without a new explicit continuation
+   authorization bound to the exact current `REJECT_REPAIRABLE` decision,
+   manifest, and failing Evidence, including after SQLite reopen or ordinary
+   Resume.
+
+The live layer's ordinary natural-branch proof uses the supported installed
+Codex App Server:
 
 1. Codex edits only an isolated Candidate and claims completion;
 2. independent real verification determines the first post-edit result;
@@ -190,13 +224,31 @@ The separate live proof uses the supported installed Codex App Server:
 5. the bounded run can close only through current passing Evidence and technical
    Acceptance.
 
+If the authorized live repair also fails, the live case fails and stops
+visibly. It MUST NOT retry until it obtains a convenient `PASS`.
+
+A separate bounded live repair-handoff proof starts from a controlled
+real-verification failure created before Codex is dispatched. Codex receives a
+fresh repair child, Session, Thread, and recompiled failure Context, then
+independent verification decides the result. This proves real Codex receipt of
+repair Context without manufacturing a failure from a correct Codex first
+edit, restoring old chat, or treating Codex output as Acceptance.
+
 ### Exit Criteria
 
 - Codex protocol failure, turn completion, compact, and process exit cannot
   bypass M1 guards;
 - control state is inaccessible from the worker-writable Candidate;
 - frozen-source mutation is detected and invalidates evidence;
+- acceptance-critical Check semantics and protected assets are fixed before
+  Worker mutation, exactly bound to decisive Evidence, and cannot be replaced
+  by Worker-writable tests;
 - restart and new Thread recovery preserve Goal/Workflow authority;
+- a fresh repair Thread receives exact current failure authority and bounded
+  non-authoritative feedback without old-chat dependency or silent history
+  injection;
+- failed bounded repair leaves a recoverable visible stop and no unauthorized
+  next generation or execution;
 - protocol schemas are version-bound and compared under one deterministic
   canonical snapshot profile rather than hand-copied into core;
 - ambient Codex configuration, instruction sources, tools, and state cannot
@@ -207,11 +259,14 @@ The separate live proof uses the supported installed Codex App Server:
 - one deterministic real-Candidate/verifier fixture proves
   reject/repair/accept behavior; and
 - one bounded live Codex path proves actual adapter execution without requiring
-  a deliberately failing first edit.
+  a deliberately failing first edit; and
+- one bounded live repair handoff proves fresh-Thread failure-context
+  continuity without old-conversation dependency.
 
 M2 completion proves the real Codex execution branch under the M1 control
-plane. It does not prove that CodeClosure can form a Goal from an incomplete
-natural-language request.
+plane and one bounded anti-self-certification and repair path. It does not prove
+arbitrary-project validation completeness, automatic multi-round repair, or
+that CodeClosure can form a Goal from an incomplete natural-language request.
 
 ## M2.5 — Goal Intake and Materialization Vertical Slice
 
@@ -373,14 +428,21 @@ runtime state.
   `GoalRevisionAdmissionDecision`;
 - dependency invalidation after a formal Goal revision;
 - Intake Context relevance selection, omission records, and hard budgets;
-- scenario-to-obligation-to-evidence trace;
-- clean-context phase and review sessions.
+- complete Criterion-to-Scenario-to-Obligation-to-Check-to-Evidence trace,
+  including verification-asset source and coverage relationships;
+- durable per-generation change, attempted-approach, failure-pattern,
+  hypothesis, and no-progress facts needed for later multi-round decisions,
+  without authorizing another repair; and
+- clean-context phase sessions and reviewer-context plumbing without making an
+  independent Reviewer mandatory or acceptance-critical.
 
 ### Exit Criteria
 
 - a new Codex Thread can continue a Goal from authoritative state without the
   old transcript;
 - every required scenario remains traceable to implementation and evidence;
+- verification asset origin and coverage remain traceable without promoting
+  Worker summaries to authority;
 - unsupported inference cannot become confirmed fact;
 - Context Manifest identity changes when relevant authority changes;
 - omitted relevant scope is detected by adversarial fixtures.
@@ -394,6 +456,9 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 ### Scope
 
 - bounded retry and repair budgets;
+- explicit authority for each automatic repair continuation, maximum rounds,
+  cost/time limits, repeated-failure and no-progress detection, and
+  continue/change-strategy/request-user/stop outcomes;
 - robust crash/restart reconciliation;
 - Human Decision Gateway UX;
 - complete Goal Intake and clarification UX;
@@ -402,6 +467,8 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - candidate retention and cleanup policy;
 - CodeClosure builds selected CodeClosure changes;
 - escaped-defect and false-acceptance tracking;
+- evaluation of whether independent Reviewers or additional verification paths
+  are required for supported risk profiles;
 - Intent Projection revision rate, clarification burden, Admission outcome,
   post-Materialization correction/cancellation rate, and execution-time Goal-
   revision frequency;

@@ -1,7 +1,7 @@
 # M2 Codex Vertical Slice Implementation Plan
 
 - Status: In progress; Slices 0 through 5 are implemented and Slice 6 has not started
-- Plan date: 2026-07-30
+- Plan date: 2026-07-30; authority boundary updated 2026-07-31
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
 - Regression baseline: completed M1 deterministic control plane
@@ -19,18 +19,36 @@ M2 will replace `FakeWorker` for an explicitly selected real execution path with
 Codex App Server Worker Adapter while retaining CodeClosure as the only control
 and technical-completion authority.
 
-The milestone must prove two complementary paths. A deterministic controlled
-Worker or App Server fixture must exercise a real isolated Candidate and real
+The milestone must prove two complementary layers. A deterministic controlled
+Worker or App Server layer must exercise a real isolated Candidate and real
 Verification Runner through fail, rejection, repair generation, fresh pass,
-Acceptance, and closeout. A separate bounded live Codex path must prove actual
-App Server editing and independent verification. The live path follows its real
-first post-edit result: a correct first pass proceeds normally, while a failure
-enters the governed repair path. M2 must not manufacture a live failure merely
-to demonstrate rejection.
+Acceptance, and closeout. The live layer must prove actual App Server editing,
+independent verification, and the repair Context handoff described below. Its
+ordinary edit path follows the real first post-edit result: a correct first pass
+proceeds normally, while a failure enters the governed repair path. M2 must not
+manufacture a live failure merely to demonstrate rejection.
+
+Fresh-Thread repair Context is also demonstrated through a bounded live repair
+handoff: a controlled fixture, not Codex, creates and verifies the failed parent
+generation; Codex is first dispatched only to its authorized repair child with
+newly compiled failure Context. This does not force a correct Codex edit to fail
+and does not replace the ordinary live path's natural first-result branch.
 
 M2 does not prove Goal Intake, product completion, production readiness, or
 permission to merge, release, deploy, communicate, purchase, or otherwise
 change an external real-world state.
+
+For acceptance-critical success conditions, “independent verification” has two
+separate meanings in M2: the check is executed outside the Worker against a
+frozen read-only Candidate, and the decisive Check/Oracle is fixed by trusted
+authority before the Worker can edit the Candidate. Worker-written tests may
+supplement that proof but cannot be its only decisive Evidence.
+
+The bounded M2 paths authorize at most one repair continuation. If that repair
+also fails, the current run stops with persisted, visible repair-required
+authority and creates no hidden generation 3, Thread, Turn, or dispatch. This
+is an M2 demonstration and automatic-continuation boundary, not a permanent
+product-wide limit on explicitly authorized repair generations.
 
 ### User-visible behavior
 
@@ -45,11 +63,18 @@ From the user's point of view, M2 should behave plainly:
   never asked to trust model memory as the recovery record.
 - CodeClosure runs the required check itself; a Codex claim that the work is
   complete is never enough.
+- The decisive Check and its protected Oracle are fixed before Codex edits;
+  weakening a Candidate-local test cannot turn an incorrect result into an
+  accepted one.
 - If the first checked result passes, the run proceeds directly to Acceptance
   and closeout. The system does not create a fake failure or an unnecessary
   repair round.
 - If the check fails, the failed generation is preserved, the reason remains
-  visible, and repair happens only in a new Candidate generation.
+  visible, and repair happens only in a new Candidate generation whose fresh
+  Thread receives the exact failure Evidence and bounded structured feedback.
+- If the one M2-authorized repair also fails, the run stops visibly. Resume,
+  retained chat, a late Worker event, or a repairable classification does not
+  authorize another attempt.
 - If effective configuration, instructions, tools, workspace identity, or
   backend state cannot be verified, the run stops visibly instead of silently
   inheriting ambient machine behavior.
@@ -75,6 +100,14 @@ exact source identity, focused commands, zero-skip results, documentation
 review, and remaining limitations. A passing unit test by itself is not slice
 completion.
 
+Slices 4 and 5 remain closed on their recorded scopes. Slice 4 proves
+independent read-only execution, and Slice 5 proves deterministic
+reject/repair/accept orchestration and Candidate file continuity. Neither
+historical review is reinterpreted as proof of independently fixed
+verification semantics, fresh-Thread failure-context continuity, or the stop
+boundary after a failed repair. Slices 6 through 8 own those additional M2
+proofs.
+
 ## 3. Governing authority
 
 M2 inherits every accepted M1 authority rule. In particular:
@@ -88,8 +121,11 @@ M2 inherits every accepted M1 authority rule. In particular:
   dispatch claim;
 - control state and audit remain outside every worker-writable Candidate;
 - a frozen Candidate is never repaired in place;
-- verification is independent of Worker claims and read-only with respect to
-  frozen source;
+- verification execution is independent of Worker claims and read-only with
+  respect to frozen source;
+- an acceptance-critical Verification Plan and protected assets are fixed
+  before Worker mutation, and Worker-writable tests cannot be the sole
+  decisive Evidence;
 - state and audit effects remain atomic and replay-safe; and
 - no adapter or CLI view becomes another Goal, Workflow, Acceptance, or
   external-effect authority.
@@ -113,6 +149,10 @@ Slice 0 additionally accepts
 [ADR 0029](../adr/0029-controlled-copy-candidate-workspaces.md), and
 [ADR 0030](../adr/0030-real-local-verification-contract.md) for the M2-only
 external execution, Candidate workspace, and real-verification boundaries.
+[ADR 0031](../adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md)
+separately fixes the authority and digest binding of acceptance-critical
+verification semantics and assets; it does not change ADR 0030's execution
+contract or the historical Slice 4 and 5 claims.
 
 If M2 needs to change a durable decision in those records, implementation must
 stop and a superseding or additional ADR must be accepted first.
@@ -167,8 +207,16 @@ The bounded implementation includes:
 - exact base, mutable-generation, freeze, parent-generation, and drift
   identities;
 - one local command Verification Runner path with closed specifications;
+- one pre-Worker acceptance-critical Verification Plan with protected
+  Check/Oracle assets and generation-specific exact bindings;
 - independent Evidence creation and deterministic Acceptance replay;
-- one deterministic repair generation after failed required verification;
+- one Runtime-authorized repair continuation in the bounded M2 demonstration,
+  with exact failure Evidence and structured `priorAttemptFeedback` recompiled
+  for a fresh Worker Session and Thread;
+- one bounded live repair handoff seeded by a controlled real failure, proving
+  that Codex receives that recompiled Context without an old Thread;
+- a persisted visible stop after that bounded repair fails, with no
+  unauthorized generation, Thread, Turn, or dispatch;
 - interruption, process failure, Compact, Thread start/resume, and restart
   behavior, including an observable working-continuity policy; and
 - a basic local CLI/composition path and a repeatable acceptance harness.
@@ -193,6 +241,11 @@ M2 MUST NOT add or claim:
   or semantic parser/editor for opaque compaction state;
 - a statistical claim that one Thread/compaction policy improves model quality,
   cost, or task success across arbitrary projects;
+- complete test design, Oracle sufficiency, coverage guarantees, or a claim
+  that arbitrary projects cannot produce false-green results;
+- an independent model Reviewer or general multi-path validation policy;
+- automatic multi-round repair, global repair-count policy, cost/time budgets,
+  repeated-failure detection, or no-progress policy;
 - automatic transient retry or undisclosed model/Thread replay;
 - an interactive approval path that can exceed the current Runtime capability
   grant;
@@ -518,8 +571,20 @@ The conservative M2 Thread rules are:
 - `ResumeGoal` creates a fresh Attempt and dispatch claim; the default recovery
   profile uses a fresh Thread;
 - a repair generation also uses a fresh Thread by default and receives the
-  exact failing Evidence plus `priorAttemptFeedback` through current compiled
+  exact current `REJECT_REPAIRABLE` decision, Acceptance Input Manifest,
+  failing Evidence, parent/child Candidate identities, preservation
+  constraints, and bounded `priorAttemptFeedback` through current compiled
   Context;
+- `priorAttemptFeedback` is fixed-schema, source-bound, and
+  non-authoritative; it cannot override Goal, Evidence, Policy, Runtime
+  Decisions, or repair-preservation constraints;
+- retaining an old Thread or transcript for diagnostics is separate from
+  Context injection. A repair does not silently receive full old chat, hidden
+  reasoning, KV cache, or raw tool history merely because they still exist;
+- deleting or losing the old Thread cannot prevent Runtime from recompiling the
+  same authoritative failure projection for a fresh repair Thread;
+- missing, stale, wrong-Goal, wrong-Candidate, or digest-mismatched repair
+  inputs block dispatch instead of asking the Worker to guess;
 - an unavailable, deleted, malformed, or mismatched Thread fails closed or
   falls back to fresh only when the Runtime policy explicitly authorizes that
   choice; and
@@ -629,6 +694,24 @@ version-2 `LOCAL_COMMAND`, `LOCAL_COMMAND_OBSERVATION_V1`,
 `LOCAL_COMMAND_ENVIRONMENT_V1`, and `LOCAL_COMMAND_TEST_RESULT` contracts plus
 an atomic bounded SQLite payload store. No M2 adapter may overload an M1 fake
 discriminator with real process evidence.
+
+[ADR 0031](../adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md)
+adds the separate verification-standard boundary. Trusted composition must
+persist an immutable acceptance-critical Verification Plan before the first
+Worker Turn. The plan fixes the required Criterion and Policy mapping, Check
+semantics, and every protected test, Oracle, script, fixture, input, and
+expected-output identity. Each frozen generation receives a concrete Check and
+Evidence binding derived from that plan.
+
+Protected assets must be outside Worker-writable Candidate roots or bound to
+their exact pre-Worker content and revalidated before execution. Mutation,
+deletion, replacement, aliasing, wrong-plan binding, or an unverifiable asset
+identity prevents eligible decisive passing Evidence. Worker-authored tests may
+be independently executed as provenance-labelled supplementary Evidence, but
+they cannot alone satisfy an acceptance-critical Verification Obligation.
+
+M2 proves this boundary with one protected fixture and does not claim that the
+Oracle completely specifies arbitrary project behavior.
 
 ## 15. Trusted composition and CLI boundary
 
@@ -1014,6 +1097,12 @@ Implementation record:
   [Slice 5 review](../reviews/m2-slice5-reject-repair-accept.md) records exact
   evidence and limitations. Slice 6 may begin but has not started.
 
+Slice 5's fresh child Candidate proves file continuity only. Its Context still
+uses the smaller M1 package, and its fixed local Check family does not yet
+implement ADR 0031's pre-Worker protected-plan authority. Those facts are
+forward requirements for Slices 6 through 8, not defects retroactively waived
+or claimed complete by Slice 5.
+
 ### Slice 6 — Thread, Compact, interruption, and restart
 
 Entry: one in-process end-to-end repair loop is green.
@@ -1028,9 +1117,27 @@ Work:
 - interrupt a current Turn on governed cancellation;
 - map process/backend/protocol failure without hidden retry;
 - persist and reopen backend execution observations;
-- reconcile an interrupted active dispatch before resume; and
+- reconcile an interrupted active dispatch before resume;
+- create a fresh Worker Session and Codex Thread for a repair generation by
+  default;
+- extend the Context Compiler, Package, Manifest, Runtime, and Store so the
+  repair dispatch binds the exact current `REJECT_REPAIRABLE` decision,
+  Acceptance Input Manifest, failing Evidence, parent/child Candidate
+  identities, preservation constraints, and bounded source-labelled
+  `priorAttemptFeedback`;
+- separate old-Thread history retention from Context injection and exclude the
+  full old chat, hidden reasoning, KV cache, and raw tool transcript by
+  default;
+- fail before dispatch when repair feedback is missing, stale, from another
+  Goal/Candidate/decision, or digest-mismatched;
 - prove a fresh Attempt and current Context can continue without redispatching
-  the old claim or trusting old Thread state.
+  the old claim or trusting old Thread state; and
+- when the one M2-authorized repair fails, terminalize its current Attempt and
+  Worker Session, persist the visible repair-required stop, and create no
+  generation 3, replacement Thread/Turn, Worker dispatch, process retry, model
+  fallback, or replay without a new explicit continuation authorization bound
+  to the exact current `REJECT_REPAIRABLE` decision, manifest, and failing
+  Evidence.
 
 Exit proof:
 
@@ -1041,11 +1148,21 @@ Exit proof:
   authority snapshot remains unchanged;
 - Compact, Thread deletion, process exit, and restart cannot remove or create
   Goal/Workflow/Candidate/Evidence/Acceptance authority;
+- deletion of the old Thread still permits reconstruction of the same
+  authoritative failure projection, while retention of that Thread does not
+  inject its full history;
+- the fresh repair Context binds only current failure Evidence and the exact
+  repair child, and non-authoritative feedback cannot override its sources;
 - old events cannot terminate the current dispatch;
 - cancellation and worker terminal events preserve the accepted ordering rule;
 - recovery creates no duplicate Candidate mutation or Turn dispatch; and
 - strict reopen reconstructs the same Runtime authority without transcript
-  replay.
+  replay;
+- after a failed bounded repair, reopen, ordinary `ResumeGoal`, duplicate
+  commands, and late old Worker events preserve the same stop and cannot create
+  another generation or dispatch; and
+- the proof forbids unauthorized automatic continuation without imposing a
+  product-wide maximum number of explicitly authorized repair generations.
 
 ### Slice 7 — Trusted composition, CLI, and live demonstration
 
@@ -1055,12 +1172,23 @@ recovery suites are green.
 Work:
 
 - wire the M2 adapters only in trusted composition;
+- implement ADR 0031's immutable pre-Worker acceptance-critical Verification
+  Plan, protected-asset identity, generation-specific Check/Evidence binding,
+  and fail-closed mutation handling;
 - expose a bounded profile/demo selection without changing direct Goal
   creation;
 - add subprocess coverage for usage, status, governed rejection, repair,
-  closeout, cancellation, audit, restart, and adapter failure;
+  repair-failed stop, closeout, cancellation, audit, restart, and adapter
+  failure;
+- add a deterministic adversarial fixture whose wrong implementation weakens a
+  Worker-writable test but still fails the pre-fixed protected Oracle;
 - run the exact bounded live edit/verify fixture through the installed Codex App
-  Server without prescribing its first post-edit result; and
+  Server without prescribing its first post-edit result; prove any repair uses
+  a fresh Thread with recompiled failure Context rather than restored chat;
+- run a separate bounded live repair-handoff fixture in which a controlled
+  Worker creates the failed frozen parent and Codex first enters only the fresh
+  repair Thread, then let independent verification determine its real result;
+  and
 - render backend lifecycle as execution detail, never completion authority.
 
 Exit proof:
@@ -1068,9 +1196,17 @@ Exit proof:
 - ordinary CLI modules cannot import or receive raw Store, client, workspace,
   verifier, or internal Runtime capabilities;
 - the project fixture and authority home are isolated and reopen correctly;
+- a weakened Worker-writable test cannot replace or satisfy the protected
+  acceptance-critical Check, while a correct implementation passes that same
+  pre-fixed Check;
 - one live Codex path proves actual isolated editing, completion-request
   admission, independent verification, and the correct first-pass or repair
-  branch without a fabricated failure; and
+  branch without a fabricated failure;
+- the live repair handoff proves Codex receives and operates on inherited parent
+  files plus exact recompiled failure Context without restoring the old Thread
+  or copying its conversation, while Codex output remains non-authoritative;
+- CLI and audit identify initial failure, fresh repair Context, repair outcome,
+  and any bounded stop without hiding an additional retry; and
 - unavailable auth, network, model, binary, or protocol compatibility produces
   a typed blocked/failure result rather than a skipped success.
 
@@ -1082,8 +1218,10 @@ Work:
 
 - add the canonical `accept:m2` runner required by the acceptance plan;
 - combine the full quality gate, offline adversarial suites, deterministic real
-  Candidate/verifier reject-repair proof, live Codex proof, public black-box
-  checks, and opening/closing source identity;
+  Candidate/verifier reject-repair proof, protected-Oracle anti-self-
+  certification proof, fresh repair-Context proof, failed-repair stop proof,
+  live Codex proof, public black-box checks, and opening/closing source
+  identity;
 - add new canonical invariants only together with executable test metadata;
 - review README, Architecture, domain status sections, ADR index, milestone
   boundary, and this status table;
@@ -1095,6 +1233,8 @@ Exit proof:
 
 - every row of the [M2 acceptance matrix](m2-acceptance-plan.md#7-mandatory-acceptance-matrix)
   passes on one source identity;
+- the report records the pre-Worker Verification Plan, protected assets,
+  repair-context source identities, new Thread boundary, and bounded stop;
 - all M1 regression gates remain green;
 - the working tree and generated protocol snapshot are stable;
 - no M2 completion statement claims Goal Intake or an external effect; and
@@ -1112,10 +1252,11 @@ M2 will use three distinct layers:
    malformed and adversarial coverage;
 2. deterministic process/filesystem integration using a controlled Worker or
    App Server fixture with the real Candidate, Verification, rejection, repair,
-   restart, and CLI paths; and
-3. one bounded live model demonstration for actual isolated editing and
-   independent verification, following either the real first-pass or governed
-   repair branch.
+   protected Oracle, fresh repair Context, failed-repair stop, restart, and CLI
+   paths; and
+3. bounded live model demonstrations for ordinary isolated editing with its
+   natural first-result branch and for a controlled-failure repair handoff,
+   both decided by independent verification.
 
 The live run does not replace deterministic negative or repair-path tests. Model
 output may vary, so acceptance must not require a deliberately incorrect first
@@ -1123,6 +1264,14 @@ edit. It asserts CodeClosure's persisted authority chain, exact fixture outcome,
 and correct branch for the observed verification result, not a specific prose
 response. A mandatory live case that cannot run is `BLOCKED`, not skipped and
 not passed through a fake.
+
+The anti-self-certification fixture is separate from the ordinary successful
+repair fixture: an incorrect implementation weakens a Candidate-local test,
+that test may genuinely pass, the protected pre-Worker Oracle still fails, and
+Acceptance remains impossible. A companion case proves a correct
+implementation can pass the same Oracle. A separate bounded-stop branch makes
+generation 2 fail and proves no unapproved generation 3 or execution is
+created, including after SQLite reopen.
 
 Every Node test invocation must report zero failed, cancelled, skipped, and
 todo tests. Fault injection must cover every new compound Store transaction and
@@ -1167,6 +1316,14 @@ Stop implementation and resolve the design before proceeding if:
 - the user's checkout or authority home would become Worker-writable;
 - a repair would require thawing a frozen generation;
 - verification would need to trust Worker command output or edit source;
+- an acceptance-critical Criterion would depend only on a Worker-writable
+  test, script, fixture, or Oracle;
+- a repair Thread would need old chat or unbound free-form feedback to learn
+  the authoritative failure;
+- a second failed bounded execution would automatically create another
+  Candidate, Thread, Turn, dispatch, process replay, or model fallback without
+  a new explicit continuation authorization bound to the exact current
+  `REJECT_REPAIRABLE` decision, manifest, and failing Evidence;
 - process recovery would require replaying an old dispatch without new Runtime
   authority;
 - schema drift would be ignored to keep a live demo running;
