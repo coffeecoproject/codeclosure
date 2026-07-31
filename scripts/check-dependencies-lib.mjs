@@ -32,6 +32,15 @@ const packagePolicies = Object.freeze([
     devDependencies: Object.freeze({}),
   }),
   Object.freeze({
+    path: 'packages/adapter-codex',
+    name: '@codeclosure/adapter-codex',
+    dependencies: Object.freeze({
+      '@codeclosure/codex-app-server-client': 'workspace:*',
+      '@codeclosure/runtime': 'workspace:*',
+    }),
+    devDependencies: Object.freeze({ '@codeclosure/domain': 'workspace:*' }),
+  }),
+  Object.freeze({
     path: 'packages/domain',
     name: '@codeclosure/domain',
     dependencies: Object.freeze({ zod: '4.4.3' }),

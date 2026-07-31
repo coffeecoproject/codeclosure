@@ -9,3 +9,4 @@ runtime evidence.
 - [M1 acceptance run — 2026-07-30](m1-acceptance-run-2026-07-30.md)
 - [M2 Slice 0 decision-closure review](m2-slice0-decision-closure.md)
 - [M2 Slice 1 App Server client review](m2-slice1-app-server-client.md)
+- [M2 Slice 2 Codex Worker Adapter review](m2-slice2-codex-worker-adapter.md)

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
@@ -70,8 +71,12 @@ packages:
 
 void test('the current manifest, lockfile, and actual source dependency graph are closed', () => {
   const audit = auditPackageDependencies(repositoryRoot);
-  assert.equal(audit.packageCount, 6);
+  assert.equal(audit.packageCount, 7);
   assert.deepEqual(audit.violations, []);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/adapter-codex'), [
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/runtime',
+  ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/codex-app-server-client'), []);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/domain'), ['zod']);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/runtime'), [
@@ -110,6 +115,40 @@ void test('the lower App Server client reverse fixture rejects every CodeClosure
     assert.equal(
       importViolation(forbidden, sourcePath, packageRoot, available),
       `undeclared package import ${forbidden}`,
+    );
+  }
+});
+
+void test('the Codex adapter reverse fixture cannot import authority owners or protocol subpaths', () => {
+  const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex');
+  const sourcePaths = [
+    resolve(packageRoot, 'src/adapter.ts'),
+    resolve(packageRoot, 'src/contracts.ts'),
+    resolve(packageRoot, 'src/index.ts'),
+    resolve(packageRoot, 'src/protocol.ts'),
+  ];
+  const available = new Set([
+    '@codeclosure/adapter-codex',
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/runtime',
+  ]);
+  for (const sourcePath of sourcePaths) {
+    for (const forbidden of [
+      '@codeclosure/domain',
+      '@codeclosure/store-sqlite',
+      '@codeclosure/testing',
+      '@codeclosure/cli',
+    ]) {
+      assert.notEqual(importViolation(forbidden, sourcePath, packageRoot, available), undefined);
+    }
+    const specifiers = collectModuleSpecifiers(readFileSync(sourcePath, 'utf8'), sourcePath);
+    assert.equal(
+      specifiers.some(
+        (specifier) =>
+          specifier.startsWith('@codeclosure/runtime/') ||
+          specifier.startsWith('@codeclosure/codex-app-server-client/'),
+      ),
+      false,
     );
   }
 });

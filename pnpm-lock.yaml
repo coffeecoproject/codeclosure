@@ -54,6 +54,19 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/adapter-codex:
+    dependencies:
+      '@codeclosure/codex-app-server-client':
+        specifier: workspace:*
+        version: link:../codex-app-server-client
+      '@codeclosure/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+    devDependencies:
+      '@codeclosure/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/codex-app-server-client: {}
 
   packages/domain:

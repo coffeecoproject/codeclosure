@@ -698,7 +698,7 @@ export class AppServerClient {
   }
 
   #receiveStdout(chunk: Buffer): void {
-    if (this.#failure !== undefined || this.#closed || this.#requestedShutdown) {
+    if (this.#failure !== undefined || this.#closed) {
       return;
     }
     if (this.#stdoutBuffer.length + chunk.length > this.#limits.maximumBufferedStdoutBytes) {
@@ -1151,7 +1151,7 @@ export class AppServerClient {
   }
 
   #stdoutEnded(): void {
-    if (this.#requestedShutdown || this.#closed) {
+    if (this.#closed) {
       return;
     }
     if (this.#stdoutBuffer.length !== 0) {
@@ -1161,6 +1161,9 @@ export class AppServerClient {
           'App Server stdout ended with an incomplete protocol line',
         ),
       );
+      return;
+    }
+    if (this.#requestedShutdown) {
       return;
     }
     this.#fail(

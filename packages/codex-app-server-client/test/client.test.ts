@@ -13,6 +13,7 @@ import {
   isJsonObject,
   serverRequestHandler,
   startAppServerClient,
+  toProtocolJsonValue,
   type AppServerClient,
   type AppServerClientLimits,
   type AppServerNotification,
@@ -144,6 +145,21 @@ void test('bounded JSON objects have no inherited fields and preserve __proto__ 
   assert.equal(prototypeData['forged'], true);
 });
 
+void test('protocol JSON conversion preserves __proto__ as outbound data without prototype mutation', () => {
+  const value = parseBoundedJson(Buffer.from('{"__proto__":{"forged":true},"ordinary":"value"}'), {
+    maximumCollectionEntries: 8,
+    maximumDepth: 4,
+    maximumNodes: 8,
+  });
+  const converted = toProtocolJsonValue(value);
+  if (typeof converted !== 'object' || converted === null || Array.isArray(converted)) {
+    assert.fail('converted protocol fixture must be an object');
+  }
+  assert.equal(Object.getPrototypeOf(converted), Object.prototype);
+  assert.equal(Object.hasOwn(converted, '__proto__'), true);
+  assert.equal(JSON.stringify(converted), '{"__proto__":{"forged":true},"ordinary":"value"}');
+});
+
 void test('initialization, Thread/Turn, manual compaction, and later continuation share one bounded client', async (t) => {
   const compactionEvents: string[] = [];
   const notifications: string[] = [];
@@ -205,6 +221,16 @@ void test('controlled launch ignores poisoned ambient environment and redacts se
   assert.equal(observation.secretPresent, true);
   assert.ok(!observation.environmentNames.includes('CODECLOSURE_POISON_VALUE'));
   assert.deepEqual(client.launchSummary.secretEnvironmentNames, ['OPENAI_API_KEY']);
+  assert.deepEqual(client.launchSummary.nonSecretEnvironment, {
+    CODEX_HOME: realpathSync(join(root, 'codex-home')),
+    HOME: realpathSync(join(root, 'process-home')),
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    NO_COLOR: '1',
+    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    TERM: 'dumb',
+    TMPDIR: realpathSync(join(root, 'process-tmp')),
+  });
   assert.ok(!JSON.stringify(client.launchSummary).includes(secret));
 });
 

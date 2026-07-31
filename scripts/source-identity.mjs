@@ -3,9 +3,26 @@ import { execFileSync } from 'node:child_process';
 import { log } from 'node:console';
 import { existsSync, lstatSync, readFileSync, readlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
+import process from 'node:process';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
-const reviewExclusion = 'docs/reviews/m1-completion-review.md';
+const defaultReviewExclusion = 'docs/reviews/m1-completion-review.md';
+
+function selectedReviewExclusion(arguments_) {
+  if (arguments_.length === 0) {
+    return defaultReviewExclusion;
+  }
+  if (
+    arguments_.length !== 2 ||
+    arguments_[0] !== '--review-exclusion' ||
+    !/^docs\/reviews\/[a-z0-9][a-z0-9-]*\.md$/u.test(arguments_[1] ?? '')
+  ) {
+    throw new TypeError('Usage: source-identity.mjs [--review-exclusion docs/reviews/<review>.md]');
+  }
+  return arguments_[1];
+}
+
+const reviewExclusion = selectedReviewExclusion(process.argv.slice(2));
 
 function git(args) {
   return execFileSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' });

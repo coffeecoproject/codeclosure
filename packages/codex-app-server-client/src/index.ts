@@ -37,8 +37,11 @@ export type { InitializeParams } from './protocol/InitializeParams.js';
 export type { InitializeResponse } from './protocol/InitializeResponse.js';
 export type { ServerNotification } from './protocol/ServerNotification.js';
 export type { ServerRequest } from './protocol/ServerRequest.js';
+export { toProtocolJsonValue } from './protocol-json.js';
 export {
   isJsonObject,
+  parseBoundedJson,
+  type JsonLimits,
   type JsonObject,
   type JsonPrimitive,
   type JsonValue,

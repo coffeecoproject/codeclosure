@@ -36,9 +36,14 @@ export interface ControlledAppServerLaunchInput {
 export interface AppServerLaunchSummary {
   readonly arguments: readonly string[];
   readonly codexHome: string;
+  readonly codexVersion: string;
   readonly cwd: string;
+  readonly delegatedExecutableDigest: string;
   readonly environmentNames: readonly string[];
   readonly executablePath: string;
+  readonly launcherDigest: string;
+  readonly nonSecretEnvironment: Readonly<Record<string, string>>;
+  readonly protocolSnapshotDigest: string;
   readonly secretEnvironmentNames: readonly string[];
 }
 
@@ -115,7 +120,7 @@ function makeLaunch(
     );
   }
   const secrets = credentialEnvironment(input.credentialEnvironment);
-  const environment = Object.freeze({
+  const nonSecretEnvironment = Object.freeze({
     CODEX_HOME: codexHome,
     HOME: processHome,
     LANG: input.locale ?? 'C.UTF-8',
@@ -124,15 +129,23 @@ function makeLaunch(
     PATH: input.executableSearchPath,
     TERM: 'dumb',
     TMPDIR: temporaryDirectory,
+  });
+  const environment = Object.freeze({
+    ...nonSecretEnvironment,
     ...secrets,
   });
   const secretEnvironmentNames = Object.freeze(Object.keys(secrets).sort());
   const summary: AppServerLaunchSummary = Object.freeze({
     arguments: Object.freeze([...arguments_]),
     codexHome,
+    codexVersion: input.installation.profile.version,
     cwd,
+    delegatedExecutableDigest: input.installation.profile.delegatedExecutableDigest,
     environmentNames: Object.freeze(Object.keys(environment).sort()),
     executablePath,
+    launcherDigest: input.installation.profile.launcherDigest,
+    nonSecretEnvironment,
+    protocolSnapshotDigest: input.installation.profile.snapshotDigest,
     secretEnvironmentNames,
   });
   return Object.freeze({

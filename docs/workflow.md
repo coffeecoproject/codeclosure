@@ -23,9 +23,13 @@ controlled Candidate copy/lease, and real-verification contracts, but no M2
 Workflow state or Store migration is implemented. The bounded 0.146.0 live
 capability probe passes. The Slice 1 lower App Server client and offline
 fixtures are implemented and its bounded live compatibility preflight passes;
-no Codex client event is mapped into Workflow state because the Slice 2 Worker
-Adapter has not started. Goal Intake is an accepted pre-Goal target for M2.5;
-it is not implemented and does not add another Workflow phase.
+the Slice 2 Goal-bound Adapter now maps one exact `IMPLEMENT` Context and
+strictly decoded terminal payload into the existing Worker event contract. It
+does not mutate Workflow state, persist external execution, create or freeze a
+Candidate, or issue Acceptance; ordinary M1 dispatch and event admission remain
+the only path into Workflow authority. Trusted Runtime/Store composition is
+later M2 work. Goal Intake is an accepted pre-Goal target for M2.5; it is not
+implemented and does not add another Workflow phase.
 
 ## Purpose
 

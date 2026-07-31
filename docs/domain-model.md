@@ -16,7 +16,14 @@ controlled-copy workspace-lease, and real local-verification contracts in ADR
 SQLite behavior yet. The bounded 0.146.0 live capability probe now passes;
 the Slice 1 lower client, protocol snapshot, offline fixtures, and live
 compatibility preflight are implemented without allowing a generated Codex
-protocol type to enter the Domain. Slice 2 Domain integration has not started.
+protocol type to enter the Domain. Slice 2 deliberately adds no Domain
+integration. Its Goal-bound Adapter is implemented outside the Domain: it consumes
+the public `WorkerRequest`, an immutable protocol-neutral external-execution
+directive, and an already-resolved full Candidate workspace-lease projection;
+it returns bounded observations and at most one existing `WorkerEvent`. The
+planned `ExternalExecutionRecord`, Execution Profile schema version 2,
+Candidate lease authority, and their Store codecs/migrations remain
+unimplemented Domain work for later M2 slices.
 
 ## Design Rules
 

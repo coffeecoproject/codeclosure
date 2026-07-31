@@ -4,6 +4,7 @@
     { "path": "./packages/codex-app-server-client" },
     { "path": "./packages/domain" },
     { "path": "./packages/runtime" },
+    { "path": "./packages/adapter-codex" },
     { "path": "./packages/store-sqlite" },
     { "path": "./packages/testing" },
     { "path": "./apps/cli" }

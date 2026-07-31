@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 and 1 are implemented and Slice 2 has not started
+- Status: In progress; Slices 0 through 2 are implemented and Slice 3 has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -62,7 +62,7 @@ From the user's point of view, M2 should behave plainly:
 | --- | --- | --- | --- |
 | 0 | authority and protocol decision closure | Implemented | [Slice 0 decision-closure review](../reviews/m2-slice0-decision-closure.md), accepted ADRs, focused probes |
 | 1 | version-bound App Server client | Implemented | [Slice 1 App Server client review](../reviews/m2-slice1-app-server-client.md), pinned snapshot, offline fixtures, and bounded live preflight |
-| 2 | Goal-bound Codex Worker Adapter | Not started | adapter contract and phase-mapping tests |
+| 2 | Goal-bound Codex Worker Adapter | Implemented | [Slice 2 review](../reviews/m2-slice2-codex-worker-adapter.md), adapter contract and phase-mapping tests |
 | 3 | real isolated Candidate workspace | Not started | containment, freeze, drift, and recovery tests |
 | 4 | real Verification Runner | Not started | runner, Evidence, mutation, and limit tests |
 | 5 | reject, repair, and accept orchestration | Not started | Runtime integration and adversarial tests |
@@ -819,6 +819,29 @@ Exit proof:
   compaction policy fails closed without storing hidden reasoning; and
 - the adapter cannot reach the Store, internal Runtime kernel, Candidate
   mutation, Acceptance, or Intake capability.
+
+Current execution record on 2026-07-31:
+
+- `@codeclosure/adapter-codex` depends only on the lower client and public
+  Runtime Worker contracts; production import audits reject Domain, Store,
+  testing, CLI, Runtime-internal, generated-protocol-subpath, and client-testing
+  access;
+- one immutable digest-bound directive covers the current Worker Request,
+  already-resolved full Candidate workspace lease, verified backend/config,
+  permission and instruction inputs, exact fresh/resume policy, one bounded
+  Turn, compaction/retention/fallback policy, and closed response mapping;
+- 40 deterministic fake-server cases cover the valid path, non-authoritative
+  diagnostics and false-completion claims, effective-input drift, wrong
+  bindings, missing terminal completeness, split/duplicate lifecycle,
+  field-level known and unknown Item rejection, prompt-bound user-message
+  projection, non-secret environment drift and exact/overlapping protected-root
+  rejection, unsupported integrations, approval, compaction, cancellation both
+  before and after terminal parsing, process/backend failure, exact
+  replay/conflict, and observation redaction with zero skips;
+- the 41-case lower-client suite and the complete M1 regression baseline remain
+  green; and
+- the [Slice 2 review](../reviews/m2-slice2-codex-worker-adapter.md) records a
+  `PASS`. Slice 2 is implemented and Slice 3 may begin, but has not started.
 
 ### Slice 3 — Real isolated Candidate workspace
 

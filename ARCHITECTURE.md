@@ -28,9 +28,18 @@ and ADR 0028 through ADR 0030 are accepted. Slice 1 is implemented: the
 version-bound lower client, pinned protocol snapshot, deterministic fake
 server, offline adversarial suite, and bounded live compatibility preflight
 pass. The [Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
-the exact evidence and limitations. No Goal-bound Codex Worker adapter, real
-Candidate adapter, real verifier, or M2 migration is implemented yet; Slice 2
-has not started.
+the exact evidence and limitations. Slice 2 is implemented: the separate
+Goal-bound Codex Worker Adapter consumes only the lower client and public
+Worker contracts, validates an immutable external-execution directive and
+already-resolved Candidate lease, maps the current `IMPLEMENT` Context into one
+bounded Thread/Turn, rejects effective-input or lifecycle drift, and emits at
+most one existing closed-schema Worker event. Its bounded observations retain
+only identities, counts, and typed disposition, not transcript or private
+reasoning content. The
+[Slice 2 review](docs/reviews/m2-slice2-codex-worker-adapter.md) records the
+offline evidence and limitations. Real Candidate creation, Runtime/Store
+external-execution persistence, real verification, trusted composition, and a
+live Goal-bound execution remain later M2 work; Slice 3 has not started.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
