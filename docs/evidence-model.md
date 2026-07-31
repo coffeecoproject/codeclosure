@@ -7,10 +7,12 @@ implementation provides logical Candidate-freeze Evidence, independent fake
 verification observations, monotonic eligibility, and canonical Evidence Sets.
 The deterministic Acceptance Engine consumes those records through a separate
 authority boundary; Evidence still cannot approve itself. ADR 0030 fixes the
-planned M2 real local-command variants and bounded payload-storage contract,
-but no real verifier, version-2 codec, payload table, or migration is
-implemented yet. Pre-Goal Intake observations are not part of the implemented
-Evidence model and cannot satisfy a formal Goal's Acceptance.
+M2 real local-command variants and bounded payload-storage contract. Slice 4
+implements the strict version-2 codecs, Runtime-derived local-command Evidence,
+Darwin local verifier, and immutable SQLite payload table with transactional
+and reopen backstops. It does not compose technical Acceptance or closeout;
+that remains Slice 5. Pre-Goal Intake observations are not part of the
+implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
 
 ## Purpose
 
@@ -175,7 +177,7 @@ The M1 Check Specification is also the producer authorization record. Its
 `producerType` and `producerIdentity` are immutable, and a persisted Evidence
 record MUST match both. A runner response cannot override them.
 
-### M2 local-command variant — planned
+### M2 local-command variant — implemented in Slice 4
 
 M2 adds a closed schema-version-2 `LOCAL_COMMAND` Check Specification. Its
 identity MUST include the exact executable realpath and content digest, ordered
@@ -282,12 +284,12 @@ derives producer and Check Specification bindings, environment identity,
 result status, and payload reference from the validated request and typed
 observation, and hashes the observation as the fake payload reference.
 Runner-supplied authority fields and unknown fields are rejected.
-No separate large blob is claimed by M1. The bounded M2 design stores retained
+No separate large blob is claimed by M1. The bounded M2 implementation stores retained
 stdout/stderr bytes in an immutable content-addressed SQLite payload table and
 commits the payload, Evidence, initial eligibility, Runtime effect, audit, and
-processed-command outcome atomically. It is planned for Slice 4 and is not
-present in the current schema. Larger or arbitrary-project payload storage
-remains a later explicit decision.
+processed-command outcome atomically. Startup rehashes referenced payloads and
+rejects missing, corrupt, or malformed authority. Larger or
+arbitrary-project payload storage remains a later explicit decision.
 
 The worker-writable Candidate must not contain the only copy of evidence used
 for acceptance. Project-local exports may be generated for human inspection,
@@ -385,9 +387,9 @@ explanation, but neither can replace fresh formal verification. See
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and [Goal Intake](goal-intake.md).
 
-## M1 Boundary
+## M1 Regression Boundary and M2 Extension
 
-The current Candidate/Evidence implementation includes:
+The preserved M1 Candidate/Evidence boundary includes:
 
 - immutable Evidence records;
 - separate monotonic Evidence eligibility;
@@ -401,6 +403,12 @@ The current Candidate/Evidence implementation includes:
 - audit-sequence reconstruction of retained historical Evidence Sets;
 - explicit atomic invalidation after Candidate drift;
 - migration and reopen validation of retained authority.
+
+Slice 4 adds one closed local-command Check and Evidence variant, bounded
+Darwin process isolation, pre/post frozen-Candidate observation, Runtime-owned
+status and payload-reference derivation, and atomic SQLite payload persistence.
+It does not add an Acceptance rule, repair transition, closeout path, general
+container runner, browser/device verifier, or arbitrary blob store.
 
 The Evidence boundary does not interpret its own records as Goal acceptance.
 The current Slice 6 Acceptance Engine separately maps pass, fail, runner-error,

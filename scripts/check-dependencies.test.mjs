@@ -71,7 +71,7 @@ packages:
 
 void test('the current manifest, lockfile, and actual source dependency graph are closed', () => {
   const audit = auditPackageDependencies(repositoryRoot);
-  assert.equal(audit.packageCount, 8);
+  assert.equal(audit.packageCount, 9);
   assert.deepEqual(audit.violations, []);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/adapter-codex'), [
     '@codeclosure/codex-app-server-client',
@@ -84,6 +84,9 @@ void test('the current manifest, lockfile, and actual source dependency graph ar
     'zod',
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/workspace-local'), [
+    '@codeclosure/runtime',
+  ]);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/verification-local'), [
     '@codeclosure/runtime',
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/store-sqlite'), [
@@ -175,6 +178,35 @@ void test('the local workspace adapter depends only on public Runtime Candidate 
       '@codeclosure/domain',
       '@codeclosure/store-sqlite',
       '@codeclosure/testing',
+    ]) {
+      assert.notEqual(importViolation(forbidden, sourcePath, packageRoot, available), undefined);
+    }
+    const specifiers = collectModuleSpecifiers(readFileSync(sourcePath, 'utf8'), sourcePath);
+    assert.equal(
+      specifiers.some((specifier) => specifier.startsWith('@codeclosure/runtime/')),
+      false,
+    );
+  }
+});
+
+void test('the local verification adapter depends only on public Runtime verification contracts', () => {
+  const packageRoot = resolve(repositoryRoot, 'packages/verification-local');
+  const sourcePaths = [
+    resolve(packageRoot, 'src/errors.ts'),
+    resolve(packageRoot, 'src/index.ts'),
+    resolve(packageRoot, 'src/local-command-runner.ts'),
+    resolve(packageRoot, 'src/seatbelt-isolation.ts'),
+  ];
+  const available = new Set(['@codeclosure/runtime', '@codeclosure/verification-local']);
+  for (const sourcePath of sourcePaths) {
+    for (const forbidden of [
+      '@codeclosure/adapter-codex',
+      '@codeclosure/cli',
+      '@codeclosure/codex-app-server-client',
+      '@codeclosure/domain',
+      '@codeclosure/store-sqlite',
+      '@codeclosure/testing',
+      '@codeclosure/workspace-local',
     ]) {
       assert.notEqual(importViolation(forbidden, sourcePath, packageRoot, available), undefined);
     }

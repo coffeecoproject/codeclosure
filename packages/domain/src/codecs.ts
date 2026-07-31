@@ -46,9 +46,13 @@ import {
   CheckSpecificationKind,
   EvidenceEligibilityState,
   EvidenceKind,
+  EvidencePayloadStream,
   EvidenceProducerType,
   EvidenceResultStatus,
   FakeVerificationDetailCode,
+  LocalCommandDiagnosticCode,
+  LocalCommandEnvironmentInheritance,
+  LocalCommandTerminationKind,
   assertCheckSpecificationInvariant,
   assertEvidenceEligibilityInvariant,
   assertEvidenceRecordInvariant,
@@ -57,6 +61,7 @@ import {
   type CheckSpecification,
   type EvidenceEligibility,
   type EvidenceEnvironmentIdentity,
+  type LocalCommandEnvironmentIdentity,
   type EvidenceObservation,
   type EvidenceRecord,
   type EvidenceSet,
@@ -128,7 +133,6 @@ const workerResultKindSchema = z.enum(Object.values(WorkerResultKind));
 const evidenceProducerTypeSchema = z.enum(Object.values(EvidenceProducerType));
 const evidenceKindSchema = z.enum(Object.values(EvidenceKind));
 const evidenceEligibilityStateSchema = z.enum(Object.values(EvidenceEligibilityState));
-const checkSpecificationKindSchema = z.enum(Object.values(CheckSpecificationKind));
 
 function assertNoExplicitUndefined(value: unknown, optionalKeys: readonly string[]): void {
   if (typeof value !== 'object' || value === null) {
@@ -965,12 +969,15 @@ export function decodeCandidateEvent(value: unknown): CandidateStateChanged {
   });
 }
 
-const checkSpecificationSchema = z
+const m1CheckSpecificationSchema = z
   .object({
     schemaVersion: z.literal(1),
     id: z.string(),
     version: nonBlankStringSchema,
-    kind: checkSpecificationKindSchema,
+    kind: z.enum([
+      CheckSpecificationKind.CANDIDATE_FREEZE,
+      CheckSpecificationKind.FAKE_VERIFICATION,
+    ]),
     producerType: evidenceProducerTypeSchema,
     producerIdentity: nonBlankStringSchema,
     operation: nonBlankStringSchema,
@@ -984,9 +991,79 @@ const checkSpecificationSchema = z
   })
   .strict();
 
+const localCommandCheckSpecificationSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    id: z.string(),
+    version: nonBlankStringSchema,
+    kind: z.literal(CheckSpecificationKind.LOCAL_COMMAND),
+    producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
+    producerIdentity: nonBlankStringSchema,
+    operation: nonBlankStringSchema,
+    cwdIdentity: nonBlankStringSchema,
+    inputRefs: z.tuple([z.string()]),
+    environmentPolicy: z.literal('LOCAL_COMMAND_EXPLICIT_V1'),
+    timeoutMilliseconds: z.number().int().positive(),
+    outputLimitBytes: z.number().int().positive(),
+    expectedObservationSchema: z.literal('LOCAL_COMMAND_OBSERVATION_V1'),
+    cleanupPolicy: z.literal('LOCAL_COMMAND_RUN_ROOT_V1'),
+    runnerIdentity: nonBlankStringSchema,
+    runnerVersion: nonBlankStringSchema,
+    executablePath: nonBlankStringSchema,
+    executableDigest: z.string(),
+    declaredToolVersion: nonBlankStringSchema,
+    argv: z.array(z.string()).max(1_024),
+    candidateGenerationId: z.string(),
+    candidateDigest: z.string(),
+    workspaceLeaseId: nonBlankStringSchema,
+    workspaceLeaseDigest: z.string(),
+    cwd: nonBlankStringSchema,
+    environmentInheritance: z.literal(LocalCommandEnvironmentInheritance.NONE),
+    allowedEnvironmentVariables: z.array(nonBlankStringSchema).max(1_024),
+    environmentDigest: z.string(),
+    isolationProfileId: nonBlankStringSchema,
+    isolationProfileDigest: z.string(),
+    candidateAccess: z.literal('READ_ONLY'),
+    authorityAccess: z.literal('NONE'),
+    credentialAccess: z.literal('NONE'),
+    networkAccess: z.literal('DISABLED'),
+    terminationGraceMilliseconds: z.number().int().positive(),
+    stdoutLimitBytes: z.number().int().positive(),
+    stderrLimitBytes: z.number().int().positive(),
+    totalOutputLimitBytes: z.number().int().positive(),
+    payloadRetentionLimitBytes: z.number().int().positive(),
+    acceptedExitCodes: z.array(z.number().int().min(0).max(255)).min(1).max(256),
+  })
+  .strict();
+
+const checkSpecificationSchema = z.discriminatedUnion('schemaVersion', [
+  m1CheckSpecificationSchema,
+  localCommandCheckSpecificationSchema,
+]);
+
 export function decodeCheckSpecification(value: unknown): CheckSpecification {
   assertNoExplicitUndefined(value, ['cleanupPolicy']);
   const parsed = checkSpecificationSchema.parse(value);
+  if (parsed.schemaVersion === 1) {
+    const checkSpec: CheckSpecification = Object.freeze({
+      schemaVersion: parsed.schemaVersion,
+      id: checkSpecificationId(parsed.id),
+      version: parsed.version,
+      kind: parsed.kind,
+      producerType: parsed.producerType,
+      producerIdentity: parsed.producerIdentity,
+      operation: parsed.operation,
+      cwdIdentity: parsed.cwdIdentity,
+      inputRefs: Object.freeze([...parsed.inputRefs]),
+      environmentPolicy: parsed.environmentPolicy,
+      timeoutMilliseconds: parsed.timeoutMilliseconds,
+      outputLimitBytes: parsed.outputLimitBytes,
+      expectedObservationSchema: parsed.expectedObservationSchema,
+      ...(parsed.cleanupPolicy === undefined ? {} : { cleanupPolicy: parsed.cleanupPolicy }),
+    });
+    assertCheckSpecificationInvariant(checkSpec);
+    return checkSpec;
+  }
   const checkSpec: CheckSpecification = Object.freeze({
     schemaVersion: parsed.schemaVersion,
     id: checkSpecificationId(parsed.id),
@@ -996,12 +1073,38 @@ export function decodeCheckSpecification(value: unknown): CheckSpecification {
     producerIdentity: parsed.producerIdentity,
     operation: parsed.operation,
     cwdIdentity: parsed.cwdIdentity,
-    inputRefs: Object.freeze([...parsed.inputRefs]),
+    inputRefs: Object.freeze([candidateGenerationId(parsed.inputRefs[0])] as const),
     environmentPolicy: parsed.environmentPolicy,
     timeoutMilliseconds: parsed.timeoutMilliseconds,
     outputLimitBytes: parsed.outputLimitBytes,
     expectedObservationSchema: parsed.expectedObservationSchema,
-    ...(parsed.cleanupPolicy === undefined ? {} : { cleanupPolicy: parsed.cleanupPolicy }),
+    cleanupPolicy: parsed.cleanupPolicy,
+    runnerIdentity: parsed.runnerIdentity,
+    runnerVersion: parsed.runnerVersion,
+    executablePath: parsed.executablePath,
+    executableDigest: sha256Digest(parsed.executableDigest),
+    declaredToolVersion: parsed.declaredToolVersion,
+    argv: Object.freeze([...parsed.argv]),
+    candidateGenerationId: candidateGenerationId(parsed.candidateGenerationId),
+    candidateDigest: sha256Digest(parsed.candidateDigest),
+    workspaceLeaseId: parsed.workspaceLeaseId,
+    workspaceLeaseDigest: sha256Digest(parsed.workspaceLeaseDigest),
+    cwd: parsed.cwd,
+    environmentInheritance: parsed.environmentInheritance,
+    allowedEnvironmentVariables: Object.freeze([...parsed.allowedEnvironmentVariables]),
+    environmentDigest: sha256Digest(parsed.environmentDigest),
+    isolationProfileId: parsed.isolationProfileId,
+    isolationProfileDigest: sha256Digest(parsed.isolationProfileDigest),
+    candidateAccess: parsed.candidateAccess,
+    authorityAccess: parsed.authorityAccess,
+    credentialAccess: parsed.credentialAccess,
+    networkAccess: parsed.networkAccess,
+    terminationGraceMilliseconds: parsed.terminationGraceMilliseconds,
+    stdoutLimitBytes: parsed.stdoutLimitBytes,
+    stderrLimitBytes: parsed.stderrLimitBytes,
+    totalOutputLimitBytes: parsed.totalOutputLimitBytes,
+    payloadRetentionLimitBytes: parsed.payloadRetentionLimitBytes,
+    acceptedExitCodes: Object.freeze([...parsed.acceptedExitCodes]),
   });
   assertCheckSpecificationInvariant(checkSpec);
   return checkSpec;
@@ -1065,22 +1168,64 @@ const fakeVerificationObservationSchema = z
     detailCode: z.enum(Object.values(FakeVerificationDetailCode)),
   })
   .strict();
+const localCommandObservationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal('LOCAL_COMMAND_OBSERVATION_V1'),
+    terminationKind: z.enum(Object.values(LocalCommandTerminationKind)),
+    exitCode: z.number().int().min(0).max(255).optional(),
+    signal: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine((value) => !value.includes('\u0000'))
+      .optional(),
+    stdoutObservedByteCount: z.number().int().nonnegative(),
+    stdoutRetainedByteCount: z.number().int().nonnegative(),
+    stdoutTruncated: z.boolean(),
+    stderrObservedByteCount: z.number().int().nonnegative(),
+    stderrRetainedByteCount: z.number().int().nonnegative(),
+    stderrTruncated: z.boolean(),
+    diagnosticCode: z.enum(Object.values(LocalCommandDiagnosticCode)),
+  })
+  .strict();
 const evidenceObservationSchema = z.discriminatedUnion('kind', [
   candidateFreezeObservationSchema,
   fakeVerificationObservationSchema,
+  localCommandObservationSchema,
 ]);
 
 export function decodeEvidenceObservation(value: unknown): EvidenceObservation {
+  assertNoExplicitUndefined(value, ['exitCode', 'signal']);
   const parsed = evidenceObservationSchema.parse(value);
-  return parsed.kind === EvidenceKind.CANDIDATE_FREEZE
-    ? Object.freeze({
-        schemaVersion: parsed.schemaVersion,
-        kind: parsed.kind,
-        firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
-        secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
-        changeSetDigest: sha256Digest(parsed.changeSetDigest),
-      })
-    : Object.freeze({ ...parsed });
+  let observation: EvidenceObservation;
+  if (parsed.kind === EvidenceKind.CANDIDATE_FREEZE) {
+    observation = Object.freeze({
+      schemaVersion: parsed.schemaVersion,
+      kind: parsed.kind,
+      firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
+      secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
+      changeSetDigest: sha256Digest(parsed.changeSetDigest),
+    });
+  } else if (parsed.kind === 'FAKE_VERIFICATION') {
+    observation = Object.freeze({ ...parsed });
+  } else {
+    observation = Object.freeze({
+      schemaVersion: parsed.schemaVersion,
+      kind: parsed.kind,
+      terminationKind: parsed.terminationKind,
+      ...(parsed.exitCode === undefined ? {} : { exitCode: parsed.exitCode }),
+      ...(parsed.signal === undefined ? {} : { signal: parsed.signal }),
+      stdoutObservedByteCount: parsed.stdoutObservedByteCount,
+      stdoutRetainedByteCount: parsed.stdoutRetainedByteCount,
+      stdoutTruncated: parsed.stdoutTruncated,
+      stderrObservedByteCount: parsed.stderrObservedByteCount,
+      stderrRetainedByteCount: parsed.stderrRetainedByteCount,
+      stderrTruncated: parsed.stderrTruncated,
+      diagnosticCode: parsed.diagnosticCode,
+    });
+  }
+  return observation;
 }
 
 const evidenceEnvironmentIdentitySchema = z
@@ -1092,17 +1237,53 @@ const evidenceEnvironmentIdentitySchema = z
   })
   .strict();
 
-function decodeEvidenceEnvironmentIdentity(value: unknown): EvidenceEnvironmentIdentity {
-  const parsed = evidenceEnvironmentIdentitySchema.parse(value);
+const localCommandEnvironmentIdentitySchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal('LOCAL_COMMAND_ENVIRONMENT_V1'),
+    identity: nonBlankStringSchema,
+    digest: z.string(),
+    runnerIdentity: nonBlankStringSchema,
+    runnerVersion: nonBlankStringSchema,
+    executableDigest: z.string(),
+    environmentDigest: z.string(),
+    isolationProfileId: nonBlankStringSchema,
+    isolationProfileDigest: z.string(),
+  })
+  .strict();
+
+export function decodeEvidenceEnvironmentIdentity(
+  value: unknown,
+): EvidenceEnvironmentIdentity | LocalCommandEnvironmentIdentity {
+  const parsed = z
+    .discriminatedUnion('kind', [
+      evidenceEnvironmentIdentitySchema,
+      localCommandEnvironmentIdentitySchema,
+    ])
+    .parse(value);
+  if (parsed.kind === 'M1_LOGICAL') {
+    return Object.freeze({
+      schemaVersion: parsed.schemaVersion,
+      kind: parsed.kind,
+      identity: parsed.identity,
+      digest: sha256Digest(parsed.digest),
+    });
+  }
   return Object.freeze({
     schemaVersion: parsed.schemaVersion,
     kind: parsed.kind,
     identity: parsed.identity,
     digest: sha256Digest(parsed.digest),
+    runnerIdentity: parsed.runnerIdentity,
+    runnerVersion: parsed.runnerVersion,
+    executableDigest: sha256Digest(parsed.executableDigest),
+    environmentDigest: sha256Digest(parsed.environmentDigest),
+    isolationProfileId: parsed.isolationProfileId,
+    isolationProfileDigest: sha256Digest(parsed.isolationProfileDigest),
   });
 }
 
-const evidenceRecordBaseShape = {
+const evidenceRecordV1BaseShape = {
   id: z.string(),
   schemaVersion: z.literal(1),
   producerIdentity: nonBlankStringSchema,
@@ -1114,7 +1295,7 @@ const evidenceRecordBaseShape = {
   candidateDigest: z.string(),
   policyBundleId: z.string(),
   policyBundleDigest: z.string(),
-  checkSpec: checkSpecificationSchema,
+  checkSpec: m1CheckSpecificationSchema,
   startedAt: z.string(),
   endedAt: z.string(),
   payloadRefs: z.array(z.string()).length(1),
@@ -1125,7 +1306,7 @@ const evidenceRecordBaseShape = {
 
 const candidateFreezeEvidenceRecordSchema = z
   .object({
-    ...evidenceRecordBaseShape,
+    ...evidenceRecordV1BaseShape,
     kind: z.literal(EvidenceKind.CANDIDATE_FREEZE),
     producerType: z.literal(EvidenceProducerType.CANDIDATE_MANAGER),
     observation: candidateFreezeObservationSchema,
@@ -1134,7 +1315,7 @@ const candidateFreezeEvidenceRecordSchema = z
   .strict();
 const testResultEvidenceRecordSchema = z
   .object({
-    ...evidenceRecordBaseShape,
+    ...evidenceRecordV1BaseShape,
     kind: z.literal(EvidenceKind.TEST_RESULT),
     producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
     verificationObligationId: z.string(),
@@ -1148,16 +1329,58 @@ const testResultEvidenceRecordSchema = z
     ]),
   })
   .strict();
+const evidencePayloadReferenceSchema = z
+  .object({
+    stream: z.enum(Object.values(EvidencePayloadStream)),
+    digest: z.string(),
+    byteLength: z.number().int().nonnegative(),
+  })
+  .strict();
+const localCommandTestResultEvidenceRecordSchema = z
+  .object({
+    id: z.string(),
+    schemaVersion: z.literal(2),
+    kind: z.literal(EvidenceKind.LOCAL_COMMAND_TEST_RESULT),
+    producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
+    producerIdentity: nonBlankStringSchema,
+    goalId: z.string(),
+    goalRevision: z.number().int().positive(),
+    workflowId: z.string(),
+    attemptId: z.string(),
+    verificationObligationId: z.string(),
+    candidateGenerationId: z.string(),
+    candidateDigest: z.string(),
+    policyBundleId: z.string(),
+    policyBundleDigest: z.string(),
+    checkSpec: localCommandCheckSpecificationSchema,
+    environmentIdentity: localCommandEnvironmentIdentitySchema,
+    workspaceLeaseId: nonBlankStringSchema,
+    workspaceLeaseDigest: z.string(),
+    startedAt: z.string(),
+    endedAt: z.string(),
+    observation: localCommandObservationSchema,
+    payloadRefs: z.tuple([evidencePayloadReferenceSchema, evidencePayloadReferenceSchema]),
+    observationDigest: z.string(),
+    resultStatus: z.enum([
+      EvidenceResultStatus.PASS,
+      EvidenceResultStatus.FAIL,
+      EvidenceResultStatus.RUNNER_ERROR,
+      EvidenceResultStatus.TIMEOUT,
+    ]),
+    recordedAt: z.string(),
+    recordDigest: z.string(),
+  })
+  .strict();
 const evidenceRecordSchema = z.discriminatedUnion('kind', [
   candidateFreezeEvidenceRecordSchema,
   testResultEvidenceRecordSchema,
+  localCommandTestResultEvidenceRecordSchema,
 ]);
 
 export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
   const parsed = evidenceRecordSchema.parse(value);
   const common = {
     id: evidenceId(parsed.id),
-    schemaVersion: parsed.schemaVersion,
     producerIdentity: parsed.producerIdentity,
     goalId: goalId(parsed.goalId),
     goalRevision: goalRevision(parsed.goalRevision),
@@ -1167,45 +1390,93 @@ export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
     candidateDigest: sha256Digest(parsed.candidateDigest),
     policyBundleId: policyBundleId(parsed.policyBundleId),
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
-    checkSpec: decodeCheckSpecification(parsed.checkSpec),
     startedAt: isoTimestamp(parsed.startedAt),
     endedAt: isoTimestamp(parsed.endedAt),
     observationDigest: sha256Digest(parsed.observationDigest),
     recordedAt: isoTimestamp(parsed.recordedAt),
     recordDigest: sha256Digest(parsed.recordDigest),
   };
-  const payloadReference = parsed.payloadRefs[0];
-  if (payloadReference === undefined) {
-    throw new TypeError('M1 Evidence payload disappeared after schema validation');
-  }
-  const payloadRefs = Object.freeze([sha256Digest(payloadReference)] as const);
   let record: EvidenceRecord;
   if (parsed.kind === EvidenceKind.CANDIDATE_FREEZE) {
+    const payloadReference = parsed.payloadRefs[0];
+    if (payloadReference === undefined) {
+      throw new TypeError('M1 Evidence payload disappeared after schema validation');
+    }
+    const payloadRefs = Object.freeze([sha256Digest(payloadReference)] as const);
     const observation = decodeEvidenceObservation(parsed.observation);
     if (observation.kind !== EvidenceKind.CANDIDATE_FREEZE) {
       throw new TypeError('Candidate freeze Evidence observation changed kind');
     }
     record = Object.freeze({
       ...common,
+      schemaVersion: parsed.schemaVersion,
       kind: parsed.kind,
       producerType: parsed.producerType,
+      checkSpec: decodeCheckSpecification(parsed.checkSpec),
+      observation,
+      payloadRefs,
+      resultStatus: parsed.resultStatus,
+    });
+  } else if (parsed.kind === EvidenceKind.TEST_RESULT) {
+    const payloadReference = parsed.payloadRefs[0];
+    if (payloadReference === undefined) {
+      throw new TypeError('M1 Evidence payload disappeared after schema validation');
+    }
+    const payloadRefs = Object.freeze([sha256Digest(payloadReference)] as const);
+    const observation = decodeEvidenceObservation(parsed.observation);
+    if (observation.kind !== 'FAKE_VERIFICATION') {
+      throw new TypeError('Test Evidence observation changed kind');
+    }
+    const environmentIdentity = decodeEvidenceEnvironmentIdentity(parsed.environmentIdentity);
+    if (environmentIdentity.kind !== 'M1_LOGICAL') {
+      throw new TypeError('M1 Test Evidence environment changed kind');
+    }
+    record = Object.freeze({
+      ...common,
+      schemaVersion: parsed.schemaVersion,
+      kind: parsed.kind,
+      producerType: parsed.producerType,
+      verificationObligationId: verificationObligationId(parsed.verificationObligationId),
+      checkSpec: decodeCheckSpecification(parsed.checkSpec),
+      environmentIdentity,
       observation,
       payloadRefs,
       resultStatus: parsed.resultStatus,
     });
   } else {
     const observation = decodeEvidenceObservation(parsed.observation);
-    if (observation.kind !== 'FAKE_VERIFICATION') {
-      throw new TypeError('Test Evidence observation changed kind');
+    const checkSpec = decodeCheckSpecification(parsed.checkSpec);
+    const environmentIdentity = decodeEvidenceEnvironmentIdentity(parsed.environmentIdentity);
+    if (
+      observation.kind !== 'LOCAL_COMMAND_OBSERVATION_V1' ||
+      checkSpec.kind !== CheckSpecificationKind.LOCAL_COMMAND ||
+      environmentIdentity.kind !== 'LOCAL_COMMAND_ENVIRONMENT_V1'
+    ) {
+      throw new TypeError('Local command Evidence changed variant during decoding');
     }
     record = Object.freeze({
       ...common,
+      schemaVersion: parsed.schemaVersion,
       kind: parsed.kind,
       producerType: parsed.producerType,
       verificationObligationId: verificationObligationId(parsed.verificationObligationId),
-      environmentIdentity: decodeEvidenceEnvironmentIdentity(parsed.environmentIdentity),
+      checkSpec,
+      environmentIdentity,
+      workspaceLeaseId: parsed.workspaceLeaseId,
+      workspaceLeaseDigest: sha256Digest(parsed.workspaceLeaseDigest),
       observation,
-      payloadRefs,
+      payloadRefs: Object.freeze([
+        Object.freeze({
+          stream: parsed.payloadRefs[0].stream,
+          digest: sha256Digest(parsed.payloadRefs[0].digest),
+          byteLength: parsed.payloadRefs[0].byteLength,
+        }),
+        Object.freeze({
+          stream: parsed.payloadRefs[1].stream,
+          digest: sha256Digest(parsed.payloadRefs[1].digest),
+          byteLength: parsed.payloadRefs[1].byteLength,
+        }),
+      ] as const),
       resultStatus: parsed.resultStatus,
     });
   }

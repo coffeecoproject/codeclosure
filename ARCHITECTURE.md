@@ -17,10 +17,10 @@ homes and assert exact terminal, audit, and reopen state. The
 [M1 completion review](docs/reviews/m1-completion-review.md) records the exact
 source identity, environment, quality stages, migration/schema inspection,
 dependency graph, and invariant coverage. Bounded controlled-copy Candidate
-isolation is now implemented in M2 Slice 3; real project verification and
-trusted production composition remain later M2 work. Components marked for
-later milestones are architectural boundaries, not current implementation
-claims.
+isolation and bounded Darwin local-command verification are now implemented
+through M2 Slice 4; reject/repair/accept orchestration, recovery, and trusted
+production composition remain later M2 work. Components marked for later
+milestones are architectural boundaries, not current implementation claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
@@ -49,9 +49,18 @@ requires a current adapter-issued one-time grant rather than a caller-selected
 path. Its ownership markers remain outside worker-writable Candidate roots, and
 it imports only public Runtime contracts. The
 [Slice 3 review](docs/reviews/m2-slice3-candidate-workspace.md) records the
-focused evidence and limitations. Runtime/Store composition, external-execution
-persistence, real verification, and a live Goal-bound execution remain later
-M2 work.
+focused evidence and limitations. Slice 4 is implemented: a separate local
+Verification adapter executes one exact no-shell command against a current
+read-only Candidate lease under the selected Darwin Seatbelt profile, with
+explicit environment, timeout, termination, output, retention, filesystem,
+credential, and network bounds. Runtime validates the untrusted result and
+derives version-2 local-command Evidence; SQLite atomically commits retained
+content-addressed stdout/stderr payloads with Evidence, eligibility, Workflow
+effects, audit, and command outcome. The
+[Slice 4 review](docs/reviews/m2-slice4-real-verification.md) records the
+focused evidence and limitations. Reject/repair/accept orchestration,
+external-execution persistence and recovery composition, trusted CLI
+composition, and a live Goal-bound execution remain later M2 work.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -436,12 +445,13 @@ The current M1 runner reports only a closed result status. Request-aware
 Runtime admission derives the producer and check binding from the validated
 request, constructs the normalized fake observation, and uses its
 Runtime-computed digest as the fake payload reference. Unknown fields and raw
-adapter exceptions are rejected without becoming authority. A
-CodeClosure-owned content-addressed payload store is required before larger
-real runner payloads are admitted. ADR 0030 selects a bounded immutable SQLite
-payload table for M2 so payload, Evidence, eligibility, Workflow effects, audit,
-and command outcome can commit atomically; implementation remains Slice 4
-work.
+adapter exceptions are rejected without becoming authority. M2 Slice 4 adds
+the closed version-2 local-command Evidence variant and a bounded immutable
+SQLite payload table. Runtime hashes the retained stdout/stderr bytes and the
+Store commits payload, Evidence, initial eligibility, Workflow effects, audit,
+and command outcome atomically. Missing, corrupt, malformed, or colliding
+payload authority fails closed. Larger or arbitrary-project payload storage
+remains a later explicit decision.
 
 ### Acceptance Engine
 
@@ -471,6 +481,15 @@ transport and lifecycle without receiving Goal-bound authority.
 Executes exact check specifications with bounded argv, cwd, environment,
 timeout, output limits, and cleanup rules. It is separated from the coding
 worker so verification policy is not merely another prompt instruction.
+
+The M2 Slice 4 implementation provides one Darwin-only local-command adapter.
+It validates the exact executable realpath and digest, uses no shell, inherits
+no ambient environment, executes against a current read-only Candidate lease,
+denies Candidate writes, authority and credential reads, and network access,
+and writes only below a Runtime-owned temporary run root. Runtime observes the
+frozen Candidate before and after execution and admits only a closed bounded
+result. The adapter cannot create Evidence, issue `ACCEPT`, or transition a
+Workflow; later M2 composition owns those control steps.
 
 ## Authority and Storage Topology
 
@@ -724,9 +743,9 @@ packages/workspace-local
 packages/verification-local
 ```
 
-The App Server client, Codex Worker Adapter, and local Candidate workspace
-packages are implemented through Slice 3. The local Verification package
-remains planned for Slice 4.
+The App Server client, Codex Worker Adapter, local Candidate workspace, and
+local Verification packages are implemented through Slice 4. Trusted
+cross-package orchestration remains later M2 work.
 
 M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside
 `domain` and `runtime`. Slice 6 implements that control without introducing a

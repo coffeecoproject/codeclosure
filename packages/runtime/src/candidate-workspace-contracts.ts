@@ -91,6 +91,10 @@ export interface CandidateWorkspaceLeasePort {
   releaseLease(lease: CandidateWorkspaceLease): void;
 }
 
+export interface CandidateWorkspaceLeaseAuthorityPort {
+  assertLeaseCurrent(lease: CandidateWorkspaceLease): CandidateWorkspaceLease;
+}
+
 export const CandidateWorkspaceRetention = {
   CURRENT: 'CURRENT',
   RETAINED: 'RETAINED',

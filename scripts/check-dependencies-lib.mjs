@@ -59,6 +59,12 @@ const packagePolicies = Object.freeze([
     devDependencies: Object.freeze({ '@codeclosure/domain': 'workspace:*' }),
   }),
   Object.freeze({
+    path: 'packages/verification-local',
+    name: '@codeclosure/verification-local',
+    dependencies: Object.freeze({ '@codeclosure/runtime': 'workspace:*' }),
+    devDependencies: Object.freeze({ '@codeclosure/domain': 'workspace:*' }),
+  }),
+  Object.freeze({
     path: 'packages/store-sqlite',
     name: '@codeclosure/store-sqlite',
     dependencies: Object.freeze({

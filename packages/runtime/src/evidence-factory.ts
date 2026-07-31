@@ -1,6 +1,7 @@
 import {
   EvidenceEligibilityState,
   EvidenceKind,
+  EvidencePayloadStream,
   EvidenceProducerType,
   EvidenceResultStatus,
   assertEvidenceRecordInvariant,
@@ -15,6 +16,7 @@ import {
   evidenceObservationDigestProjection,
   evidenceRecordDigestProjection,
   evidenceSetDigestProjection,
+  localCommandEvidenceStatusForObservation,
   sha256Digest,
   type AttemptId,
   type CandidateGenerationId,
@@ -28,6 +30,10 @@ import {
   type GoalId,
   type GoalRevision,
   type IsoTimestamp,
+  type LocalCommandCheckSpecification,
+  type LocalCommandEnvironmentIdentity,
+  type LocalCommandObservation,
+  type EvidencePayloadReference,
   type PolicyBundleId,
   type Sha256Digest,
   type VerificationObligation,
@@ -60,6 +66,16 @@ export interface CreateCandidateFreezeEvidenceRecordInput extends CreateEvidence
 export interface CreateTestResultEvidenceRecordInput extends CreateEvidenceRecordBaseInput {
   readonly verificationObligationId: VerificationObligationId;
   readonly observation: FakeVerificationObservation;
+}
+
+export interface CreateLocalCommandTestResultEvidenceRecordInput extends CreateEvidenceRecordBaseInput {
+  readonly verificationObligationId: VerificationObligationId;
+  readonly checkSpec: LocalCommandCheckSpecification;
+  readonly workspaceLeaseId: string;
+  readonly workspaceLeaseDigest: Sha256Digest;
+  readonly observation: LocalCommandObservation;
+  readonly stdoutPayload: EvidencePayloadReference;
+  readonly stderrPayload: EvidencePayloadReference;
 }
 
 export interface BuildEvidenceSetInput {
@@ -98,6 +114,32 @@ export function deriveM1EvidenceEnvironmentIdentity(
         environmentPolicy: checkSpec.environmentPolicy,
       }),
     ),
+  });
+}
+
+export function deriveLocalCommandEnvironmentIdentity(
+  rawCheckSpec: LocalCommandCheckSpecification,
+  digests: DigestProvider,
+): LocalCommandEnvironmentIdentity {
+  const decoded = decodeCheckSpecification(rawCheckSpec);
+  if (decoded.kind !== 'LOCAL_COMMAND') {
+    throw new TypeError('Local command environment requires a LOCAL_COMMAND Check');
+  }
+  const projection = {
+    schemaVersion: 1,
+    kind: 'LOCAL_COMMAND_ENVIRONMENT_V1',
+    runnerIdentity: decoded.runnerIdentity,
+    runnerVersion: decoded.runnerVersion,
+    executableDigest: decoded.executableDigest,
+    environmentDigest: decoded.environmentDigest,
+    isolationProfileId: decoded.isolationProfileId,
+    isolationProfileDigest: decoded.isolationProfileDigest,
+  } as const;
+  const digest = sha256Digest(digests.digest(projection));
+  return Object.freeze({
+    ...projection,
+    identity: `local-command:${digest}`,
+    digest,
   });
 }
 
@@ -199,6 +241,62 @@ export function createTestResultEvidenceRecord(
   return record;
 }
 
+export function createLocalCommandTestResultEvidenceRecord(
+  rawInput: CreateLocalCommandTestResultEvidenceRecordInput,
+  digests: DigestProvider,
+): Extract<EvidenceRecord, { readonly kind: typeof EvidenceKind.LOCAL_COMMAND_TEST_RESULT }> {
+  const observation = decodeEvidenceObservation(rawInput.observation);
+  if (observation.kind !== 'LOCAL_COMMAND_OBSERVATION_V1') {
+    throw new TypeError('Local command Evidence requires a local-command observation');
+  }
+  const checkSpec = decodeCheckSpecification(rawInput.checkSpec);
+  if (checkSpec.kind !== 'LOCAL_COMMAND') {
+    throw new TypeError('Local command Evidence requires a LOCAL_COMMAND Check');
+  }
+  if (
+    rawInput.stdoutPayload.stream !== EvidencePayloadStream.STDOUT ||
+    rawInput.stderrPayload.stream !== EvidencePayloadStream.STDERR
+  ) {
+    throw new TypeError('Local command Evidence payloads are not stream ordered');
+  }
+  const observationDigest = sha256Digest(
+    digests.digest(evidenceObservationDigestProjection(observation)),
+  );
+  const withoutEnvelope = {
+    schemaVersion: 2 as const,
+    kind: EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+    producerType: EvidenceProducerType.VERIFICATION_RUNNER,
+    producerIdentity: checkSpec.producerIdentity,
+    goalId: rawInput.goalId,
+    goalRevision: rawInput.goalRevision,
+    workflowId: rawInput.workflowId,
+    attemptId: rawInput.attemptId,
+    verificationObligationId: rawInput.verificationObligationId,
+    candidateGenerationId: rawInput.candidateGenerationId,
+    candidateDigest: rawInput.candidateDigest,
+    policyBundleId: rawInput.policyBundleId,
+    policyBundleDigest: rawInput.policyBundleDigest,
+    checkSpec,
+    environmentIdentity: deriveLocalCommandEnvironmentIdentity(checkSpec, digests),
+    workspaceLeaseId: rawInput.workspaceLeaseId,
+    workspaceLeaseDigest: rawInput.workspaceLeaseDigest,
+    startedAt: rawInput.startedAt,
+    endedAt: rawInput.endedAt,
+    observation,
+    payloadRefs: Object.freeze([
+      Object.freeze({ ...rawInput.stdoutPayload }),
+      Object.freeze({ ...rawInput.stderrPayload }),
+    ] as const),
+    observationDigest,
+    resultStatus: localCommandEvidenceStatusForObservation(checkSpec, observation),
+  };
+  const record = finalizeEvidenceRecord(rawInput.id, rawInput.recordedAt, withoutEnvelope, digests);
+  if (record.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT) {
+    throw new TypeError('Local command Evidence changed kind during construction');
+  }
+  return record;
+}
+
 export function verifyEvidenceRecordDigests(
   rawRecord: unknown,
   digests: DigestProvider,
@@ -213,6 +311,16 @@ export function verifyEvidenceRecordDigests(
   }
   if (record.kind === EvidenceKind.TEST_RESULT) {
     const expectedEnvironment = deriveM1EvidenceEnvironmentIdentity(record.checkSpec, digests);
+    if (
+      record.environmentIdentity.identity !== expectedEnvironment.identity ||
+      record.environmentIdentity.digest !== expectedEnvironment.digest
+    ) {
+      throw new TypeError(
+        `Evidence ${record.id} environment does not match its Check Specification`,
+      );
+    }
+  } else if (record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT) {
+    const expectedEnvironment = deriveLocalCommandEnvironmentIdentity(record.checkSpec, digests);
     if (
       record.environmentIdentity.identity !== expectedEnvironment.identity ||
       record.environmentIdentity.digest !== expectedEnvironment.digest

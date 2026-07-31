@@ -1,7 +1,7 @@
 import type {
   CandidateWorkspaceAuthoritySnapshot,
   CandidateWorkspaceCleanupGrant,
-  CandidateWorkspaceLease,
+  CandidateWorkspaceLeaseAuthorityPort,
   CandidateWorkspaceLeasePort,
   CandidateSourcePort,
 } from '@codeclosure/runtime';
@@ -54,8 +54,8 @@ export interface CandidateWorkspaceCleanupResult {
   readonly status: 'REMOVED';
 }
 
-export interface LocalCandidateWorkspace extends CandidateSourcePort, CandidateWorkspaceLeasePort {
-  assertLeaseCurrent(lease: CandidateWorkspaceLease): CandidateWorkspaceLease;
+export interface LocalCandidateWorkspace
+  extends CandidateSourcePort, CandidateWorkspaceLeasePort, CandidateWorkspaceLeaseAuthorityPort {
   cleanupOrphanedGeneration(grant: CandidateWorkspaceCleanupGrant): CandidateWorkspaceCleanupResult;
   reconcile(
     authority: CandidateWorkspaceAuthoritySnapshot,

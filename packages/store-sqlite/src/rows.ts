@@ -400,6 +400,8 @@ const evidenceRecordRowSchema = z.object({
   candidate_generation_id: z.string(),
   candidate_digest: z.string(),
   fact_snapshot_digest: z.string().nullable(),
+  workspace_lease_id: z.string().nullable(),
+  workspace_lease_digest: z.string().nullable(),
   policy_bundle_id: z.string(),
   policy_bundle_digest: z.string(),
   check_spec_json: z.string(),
@@ -1006,6 +1008,12 @@ export function decodeEvidenceRecordRow(row: unknown): EvidenceRecord {
       ...(parsed.fact_snapshot_digest === null
         ? {}
         : { factSnapshotDigest: parsed.fact_snapshot_digest }),
+      ...(parsed.workspace_lease_id === null
+        ? {}
+        : { workspaceLeaseId: parsed.workspace_lease_id }),
+      ...(parsed.workspace_lease_digest === null
+        ? {}
+        : { workspaceLeaseDigest: parsed.workspace_lease_digest }),
       policyBundleId: parsed.policy_bundle_id,
       policyBundleDigest: parsed.policy_bundle_digest,
       checkSpec: parseJson(parsed.check_spec_json, 'EvidenceRecord.checkSpec'),

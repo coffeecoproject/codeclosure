@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
@@ -149,6 +150,7 @@ import {
   m1PhaseObjective,
   m1WorkerResponseContract,
   validateM1CandidateEvidencePolicy,
+  validateLocalCommandVerificationPolicy,
   verifyM1AcceptanceDecision,
   verifyEvidenceSetAuthority,
   assertM1WorkerPhaseAttemptAuthority,
@@ -178,6 +180,9 @@ import {
   type CommittedVerificationAttemptOutcome,
   type CommittedWorkflowCandidateEvent,
   type CommitVerificationAttemptOutcome,
+  type CommitLocalCommandVerificationAuthority,
+  type CommittedLocalCommandVerificationAuthority,
+  type EvidencePayload,
   type CommitWorkflowCandidateEvent,
   type CommitContextBoundAttemptStart,
   type CommitGoalCreation,
@@ -285,6 +290,7 @@ export const CandidateEvidenceTransactionStep = {
   AFTER_CANDIDATE_WRITE: 'AFTER_CANDIDATE_WRITE',
   AFTER_CANDIDATE_TRANSITION: 'AFTER_CANDIDATE_TRANSITION',
   AFTER_EVIDENCE_WRITE: 'AFTER_EVIDENCE_WRITE',
+  AFTER_EVIDENCE_PAYLOAD_WRITE: 'AFTER_EVIDENCE_PAYLOAD_WRITE',
   AFTER_ELIGIBILITY_WRITE: 'AFTER_ELIGIBILITY_WRITE',
   AFTER_EVIDENCE_SET_WRITE: 'AFTER_EVIDENCE_SET_WRITE',
 } as const;
@@ -379,6 +385,29 @@ const evidenceIdentifierRowsSchema = z.array(
     })
     .strict(),
 );
+
+const evidencePayloadIdentityRowsSchema = z.array(
+  z
+    .object({
+      digest: z.string(),
+      byte_length: z.number(),
+    })
+    .strict(),
+);
+
+const evidencePayloadRowSchema = z
+  .object({
+    digest: z.string(),
+    byte_length: z.number(),
+    payload_bytes: z.instanceof(Uint8Array),
+  })
+  .strict();
+
+const evidencePayloadBytesRowSchema = z
+  .object({
+    payload_bytes: z.instanceof(Uint8Array),
+  })
+  .strict();
 
 const authorityIdentifierRowSchema = z
   .object({
@@ -1084,6 +1113,7 @@ function validateCommitVerificationAttemptOutcome(
   const obligationId = verificationObligationId(rawInput.obligationId);
   const evidence = decodeEvidenceRecord(rawInput.evidence);
   const initialEligibility = decodeEvidenceEligibility(rawInput.initialEligibility);
+  const payloads = validateEvidencePayloads(evidence, rawInput.payloads);
   if (
     base.event.type !== 'ATTEMPT_FINISHED' ||
     base.event.phase !== WorkflowPhase.EVIDENCE_BUILD ||
@@ -1097,8 +1127,79 @@ function validateCommitVerificationAttemptOutcome(
     ...base,
     obligationId,
     evidence,
+    ...(payloads === undefined ? {} : { payloads }),
     initialEligibility,
     evidenceAuditEventId: auditEventId(rawInput.evidenceAuditEventId),
+  });
+}
+
+function validateEvidencePayloads(
+  evidence: EvidenceRecord,
+  rawPayloads: readonly EvidencePayload[] | undefined,
+): readonly EvidencePayload[] | undefined {
+  if (evidence.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT) {
+    if (rawPayloads !== undefined) {
+      throw new StoreInvariantError('M1 Evidence cannot carry stored payload bytes');
+    }
+    return undefined;
+  }
+  if (rawPayloads?.length !== 2) {
+    throw new StoreInvariantError('Local command Evidence requires stdout and stderr payloads');
+  }
+  const payloads = Object.freeze(
+    rawPayloads.map((rawPayload, index) => {
+      if (!(rawPayload.bytes instanceof Uint8Array)) {
+        throw new StoreInvariantError('Evidence payload bytes are malformed');
+      }
+      const bytes = new Uint8Array(rawPayload.bytes);
+      const digest = sha256Digest(rawPayload.digest);
+      if (
+        !Number.isSafeInteger(rawPayload.byteLength) ||
+        rawPayload.byteLength < 0 ||
+        rawPayload.byteLength !== bytes.byteLength ||
+        digest !== sha256Digest(`sha256:${createHash('sha256').update(bytes).digest('hex')}`)
+      ) {
+        throw new StoreInvariantError('Evidence payload identity does not match its bytes');
+      }
+      const reference = evidence.payloadRefs[index];
+      if (reference?.digest !== digest || reference.byteLength !== bytes.byteLength) {
+        throw new StoreInvariantError('Evidence payload does not match its record reference');
+      }
+      return Object.freeze({ digest, byteLength: bytes.byteLength, bytes });
+    }),
+  );
+  return payloads;
+}
+
+function validateCommitLocalCommandVerificationAuthority(
+  rawInput: CommitLocalCommandVerificationAuthority,
+): CommitLocalCommandVerificationAuthority {
+  const checkSpecification = decodeCheckSpecification(rawInput.checkSpecification);
+  if (checkSpecification.kind !== CheckSpecificationKind.LOCAL_COMMAND) {
+    throw new StoreInvariantError('Local verification authority requires a LOCAL_COMMAND Check');
+  }
+  const obligations = Object.freeze(
+    rawInput.obligations.map((obligation) => decodeVerificationObligation(obligation)),
+  );
+  return Object.freeze({
+    commandId: commandId(rawInput.commandId),
+    inputDigest: sha256Digest(rawInput.inputDigest),
+    target: decodeCommandTarget(rawInput.target),
+    workflowId: workflowId(rawInput.workflowId),
+    expectedWorkflowVersion: workflowVersion(rawInput.expectedWorkflowVersion),
+    checkSpecification,
+    obligations,
+    auditEventId: auditEventId(rawInput.auditEventId),
+    checkSpecificationAuditEventId: auditEventId(rawInput.checkSpecificationAuditEventId),
+    obligationAuditEventIds: validateAuditIdentifiers(
+      rawInput.obligationAuditEventIds,
+      obligations.length,
+      'Local Verification Obligation',
+    ),
+    payloadDigest: sha256Digest(rawInput.payloadDigest),
+    ...(rawInput.correlationId === undefined ? {} : { correlationId: rawInput.correlationId }),
+    ...(rawInput.causationId === undefined ? {} : { causationId: rawInput.causationId }),
+    occurredAt: isoTimestamp(rawInput.occurredAt),
   });
 }
 
@@ -1975,6 +2076,40 @@ export class SqliteControlStore
       .prepare('SELECT * FROM evidence_records WHERE id = ?')
       .get(evidenceIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedEvidenceRecordRow(row);
+  }
+
+  public getEvidencePayload(
+    rawDigest: Sha256Digest,
+    rawByteLength: number,
+  ): EvidencePayload | undefined {
+    this.assertOpen();
+    const digest = sha256Digest(rawDigest);
+    if (!Number.isSafeInteger(rawByteLength) || rawByteLength < 0) {
+      throw new StoreInvariantError('Evidence payload length is invalid');
+    }
+    const rawRow: unknown = this.#database
+      .prepare(
+        'SELECT digest, byte_length, payload_bytes FROM evidence_payloads WHERE digest = ? AND byte_length = ?',
+      )
+      .get(digest, rawByteLength);
+    if (rawRow === undefined) {
+      return undefined;
+    }
+    const {
+      digest: storedDigest,
+      byte_length: byteLength,
+      payload_bytes: rawBytes,
+    } = evidencePayloadRowSchema.parse(rawRow);
+    const bytes = new Uint8Array(rawBytes);
+    if (
+      sha256Digest(storedDigest) !== digest ||
+      byteLength !== rawByteLength ||
+      bytes.byteLength !== byteLength ||
+      digest !== sha256Digest(`sha256:${createHash('sha256').update(bytes).digest('hex')}`)
+    ) {
+      throw new StoreInvariantError('Stored Evidence payload has an invalid content identity');
+    }
+    return Object.freeze({ digest, byteLength, bytes });
   }
 
   public getEvidenceEligibility(
@@ -4462,6 +4597,182 @@ export class SqliteControlStore
     });
   }
 
+  public commitLocalCommandVerificationAuthority(
+    rawInput: CommitLocalCommandVerificationAuthority,
+  ): StoreCommandResult<CommittedLocalCommandVerificationAuthority> {
+    this.assertOpen();
+    const input = validateCommitLocalCommandVerificationAuthority(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+      const workflow = this.getWorkflowInsideTransaction(input.workflowId);
+      this.validateCommandTarget(input.target, workflow);
+      if (workflow.version !== input.expectedWorkflowVersion) {
+        throw new OptimisticConcurrencyError('Workflow', workflow.id);
+      }
+      if (
+        workflow.phase !== WorkflowPhase.EVIDENCE_BUILD ||
+        workflow.activeAttemptId !== undefined
+      ) {
+        throw new StoreInvariantError(
+          'Local verification authority requires idle EVIDENCE_BUILD state',
+        );
+      }
+      const authority = this.getCandidateAuthorityForWorkflow(workflow.id);
+      const goal = this.getGoal(workflow.goalId);
+      if (authority?.generation.state !== CandidateGenerationState.FROZEN || goal === undefined) {
+        throw new StoreInvariantError(
+          'Local verification authority requires the current frozen Candidate',
+        );
+      }
+      const verification = input.checkSpecification;
+      if (verification.kind !== CheckSpecificationKind.LOCAL_COMMAND) {
+        throw new StoreInvariantError('Local verification authority changed Check kind');
+      }
+      const policy = validateLocalCommandVerificationPolicy(
+        goal,
+        authority.generation,
+        {
+          verification,
+          obligations: input.obligations,
+        },
+        input.occurredAt,
+      );
+      if (
+        this.getCheckSpecification(policy.verification.id) !== undefined ||
+        this.listVerificationObligations(goal.id).some(
+          (obligation) =>
+            obligation.candidateGenerationId === authority.generation.id &&
+            obligation.requiredEvidenceKind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+        )
+      ) {
+        throw new StoreInvariantError(
+          'Local verification authority already exists for this Candidate generation',
+        );
+      }
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          checkSpecification: policy.verification,
+          obligations: policy.obligations,
+          occurredAt: input.occurredAt,
+        }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError('Local verification authority audit digest is incomplete');
+      }
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: workflow.id,
+        eventType: 'LOCAL_COMMAND_VERIFICATION_AUTHORITY_RECORDED',
+        commandId: input.commandId,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.occurredAt,
+      });
+      this.insertAuditEvent({
+        id: input.checkSpecificationAuditEventId,
+        aggregateType: 'CHECK_SPECIFICATION',
+        aggregateId: policy.verification.id,
+        eventType: 'CHECK_SPECIFICATION_RECORDED',
+        commandId: input.commandId,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.occurredAt,
+      });
+      this.#database
+        .prepare('INSERT INTO check_specifications(id, version, canonical_json) VALUES (?, ?, ?)')
+        .run(
+          policy.verification.id,
+          policy.verification.version,
+          serializeJson(decodeJsonValue(policy.verification)),
+        );
+      policy.obligations.forEach((obligation, index) => {
+        const auditIdentifier = input.obligationAuditEventIds[index];
+        if (auditIdentifier === undefined) {
+          throw new StoreInvariantError('Local Verification Obligation audit ID is missing');
+        }
+        this.insertAuditEvent({
+          id: auditIdentifier,
+          aggregateType: 'VERIFICATION_OBLIGATION',
+          aggregateId: obligation.id,
+          eventType: 'VERIFICATION_OBLIGATION_RECORDED',
+          commandId: input.commandId,
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+          payloadDigest: input.payloadDigest,
+          occurredAt: input.occurredAt,
+        });
+        this.insertVerificationObligation(obligation);
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, workflow, input.commandId),
+      );
+      this.insertProcessedCommand(
+        input.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedCheck = this.getCheckSpecification(policy.verification.id);
+      const persistedObligations = policy.obligations.map((obligation) =>
+        this.getVerificationObligation(obligation.id),
+      );
+      if (
+        persistedCheck === undefined ||
+        canonicalizeJson(persistedCheck) !== canonicalizeJson(policy.verification) ||
+        persistedObligations.some((obligation) => obligation === undefined)
+      ) {
+        throw new StoreInvariantError('Local verification authority did not round-trip');
+      }
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.commandId,
+        input.inputDigest,
+        input.target,
+        workflow.goalId,
+        workflow.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([
+        input.auditEventId,
+        input.checkSpecificationAuditEventId,
+        ...input.obligationAuditEventIds,
+      ]);
+      return {
+        status: 'APPLIED',
+        outcome: persistedCommand.outcome,
+        value: Object.freeze({
+          workflow,
+          checkSpecification: persistedCheck,
+          obligations: Object.freeze(
+            persistedObligations.filter(
+              (obligation): obligation is VerificationObligation => obligation !== undefined,
+            ),
+          ),
+        }),
+      };
+    });
+  }
+
   public commitVerificationAttemptOutcome(
     rawInput: CommitVerificationAttemptOutcome,
   ): StoreCommandResult<CommittedVerificationAttemptOutcome> {
@@ -4539,6 +4850,12 @@ export class SqliteControlStore
         payloadDigest: evidence.recordDigest,
         occurredAt: evidence.recordedAt,
       });
+      for (const payload of input.payloads ?? []) {
+        this.insertEvidencePayload(payload);
+      }
+      if (input.payloads !== undefined) {
+        this.probe(CandidateEvidenceTransactionStep.AFTER_EVIDENCE_PAYLOAD_WRITE);
+      }
       this.insertEvidenceRecord(evidence);
       this.probe(CandidateEvidenceTransactionStep.AFTER_EVIDENCE_WRITE);
       this.insertEvidenceEligibility(input.initialEligibility);
@@ -4569,6 +4886,17 @@ export class SqliteControlStore
       const persistedEligibility = this.getEvidenceEligibility(evidence.id);
       if (persistedEvidence === undefined || persistedEligibility === undefined) {
         throw new StoreInvariantError(`Verification Evidence ${evidence.id} did not round-trip`);
+      }
+      if (
+        persistedEvidence.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT &&
+        persistedEvidence.payloadRefs.some(
+          (reference) =>
+            this.getEvidencePayload(reference.digest, reference.byteLength) === undefined,
+        )
+      ) {
+        throw new StoreInvariantError(
+          `Verification Evidence ${evidence.id} payloads did not round-trip`,
+        );
       }
       const persistedCommand = this.assertProcessedCommandReadable(
         input.event.commandId,
@@ -5583,11 +5911,12 @@ export class SqliteControlStore
            id, schema_version, kind, producer_type, producer_identity, goal_id,
            goal_revision, workflow_id, attempt_id, verification_obligation_id,
            candidate_generation_id,
-           candidate_digest, fact_snapshot_digest, policy_bundle_digest,
+           candidate_digest, fact_snapshot_digest, workspace_lease_id,
+           workspace_lease_digest, policy_bundle_digest,
            check_spec_json, environment_identity_json, started_at, ended_at,
            observation_json, payload_refs_json, observation_digest, result_status,
            recorded_at, record_digest, policy_bundle_id
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -5603,6 +5932,8 @@ export class SqliteControlStore
         record.candidateGenerationId,
         record.candidateDigest,
         null,
+        record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT ? record.workspaceLeaseId : null,
+        record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT ? record.workspaceLeaseDigest : null,
         record.policyBundleDigest,
         serializeJson(decodeJsonValue(record.checkSpec)),
         record.environmentIdentity === undefined
@@ -5618,6 +5949,22 @@ export class SqliteControlStore
         record.recordDigest,
         record.policyBundleId,
       );
+  }
+
+  private insertEvidencePayload(payload: EvidencePayload): void {
+    const rawExisting: unknown = this.#database
+      .prepare('SELECT payload_bytes FROM evidence_payloads WHERE digest = ? AND byte_length = ?')
+      .get(payload.digest, payload.byteLength);
+    if (rawExisting !== undefined) {
+      const { payload_bytes: rawBytes } = evidencePayloadBytesRowSchema.parse(rawExisting);
+      if (!Buffer.from(rawBytes).equals(Buffer.from(payload.bytes))) {
+        throw new StoreInvariantError('Evidence payload digest collision detected');
+      }
+      return;
+    }
+    this.#database
+      .prepare('INSERT INTO evidence_payloads(digest, byte_length, payload_bytes) VALUES (?, ?, ?)')
+      .run(payload.digest, payload.byteLength, Buffer.from(payload.bytes));
   }
 
   private insertEvidenceEligibility(eligibility: EvidenceEligibility): void {
@@ -5864,7 +6211,9 @@ export class SqliteControlStore
       !(
         (attempt.phase === WorkflowPhase.SOURCE_FREEZE &&
           record.kind === EvidenceKind.CANDIDATE_FREEZE) ||
-        (attempt.phase === WorkflowPhase.EVIDENCE_BUILD && record.kind === EvidenceKind.TEST_RESULT)
+        (attempt.phase === WorkflowPhase.EVIDENCE_BUILD &&
+          (record.kind === EvidenceKind.TEST_RESULT ||
+            record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT))
       ) ||
       record.startedAt < attempt.startedAt ||
       record.endedAt > attempt.endedAt ||
@@ -5976,6 +6325,12 @@ export class SqliteControlStore
         obligation.requiredEvidenceKind === record.kind &&
         obligation.checkSpecRef === `${record.checkSpec.id}@${record.checkSpec.version}`,
     );
+    const hasLocalPayloads =
+      record.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT ||
+      record.payloadRefs.every(
+        (reference) =>
+          this.getEvidencePayload(reference.digest, reference.byteLength) !== undefined,
+      );
     if (
       attempt === undefined ||
       workflow === undefined ||
@@ -6004,7 +6359,8 @@ export class SqliteControlStore
       policyBinding.boundAt > record.recordedAt ||
       policy.bundle.digest !== record.policyBundleDigest ||
       policy.installedAt > record.startedAt ||
-      (record.kind === EvidenceKind.TEST_RESULT && !matchingObligation) ||
+      !hasLocalPayloads ||
+      (record.kind !== EvidenceKind.CANDIDATE_FREEZE && !matchingObligation) ||
       canonicalizeJson(specification) !== canonicalizeJson(record.checkSpec)
     ) {
       throw new StoreInvariantError(`Evidence ${record.id} has stale authority bindings`);
@@ -7869,6 +8225,18 @@ export class SqliteControlStore
     if (!this.hasTable('candidates')) {
       return;
     }
+    if (this.hasTable('evidence_payloads')) {
+      const payloadRows = evidencePayloadIdentityRowsSchema.parse(
+        this.#database
+          .prepare('SELECT digest, byte_length FROM evidence_payloads ORDER BY digest, byte_length')
+          .all(),
+      );
+      for (const row of payloadRows) {
+        if (this.getEvidencePayload(sha256Digest(row.digest), row.byte_length) === undefined) {
+          throw new StoreInvariantError('Retained Evidence payload authority is malformed');
+        }
+      }
+    }
     const candidateRows = this.#database.prepare('SELECT * FROM candidates ORDER BY id').all();
     for (const row of candidateRows) {
       const candidate = decodeCandidateRow(row);
@@ -7980,9 +8348,12 @@ export class SqliteControlStore
       const verification = relatedSpecifications.find(
         (specification) => specification.kind === CheckSpecificationKind.FAKE_VERIFICATION,
       );
+      const localVerification = relatedSpecifications.find(
+        (specification) => specification.kind === CheckSpecificationKind.LOCAL_COMMAND,
+      );
       if (
         goal === undefined ||
-        relatedSpecifications.length !== 2 ||
+        relatedSpecifications.length !== (localVerification === undefined ? 2 : 3) ||
         freeze === undefined ||
         verification === undefined
       ) {
@@ -7996,9 +8367,33 @@ export class SqliteControlStore
       validateM1CandidateEvidencePolicy(
         goal,
         generation,
-        { freeze, verification, obligations },
+        {
+          freeze,
+          verification,
+          obligations: obligations.filter(
+            (obligation) => obligation.requiredEvidenceKind === EvidenceKind.TEST_RESULT,
+          ),
+        },
         generation.createdAt,
       );
+      if (localVerification !== undefined) {
+        const localObligations = obligations.filter(
+          (obligation) =>
+            obligation.requiredEvidenceKind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+        );
+        const localCreatedAt = localObligations[0]?.createdAt;
+        if (localCreatedAt === undefined) {
+          throw new StoreInvariantError(
+            `Candidate generation ${generation.id} lacks local Verification Obligations`,
+          );
+        }
+        validateLocalCommandVerificationPolicy(
+          goal,
+          generation,
+          { verification: localVerification, obligations: localObligations },
+          localCreatedAt,
+        );
+      }
     }
 
     const evidenceRows = this.#database.prepare('SELECT * FROM evidence_records ORDER BY id').all();

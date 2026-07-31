@@ -6,6 +6,7 @@
     { "path": "./packages/runtime" },
     { "path": "./packages/adapter-codex" },
     { "path": "./packages/workspace-local" },
+    { "path": "./packages/verification-local" },
     { "path": "./packages/store-sqlite" },
     { "path": "./packages/testing" },
     { "path": "./apps/cli" }

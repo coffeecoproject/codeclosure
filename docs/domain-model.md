@@ -12,8 +12,7 @@ outside that subset remain planned behavior. The accepted pre-Goal Intake
 records below are planned for M2.5 and are not part of the implemented M1
 schema or Runtime. M2 Slice 0 has accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
-0028 through ADR 0030. Those target structures are not implemented Domain or
-SQLite behavior yet. The bounded 0.146.0 live capability probe now passes;
+0028 through ADR 0030. The bounded 0.146.0 live capability probe now passes;
 the Slice 1 lower client, protocol snapshot, offline fixtures, and live
 compatibility preflight are implemented without allowing a generated Codex
 protocol type to enter the Domain. Slice 2 deliberately adds no Domain
@@ -29,7 +28,11 @@ persisted Candidate and Workflow authority; only orphan classifications receive
 a current one-time cleanup grant. The planned `ExternalExecutionRecord`,
 Execution Profile schema version 2, persisted Candidate lease authority, and
 their Store codecs/migrations remain unimplemented Domain work for later M2
-slices.
+slices. Slice 4 implements the closed schema-version-2 `LOCAL_COMMAND` Check,
+`LOCAL_COMMAND_TEST_RESULT` Evidence and environment variants, strict codecs,
+Runtime verification contracts, and immutable SQLite payload authority without
+changing the M1 version-1 digest contract. This bounded verification seam is
+not yet the Slice 5 reject/repair/accept orchestration path.
 
 ## Design Rules
 
@@ -1075,11 +1078,11 @@ The current M1 `m1.2` specification persistently authorizes one producer as
 well as one bounded operation. Evidence must match its exact producer type and
 identity; a runner response cannot supply an alternate binding.
 
-M2 adds a schema-version-2 `LOCAL_COMMAND` variant. It binds an exact executable
-realpath/digest/version, ordered argv with no shell, frozen Candidate and
-read-only lease, contained cwd, environment inheritance `NONE`, isolation
-profile, timeout and termination grace, separate/total output limits, accepted
-exit codes, payload policy, runner identity, and
+M2 Slice 4 implements a schema-version-2 `LOCAL_COMMAND` variant. It binds an
+exact executable realpath/digest/version, ordered argv with no shell, frozen
+Candidate and read-only lease, contained cwd, environment inheritance `NONE`,
+isolation profile, timeout and termination grace, separate/total output limits,
+accepted exit codes, payload policy, runner identity, and
 `LOCAL_COMMAND_OBSERVATION_V1`. M1 specifications retain their current version
 and digest meaning.
 
@@ -1160,7 +1163,7 @@ producer, environment, payload, and result fields that follow from the Check
 and typed observation. M1 rejects a `factSnapshotDigest` on either variant and
 does not expose a generic producer-authored Evidence constructor.
 
-M2 adds `LOCAL_COMMAND_TEST_RESULT` with
+M2 Slice 4 implements `LOCAL_COMMAND_TEST_RESULT` with
 `LOCAL_COMMAND_ENVIRONMENT_V1`. The runner returns only bounded process
 observations; Runtime derives status, identities, timestamps, digests, and
 payload references. Bounded stdout/stderr bytes are stored content-addressed in
@@ -1312,7 +1315,7 @@ describes.
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
-| Evidence payload — planned M2 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |
+| Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |
 | Evidence eligibility | integrity observation / runtime command | Evidence policy | Evidence Store through an audited monotonic transition |
 | Acceptance decision | Acceptance Engine | Acceptance policy plus Store backstop | Acceptance Engine issuance; Acceptance Store persistence, immutable |
 | Acceptance repair record | Workflow Runtime coordination | Store and SQLite exact-authority backstops | Workflow Runtime compound transaction, immutable |

@@ -667,6 +667,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0017_workflow_policy_binding_authority.sql',
       '0018_m1_retry_boundary_closure.sql',
       '0019_m1_attempt_authority_closure.sql',
+      '0020_local_command_verification_evidence.sql',
     ],
   );
   store.close();

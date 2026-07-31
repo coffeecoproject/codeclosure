@@ -32,9 +32,13 @@ workspace adapter and public Runtime lease contract for bounded controlled
 copy, freeze, exact-parent repair, restart classification against a monotonically
 admitted canonical authority snapshot, and one-time-grant cleanup. That adapter
 owns filesystem mechanics only: it does not mutate Workflow or Store state, and
-trusted Runtime/Store composition remains later M2 work. Goal Intake is an
-accepted pre-Goal target for M2.5; it is not implemented and does not add
-another Workflow phase.
+trusted Runtime/Store composition remains later M2 work. Slice 4 now implements
+the separate local Verification adapter, closed Runtime request/result
+boundary, Runtime-derived local-command Evidence, and atomic SQLite payload
+transaction. It deliberately adds no new Workflow transition: Slice 5 must
+compose verification, rejection, repair, Acceptance, and closeout through the
+existing Runtime authority. Goal Intake is an accepted pre-Goal target for
+M2.5; it is not implemented and does not add another Workflow phase.
 
 ## Purpose
 

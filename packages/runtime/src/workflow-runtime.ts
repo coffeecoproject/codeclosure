@@ -514,6 +514,7 @@ function isCandidateEvidenceControlStore(
       'getVerificationObligation',
       'listVerificationObligations',
       'getEvidence',
+      'getEvidencePayload',
       'getEvidenceEligibility',
       'listEvidenceForGeneration',
       'getEvidenceSet',
@@ -522,6 +523,7 @@ function isCandidateEvidenceControlStore(
       'commitCandidateIntegrityFailure',
       'commitCandidateAttemptOutcome',
       'commitVerificationAttemptOutcome',
+      'commitLocalCommandVerificationAuthority',
       'commitEvidenceSetTransition',
     ].every((method) => typeof Reflect.get(store, method) === 'function')
   );

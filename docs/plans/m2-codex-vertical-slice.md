@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 through 3 are implemented and Slice 4 has not started
+- Status: In progress; Slices 0 through 4 are implemented and Slice 5 has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -64,7 +64,7 @@ From the user's point of view, M2 should behave plainly:
 | 1 | version-bound App Server client | Implemented | [Slice 1 App Server client review](../reviews/m2-slice1-app-server-client.md), pinned snapshot, offline fixtures, and bounded live preflight |
 | 2 | Goal-bound Codex Worker Adapter | Implemented | [Slice 2 review](../reviews/m2-slice2-codex-worker-adapter.md), adapter contract and phase-mapping tests |
 | 3 | real isolated Candidate workspace | Implemented | [Slice 3 review](../reviews/m2-slice3-candidate-workspace.md), controlled-copy, lease, freeze, repair, drift, restart, and cleanup tests |
-| 4 | real Verification Runner | Not started | runner, Evidence, mutation, and limit tests |
+| 4 | real Verification Runner | Implemented | [Slice 4 review](../reviews/m2-slice4-real-verification.md), runner isolation, v2 Evidence, payload, mutation, and limit tests |
 | 5 | reject, repair, and accept orchestration | Not started | Runtime integration and adversarial tests |
 | 6 | Thread, Compact, interruption, and restart policy | Not started | recovery and protocol-lifecycle tests |
 | 7 | trusted composition, CLI, and live demonstration | Not started | subprocess and bounded live proof |
@@ -892,7 +892,8 @@ Current execution record on 2026-07-31:
   pre-persistence lease bounds preserve ambiguous, aliased, stale, active,
   current, retained, and user-owned paths; and
 - the [Slice 3 review](../reviews/m2-slice3-candidate-workspace.md) records a
-  `PASS`. Slice 3 is implemented and Slice 4 may begin, but has not started.
+  `PASS`. Slice 3 is implemented and supplied the frozen Candidate and
+  read-only lease entry boundary used by Slice 4.
 
 ### Slice 4 — Real Verification Runner
 
@@ -916,6 +917,37 @@ Exit proof:
 - verification cannot edit frozen source or write control state;
 - source drift invalidates all affected Evidence; and
 - command exit or output alone cannot issue Acceptance.
+
+Current execution record on 2026-07-31:
+
+- the closed schema-version-2 `LOCAL_COMMAND` Check Specification,
+  `LOCAL_COMMAND_OBSERVATION_V1`, `LOCAL_COMMAND_ENVIRONMENT_V1`, and
+  `LOCAL_COMMAND_TEST_RESULT` variants are implemented with strict codecs while
+  preserving every M1 version-1 projection and digest;
+- the separate `@codeclosure/verification-local` package consumes only public
+  Runtime contracts. Its selected Darwin Seatbelt profile preflights that the
+  exact profile is operational, launches one exact executable with ordered argv
+  and no shell, inherits no ambient environment, permits only the explicit
+  bounded environment, denies Candidate writes, authority and credential
+  reads, and network access, and writes only below an exact run-owned temporary
+  root;
+- the local runner revalidates executable realpath/content, cwd containment,
+  runner/isolation identity, and the current read-only lease before execution
+  and after process termination. Timeout uses bounded terminate-then-kill,
+  stdout/stderr are independently and jointly bounded, and cleanup is scoped to
+  the exact run leaf;
+- Runtime observes the frozen Candidate before and after execution, treats
+  adapter exceptions and malformed output as closed failures, maps only a
+  decoded process observation to result status, hashes retained bytes, and is
+  the sole constructor of authoritative Evidence and payload references;
+- additive SQLite migration 0020 preserves the exact M1 schema/version guards,
+  admits only the closed local-command variants, stores immutable
+  content-addressed payload bytes, and commits payloads, Evidence, initial
+  eligibility, Workflow/Attempt effects, audit, and processed outcome in one
+  transaction. Reopen rejects missing, corrupt, colliding, or malformed
+  payload authority; and
+- the [Slice 4 review](../reviews/m2-slice4-real-verification.md) records a
+  `PASS`. Slice 4 is implemented and Slice 5 may begin, but has not started.
 
 ### Slice 5 — Reject, repair, and accept orchestration
 

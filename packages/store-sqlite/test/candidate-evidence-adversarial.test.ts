@@ -48,6 +48,7 @@ import {
   workflowId,
   type AttemptId,
   type CandidateGenerationId,
+  type EvidenceRecord,
   type PolicyBundle,
   type PolicyBundleDefinition,
   type VerificationObligationId,
@@ -55,6 +56,7 @@ import {
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
+  CandidateWorkspaceAccessMode,
   CandidateSourceFailureCode,
   GoalNextSafeAction,
   M1_ACCEPTANCE_RULES,
@@ -62,17 +64,26 @@ import {
   Rfc8785Canonicalizer,
   VerificationResultAdmissionFailureCode,
   buildEvidenceSet,
+  candidateWorkspaceAllowedPathProjection,
+  candidateWorkspaceLeaseProjection,
   compileM1AcceptanceInput,
+  createLocalCommandCheckSpecification,
+  createLocalCommandVerificationPolicy,
   createTestResultEvidenceRecord,
   createM1CandidateEvidencePolicy,
   createM1AcceptanceCheckerIdentity,
   createExecutionProfileInstaller,
   createCodeClosureApplication,
   createPolicyInstaller,
+  decodeCandidateWorkspaceLease,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
+  digestCandidateWorkspaceValue,
+  executeLocalCommandVerification,
   verifyEvidenceSetAuthority,
+  type CandidateWorkspaceLease,
   type Clock,
+  type LocalCommandVerificationRequest,
 } from '@codeclosure/runtime';
 import { createRecoveryCoordinator } from '@codeclosure/runtime/composition';
 import {
@@ -129,6 +140,7 @@ interface Harness {
   readonly filename: string;
   readonly store: SqliteControlStore;
   readonly runtime: WorkflowRuntimeKernel;
+  readonly clock: Clock;
   readonly policy: PolicyBundle;
   readonly candidateSource: FakeCandidateSource;
   readonly ids: DeterministicIds;
@@ -261,9 +273,10 @@ function createHarness(
   const candidateSource = new FakeCandidateSource(
     options.sourceFixture ?? FakeCandidateSourceFixture.STABLE,
   );
+  const clock = monotonicClock();
   const runtime = new WorkflowRuntimeKernel({
     store,
-    clock: monotonicClock(),
+    clock,
     ids,
     digests,
     phaseGuards: genericGuards,
@@ -296,6 +309,7 @@ function createHarness(
     filename,
     store,
     runtime,
+    clock,
     policy,
     candidateSource,
     ids,
@@ -612,6 +626,247 @@ function beginVerification(
     obligationId: obligation.id,
     completionCommandId: harnessCommand(harness, label('verification-complete')),
   });
+}
+
+interface LocalVerificationAuthorityFixture {
+  readonly generation: NonNullable<ReturnType<SqliteControlStore['getCandidateGeneration']>>;
+  readonly lease: CandidateWorkspaceLease;
+  readonly checkSpecification: ReturnType<typeof createLocalCommandCheckSpecification>;
+  readonly obligation: NonNullable<ReturnType<SqliteControlStore['getVerificationObligation']>>;
+}
+
+function installLocalVerificationAuthority(harness: Harness): LocalVerificationAuthorityFixture {
+  const workflow = currentWorkflow(harness);
+  assert.equal(workflow.phase, WorkflowPhase.EVIDENCE_BUILD);
+  assert.equal(workflow.activeAttemptId, undefined);
+  assert.ok(workflow.activeCandidateGenerationId);
+  const generation = harness.store.getCandidateGeneration(workflow.activeCandidateGenerationId);
+  const goal = harness.store.getGoal(harness.goalId);
+  assert.ok(generation?.state === CandidateGenerationState.FROZEN);
+  assert.ok(goal);
+
+  const workspaceRoot = `/fixture/local-${harness.name}-workspace`;
+  const candidateRoot = `${workspaceRoot}/candidate`;
+  const sourceProjectRoot = `/fixture/local-${harness.name}-source`;
+  const forbiddenRoots = Object.freeze(
+    [`/fixture/local-${harness.name}-authority`, sourceProjectRoot].sort(),
+  );
+  const allowedPaths = Object.freeze(['src']);
+  const issuedAt = harness.clock.now();
+  const leaseWithoutDigest = Object.freeze({
+    accessMode: CandidateWorkspaceAccessMode.READ_ONLY,
+    allowedPathPolicyDigest: digestCandidateWorkspaceValue(
+      candidateWorkspaceAllowedPathProjection(allowedPaths),
+    ),
+    allowedPaths,
+    candidateId: generation.candidateId,
+    candidateDigest: generation.frozenDigest,
+    candidateGenerationId: generation.id,
+    candidateGenerationVersion: generation.version,
+    forbiddenRoots,
+    generationSequence: generation.sequence,
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    id: `lease_local-${harness.name}`,
+    issuedAt,
+    lifecyclePolicy: 'RELEASE_EXPLICITLY' as const,
+    parentGenerationId: generation.parentGenerationId ?? null,
+    reservedPathPolicy: 'M2_CONTROLLED_COPY_V1' as const,
+    retentionPolicy: 'RUNTIME_OWNED' as const,
+    root: candidateRoot,
+    schemaVersion: 1 as const,
+    sourceGitMetadataDigest: digests.digest({
+      schemaVersion: 1,
+      type: 'LOCAL_VERIFICATION_SOURCE_GIT_METADATA',
+      generationId: generation.id,
+    }),
+    sourceProjectRoot,
+    sourceTreeDigest: generation.baseDigest,
+    state: 'ACTIVE' as const,
+    version: 1,
+    workspaceRootIdentity: workspaceRoot,
+    workflowId: workflow.id,
+    workflowVersion: workflow.version,
+  });
+  const lease = decodeCandidateWorkspaceLease({
+    ...leaseWithoutDigest,
+    leaseDigest: digestCandidateWorkspaceValue(
+      candidateWorkspaceLeaseProjection(leaseWithoutDigest),
+    ),
+  });
+  const checkSpecification = createLocalCommandCheckSpecification(
+    {
+      id: harness.ids.nextCheckSpecificationId(),
+      version: 'm2.local-command.1',
+      producerIdentity: 'codeclosure.local-command-runner',
+      operation: 'local-command.execute',
+      runnerIdentity: 'codeclosure.local-command-runner',
+      runnerVersion: '1',
+      executablePath: '/usr/bin/true',
+      executableDigest: digests.digest({ executablePath: '/usr/bin/true' }),
+      declaredToolVersion: 'fixture-system-tool',
+      argv: Object.freeze([]),
+      workspaceLease: lease,
+      cwd: '.',
+      environmentVariables: Object.freeze([]),
+      isolationProfileId: 'codeclosure.test-isolation',
+      isolationProfileDigest: digests.digest({ profile: 'codeclosure.test-isolation' }),
+      timeoutMilliseconds: 1_000,
+      terminationGraceMilliseconds: 100,
+      stdoutLimitBytes: 1_024,
+      stderrLimitBytes: 1_024,
+      totalOutputLimitBytes: 2_048,
+      payloadRetentionLimitBytes: 2_048,
+      acceptedExitCodes: Object.freeze([0]),
+    },
+    digests,
+  );
+  const occurredAt = harness.clock.now();
+  const localPolicy = createLocalCommandVerificationPolicy(
+    goal,
+    generation,
+    checkSpecification,
+    harness.ids,
+    occurredAt,
+  );
+  const payloadDigest = digests.digest({
+    workflowId: workflow.id,
+    workflowVersion: workflow.version,
+    checkSpecification: localPolicy.verification,
+    obligations: localPolicy.obligations,
+    occurredAt,
+  });
+  const result = harness.store.commitLocalCommandVerificationAuthority({
+    commandId: harnessCommand(harness, 'local-verification-authority'),
+    inputDigest: digests.digest({
+      schemaVersion: 1,
+      type: 'INSTALL_LOCAL_VERIFICATION_AUTHORITY',
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+      payloadDigest,
+    }),
+    target: { aggregateType: 'WORKFLOW', aggregateId: workflow.id },
+    workflowId: workflow.id,
+    expectedWorkflowVersion: workflow.version,
+    checkSpecification: localPolicy.verification,
+    obligations: localPolicy.obligations,
+    auditEventId: harness.ids.nextAuditEventId(),
+    checkSpecificationAuditEventId: harness.ids.nextAuditEventId(),
+    obligationAuditEventIds: localPolicy.obligations.map(() => harness.ids.nextAuditEventId()),
+    payloadDigest,
+    occurredAt,
+  });
+  assertApplied(result);
+  const obligation = localPolicy.obligations[0];
+  assert.ok(obligation);
+  return Object.freeze({ generation, lease, checkSpecification, obligation });
+}
+
+async function prepareLocalVerificationOutcome(
+  harness: Harness,
+  authority: LocalVerificationAuthorityFixture,
+  exitCode: number,
+  label: string,
+): Promise<{
+  readonly input: Parameters<SqliteControlStore['commitVerificationAttemptOutcome']>[0];
+  readonly evidence: EvidenceRecord;
+}> {
+  let workflow = currentWorkflow(harness);
+  assertApplied(
+    harness.runtime.beginAttempt({
+      commandId: harnessCommand(harness, `local-verification-${label}-start`),
+      workflowId: workflow.id,
+      expectedWorkflowVersion: workflow.version,
+    }),
+  );
+  workflow = currentWorkflow(harness);
+  assert.ok(workflow.activeAttemptId);
+  const attempt = harness.store.getAttempt(workflow.activeAttemptId);
+  assert.ok(attempt?.status === AttemptStatus.RUNNING);
+  const request: LocalCommandVerificationRequest = Object.freeze({
+    schemaVersion: 2,
+    goalId: harness.goalId,
+    goalRevision: goalRevision(1),
+    workflowId: workflow.id,
+    workflowVersion: workflow.version,
+    attemptId: attempt.id,
+    generation: authority.generation,
+    workspaceLease: authority.lease,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
+    obligation: authority.obligation,
+    checkSpec: authority.checkSpecification,
+    runnerIdentity: authority.checkSpecification.runnerIdentity,
+    runnerVersion: authority.checkSpecification.runnerVersion,
+    isolationProfileId: authority.checkSpecification.isolationProfileId,
+    isolationProfileDigest: authority.checkSpecification.isolationProfileDigest,
+    environmentVariables: Object.freeze([]),
+  });
+  const output = new Uint8Array(Buffer.from(exitCode === 0 ? 'pass\n' : 'fail\n'));
+  const execution = await executeLocalCommandVerification(request, harness.ids.nextEvidenceId(), {
+    candidateSource: harness.candidateSource,
+    runner: Object.freeze({
+      run: () =>
+        Promise.resolve({
+          schemaVersion: 1,
+          kind: 'LOCAL_COMMAND_OBSERVATION_V1',
+          terminationKind: 'EXITED',
+          exitCode,
+          stdoutBytes: output,
+          stdoutObservedByteCount: output.byteLength,
+          stdoutTruncated: false,
+          stderrBytes: new Uint8Array(),
+          stderrObservedByteCount: 0,
+          stderrTruncated: false,
+          diagnosticCode: 'NONE',
+        }),
+    }),
+    clock: harness.clock,
+    digests,
+  });
+  if (execution.status !== 'EVIDENCE_READY') {
+    assert.fail(JSON.stringify(execution));
+  }
+  const completionCommandId = harnessCommand(harness, `local-verification-${label}-complete`);
+  const decision = decideAttempt(workflow, attempt, {
+    type: 'RECORD_ATTEMPT_RESULT',
+    commandId: completionCommandId,
+    workflowId: workflow.id,
+    expectedWorkflowVersion: workflow.version,
+    attemptId: attempt.id,
+    occurredAt: execution.evidence.recordedAt,
+    reason: `local verification ${label} observation handled`,
+  });
+  if (!decision.accepted) {
+    assert.fail(decision.rejection.message);
+  }
+  const event = decision.events[0];
+  const initialEligibility = createInitialEvidenceEligibility(
+    execution.evidence.id,
+    execution.evidence.recordedAt,
+  );
+  const input = Object.freeze({
+    inputDigest: digests.digest({
+      schemaVersion: 1,
+      type: 'COMMIT_LOCAL_VERIFICATION_OUTCOME',
+      evidenceRecordDigest: execution.evidence.recordDigest,
+    }),
+    target: { aggregateType: 'WORKFLOW' as const, aggregateId: workflow.id },
+    event,
+    auditEventId: harness.ids.nextAuditEventId(),
+    workflowAuditEventId: harness.ids.nextAuditEventId(),
+    payloadDigest: digests.digest({
+      event,
+      evidenceRecordDigest: execution.evidence.recordDigest,
+      obligationId: authority.obligation.id,
+    }),
+    obligationId: authority.obligation.id,
+    evidence: execution.evidence,
+    payloads: execution.payloads,
+    initialEligibility,
+    evidenceAuditEventId: harness.ids.nextAuditEventId(),
+  });
+  return Object.freeze({ input, evidence: execution.evidence });
 }
 
 function advanceToFinalVerify(harness: Harness): {
@@ -1494,6 +1749,131 @@ void test('[I-005][I-006][I-009] Store rejects cross-generation, stale-Policy, a
   assert.equal(harness.store.listEvidenceForGeneration(generationId).length, 2);
 });
 
+void test('[M2-E03][M2-E04][M2-E05] local-command PASS and FAIL Evidence persist with exact payload bytes', async (t) => {
+  for (const fixture of [
+    { label: 'pass', exitCode: 0, expectedResult: 'PASS' },
+    { label: 'fail', exitCode: 7, expectedResult: 'FAIL' },
+  ] as const) {
+    await t.test(fixture.label, async (subtest) => {
+      const harness = createHarness(subtest, {
+        name: `local-verification-${fixture.label}`,
+      });
+      const generationId = completeStableFreezeAndEnterEvidence(harness);
+      const authority = installLocalVerificationAuthority(harness);
+      const prepared = await prepareLocalVerificationOutcome(
+        harness,
+        authority,
+        fixture.exitCode,
+        fixture.label,
+      );
+      const result = harness.store.commitVerificationAttemptOutcome(prepared.input);
+      assertApplied(result);
+      assert.equal(result.status, 'APPLIED');
+      assert.equal(result.value.evidence.resultStatus, fixture.expectedResult);
+      assert.equal(result.value.eligibility.state, EvidenceEligibilityState.ELIGIBLE);
+      assert.equal(result.value.evidence.kind, EvidenceKind.LOCAL_COMMAND_TEST_RESULT);
+      assert.equal(
+        harness.store
+          .listEvidenceForGeneration(generationId)
+          .filter(({ record }) => record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT).length,
+        1,
+      );
+      prepared.input.payloads?.forEach((payload) => {
+        assert.deepEqual(
+          harness.store.getEvidencePayload(payload.digest, payload.byteLength),
+          payload,
+        );
+      });
+
+      harness.store.close();
+      const reopened = openSqliteControlStore({ filename: harness.filename });
+      subtest.after(() => reopened.close());
+      assert.deepEqual(reopened.getEvidence(prepared.evidence.id), prepared.evidence);
+      prepared.input.payloads?.forEach((payload) => {
+        assert.deepEqual(reopened.getEvidencePayload(payload.digest, payload.byteLength), payload);
+      });
+    });
+  }
+});
+
+void test('[I-008][M2-E03] local-command payload, Evidence, eligibility, Attempt, audit, and outcome roll back together', async (t) => {
+  let armed = false;
+  const harness = createHarness(t, {
+    name: 'local-verification-payload-rollback',
+    transactionProbe: (step) => {
+      if (armed && step === CandidateEvidenceTransactionStep.AFTER_EVIDENCE_PAYLOAD_WRITE) {
+        throw new Error('injected local Verification payload failure');
+      }
+    },
+  });
+  const generationId = completeStableFreezeAndEnterEvidence(harness);
+  const authority = installLocalVerificationAuthority(harness);
+  const prepared = await prepareLocalVerificationOutcome(harness, authority, 0, 'rollback');
+  const workflowBefore = currentWorkflow(harness);
+  const attemptBefore = harness.store.getAttempt(prepared.evidence.attemptId);
+  assert.ok(attemptBefore?.status === AttemptStatus.RUNNING);
+  armed = true;
+  assert.throws(
+    () => harness.store.commitVerificationAttemptOutcome(prepared.input),
+    /injected local Verification payload failure/,
+  );
+  armed = false;
+
+  assert.deepEqual(currentWorkflow(harness), workflowBefore);
+  assert.deepEqual(harness.store.getAttempt(attemptBefore.id), attemptBefore);
+  assert.equal(harness.store.getEvidence(prepared.evidence.id), undefined);
+  assert.equal(harness.store.getEvidenceEligibility(prepared.evidence.id), undefined);
+  assert.equal(harness.store.getProcessedCommand(prepared.input.event.commandId), undefined);
+  assert.equal(
+    harness.store
+      .listAuditEvents('EVIDENCE', prepared.evidence.id)
+      .some((event) => event.commandId === prepared.input.event.commandId),
+    false,
+  );
+  assert.equal(
+    harness.store
+      .listEvidenceForGeneration(generationId)
+      .some(({ record }) => record.id === prepared.evidence.id),
+    false,
+  );
+  prepared.input.payloads?.forEach((payload) => {
+    assert.equal(harness.store.getEvidencePayload(payload.digest, payload.byteLength), undefined);
+  });
+});
+
+void test('[I-006][I-009][M2-E03] reopen rejects a retained payload whose bytes contradict its content identity', async (t) => {
+  const harness = createHarness(t, { name: 'local-verification-payload-corruption' });
+  completeStableFreezeAndEnterEvidence(harness);
+  const authority = installLocalVerificationAuthority(harness);
+  const prepared = await prepareLocalVerificationOutcome(harness, authority, 0, 'corruption');
+  assertApplied(harness.store.commitVerificationAttemptOutcome(prepared.input));
+  const stdoutPayload = prepared.input.payloads?.[0];
+  assert.ok(stdoutPayload);
+  assert.ok(stdoutPayload.byteLength > 0);
+  harness.store.close();
+
+  const raw = new Database(harness.filename);
+  try {
+    raw.exec('DROP TRIGGER evidence_payloads_no_update');
+    const update = raw
+      .prepare(
+        'UPDATE evidence_payloads SET payload_bytes = ? WHERE digest = ? AND byte_length = ?',
+      )
+      .run(
+        Buffer.alloc(stdoutPayload.byteLength, 'x'),
+        stdoutPayload.digest,
+        stdoutPayload.byteLength,
+      );
+    assert.equal(update.changes, 1);
+  } finally {
+    raw.close();
+  }
+  assert.throws(
+    () => openSqliteControlStore({ filename: harness.filename }),
+    /invalid content identity/,
+  );
+});
+
 void test('[I-008] injected failure after Evidence invalidation rolls back Candidate, Evidence, Workflow, audit, and command', (t) => {
   let armed = false;
   const harness = createHarness(t, {
@@ -2111,7 +2491,7 @@ void test('[I-006][I-008][I-027] SQLite rejects empty, unaudited, and audited-ma
       raw
         .prepare('INSERT INTO check_specifications(id, version, canonical_json) VALUES (?, ?, ?)')
         .run(malformedCheckId, checkSpec.version, JSON.stringify({})),
-    /invalid Check Specification authority/,
+    /unknown Check Specification schema version/,
   );
 
   const invalidatedAt = isoTimestamp('2026-07-27T00:01:01.000Z');

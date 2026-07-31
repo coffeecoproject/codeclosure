@@ -8,6 +8,7 @@ import {
   type CandidateGeneration,
   type CandidateGenerationId,
   type CheckSpecification,
+  type LocalCommandCheckSpecification,
   type CheckSpecificationId,
   type Goal,
   type IsoTimestamp,
@@ -42,6 +43,11 @@ export interface M1VerificationObligationIdentities {
 export interface M1CandidateEvidencePolicy {
   readonly freeze: CheckSpecification;
   readonly verification: CheckSpecification;
+  readonly obligations: readonly VerificationObligation[];
+}
+
+export interface LocalCommandVerificationPolicy {
+  readonly verification: LocalCommandCheckSpecification;
   readonly obligations: readonly VerificationObligation[];
 }
 
@@ -215,6 +221,107 @@ export function createM1CandidateEvidencePolicy(
     goal,
     generation,
     Object.freeze({ freeze, verification, obligations }),
+    createdAt,
+  );
+}
+
+export function validateLocalCommandVerificationPolicy(
+  goal: Goal,
+  generation: CandidateGeneration,
+  rawPolicy: LocalCommandVerificationPolicy,
+  createdAt: IsoTimestamp,
+): LocalCommandVerificationPolicy {
+  const verification = decodeCheckSpecification(rawPolicy.verification);
+  if (
+    verification.kind !== CheckSpecificationKind.LOCAL_COMMAND ||
+    !['FROZEN', 'INVALIDATED', 'REJECTED', 'ACCEPTED'].includes(generation.state) ||
+    generation.frozenDigest === undefined ||
+    verification.candidateGenerationId !== generation.id ||
+    verification.candidateDigest !== generation.frozenDigest ||
+    verification.inputRefs[0] !== generation.id
+  ) {
+    throw new TypeError('Local command verification policy is not bound to the frozen Candidate');
+  }
+  const obligations = Object.freeze(
+    rawPolicy.obligations.map((obligation) => decodeVerificationObligation(obligation)),
+  );
+  const requiredCriteria = goal.successCriteria.filter((criterion) => criterion.required);
+  if (requiredCriteria.length === 0 || obligations.length !== requiredCriteria.length) {
+    throw new TypeError(
+      'Local command verification requires one obligation per required criterion',
+    );
+  }
+  const verificationRef = checkSpecificationRef(verification);
+  const byCriterion = new Map<string, VerificationObligation>();
+  const seenIds = new Set<string>();
+  for (const obligation of obligations) {
+    const criterionId = obligation.sourceCriterionRefs[0];
+    if (
+      criterionId === undefined ||
+      obligation.sourceCriterionRefs.length !== 1 ||
+      !requiredCriteria.some((criterion) => criterion.id === criterionId) ||
+      seenIds.has(obligation.id) ||
+      byCriterion.has(criterionId) ||
+      obligation.goalId !== goal.id ||
+      obligation.goalRevision !== goal.revision ||
+      obligation.candidateGenerationId !== generation.id ||
+      !hasExactValues(obligation.scenarioRefs, [`criterion:${criterionId}`]) ||
+      obligation.checkSpecRef !== verificationRef ||
+      obligation.requiredEvidenceKind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT ||
+      obligation.strength !== 'M2_LOCAL_COMMAND' ||
+      obligation.createdAt !== createdAt
+    ) {
+      throw new TypeError(
+        `Verification Obligation ${obligation.id} is not the exact local-command mapping`,
+      );
+    }
+    seenIds.add(obligation.id);
+    byCriterion.set(criterionId, obligation);
+  }
+  return Object.freeze({
+    verification,
+    obligations: Object.freeze(
+      requiredCriteria.map((criterion) => {
+        const obligation = byCriterion.get(criterion.id);
+        if (obligation === undefined) {
+          throw new TypeError(`Required criterion ${criterion.id} lacks local-command Evidence`);
+        }
+        return obligation;
+      }),
+    ),
+  });
+}
+
+export function createLocalCommandVerificationPolicy(
+  goal: Goal,
+  generation: CandidateGeneration,
+  verification: LocalCommandCheckSpecification,
+  obligationIds: M1VerificationObligationIdentities,
+  createdAt: IsoTimestamp,
+): LocalCommandVerificationPolicy {
+  const verificationRef = checkSpecificationRef(verification);
+  const obligations = Object.freeze(
+    goal.successCriteria
+      .filter((criterion) => criterion.required)
+      .map((criterion) =>
+        decodeVerificationObligation({
+          id: obligationIds.nextVerificationObligationId(),
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          candidateGenerationId: generation.id,
+          sourceCriterionRefs: [criterion.id],
+          scenarioRefs: [`criterion:${criterion.id}`],
+          checkSpecRef: verificationRef,
+          requiredEvidenceKind: EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+          strength: 'M2_LOCAL_COMMAND',
+          createdAt,
+        }),
+      ),
+  );
+  return validateLocalCommandVerificationPolicy(
+    goal,
+    generation,
+    { verification, obligations },
     createdAt,
   );
 }

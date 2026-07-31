@@ -36,6 +36,7 @@ const migrationNames = Object.freeze([
   '0017_workflow_policy_binding_authority.sql',
   '0018_m1_retry_boundary_closure.sql',
   '0019_m1_attempt_authority_closure.sql',
+  '0020_local_command_verification_evidence.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -148,12 +149,12 @@ void test('[I-006][I-009] M1 migration ledger and reopened SQLite schema match o
     })),
   );
   assert.deepEqual(firstInspection, {
-    counts: { table: 29, index: 18, trigger: 124, view: 0 },
+    counts: { table: 30, index: 18, trigger: 130, view: 0 },
     foreignKeyViolationCount: 0,
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:df43d9bbd3a636791c91a82f587c21ea3a87b5fd50c971fc544e393a0f46f693',
+    schemaDigest: 'sha256:9a89c10788a7a2b1f623ad801c5c5b42dd30338a2649996dabbad289a1736e93',
   });
 
   const reopened = new Database(filename);

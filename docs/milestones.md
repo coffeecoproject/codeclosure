@@ -120,12 +120,13 @@ promotion consent, or a release claim.
 
 Status: In progress. Slice 0 authority/protocol decision closure, Slice 1
 version-bound App Server client, Slice 2 Goal-bound Worker Adapter, and Slice 3
-controlled-copy Candidate workspace are implemented. They do not yet
-constitute a trusted live Goal-bound production path; real verification begins
-in Slice 4. The detailed work
-sequence and status are in the [M2 implementation
-plan](plans/m2-codex-vertical-slice.md), and the independent exit procedure is
-in the [M2 acceptance plan](plans/m2-acceptance-plan.md).
+controlled-copy Candidate workspace are implemented. Slice 4 adds the bounded
+real local-command verifier, versioned Evidence contract, and atomic payload
+persistence. These slices do not yet constitute a trusted live Goal-bound
+production path; reject/repair/accept orchestration begins in Slice 5. The
+detailed work sequence and status are in the
+[M2 implementation plan](plans/m2-codex-vertical-slice.md), and the independent
+exit procedure is in the [M2 acceptance plan](plans/m2-acceptance-plan.md).
 
 ### Objective
 

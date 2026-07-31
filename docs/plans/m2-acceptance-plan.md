@@ -1,6 +1,6 @@
 # M2 Milestone Acceptance Plan
 
-- Status: Prepared; Slices 0 through 3 are implemented, Slice 4 has not started,
+- Status: Prepared; Slices 0 through 4 are implemented, Slice 5 has not started,
   and milestone acceptance has not started
 - Plan date: 2026-07-30
 - Milestone: M2

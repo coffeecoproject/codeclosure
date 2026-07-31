@@ -93,6 +93,12 @@ export interface DigestProvider {
   digest(value: unknown): Sha256Digest;
 }
 
+export interface EvidencePayload {
+  readonly digest: Sha256Digest;
+  readonly byteLength: number;
+  readonly bytes: Uint8Array;
+}
+
 export interface Canonicalizer {
   canonicalize(value: unknown): string;
 }
@@ -403,6 +409,7 @@ export interface CommittedCandidateAttemptOutcome extends AppliedAttemptEvent {
 export interface CommitVerificationAttemptOutcome extends CommitAttemptEvent {
   readonly obligationId: VerificationObligationId;
   readonly evidence: EvidenceRecord;
+  readonly payloads?: readonly EvidencePayload[];
   readonly initialEligibility: EvidenceEligibility;
   readonly evidenceAuditEventId: AuditEventId;
 }
@@ -410,6 +417,25 @@ export interface CommitVerificationAttemptOutcome extends CommitAttemptEvent {
 export interface CommittedVerificationAttemptOutcome extends AppliedAttemptEvent {
   readonly evidence: EvidenceRecord;
   readonly eligibility: EvidenceEligibility;
+}
+
+export interface CommitLocalCommandVerificationAuthority extends AuditWriteIdentity {
+  readonly commandId: CommandId;
+  readonly inputDigest: Sha256Digest;
+  readonly target: CommandTarget;
+  readonly workflowId: WorkflowId;
+  readonly expectedWorkflowVersion: WorkflowInstance['version'];
+  readonly checkSpecification: CheckSpecification;
+  readonly obligations: readonly VerificationObligation[];
+  readonly checkSpecificationAuditEventId: AuditEventId;
+  readonly obligationAuditEventIds: readonly AuditEventId[];
+  readonly occurredAt: IsoTimestamp;
+}
+
+export interface CommittedLocalCommandVerificationAuthority {
+  readonly workflow: WorkflowInstance;
+  readonly checkSpecification: CheckSpecification;
+  readonly obligations: readonly VerificationObligation[];
 }
 
 export interface CommitEvidenceSetTransition extends CommitWorkflowEvent {
@@ -578,6 +604,7 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
   ): VerificationObligation | undefined;
   listVerificationObligations(goalId: GoalId): readonly VerificationObligation[];
   getEvidence(evidenceId: EvidenceId): EvidenceRecord | undefined;
+  getEvidencePayload(digest: Sha256Digest, byteLength: number): EvidencePayload | undefined;
   getEvidenceEligibility(evidenceId: EvidenceId): EvidenceEligibility | undefined;
   listEvidenceForGeneration(
     candidateGenerationId: CandidateGeneration['id'],
@@ -598,6 +625,9 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
   commitVerificationAttemptOutcome(
     input: CommitVerificationAttemptOutcome,
   ): StoreCommandResult<CommittedVerificationAttemptOutcome>;
+  commitLocalCommandVerificationAuthority(
+    input: CommitLocalCommandVerificationAuthority,
+  ): StoreCommandResult<CommittedLocalCommandVerificationAuthority>;
   commitEvidenceSetTransition(
     input: CommitEvidenceSetTransition,
   ): StoreCommandResult<WorkflowInstance>;
