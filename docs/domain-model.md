@@ -12,8 +12,10 @@ outside that subset remain planned behavior. The accepted pre-Goal Intake
 records below are planned for M2.5 and are not part of the implemented M1
 schema or Runtime. M2 Slice 0 has accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
-0028 through ADR 0030. ADR 0031 now fixes the planned acceptance-critical
-Verification Plan and protected-asset authority. The bounded 0.146.0 live
+0028 through ADR 0030. ADR 0031 fixes the planned acceptance-critical
+Verification Plan and protected-asset authority, and ADR 0032 closes the
+bounded M2 plan cardinality, lease value, isolation-profile version, and
+Evidence-family composition. The bounded 0.146.0 live
 capability probe now passes;
 the Slice 1 lower client, protocol snapshot, offline fixtures, and live
 compatibility preflight are implemented without allowing a generated Codex
@@ -40,7 +42,8 @@ retained for each new child generation, and the child receives a fresh local
 family only after its own freeze. Active verification drift is persisted as one
 Attempt/Workflow/Candidate/Evidence compound failure. External execution and
 lease/session persistence, the ADR 0031 plan plus schema-version-3
-Check/Evidence variants, and their Acceptance binding remain later M2 work.
+Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
+and their Acceptance binding remain later M2 work.
 
 ## Design Rules
 
@@ -1129,12 +1132,67 @@ Runtime validates and digests it, and Store persists it with its creation audit
 atomically. It is immutable for the Workflow and reused by repair generations.
 Worker output cannot create, revise, or replace it.
 
+Under ADR 0032, a Workflow started with the bounded M2 acceptance-critical
+profile has exactly one such plan. Its ordered Criterion and rule arrays cover
+the complete critical set supported by the single protected semantic Check
+family. A profile requiring a second semantic protected family is unsupported
+by M2 and fails before Worker dispatch.
+
 ADR 0031 adds a schema-version-3 `LOCAL_COMMAND` Check that retains the full
 version-2 projection and adds the plan ID/digest, protected-asset manifest
 digest, and exact Runtime-issued read-only asset-lease digest. The matching
 schema-version-3 `LOCAL_COMMAND_TEST_RESULT` Evidence repeats those bindings.
 Existing version-2 records remain unchanged and cannot be the sole decisive
 Evidence for an acceptance-critical M2 obligation.
+
+ADR 0032 defines `ProtectedAssetReadLease` as a deterministic protocol-neutral
+Runtime request value derived per concrete verification. Its canonical
+projection binds current Attempt, Candidate, plan, manifest, obligation, Check,
+isolation Profile, exact protected file identities, access mode, and
+single-invocation lifecycle. The complete value travels in the version-3 local
+verification request; Check and Evidence retain its recomputable digest. M2
+adds no separately mutable lease aggregate.
+
+## Protected Asset Read Lease — planned M2 Slice 7
+
+```text
+ProtectedAssetReadLease
+  schemaVersion: 1
+  goalId
+  goalRevision
+  workflowId
+  workflowVersion
+  attemptId
+  candidateGenerationId
+  candidateDigest
+  acceptanceCriticalVerificationPlanId
+  acceptanceCriticalVerificationPlanDigest
+  protectedAssetManifestDigest
+  verificationObligationId
+  checkSpecificationId
+  checkSpecificationVersion
+  isolationProfileId
+  isolationProfileDigest
+  accessMode: READ_ONLY
+  lifecyclePolicy: SINGLE_VERIFICATION_INVOCATION
+  assets[]
+    logicalAssetId
+    registeredProtectedRootIdentity
+    exactRealpath
+    executionPath
+    fileMode
+    byteLength
+    contentDigest
+  leaseDigest
+```
+
+The full value is deterministically derived from retained authority and carried
+in the verification request. Its digest is repeated by the version-3 Check and
+Evidence. Runtime and Store recompute it; M2 does not persist an independently
+mutable lease row. The protected path uses
+`codeclosure.darwin-seatbelt.local-command` isolation profile version `2` with
+a distinct digest. Version `1` retains its Slice 4 meaning and cannot execute
+this protected path.
 
 ## Verification Obligation
 
@@ -1224,9 +1282,9 @@ M1 version-1 record and digest. See
 
 The planned ADR 0031 version-3 local Evidence additionally binds the immutable
 acceptance-critical Verification Plan, protected-asset manifest, and read-only
-asset lease. Worker-authored tests may be independently executed under a
-separate supplementary obligation, but that Evidence cannot by itself satisfy
-an acceptance-critical obligation.
+asset lease. Under ADR 0032, Worker-authored tests may be independently executed
+under a separate supplementary obligation, but that Evidence remains outside
+the bounded acceptance-critical Evidence Set and cannot satisfy its obligation.
 
 ## Acceptance Input, Decision, and Repair Authority
 

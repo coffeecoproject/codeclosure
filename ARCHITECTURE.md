@@ -27,7 +27,7 @@ The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
 current milestone. Slice 0 decision closure is implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
-and ADR 0028 through ADR 0031 are accepted. Slice 1 is implemented: the
+and ADR 0028 through ADR 0032 are accepted. Slice 1 is implemented: the
 version-bound lower client, pinned protocol snapshot, deterministic fake
 server, offline adversarial suite, and bounded live compatibility preflight
 pass. The [Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
@@ -439,11 +439,15 @@ Slice 6 will extend this smaller package for a fresh repair Worker Session and
 Thread. Runtime will compile the exact current `REJECT_REPAIRABLE` decision,
 Acceptance Input Manifest, failing Evidence, parent/child Candidate identities,
 preservation constraints, and bounded source-labelled
-`priorAttemptFeedback`. Full old chat, hidden reasoning, KV cache, and raw tool
-history remain outside the package by default. History retention and Context
-injection are separate policies: deleting the old Thread cannot erase failure
-authority, while retaining it cannot silently make the transcript
-authoritative. Missing, stale, or mismatched repair inputs block dispatch.
+`priorAttemptFeedback` deterministically projected from those records plus the
+retained Candidate-freeze change-set digest and other explicitly retained
+project observations. A decoded changed-file list, attempted approaches, or
+eliminated directions are not required M2 inputs and cannot be inferred from old
+chat. Full old chat, hidden reasoning, KV cache, and raw tool history remain
+outside the package by default. History retention and Context injection are
+separate policies: deleting the old Thread cannot erase failure authority,
+while retaining it cannot silently make the transcript authoritative. Missing,
+stale, or mismatched repair inputs block dispatch.
 
 ### Candidate Manager
 
@@ -493,8 +497,11 @@ family may be decisive for an acceptance-critical Criterion. Trusted
 composition fixes an immutable pre-Worker Verification Plan and protected-asset
 manifest; each frozen generation's Check and Evidence bind back to that exact
 plan. Worker-authored tests may produce labelled supplementary Evidence but
-cannot alone satisfy the protected obligation. This is planned Slice 7 work,
-not an implemented Slice 5 claim.
+cannot alone satisfy the protected obligation. ADR 0032 fixes exactly one such
+plan for the bounded Workflow, defines a deterministic protected-asset read
+lease and version-2 isolation profile, and keeps supplementary records outside
+the decisive one-family Evidence Set. This is planned Slice 7 work, not an
+implemented Slice 5 claim.
 
 ### Acceptance Engine
 
@@ -542,6 +549,10 @@ mutation and stored outside Worker authority or bound to exact pre-Worker
 content. Asset removal, replacement, weakening, aliasing, or digest drift
 prevents decisive passing Evidence. This boundary permits Worker test changes
 as supplementary work and does not claim general test-suite completeness.
+[ADR 0032](docs/adr/0032-close-bounded-m2-protected-verification-composition.md)
+closes the bounded composition with one Workflow-scoped plan, a deterministic
+exact-read lease, Darwin isolation profile version 2, and a decisive Evidence
+Set that excludes supplementary families.
 
 ## Authority and Storage Topology
 

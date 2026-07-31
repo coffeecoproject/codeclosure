@@ -77,18 +77,22 @@ worker misunderstands an accurate context package.
 - project/base identity;
 - relevant source files or bounded excerpts;
 - repository rules and accepted project configuration;
-- actual change manifest;
+- actual change manifest when a retained project record provides it; bounded M2
+  otherwise has only Candidate-freeze `changeSetDigest`;
 - current test/build declarations;
 - current runtime observations when applicable.
 
 ### Non-authoritative working inputs
 
 - bounded transcript excerpts;
-- worker-authored summaries;
+- provenance-labelled worker-authored summaries only when a policy selects an
+  explicit durable source record;
 - proposed facts;
 - hypotheses and search hints;
-- bounded `priorAttemptFeedback` derived from exact current failure authority;
-- bounded worker-authored rationale, hypothesis, or search-state summaries.
+- bounded `priorAttemptFeedback` deterministically projected from exact current
+  failure authority and retained project observations; and
+- optional bounded worker-authored rationale, hypothesis, or search-state
+  summaries only when an explicit durable source record exists.
 
 Non-authoritative inputs must be labelled and cannot override authoritative
 inputs. Raw private reasoning and opaque compaction state are worker-session
@@ -163,10 +167,23 @@ The canonical identity is the `ContextManifest`, not presentation formatting.
 `repairContext` is authoritative Runtime state. Its fields MUST bind the exact
 current repair authority and failing Evidence retained for the parent
 generation. `priorAttemptFeedback` is a bounded, fixed-schema working
-projection that may describe changed files, attempted approaches, observed
-failure causes, and eliminated directions. Every item MUST cite its source
-records and digests. It remains non-authoritative and cannot override Goal,
-Policy, Evidence, Runtime Decisions, or preservation constraints.
+projection. The required M2 projection MUST be deterministically derived from
+the exact current Acceptance repair record and decision, Acceptance Input
+Manifest, failing Evidence, parent/child Candidate relationship, actual change
+set digest (`changeSetDigest`) retained by Candidate-freeze Evidence, other explicitly retained
+project observations, and Goal preservation constraints. It may describe
+changed files and observed failure causes only to the extent a decoded retained
+source establishes them. The change-set digest alone does not authorize a
+Worker-authored changed-file list. Every item MUST cite its source records and
+digests. It remains non-authoritative and cannot override Goal, Policy,
+Evidence, Runtime Decisions, or preservation constraints.
+
+Attempted approaches, eliminated directions, hypotheses, and free-form Worker
+summaries are not required M2 repair inputs. The bounded M2 profile omits them
+unless a separately defined durable, provenance-labelled, non-authoritative
+record exists. A decoded per-file change history is likewise optional unless an
+exact retained source exists. M2 does not derive any of those inputs from old
+chat. M3 owns their general durable fact model and relevance selection.
 
 The bound Context policy sets maximum feedback items, maximum canonical bytes
 per item, and maximum total canonical bytes. Required authoritative failure
@@ -431,7 +448,8 @@ policy from injecting content into a new Context Package. M2 defaults are:
 - retained history does not change the authoritative repair projection merely
   because it is available;
 - a policy-selected worker summary may enter only as bounded,
-  provenance-labelled, non-authoritative feedback; and
+  provenance-labelled, non-authoritative feedback from an explicit durable
+  source record; the bounded M2 profile does not require such a record; and
 - expired or unbound historical content is omitted rather than allowed to
   override current authority.
 

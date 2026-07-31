@@ -37,6 +37,7 @@ supersedes it.
 | [0029](0029-controlled-copy-candidate-workspaces.md) | Use controlled-copy Candidate workspaces for bounded M2 execution | Accepted |
 | [0030](0030-real-local-verification-contract.md) | Add a versioned real local-command verification contract | Accepted |
 | [0031](0031-protect-acceptance-critical-verification-from-worker-writable-assets.md) | Protect acceptance-critical verification from Worker-writable assets | Accepted |
+| [0032](0032-close-bounded-m2-protected-verification-composition.md) | Close bounded M2 protected-verification composition | Accepted |
 
 ## ADR lifecycle
 

@@ -18,9 +18,11 @@ all dependent eligible Evidence in the same transaction that ends the active
 Attempt. Selecting the M2 local-verification capability makes that family
 mandatory rather than permitting fallback to M1 fake Evidence. Runtime causal
 floors plus Store, migration, and reopen backstops prevent verification
-Evidence from predating its exact Obligation. ADR 0031 now fixes the planned M2
-acceptance-critical Verification Plan and protected-asset authority, but its
-additive Check/Evidence binding is not implemented; Slice 7 owns that work.
+Evidence from predating its exact Obligation. ADR 0031 fixes the planned M2
+acceptance-critical Verification Plan and protected-asset authority, and ADR
+0032 closes its bounded plan, lease, isolation-profile, and Evidence-family
+composition. The additive Check/Evidence binding is not implemented; Slice 7
+owns that work.
 Pre-Goal
 Intake observations are not part of the
 implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
@@ -223,10 +225,23 @@ bindings without changing schema-version-2 identity. Asset removal,
 replacement, weakening, aliasing, or digest drift prevents eligible decisive
 passing Evidence.
 
+ADR 0032 requires the schema-version-3 local verification request to carry the
+complete canonical `ProtectedAssetReadLease`; a digest alone is not an
+executable request. Runtime and Store recompute that digest from retained
+authority. The version-2 verification-isolation request receives the same
+decoded lease and binds Darwin isolation-profile version `2`; profile version
+`1` cannot run the protected path.
+
 Worker-authored tests may be independently executed only as
 provenance-labelled supplementary Evidence. Their Check and obligation mapping
 MUST identify that lower role; a Worker result cannot promote it to an
 acceptance-critical mapping.
+
+Under ADR 0032, that supplementary Evidence remains outside the bounded M2
+acceptance-critical Evidence Set. Slice 5's one-complete-Check-family invariant
+still applies: the decisive Set contains only the complete schema-version-3
+protected local-command family. Supplementary records remain separately
+queryable and auditable; mixing or substitution fails closed.
 
 ## Observation Versus Result
 
@@ -450,8 +465,10 @@ Slice 5 reuses the existing deterministic Acceptance rules and repair/closeout
 transitions with that exact local family; it adds no second Acceptance issuer,
 general container runner, browser/device verifier, or arbitrary blob store.
 Slice 7 will add ADR 0031's pre-Worker plan, protected-asset manifest, and
-generation-specific decisive Evidence binding. That planned extension does not
-rewrite the Slice 4/5 version-2 records or their historical review claims.
+generation-specific decisive Evidence binding under ADR 0032's bounded
+single-plan, deterministic lease, version-2 isolation-profile, and one-family
+selection rules. That planned extension does not rewrite the Slice 4/5
+version-2 records or their historical review claims.
 
 The Evidence boundary does not interpret its own records as Goal acceptance.
 The existing M1 Slice 6 Acceptance Engine separately maps pass, fail, runner-error,

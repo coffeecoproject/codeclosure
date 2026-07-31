@@ -39,9 +39,10 @@ transaction. It deliberately added no new Workflow transition. Slice 5 now
 composes verification, rejection, repair, Acceptance, and closeout through the
 existing Runtime authority and implements that bounded in-process
 composition without adding a Workflow phase: failing required Evidence reaches
-`REJECT_REPAIRABLE`, repair creates a distinct child generation, fresh Evidence
-is selected for deterministic Acceptance, and closeout consumes only the exact
-current decision. Verification-time Candidate drift uses one compound Store
+`REJECT_REPAIRABLE`, the separate explicit `BeginAcceptanceRepair` command
+creates a distinct child generation, fresh Evidence is selected for
+deterministic Acceptance, and closeout consumes only the exact current decision.
+Verification-time Candidate drift uses one compound Store
 transaction to fail the active Attempt and Workflow and invalidate Candidate
 and Evidence authority. Candidate Worker leases require the exact current
 `IMPLEMENT` Attempt, and an `EVIDENCE_BUILD` Attempt cannot begin before its
@@ -53,9 +54,9 @@ Resume, or repair may mutate authority; Resume reuses that preflighted binding
 after the Recovery owner commits. Restart reconstruction of its external
 execution session, fresh repair Context, and failed-repair stop proof remain M2
 Slice 6. ADR 0031's protected acceptance-critical Verification Plan and
-schema-version-3 Check/Evidence family remain Slice 7. Goal Intake is an
-accepted pre-Goal target for M2.5; it is not implemented and does not add
-another Workflow phase.
+schema-version-3 Check/Evidence family, closed for bounded composition by ADR
+0032, remain Slice 7. Goal Intake is an accepted pre-Goal target for M2.5; it is
+not implemented and does not add another Workflow phase.
 
 ## Purpose
 

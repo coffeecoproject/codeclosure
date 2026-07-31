@@ -153,6 +153,10 @@ external execution, Candidate workspace, and real-verification boundaries.
 separately fixes the authority and digest binding of acceptance-critical
 verification semantics and assets; it does not change ADR 0030's execution
 contract or the historical Slice 4 and 5 claims.
+[ADR 0032](../adr/0032-close-bounded-m2-protected-verification-composition.md)
+closes the bounded single-plan, deterministic asset-lease,
+isolation-profile-version, and Evidence-family decisions without reinterpreting
+those completed slices.
 
 If M2 needs to change a durable decision in those records, implementation must
 stop and a superseding or additional ADR must be accepted first.
@@ -211,8 +215,9 @@ The bounded implementation includes:
   Check/Oracle assets and generation-specific exact bindings;
 - independent Evidence creation and deterministic Acceptance replay;
 - one Runtime-authorized repair continuation in the bounded M2 demonstration,
-  with exact failure Evidence and structured `priorAttemptFeedback` recompiled
-  for a fresh Worker Session and Thread;
+  with exact failure Evidence and structured `priorAttemptFeedback`
+  deterministically projected from retained authority and recompiled for a
+  fresh Worker Session and Thread;
 - one bounded live repair handoff seeded by a controlled real failure, proving
   that Codex receives that recompiled Context without an old Thread;
 - a persisted visible stop after that bounded repair fails, with no
@@ -575,8 +580,13 @@ The conservative M2 Thread rules are:
   failing Evidence, parent/child Candidate identities, preservation
   constraints, and bounded `priorAttemptFeedback` through current compiled
   Context;
-- `priorAttemptFeedback` is fixed-schema, source-bound, and
-  non-authoritative; it cannot override Goal, Evidence, Policy, Runtime
+- required M2 `priorAttemptFeedback` is fixed-schema, source-bound,
+  non-authoritative, and deterministically projected from those exact records
+  plus the retained Candidate-freeze change-set digest and other explicitly
+  retained project observations; a decoded changed-file list, attempted
+  approaches, eliminated directions, and free-form Worker summaries are omitted
+  unless a separately defined durable non-authoritative record exists;
+- `priorAttemptFeedback` cannot override Goal, Evidence, Policy, Runtime
   Decisions, or repair-preservation constraints;
 - retaining an old Thread or transcript for diagnostics is separate from
   Context injection. A repair does not silently receive full old chat, hidden
@@ -703,12 +713,20 @@ semantics, and every protected test, Oracle, script, fixture, input, and
 expected-output identity. Each frozen generation receives a concrete Check and
 Evidence binding derived from that plan.
 
+[ADR 0032](../adr/0032-close-bounded-m2-protected-verification-composition.md)
+fixes exactly one such plan for the bounded Workflow and one protected semantic
+Check family. It defines a deterministic full `ProtectedAssetReadLease` value,
+requires Darwin isolation profile version 2 for exact protected-asset reads,
+and keeps supplementary Worker-test Evidence outside the decisive one-family
+Evidence Set.
+
 Protected assets must be outside Worker-writable Candidate roots or bound to
 their exact pre-Worker content and revalidated before execution. Mutation,
 deletion, replacement, aliasing, wrong-plan binding, or an unverifiable asset
 identity prevents eligible decisive passing Evidence. Worker-authored tests may
 be independently executed as provenance-labelled supplementary Evidence, but
-they cannot alone satisfy an acceptance-critical Verification Obligation.
+they remain outside the bounded M2 acceptance-critical Evidence Set and cannot
+satisfy an acceptance-critical Verification Obligation.
 
 M2 proves this boundary with one protected fixture and does not claim that the
 Oracle completely specifies arbitrary project behavior.
@@ -1123,8 +1141,12 @@ Work:
 - extend the Context Compiler, Package, Manifest, Runtime, and Store so the
   repair dispatch binds the exact current `REJECT_REPAIRABLE` decision,
   Acceptance Input Manifest, failing Evidence, parent/child Candidate
-  identities, preservation constraints, and bounded source-labelled
-  `priorAttemptFeedback`;
+  identities, preservation constraints, retained Candidate-freeze change-set
+  digest, and bounded source-labelled `priorAttemptFeedback` deterministically
+  projected from those retained sources;
+- omit decoded changed-file lists, attempted approaches, eliminated directions,
+  and free-form Worker summaries from the required M2 repair Context unless a
+  separately defined durable non-authoritative source record exists;
 - separate old-Thread history retention from Context injection and exclude the
   full old chat, hidden reasoning, KV cache, and raw tool transcript by
   default;
@@ -1174,7 +1196,9 @@ Work:
 - wire the M2 adapters only in trusted composition;
 - implement ADR 0031's immutable pre-Worker acceptance-critical Verification
   Plan, protected-asset identity, generation-specific Check/Evidence binding,
-  and fail-closed mutation handling;
+  and fail-closed mutation handling together with ADR 0032's exactly-one-plan,
+  deterministic full asset-lease, isolation-profile-version-2, and decisive
+  Evidence-family boundaries;
 - expose a bounded profile/demo selection without changing direct Goal
   creation;
 - add subprocess coverage for usage, status, governed rejection, repair,

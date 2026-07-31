@@ -162,7 +162,8 @@ the M1 authority boundary.
   Worker-writable tests;
 - acceptance rejection and repair generation loop;
 - exact failure Evidence plus bounded structured `priorAttemptFeedback`
-  recompiled into a fresh repair Worker Session and Thread;
+  deterministically projected from retained authority and recompiled into a
+  fresh repair Worker Session and Thread;
 - one bounded live repair handoff whose failed parent is produced by a
   controlled fixture before Codex enters only the repair child;
 - one bounded M2 repair continuation followed by a visible persisted stop if
@@ -192,7 +193,9 @@ Verification paths:
 
 1. the controlled Worker edits an isolated Candidate and claims completion;
 2. a required real check deterministically fails;
-3. CodeClosure rejects closeout and creates a repair generation;
+3. CodeClosure records the exact `REJECT_REPAIRABLE`, then a controlled explicit
+   `BeginAcceptanceRepair` consumes it and atomically creates the repair
+   generation plus immutable repair record;
 4. the controlled repair edits only the new generation;
 5. fresh verification passes; and
 6. Acceptance and Runtime closeout bind the exact repaired Candidate and
@@ -206,7 +209,8 @@ Separate deterministic adversarial branches MUST also prove:
    close the Goal, while the correct implementation passes the same protected
    Oracle;
 3. a repair child uses a fresh Thread whose current Context contains the exact
-   failing Evidence and source-bound `priorAttemptFeedback`, without requiring
+   failing Evidence and `priorAttemptFeedback` deterministically projected from
+   retained authority and Candidate-freeze change-set digest, without requiring
    the old Thread; and
 4. when the bounded repair fails, no generation 3, Thread, Turn, dispatch,
    retry, or model fallback occurs without a new explicit continuation
@@ -243,6 +247,10 @@ edit, restoring old chat, or treating Codex output as Acceptance.
 - acceptance-critical Check semantics and protected assets are fixed before
   Worker mutation, exactly bound to decisive Evidence, and cannot be replaced
   by Worker-writable tests;
+- the bounded Workflow has exactly one protected Verification Plan, its full
+  read lease is reproducible from retained authority, the protected path uses a
+  new isolation-profile version, and supplementary Worker-test Evidence remains
+  outside the decisive Evidence Set;
 - restart and new Thread recovery preserve Goal/Workflow authority;
 - a fresh repair Thread receives exact current failure authority and bounded
   non-authoritative feedback without old-chat dependency or silent history

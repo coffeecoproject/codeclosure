@@ -10,9 +10,11 @@ and immutable exact repair-generation authority. ADR 0030's bounded real
 local-command verifier and version-2 Evidence are implemented, and Slice 5 now
 selects one complete local Check family as the current deterministic Acceptance
 input. The same M1 rule set maps real `PASS`, `FAIL`, runner-error, and timeout
-status without granting the runner completion authority. ADR 0031 now fixes a
+status without granting the runner completion authority. ADR 0031 fixes a
 planned additive acceptance-critical Verification Plan and protected-asset
-rule, but Slice 7 has not implemented that Acceptance input or checker.
+rule, while ADR 0032 closes the bounded single-plan, lease, Profile, and
+Evidence-family composition. Slice 7 has not implemented that Acceptance input
+or checker.
 Intent Admission and
 Goal Materialization are a separate
 pre-Goal authority and are not implemented by the Acceptance Engine.
@@ -101,6 +103,11 @@ manifest MUST also bind the immutable
 MUST contain the exact generation-specific Check and protected-asset manifest
 binding required by that plan. Existing M1 manifests and Slice 4/5 inputs keep
 their exact schema and digest semantics.
+
+The bounded M2 manifest binds exactly one Workflow-scoped plan. Its Evidence
+Set contains only the complete protected schema-version-3 local-command family;
+supplementary Worker-test Evidence is not selected into that Set. A second plan,
+mixed family, or supplementary substitution fails before rule evaluation.
 
 `manifestDigest` is computed over the semantic fields from `schemaVersion`
 through `policyBundleDigest`. It excludes `createdAt` and `manifestDigest`
