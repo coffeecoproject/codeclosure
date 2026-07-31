@@ -1200,9 +1200,13 @@ The full value is deterministically derived from retained authority and carried
 in the verification request. It is constructed with the concrete Check while
 `EVIDENCE_BUILD` is idle and before its Attempt exists. Its digest is repeated
 by the version-3 Check and Evidence. The request binds the current Workflow
-version, Attempt, and Obligation; Evidence repeats Attempt and Obligation, while
-the Acceptance Input Manifest binds Workflow version. Runtime and Store
-recompute and cross-check that complete chain; M2 does not persist an
+version at verification execution plus the exact Attempt and Obligation.
+Evidence repeats Workflow ID, Attempt, Obligation, Check, and lease identity.
+Runtime and Store reconstruct the execution-time Workflow version from request
+admission plus persisted Attempt, processed command, audit, and Workflow
+history. The
+Acceptance Input Manifest separately binds the later `FINAL_VERIFY` evaluation
+version; the two Workflow versions need not be equal. M2 does not persist an
 independently mutable lease row. The protected path uses
 `codeclosure.darwin-seatbelt.local-command` isolation profile version `2` with
 a distinct digest. Version `1` retains its Slice 4 meaning and cannot execute

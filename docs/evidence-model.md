@@ -239,11 +239,14 @@ decoded lease and binds Darwin isolation-profile version `2`; profile version
 
 ADR 0033 fixes that lease as static authority constructed with the concrete
 Check before the verification Attempt exists. The lease excludes Workflow
-version, Attempt, and Obligation. The request binds all three invocation fields;
-Evidence repeats Attempt and Obligation, and the Acceptance Input Manifest
-binds Workflow version. Runtime and Store cross-check the complete chain. A
-consumed, stale, replayed, or late verification session cannot reuse the lease
-to invoke the Runner or create Evidence.
+version, Attempt, and Obligation. The request binds the execution-time Workflow
+version plus Attempt and Obligation; Evidence repeats Workflow ID, Attempt,
+Obligation, Check, and lease identity. Runtime and Store reconstruct that
+execution-time version from request admission plus persisted Attempt, processed
+command, audit, and Workflow history. The Acceptance Input Manifest
+independently binds the later `FINAL_VERIFY` evaluation version, which need not
+equal the execution version. A consumed, stale, replayed, or late verification
+session cannot reuse the lease to invoke the Runner or create Evidence.
 
 Worker-authored tests may be independently executed only as
 provenance-labelled supplementary Evidence. Their Check and obligation mapping
