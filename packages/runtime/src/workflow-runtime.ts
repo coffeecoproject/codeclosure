@@ -93,10 +93,12 @@ import {
   type ExecutionProfileBinding,
   type ExecutionProfileId,
   type IsoTimestamp,
+  type LocalCommandCheckSpecification,
   type PolicyBundle,
   type PolicyBundleId,
   type Sha256Digest,
   type VerificationObligationId,
+  type VerificationObligation,
   type WorkflowId,
   type WorkflowInstance,
   type WorkflowPolicyBinding,
@@ -161,10 +163,19 @@ import { createM1AcceptanceEngine } from './acceptance-engine.js';
 import { compileM1AcceptanceInput } from './acceptance-policy.js';
 import {
   createM1CandidateEvidencePolicy,
+  createLocalCommandVerificationPolicy,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
+  validateAcceptanceCandidateEvidencePolicy,
   validateM1CandidateEvidencePolicy,
 } from './candidate-evidence-policy.js';
+import {
+  CandidateWorkspaceAccessMode,
+  decodeCandidateWorkspaceLease,
+  type CandidateWorkspaceLease,
+  type CandidateWorkspaceLeaseAuthorityPort,
+  type CandidateWorkspaceLeasePort,
+} from './candidate-workspace-contracts.js';
 import { canonicalizeJson } from './canonical-json.js';
 import {
   buildEvidenceSet,
@@ -174,6 +185,16 @@ import {
   verifyEvidenceRecordDigests,
   verifyEvidenceSetAuthority,
 } from './evidence-factory.js';
+import {
+  createLocalCommandCheckSpecification,
+  type CreateLocalCommandCheckSpecificationInput,
+  type LocalCommandVerificationPort,
+} from './local-command-verification-contracts.js';
+import {
+  LocalCommandVerificationFailureCode,
+  executeLocalCommandVerification,
+  type LocalCommandVerificationExecution,
+} from './local-command-verification.js';
 import {
   WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
@@ -281,6 +302,18 @@ export interface AcceptanceRuntimeDependencies {
   readonly policyBundleDigest: Sha256Digest;
 }
 
+export interface LocalCommandVerificationRuntimeProfile {
+  /** Trusted roots in addition to the source root, which the workspace adds itself. */
+  readonly forbiddenRoots: readonly string[];
+  readonly check: Omit<CreateLocalCommandCheckSpecificationInput, 'id' | 'workspaceLease'>;
+}
+
+export interface LocalCommandVerificationRuntimeDependencies {
+  readonly workspace: CandidateWorkspaceLeasePort & CandidateWorkspaceLeaseAuthorityPort;
+  readonly runner: LocalCommandVerificationPort;
+  readonly profile: LocalCommandVerificationRuntimeProfile;
+}
+
 export type BeginAttemptRequest = WorkflowCommandRequest;
 
 export interface RecordAttemptResultRequest extends WorkflowCommandRequest {
@@ -322,6 +355,9 @@ export interface RunVerificationRequest extends WorkflowCommandRequest {
   readonly reason: string;
 }
 
+export type ConfigureLocalCommandVerificationRequest = WorkflowCommandRequest;
+export type RunLocalCommandVerificationRequest = RunVerificationRequest;
+
 export type EvaluateAcceptanceRequest = GoalCommandRequest;
 
 interface ConsumeAcceptanceRequest extends GoalCommandRequest {
@@ -348,6 +384,7 @@ export interface WorkflowRuntimeKernelDependencies extends WorkflowRuntimeDepend
   readonly phaseGuards?: PhaseGuardEvaluator;
   readonly workerContext?: WorkerContextRuntimeDependencies;
   readonly candidateEvidence?: CandidateEvidenceRuntimeDependencies;
+  readonly localCommandVerification?: LocalCommandVerificationRuntimeDependencies;
   readonly acceptance?: AcceptanceRuntimeDependencies;
 }
 
@@ -387,6 +424,12 @@ interface OutcomeAuthority {
 interface WorkerAttemptIdentity {
   readonly contextManifestId: ContextManifestId;
   readonly workerSessionRef: WorkerSessionId;
+}
+
+interface ActiveLocalCommandVerificationAuthority {
+  readonly lease: CandidateWorkspaceLease;
+  readonly checkSpecification: LocalCommandCheckSpecification;
+  readonly obligations: readonly VerificationObligation[];
 }
 
 interface PreparedAttemptContext {
@@ -521,6 +564,7 @@ function isCandidateEvidenceControlStore(
       'commitCandidatePreparation',
       'commitWorkflowCandidateEvent',
       'commitCandidateIntegrityFailure',
+      'commitVerificationIntegrityFailure',
       'commitCandidateAttemptOutcome',
       'commitVerificationAttemptOutcome',
       'commitLocalCommandVerificationAuthority',
@@ -976,9 +1020,14 @@ export class WorkflowRuntimeKernel {
   readonly #workerStore: WorkerControlStore | undefined;
   readonly #candidateEvidence: CandidateEvidenceRuntimeDependencies | undefined;
   readonly #candidateEvidenceStore: CandidateEvidenceControlStore | undefined;
+  readonly #localCommandVerification: LocalCommandVerificationRuntimeDependencies | undefined;
   readonly #acceptance: AcceptanceRuntimeDependencies | undefined;
   readonly #acceptanceStore: AcceptanceControlStore | undefined;
   readonly #preparedWorkerRequests = new Map<AttemptId, WorkerRequest>();
+  readonly #activeLocalCommandVerification = new Map<
+    CandidateGenerationId,
+    ActiveLocalCommandVerificationAuthority
+  >();
 
   public constructor(dependencies: WorkflowRuntimeKernelDependencies) {
     this.#store = dependencies.store;
@@ -993,6 +1042,30 @@ export class WorkflowRuntimeKernel {
     this.#acceptanceStore = isAcceptanceControlStore(dependencies.store)
       ? dependencies.store
       : undefined;
+    this.#localCommandVerification =
+      dependencies.localCommandVerification === undefined
+        ? undefined
+        : Object.freeze({
+            workspace: dependencies.localCommandVerification.workspace,
+            runner: dependencies.localCommandVerification.runner,
+            profile: Object.freeze({
+              forbiddenRoots: Object.freeze([
+                ...dependencies.localCommandVerification.profile.forbiddenRoots,
+              ]),
+              check: Object.freeze({
+                ...dependencies.localCommandVerification.profile.check,
+                argv: Object.freeze([...dependencies.localCommandVerification.profile.check.argv]),
+                environmentVariables: Object.freeze(
+                  dependencies.localCommandVerification.profile.check.environmentVariables.map(
+                    (variable) => Object.freeze({ ...variable }),
+                  ),
+                ),
+                acceptedExitCodes: Object.freeze([
+                  ...dependencies.localCommandVerification.profile.check.acceptedExitCodes,
+                ]),
+              }),
+            }),
+          });
     if (dependencies.workerContext !== undefined) {
       if (this.#workerStore === undefined) {
         throw new TypeError('Worker Context requires the complete WorkerControlStore port');
@@ -1031,6 +1104,11 @@ export class WorkflowRuntimeKernel {
       });
     } else {
       this.#candidateEvidence = undefined;
+    }
+    if (this.#localCommandVerification !== undefined && this.#candidateEvidence === undefined) {
+      throw new TypeError(
+        'Local command verification requires Candidate/Evidence runtime dependencies',
+      );
     }
     if (dependencies.acceptance !== undefined) {
       if (this.#acceptanceStore === undefined) {
@@ -1995,6 +2073,26 @@ export class WorkflowRuntimeKernel {
         }
         const boundPolicy = this.resolveBoundWorkerPolicy(input.commandId, workflow);
         const boundProfile = this.resolveBoundExecutionProfile(input.commandId, workflow);
+        let evidenceAuthorityFloors: readonly IsoTimestamp[] = [];
+        if (workflow.phase === WorkflowPhase.EVIDENCE_BUILD) {
+          const generation = this.resolveCandidateAuthority(
+            input.commandId,
+            workflow,
+            goal,
+          ).generation;
+          const evidencePolicy = this.resolveAcceptanceCandidateEvidencePolicy(
+            input.commandId,
+            goal,
+            generation,
+            this.#localCommandVerification !== undefined,
+          );
+          if (this.#localCommandVerification !== undefined) {
+            this.assertActiveLocalCommandVerificationAuthority(generation, evidencePolicy);
+          }
+          evidenceAuthorityFloors = evidencePolicy.obligations.map(
+            (obligation) => obligation.createdAt,
+          );
+        }
         const attemptIdentifier = this.nextAttemptId(input.commandId);
         const workerIdentity = this.nextWorkerAttemptIdentity(input.commandId, workflow.phase);
         const occurredAt = this.causalNow(
@@ -2006,6 +2104,7 @@ export class WorkflowRuntimeKernel {
           ...(boundProfile === undefined
             ? []
             : [boundProfile.profile.installedAt, boundProfile.binding.boundAt]),
+          ...evidenceAuthorityFloors,
         );
         const decision = decideAttempt(workflow, undefined, {
           type: 'BEGIN_ATTEMPT',
@@ -2308,8 +2407,618 @@ export class WorkflowRuntimeKernel {
     });
   }
 
+  public configureLocalCommandVerification(
+    rawInput: ConfigureLocalCommandVerificationRequest,
+  ): RuntimeCommandResult {
+    const input = decodeBeginAttemptRequest(rawInput);
+    const target = workflowTarget(input.workflowId);
+    const local = this.#localCommandVerification;
+    if (local === undefined) {
+      return rejected(
+        input.commandId,
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Local command verification is not configured',
+          'LOCAL_COMMAND_VERIFICATION_RUNTIME_UNAVAILABLE',
+        ),
+      );
+    }
+    let issuedLease: CandidateWorkspaceLease | undefined;
+    const result = this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      digestInput: { schemaVersion: 1, type: 'CONFIGURE_LOCAL_COMMAND_VERIFICATION', ...input },
+      missingResource: 'Workflow',
+      missingIdentifier: input.workflowId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const runtime = this.requireCandidateEvidenceRuntime();
+        const store = this.requireCandidateEvidenceStore();
+        if (
+          workflow.phase !== WorkflowPhase.EVIDENCE_BUILD ||
+          workflow.runStatus !== RunStatus.READY ||
+          workflow.activeAttemptId !== undefined
+        ) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Local command verification authority requires idle EVIDENCE_BUILD state',
+              'LOCAL_COMMAND_VERIFICATION_NOT_IDLE',
+            ),
+          );
+        }
+        const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+        if (authority.generation.state !== CandidateGenerationState.FROZEN) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'Local command verification requires the current frozen Candidate',
+              'FROZEN_CANDIDATE_UNAVAILABLE',
+            ),
+          );
+        }
+        if (goal.scope.allowedPaths.length === 0) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'The bounded local verification profile requires explicit allowed paths',
+              'LOCAL_COMMAND_ALLOWED_PATHS_EMPTY',
+            ),
+          );
+        }
+        const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
+        const occurredAt = this.causalNow(
+          input.commandId,
+          workflow.updatedAt,
+          authority.generation.updatedAt,
+          policy.installedAt,
+        );
+        const rawLease = local.workspace.issueLease({
+          schemaVersion: 1,
+          id: `local-verification:${input.commandId}`,
+          version: 1,
+          issuedAt: occurredAt,
+          accessMode: CandidateWorkspaceAccessMode.READ_ONLY,
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          workflowId: workflow.id,
+          workflowVersion: workflow.version,
+          generation: authority.generation,
+          allowedPaths: goal.scope.allowedPaths,
+          forbiddenRoots: local.profile.forbiddenRoots,
+        });
+        issuedLease = decodeCandidateWorkspaceLease(rawLease);
+        const checkSpecification = createLocalCommandCheckSpecification(
+          {
+            ...local.profile.check,
+            id: this.internalOperation(
+              input.commandId,
+              'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
+              () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
+            ),
+            workspaceLease: issuedLease,
+          },
+          this.#digests,
+        );
+        const localPolicy = createLocalCommandVerificationPolicy(
+          goal,
+          authority.generation,
+          checkSpecification,
+          Object.freeze({
+            nextVerificationObligationId: () =>
+              this.internalOperation(input.commandId, 'VERIFICATION_OBLIGATION_ID_FAILURE', () =>
+                verificationObligationId(runtime.identities.nextVerificationObligationId()),
+              ),
+          }),
+          occurredAt,
+        );
+        const payloadDigest = this.digest(
+          input.commandId,
+          {
+            workflowId: workflow.id,
+            workflowVersion: workflow.version,
+            checkSpecification: localPolicy.verification,
+            obligations: localPolicy.obligations,
+            occurredAt,
+          },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitLocalCommandVerificationAuthority({
+              commandId: input.commandId,
+              inputDigest,
+              target,
+              workflowId: workflow.id,
+              expectedWorkflowVersion: workflow.version,
+              checkSpecification: localPolicy.verification,
+              obligations: localPolicy.obligations,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              checkSpecificationAuditEventId: this.nextAuditEventId(input.commandId),
+              obligationAuditEventIds: Object.freeze(
+                localPolicy.obligations.map(() => this.nextAuditEventId(input.commandId)),
+              ),
+              payloadDigest,
+              occurredAt,
+            }),
+          afterApplied: () => {
+            if (issuedLease === undefined) {
+              throw new TypeError('Applied local verification authority has no workspace lease');
+            }
+            this.#activeLocalCommandVerification.set(
+              authority.generation.id,
+              Object.freeze({
+                lease: issuedLease,
+                checkSpecification: localPolicy.verification,
+                obligations: localPolicy.obligations,
+              }),
+            );
+          },
+        };
+      },
+    });
+    const retainedLeaseDigest =
+      issuedLease === undefined
+        ? undefined
+        : this.#activeLocalCommandVerification.get(issuedLease.candidateGenerationId)?.lease
+            .leaseDigest;
+    if (issuedLease !== undefined && retainedLeaseDigest !== issuedLease.leaseDigest) {
+      try {
+        local.workspace.releaseLease(issuedLease);
+      } catch {
+        // The command outcome is already authoritative. Workspace
+        // reconciliation owns an un-releasable non-authoritative lease.
+      }
+    }
+    return result;
+  }
+
+  public async runLocalCommandVerification(
+    rawInput: RunLocalCommandVerificationRequest,
+  ): Promise<RuntimeCommandResult> {
+    const input = decodeRunVerificationRequest(rawInput);
+    const target = workflowTarget(input.workflowId);
+    const digestInput = { schemaVersion: 1, type: 'RUN_LOCAL_COMMAND_VERIFICATION', ...input };
+    const local = this.#localCommandVerification;
+    if (local === undefined) {
+      return rejected(
+        input.commandId,
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Local command verification is not configured',
+          'LOCAL_COMMAND_VERIFICATION_RUNTIME_UNAVAILABLE',
+        ),
+      );
+    }
+
+    let requestAuthority: {
+      readonly goal: Goal;
+      readonly workflow: WorkflowInstance;
+      readonly attempt: Extract<Attempt, { readonly status: 'RUNNING' }>;
+      readonly generation: CandidateGeneration & { readonly frozenDigest: Sha256Digest };
+      readonly session: ActiveLocalCommandVerificationAuthority;
+      readonly policy: ActiveWorkerPolicy;
+    };
+    try {
+      const inputDigest = this.digest(input.commandId, digestInput, 'COMMAND_DIGEST_FAILURE');
+      const replay = this.preflightReplay(input.commandId, inputDigest, target);
+      if (replay !== undefined) {
+        return replay;
+      }
+      const authority = this.resolveAuthority(input.commandId, target);
+      if (authority.status === 'MISSING') {
+        return this.notFound(input.commandId, 'Workflow', input.workflowId);
+      }
+      if (authority.status !== 'FOUND') {
+        throw new TypeError('Local verification authority records are invalid');
+      }
+      const { goal, workflow } = authority.context;
+      this.assertConfiguredWorkflowPolicy(input.commandId, workflow);
+      if (workflow.version !== input.expectedWorkflowVersion) {
+        return rejected(
+          input.commandId,
+          commandError(
+            RuntimeErrorCode.STALE_WORKFLOW_VERSION,
+            `Expected Workflow version ${String(input.expectedWorkflowVersion)} but found ${String(workflow.version)}`,
+            'STALE_WORKFLOW_VERSION',
+            true,
+          ),
+        );
+      }
+      const attempt = this.resolveRuntimeOwnedAttempt(
+        input.commandId,
+        workflow,
+        input.attemptId,
+        WorkflowPhase.EVIDENCE_BUILD,
+      );
+      const candidate = this.resolveCandidateAuthority(input.commandId, workflow, goal).generation;
+      if (candidate.state !== CandidateGenerationState.FROZEN) {
+        throw new TypeError('Local verification has no current frozen Candidate');
+      }
+      const session = this.#activeLocalCommandVerification.get(candidate.id);
+      if (session === undefined) {
+        throw new TypeError(
+          'Local verification lease is unavailable; restart reconciliation is required',
+        );
+      }
+      local.workspace.assertLeaseCurrent(session.lease);
+      const obligation = session.obligations.find((entry) => entry.id === input.obligationId);
+      const storedCheck = this.requireCandidateEvidenceStore().getCheckSpecification(
+        session.checkSpecification.id,
+      );
+      const storedObligation = this.requireCandidateEvidenceStore().getVerificationObligation(
+        input.obligationId,
+      );
+      if (
+        obligation === undefined ||
+        storedCheck === undefined ||
+        storedObligation === undefined ||
+        canonicalizeJson(storedCheck) !== canonicalizeJson(session.checkSpecification) ||
+        canonicalizeJson(storedObligation) !== canonicalizeJson(obligation)
+      ) {
+        throw new TypeError('Local verification authority is stale or incomplete');
+      }
+      requestAuthority = Object.freeze({
+        goal,
+        workflow,
+        attempt,
+        generation: candidate,
+        session,
+        policy: this.resolveCandidateEvidencePolicy(input.commandId, workflow),
+      });
+    } catch (error) {
+      return rejected(
+        input.commandId,
+        error instanceof CommandExecutionFailure
+          ? error.commandError
+          : commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              error instanceof Error ? error.message : 'Local verification preparation failed',
+              'LOCAL_COMMAND_VERIFICATION_PREPARATION_FAILED',
+            ),
+      );
+    }
+
+    const obligation = requestAuthority.session.obligations.find(
+      (entry) => entry.id === input.obligationId,
+    );
+    if (obligation === undefined) {
+      return rejected(
+        input.commandId,
+        commandError(
+          RuntimeErrorCode.NOT_FOUND,
+          `Verification Obligation ${input.obligationId} does not exist`,
+          'VERIFICATION_OBLIGATION_NOT_FOUND',
+        ),
+      );
+    }
+    let execution: LocalCommandVerificationExecution;
+    try {
+      let verificationTimeFloor = latestIsoTimestamp(
+        requestAuthority.workflow.updatedAt,
+        requestAuthority.attempt.startedAt,
+        requestAuthority.generation.updatedAt,
+        requestAuthority.policy.installedAt,
+        requestAuthority.session.lease.issuedAt,
+        obligation.createdAt,
+      );
+      const verificationClock: Clock = Object.freeze({
+        now: () => {
+          verificationTimeFloor = this.causalNow(input.commandId, verificationTimeFloor);
+          return verificationTimeFloor;
+        },
+      });
+      execution = await executeLocalCommandVerification(
+        {
+          schemaVersion: 2,
+          goalId: requestAuthority.goal.id,
+          goalRevision: requestAuthority.goal.revision,
+          workflowId: requestAuthority.workflow.id,
+          workflowVersion: requestAuthority.workflow.version,
+          attemptId: requestAuthority.attempt.id,
+          generation: requestAuthority.generation,
+          workspaceLease: requestAuthority.session.lease,
+          policyBundleId: requestAuthority.policy.bundle.id,
+          policyBundleDigest: requestAuthority.policy.bundle.digest,
+          obligation,
+          checkSpec: requestAuthority.session.checkSpecification,
+          runnerIdentity: requestAuthority.session.checkSpecification.runnerIdentity,
+          runnerVersion: requestAuthority.session.checkSpecification.runnerVersion,
+          isolationProfileId: requestAuthority.session.checkSpecification.isolationProfileId,
+          isolationProfileDigest:
+            requestAuthority.session.checkSpecification.isolationProfileDigest,
+          environmentVariables: local.profile.check.environmentVariables,
+        },
+        this.internalOperation(input.commandId, 'EVIDENCE_ID_GENERATION_FAILURE', () =>
+          evidenceId(this.requireCandidateEvidenceRuntime().identities.nextEvidenceId()),
+        ),
+        {
+          candidateSource: this.requireCandidateEvidenceRuntime().candidateSource,
+          runner: local.runner,
+          clock: verificationClock,
+          digests: this.#digests,
+        },
+      );
+    } catch (error) {
+      return rejected(
+        input.commandId,
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          error instanceof Error ? error.message : 'Local verification execution failed',
+          'LOCAL_COMMAND_VERIFICATION_EXECUTION_FAILED',
+        ),
+      );
+    }
+
+    const result = this.commitLocalCommandVerificationExecution(
+      input,
+      digestInput,
+      requestAuthority,
+      obligation,
+      execution,
+    );
+    const allObligationsCovered = requestAuthority.session.obligations.every((candidate) =>
+      this.requireCandidateEvidenceStore()
+        .listEvidenceForGeneration(requestAuthority.generation.id)
+        .some(
+          ({ record, eligibility }) =>
+            record.verificationObligationId === candidate.id &&
+            eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+        ),
+    );
+    if (result.status === 'APPLIED' && (execution.status === 'FAILED' || allObligationsCovered)) {
+      this.#activeLocalCommandVerification.delete(requestAuthority.generation.id);
+      try {
+        local.workspace.releaseLease(requestAuthority.session.lease);
+      } catch {
+        // Cleanup is not completion authority. Retain the exact lease for later
+        // reconciliation rather than contradicting an already committed command.
+        this.#activeLocalCommandVerification.set(
+          requestAuthority.generation.id,
+          requestAuthority.session,
+        );
+      }
+    }
+    return result;
+  }
+
+  private commitLocalCommandVerificationExecution(
+    input: RunLocalCommandVerificationRequest,
+    digestInput: unknown,
+    prepared: {
+      readonly goal: Goal;
+      readonly workflow: WorkflowInstance;
+      readonly attempt: Extract<Attempt, { readonly status: 'RUNNING' }>;
+      readonly generation: CandidateGeneration & { readonly frozenDigest: Sha256Digest };
+      readonly session: ActiveLocalCommandVerificationAuthority;
+      readonly policy: ActiveWorkerPolicy;
+    },
+    obligation: VerificationObligation,
+    execution: LocalCommandVerificationExecution,
+  ): RuntimeCommandResult {
+    const target = workflowTarget(input.workflowId);
+    return this.executeCommand({
+      commandId: input.commandId,
+      target,
+      expectedWorkflowVersion: input.expectedWorkflowVersion,
+      digestInput,
+      missingResource: 'Workflow',
+      missingIdentifier: input.workflowId,
+      plan: ({ goal, workflow }, inputDigest) => {
+        const store = this.requireCandidateEvidenceStore();
+        const attempt = this.resolveRuntimeOwnedAttempt(
+          input.commandId,
+          workflow,
+          input.attemptId,
+          WorkflowPhase.EVIDENCE_BUILD,
+        );
+        const authority = this.resolveCandidateAuthority(input.commandId, workflow, goal);
+        const currentPolicy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
+        if (
+          goal.id !== prepared.goal.id ||
+          workflow.id !== prepared.workflow.id ||
+          attempt.id !== prepared.attempt.id ||
+          authority.generation.id !== prepared.generation.id ||
+          authority.generation.state !== CandidateGenerationState.FROZEN ||
+          authority.generation.frozenDigest !== prepared.generation.frozenDigest ||
+          currentPolicy.bundle.id !== prepared.policy.bundle.id ||
+          currentPolicy.bundle.digest !== prepared.policy.bundle.digest
+        ) {
+          throw new TypeError('Local verification authority changed during execution');
+        }
+        const expectedFrozenDigest = authority.generation.frozenDigest;
+        if (execution.status === 'FAILED') {
+          const occurredAt = this.causalNow(
+            input.commandId,
+            workflow.updatedAt,
+            attempt.startedAt,
+            authority.generation.updatedAt,
+            currentPolicy.installedAt,
+          );
+          if (
+            execution.failureCode === LocalCommandVerificationFailureCode.CANDIDATE_SOURCE_DRIFT
+          ) {
+            const observedDigest = execution.observedCandidateDigest;
+            if (observedDigest === undefined || observedDigest === expectedFrozenDigest) {
+              throw new TypeError('Candidate drift failure lacks a distinct observed digest');
+            }
+            const candidateDecision = decideCandidate(authority.generation, {
+              type: 'INVALIDATE_CANDIDATE',
+              commandId: input.commandId,
+              candidateGenerationId: authority.generation.id,
+              expectedVersion: authority.generation.version,
+              occurredAt,
+              reason: 'FROZEN_CANDIDATE_DRIFT',
+            });
+            if (!candidateDecision.accepted) {
+              return rejectPlan(
+                commandError(
+                  RuntimeErrorCode.DOMAIN_REJECTED,
+                  candidateDecision.rejection.message,
+                  candidateDecision.rejection.code,
+                ),
+              );
+            }
+            const attemptDecision = decideAttempt(workflow, attempt, {
+              type: 'RECORD_ATTEMPT_FAILURE',
+              commandId: input.commandId,
+              workflowId: workflow.id,
+              expectedWorkflowVersion: workflow.version,
+              attemptId: attempt.id,
+              occurredAt,
+              failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+              reason: execution.failureCode,
+            });
+            if (!attemptDecision.accepted) {
+              return this.domainRejectPlan(attemptDecision.rejection);
+            }
+            const event = attemptDecision.events[0];
+            const candidateEvent = candidateDecision.events[0];
+            const evidence = this.resolveGenerationEvidence(
+              input.commandId,
+              authority.generation.id,
+            );
+            const eligibleEvidenceCount = evidence.filter(
+              ({ eligibility }) => eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+            ).length;
+            const payloadDigest = this.digest(
+              input.commandId,
+              {
+                event,
+                candidateEvent,
+                expectedFrozenDigest,
+                observedDigest,
+              },
+              'COMMAND_PAYLOAD_DIGEST_FAILURE',
+            );
+            return {
+              kind: 'APPLY',
+              commit: () =>
+                store.commitVerificationIntegrityFailure({
+                  inputDigest,
+                  target,
+                  event,
+                  auditEventId: this.nextAuditEventId(input.commandId),
+                  workflowAuditEventId: this.nextAuditEventId(input.commandId),
+                  payloadDigest,
+                  candidateEvent,
+                  expectedFrozenDigest,
+                  observedDigest,
+                  candidateAuditEventId: this.nextAuditEventId(input.commandId),
+                  invalidatedEvidenceAuditEventIds: Object.freeze(
+                    Array.from({ length: eligibleEvidenceCount }, () =>
+                      this.nextAuditEventId(input.commandId),
+                    ),
+                  ),
+                }),
+            };
+          }
+          const attemptDecision = decideAttempt(workflow, attempt, {
+            type: 'RECORD_ATTEMPT_FAILURE',
+            commandId: input.commandId,
+            workflowId: workflow.id,
+            expectedWorkflowVersion: workflow.version,
+            attemptId: attempt.id,
+            occurredAt,
+            failureClass: AttemptFailureClass.PROTOCOL_ERROR,
+            reason: execution.failureCode,
+          });
+          if (!attemptDecision.accepted) {
+            return this.domainRejectPlan(attemptDecision.rejection);
+          }
+          const event = attemptDecision.events[0];
+          const payloadDigest = this.digest(
+            input.commandId,
+            event,
+            'COMMAND_PAYLOAD_DIGEST_FAILURE',
+          );
+          return {
+            kind: 'APPLY',
+            commit: () =>
+              this.#store.commitAttemptEvent({
+                inputDigest,
+                target,
+                event,
+                auditEventId: this.nextAuditEventId(input.commandId),
+                workflowAuditEventId: this.nextAuditEventId(input.commandId),
+                payloadDigest,
+              }),
+          };
+        }
+
+        const occurredAt = execution.evidence.recordedAt;
+        const attemptDecision = decideAttempt(workflow, attempt, {
+          type: 'RECORD_ATTEMPT_RESULT',
+          commandId: input.commandId,
+          workflowId: workflow.id,
+          expectedWorkflowVersion: workflow.version,
+          attemptId: attempt.id,
+          occurredAt,
+          reason: input.reason,
+        });
+        if (!attemptDecision.accepted) {
+          return this.domainRejectPlan(attemptDecision.rejection);
+        }
+        if (
+          execution.evidence.goalId !== goal.id ||
+          execution.evidence.workflowId !== workflow.id ||
+          execution.evidence.attemptId !== attempt.id ||
+          execution.evidence.verificationObligationId !== obligation.id ||
+          execution.evidence.candidateGenerationId !== authority.generation.id ||
+          execution.evidence.candidateDigest !== authority.generation.frozenDigest ||
+          canonicalizeJson(execution.evidence.checkSpec) !==
+            canonicalizeJson(prepared.session.checkSpecification)
+        ) {
+          throw new TypeError('Runtime-derived local Evidence lost its exact authority binding');
+        }
+        const event = attemptDecision.events[0];
+        const initialEligibility = createInitialEvidenceEligibility(
+          execution.evidence.id,
+          occurredAt,
+        );
+        const payloadDigest = this.digest(
+          input.commandId,
+          {
+            event,
+            evidenceRecordDigest: execution.evidence.recordDigest,
+            obligationId: obligation.id,
+          },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitVerificationAttemptOutcome({
+              inputDigest,
+              target,
+              event,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              workflowAuditEventId: this.nextAuditEventId(input.commandId),
+              payloadDigest,
+              obligationId: obligation.id,
+              evidence: execution.evidence,
+              payloads: execution.payloads,
+              initialEligibility,
+              evidenceAuditEventId: this.nextAuditEventId(input.commandId),
+            }),
+        };
+      },
+    });
+  }
+
   public runVerification(rawInput: RunVerificationRequest): RuntimeCommandResult {
     const input = decodeRunVerificationRequest(rawInput);
+    if (this.#localCommandVerification !== undefined) {
+      return rejected(
+        input.commandId,
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'M1 fake verification is unavailable when local command verification is selected',
+          'M1_VERIFICATION_DISABLED_FOR_LOCAL_COMMAND_PROFILE',
+        ),
+      );
+    }
     const target = workflowTarget(input.workflowId);
     return this.executeCommand({
       commandId: input.commandId,
@@ -3149,7 +3858,7 @@ export class WorkflowRuntimeKernel {
       return rejectPlan(
         commandError(
           RuntimeErrorCode.DOMAIN_REJECTED,
-          'Repair generation creation is unavailable until Slice 6 records a repairable rejection',
+          'Repair generation creation is unavailable until M1 Slice 6 records a repairable rejection',
           'REPAIR_ACCEPTANCE_UNAVAILABLE',
         ),
       );
@@ -3533,7 +4242,7 @@ export class WorkflowRuntimeKernel {
       );
     }
     const evidence = this.resolveGenerationEvidence(input.commandId, authority.generation.id);
-    const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+    const candidateEvidencePolicy = this.resolveAcceptanceCandidateEvidencePolicy(
       input.commandId,
       goal,
       authority.generation,
@@ -3735,22 +4444,27 @@ export class WorkflowRuntimeKernel {
           }),
       };
     }
-    const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+    const candidateEvidencePolicy = this.resolveAcceptanceCandidateEvidencePolicy(
       input.commandId,
       goal,
       authority.generation,
+      this.#localCommandVerification !== undefined,
     );
     const obligations = candidateEvidencePolicy.obligations;
     const evidence = this.resolveGenerationEvidence(input.commandId, authority.generation.id);
     const expectedVerificationCheck = canonicalizeJson(candidateEvidencePolicy.verification);
+    const selectedEvidenceKind =
+      candidateEvidencePolicy.verification.kind === CheckSpecificationKind.LOCAL_COMMAND
+        ? EvidenceKind.LOCAL_COMMAND_TEST_RESULT
+        : EvidenceKind.TEST_RESULT;
     if (
       evidence.some(
         ({ record }) =>
-          record.kind === EvidenceKind.TEST_RESULT &&
+          record.kind === selectedEvidenceKind &&
           canonicalizeJson(record.checkSpec) !== expectedVerificationCheck,
       )
     ) {
-      throw new TypeError('Verification Evidence does not retain its exact M1 Check authority');
+      throw new TypeError('Verification Evidence does not retain its exact Check authority');
     }
     const evidenceSet = buildEvidenceSet(
       {
@@ -3773,8 +4487,15 @@ export class WorkflowRuntimeKernel {
       evidenceSet.evidenceRefs.length > 0 &&
       evidenceSet.evidenceRefs.every((reference) => {
         const entry = evidence.find(({ record }) => record.id === reference.evidenceId);
-        return entry?.record.checkSpec.cleanupPolicy === 'M1_LOGICAL_NO_EXTERNAL_RESOURCES';
+        return (
+          entry?.record.checkSpec.cleanupPolicy === 'M1_LOGICAL_NO_EXTERNAL_RESOURCES' ||
+          entry?.record.checkSpec.cleanupPolicy === 'LOCAL_COMMAND_RUN_ROOT_V1'
+        );
       });
+    const cleanupReasonCode =
+      candidateEvidencePolicy.verification.kind === CheckSpecificationKind.LOCAL_COMMAND
+        ? 'LOCAL_COMMAND_CLEANUP_PROVEN'
+        : 'M1_LOGICAL_CLEANUP_PROVEN';
     const guardResults = Object.freeze([
       ...genericGuardResults,
       this.ownedGuard(
@@ -3788,7 +4509,7 @@ export class WorkflowRuntimeKernel {
           ? [evidenceSet.digest]
           : evidenceSet.unresolvedEvidenceRequirements.length > 0
             ? [...evidenceSet.unresolvedEvidenceRequirements]
-            : ['m1:required-evidence-empty'],
+            : ['required-evidence-empty'],
         obligationsAccounted,
       ),
       this.ownedGuard(WorkflowGuard.EVIDENCE_BINDINGS_CURRENT, 'EVIDENCE_SET_CURRENT', [
@@ -3797,10 +4518,10 @@ export class WorkflowRuntimeKernel {
       ]),
       this.ownedGuard(
         WorkflowGuard.CLEANUP_PROVEN,
-        cleanupProven ? 'M1_LOGICAL_CLEANUP_PROVEN' : 'CLEANUP_POLICY_MISSING',
+        cleanupProven ? cleanupReasonCode : 'CLEANUP_POLICY_MISSING',
         cleanupProven
           ? evidenceSet.evidenceRefs.map((reference) => reference.evidenceId)
-          : ['m1:cleanup-unproven'],
+          : ['cleanup-unproven'],
         cleanupProven,
       ),
       this.ownedGuard(WorkflowGuard.SOURCE_DIGEST_CURRENT, 'FROZEN_SOURCE_REOBSERVED', [
@@ -4199,6 +4920,12 @@ export class WorkflowRuntimeKernel {
       'ACCEPTANCE_VERIFICATION_CHECK_INVALID',
       () => decodeCheckSpecification(Reflect.get(raw, 'verificationCheck')),
     );
+    if (
+      this.#localCommandVerification !== undefined &&
+      verificationCheck.kind !== CheckSpecificationKind.LOCAL_COMMAND
+    ) {
+      throw new TypeError('Local command profile cannot consume M1 fake Acceptance authority');
+    }
     const evidenceSet = this.decodeStoreSnapshot(
       commandIdentifier,
       'ACCEPTANCE_EVIDENCE_SET_INVALID',
@@ -4250,7 +4977,8 @@ export class WorkflowRuntimeKernel {
       generation.candidateId !== candidate.id ||
       generation.id !== workflow.activeCandidateGenerationId ||
       freezeCheck.kind !== CheckSpecificationKind.CANDIDATE_FREEZE ||
-      verificationCheck.kind !== CheckSpecificationKind.FAKE_VERIFICATION ||
+      (verificationCheck.kind !== CheckSpecificationKind.FAKE_VERIFICATION &&
+        verificationCheck.kind !== CheckSpecificationKind.LOCAL_COMMAND) ||
       policyBundle.id !== activePolicyBundleId ||
       policyBundle.digest !== activePolicy.bundle.digest
     ) {
@@ -4601,6 +5329,131 @@ export class WorkflowRuntimeKernel {
         generation.createdAt,
       ),
     );
+  }
+
+  private resolveAcceptanceCandidateEvidencePolicy(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    generation: CandidateGeneration,
+    requireLocalCommandVerification = false,
+  ): ReturnType<typeof validateAcceptanceCandidateEvidencePolicy> {
+    const rawSpecifications = this.storeOperation(
+      commandIdentifier,
+      'CANDIDATE_CHECK_SPECIFICATIONS_READ_FAILURE',
+      () => this.requireCandidateEvidenceStore().listCheckSpecifications(),
+    );
+    if (!Array.isArray(rawSpecifications)) {
+      throw new TypeError('Store returned malformed Check Specifications');
+    }
+    const relatedSpecifications = rawSpecifications
+      .map((specification) =>
+        this.decodeStoreSnapshot(commandIdentifier, 'CHECK_SPECIFICATION_INVALID', () =>
+          decodeCheckSpecification(specification),
+        ),
+      )
+      .filter((specification) => specification.inputRefs.includes(generation.id));
+    const freezeChecks = relatedSpecifications.filter(
+      (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+    );
+    const localChecks = relatedSpecifications.filter(
+      (specification) => specification.kind === CheckSpecificationKind.LOCAL_COMMAND,
+    );
+    if (localChecks.length === 0) {
+      if (requireLocalCommandVerification) {
+        throw new CommandExecutionFailure(
+          commandError(
+            RuntimeErrorCode.INTERNAL_FAILURE,
+            'Local command verification authority is not installed for the current Candidate',
+            'LOCAL_COMMAND_VERIFICATION_AUTHORITY_UNAVAILABLE',
+          ),
+        );
+      }
+      return this.resolveM1CandidateEvidencePolicy(commandIdentifier, goal, generation);
+    }
+    if (freezeChecks.length !== 1 || localChecks.length !== 1) {
+      throw new TypeError(
+        `Candidate generation ${generation.id} has ambiguous local verification authority`,
+      );
+    }
+    const freeze = freezeChecks[0];
+    const verification = localChecks[0];
+    if (freeze === undefined || verification === undefined) {
+      throw new TypeError('Local verification policy lacks its Check authority');
+    }
+    const rawObligations = this.storeOperation(
+      commandIdentifier,
+      'OBLIGATION_AUTHORITY_READ_FAILURE',
+      () => this.requireCandidateEvidenceStore().listVerificationObligations(goal.id),
+    );
+    if (!Array.isArray(rawObligations)) {
+      throw new TypeError('Store returned malformed Verification Obligations');
+    }
+    const verificationRef = `${verification.id}@${verification.version}`;
+    const obligations = rawObligations
+      .map((obligation) =>
+        this.decodeStoreSnapshot(commandIdentifier, 'VERIFICATION_OBLIGATION_INVALID', () =>
+          decodeVerificationObligation(obligation),
+        ),
+      )
+      .filter(
+        (obligation) =>
+          obligation.goalId === goal.id &&
+          obligation.goalRevision === goal.revision &&
+          obligation.candidateGenerationId === generation.id &&
+          obligation.checkSpecRef === verificationRef,
+      );
+    const createdAt = obligations[0]?.createdAt;
+    if (createdAt === undefined) {
+      throw new TypeError('Local verification policy has no current obligations');
+    }
+    return this.decodeStoreSnapshot(commandIdentifier, 'CANDIDATE_EVIDENCE_POLICY_INVALID', () =>
+      validateAcceptanceCandidateEvidencePolicy(
+        goal,
+        generation,
+        { freeze, verification, obligations },
+        createdAt,
+      ),
+    );
+  }
+
+  private assertActiveLocalCommandVerificationAuthority(
+    generation: CandidateGeneration,
+    policy: ReturnType<typeof validateAcceptanceCandidateEvidencePolicy>,
+  ): void {
+    const local = this.#localCommandVerification;
+    const session = this.#activeLocalCommandVerification.get(generation.id);
+    if (local === undefined || session === undefined) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Local command verification lease is unavailable for the current Candidate',
+          'LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE',
+        ),
+      );
+    }
+    try {
+      local.workspace.assertLeaseCurrent(session.lease);
+    } catch {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Local command verification lease is no longer current',
+          'LOCAL_COMMAND_VERIFICATION_LEASE_STALE',
+        ),
+      );
+    }
+    if (
+      canonicalizeJson(session.checkSpecification) !== canonicalizeJson(policy.verification) ||
+      canonicalizeJson(session.obligations) !== canonicalizeJson(policy.obligations)
+    ) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.INTERNAL_FAILURE,
+          'Local command verification session does not match persisted authority',
+          'LOCAL_COMMAND_VERIFICATION_SESSION_STALE',
+        ),
+      );
+    }
   }
 
   private resolveGenerationEvidence(

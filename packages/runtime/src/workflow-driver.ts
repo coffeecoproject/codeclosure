@@ -57,7 +57,9 @@ import { canonicalizeJson } from './canonical-json.js';
 import {
   WorkflowRuntimeKernel,
   type AttemptContextFactory,
+  type BeginAcceptanceRepairRequest,
   type CancelGoalRequest,
+  type LocalCommandVerificationRuntimeDependencies,
   type PhaseGuardEvaluator,
   type StartGoalRequest,
 } from './workflow-runtime.js';
@@ -75,6 +77,58 @@ const authorityObjectOrNullSchema = z.union([z.null(), z.looseObject({})]);
 
 const installedPolicyBundleSchema = z
   .object({ bundle: z.unknown(), installedAt: z.string() })
+  .strict();
+
+const boundedNonBlankStringSchema = z
+  .string()
+  .min(1)
+  .max(16_384)
+  .refine((value) => value.trim().length > 0 && !value.includes('\u0000'));
+
+const positiveSafeIntegerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+
+const localCommandEnvironmentVariableSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
+    value: z
+      .string()
+      .max(65_536)
+      .refine((value) => !value.includes('\u0000')),
+  })
+  .strict();
+
+const localCommandVerificationProfileSchema = z
+  .object({
+    forbiddenRoots: z.array(boundedNonBlankStringSchema).max(4_096),
+    check: z
+      .object({
+        version: boundedNonBlankStringSchema,
+        producerIdentity: boundedNonBlankStringSchema,
+        operation: boundedNonBlankStringSchema,
+        runnerIdentity: boundedNonBlankStringSchema,
+        runnerVersion: boundedNonBlankStringSchema,
+        executablePath: boundedNonBlankStringSchema,
+        executableDigest: z.string(),
+        declaredToolVersion: boundedNonBlankStringSchema,
+        argv: z.array(z.string().max(16_384)).max(1_024),
+        cwd: boundedNonBlankStringSchema,
+        environmentVariables: z.array(localCommandEnvironmentVariableSchema).max(1_024),
+        isolationProfileId: boundedNonBlankStringSchema,
+        isolationProfileDigest: z.string(),
+        timeoutMilliseconds: positiveSafeIntegerSchema,
+        terminationGraceMilliseconds: positiveSafeIntegerSchema,
+        stdoutLimitBytes: positiveSafeIntegerSchema,
+        stderrLimitBytes: positiveSafeIntegerSchema,
+        totalOutputLimitBytes: positiveSafeIntegerSchema,
+        payloadRetentionLimitBytes: positiveSafeIntegerSchema,
+        acceptedExitCodes: z.array(z.number().int().min(0).max(255)).min(1).max(256),
+      })
+      .strict(),
+  })
   .strict();
 
 const driverAuthoritySchema = z
@@ -150,6 +204,11 @@ export interface GoalExecutionCapability {
   cancelGoal(input: CancelGoalRequest): RuntimeCommandResult;
 }
 
+export interface WorkflowDriverCapability extends GoalExecutionCapability {
+  /** Trusted continuation after an exact current REJECT_REPAIRABLE decision. */
+  repairGoal(input: BeginAcceptanceRepairRequest): Promise<DrivenGoalCommandResult>;
+}
+
 export interface RuntimeExecutionProfile {
   readonly schemaVersion: 1;
   readonly profileId: ExecutionProfileId;
@@ -158,6 +217,7 @@ export interface RuntimeExecutionProfile {
   readonly worker: WorkerPort;
   readonly candidateSource: CandidateSourcePort;
   readonly verification: VerificationPort;
+  readonly localCommandVerification?: LocalCommandVerificationRuntimeDependencies;
 }
 
 export interface RuntimeExecutionProfileResolver {
@@ -247,22 +307,88 @@ function hasMethod(value: unknown, method: string): boolean {
   );
 }
 
+function decodeLocalCommandVerificationRuntimeDependencies(
+  value: unknown,
+): LocalCommandVerificationRuntimeDependencies {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !exactOwnKeys(value, ['workspace', 'runner', 'profile'])
+  ) {
+    throw new TypeError('Local command verification must be one closed capability record');
+  }
+  const workspace: unknown = Reflect.get(value, 'workspace');
+  const runner: unknown = Reflect.get(value, 'runner');
+  const parsed = localCommandVerificationProfileSchema.parse(Reflect.get(value, 'profile'));
+  if (
+    !hasMethod(workspace, 'issueLease') ||
+    !hasMethod(workspace, 'releaseLease') ||
+    !hasMethod(workspace, 'assertLeaseCurrent') ||
+    !hasMethod(runner, 'run')
+  ) {
+    throw new TypeError('Local command verification contains malformed capabilities');
+  }
+  const acceptedExitCodes = [...parsed.check.acceptedExitCodes];
+  const environmentVariables = parsed.check.environmentVariables.map((entry) =>
+    Object.freeze({ ...entry }),
+  );
+  const environmentNames = environmentVariables.map(({ name }) => name);
+  if (
+    JSON.stringify(acceptedExitCodes) !==
+      JSON.stringify([...new Set(acceptedExitCodes)].sort((left, right) => left - right)) ||
+    JSON.stringify(environmentNames) !== JSON.stringify([...new Set(environmentNames)].sort())
+  ) {
+    throw new TypeError(
+      'Local command verification exit codes and environment names must be sorted and unique',
+    );
+  }
+  const profile: LocalCommandVerificationRuntimeDependencies['profile'] = Object.freeze({
+    forbiddenRoots: Object.freeze([...parsed.forbiddenRoots]),
+    check: Object.freeze({
+      ...parsed.check,
+      executableDigest: sha256Digest(parsed.check.executableDigest),
+      isolationProfileDigest: sha256Digest(parsed.check.isolationProfileDigest),
+      argv: Object.freeze([...parsed.check.argv]),
+      environmentVariables: Object.freeze(environmentVariables),
+      acceptedExitCodes: Object.freeze(acceptedExitCodes),
+    }),
+  });
+  return Object.freeze({
+    workspace: workspace as LocalCommandVerificationRuntimeDependencies['workspace'],
+    runner: runner as LocalCommandVerificationRuntimeDependencies['runner'],
+    profile,
+  });
+}
+
 function decodeRuntimeExecutionProfile(
   value: unknown,
   expected?: ExecutionProfile,
+  requireLocalCommandVerification = false,
 ): RuntimeExecutionProfile {
   if (
     typeof value !== 'object' ||
     value === null ||
-    !exactOwnKeys(value, [
-      'schemaVersion',
-      'profileId',
-      'profileDigest',
-      'driverVersion',
-      'worker',
-      'candidateSource',
-      'verification',
-    ])
+    ![
+      [
+        'schemaVersion',
+        'profileId',
+        'profileDigest',
+        'driverVersion',
+        'worker',
+        'candidateSource',
+        'verification',
+      ],
+      [
+        'schemaVersion',
+        'profileId',
+        'profileDigest',
+        'driverVersion',
+        'worker',
+        'candidateSource',
+        'verification',
+        'localCommandVerification',
+      ],
+    ].some((keys) => exactOwnKeys(value, keys))
   ) {
     throw new TypeError('Runtime Execution Profile must be one closed capability record');
   }
@@ -273,6 +399,7 @@ function decodeRuntimeExecutionProfile(
   const worker: unknown = Reflect.get(value, 'worker');
   const candidateSource: unknown = Reflect.get(value, 'candidateSource');
   const verification: unknown = Reflect.get(value, 'verification');
+  const localCommandVerification: unknown = Reflect.get(value, 'localCommandVerification');
   if (
     schemaVersion !== 1 ||
     typeof rawProfileId !== 'string' ||
@@ -290,11 +417,23 @@ function decodeRuntimeExecutionProfile(
   }
   const profileId = executionProfileId(rawProfileId);
   const profileDigest = sha256Digest(rawProfileDigest);
+  const decodedLocalCommandVerification =
+    localCommandVerification === undefined
+      ? undefined
+      : decodeLocalCommandVerificationRuntimeDependencies(localCommandVerification);
+  if (requireLocalCommandVerification && decodedLocalCommandVerification === undefined) {
+    throw new TypeError('M2 Runtime Execution Profile requires local command verification');
+  }
   if (
     expected !== undefined &&
     (profileId !== expected.id ||
       profileDigest !== expected.digest ||
-      driverVersion !== expected.driverVersion)
+      driverVersion !== expected.driverVersion ||
+      (decodedLocalCommandVerification !== undefined &&
+        (decodedLocalCommandVerification.profile.check.runnerIdentity !==
+          expected.verificationRunner ||
+          decodedLocalCommandVerification.profile.check.runnerVersion !==
+            expected.verificationRunnerVersion)))
   ) {
     throw new TypeError('Resolved Runtime Execution Profile does not bind installed authority');
   }
@@ -306,6 +445,9 @@ function decodeRuntimeExecutionProfile(
     worker: worker as WorkerPort,
     candidateSource: candidateSource as CandidateSourcePort,
     verification: verification as VerificationPort,
+    ...(decodedLocalCommandVerification === undefined
+      ? {}
+      : { localCommandVerification: decodedLocalCommandVerification }),
   });
 }
 
@@ -587,7 +729,7 @@ function commandFailure(commandIdentifier: CommandId, detailCode: string): Runti
   });
 }
 
-class RuntimeWorkflowDriver implements GoalExecutionCapability {
+class RuntimeWorkflowDriver implements WorkflowDriverCapability {
   readonly #store: WorkflowDriverControlStore;
   readonly #clock: Clock;
   readonly #ids: WorkflowDriverIdentityGenerator;
@@ -599,11 +741,15 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
   readonly #recovery: RecoveryCommandCapability;
   readonly #startProfile: RuntimeExecutionProfile;
   readonly #profiles: RuntimeExecutionProfileResolver;
+  readonly #requireLocalCommandVerification: boolean;
   readonly #maxOperations: number;
   readonly #activeControllers = new Map<GoalId, AbortController>();
   readonly #activeDrives = new Set<GoalId>();
 
-  public constructor(dependencies: WorkflowDriverDependencies) {
+  public constructor(
+    dependencies: WorkflowDriverDependencies,
+    requireLocalCommandVerification = false,
+  ) {
     this.#store = dependencies.store;
     this.#clock = dependencies.clock;
     this.#ids = dependencies.ids;
@@ -613,7 +759,12 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
     this.#policyBundleDigest = sha256Digest(dependencies.policyBundleDigest);
     this.#phaseGuards = dependencies.phaseGuards;
     this.#recovery = dependencies.recovery;
-    this.#startProfile = decodeRuntimeExecutionProfile(dependencies.startProfile);
+    this.#requireLocalCommandVerification = requireLocalCommandVerification;
+    this.#startProfile = decodeRuntimeExecutionProfile(
+      dependencies.startProfile,
+      undefined,
+      requireLocalCommandVerification,
+    );
     this.#profiles = dependencies.profiles;
     const maxOperations = dependencies.maxOperations ?? 128;
     if (!Number.isSafeInteger(maxOperations) || maxOperations < 1) {
@@ -626,7 +777,7 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
     let binding: DriverKernelBinding;
     let command: RuntimeCommandResult;
     try {
-      binding = this.createKernel(this.#startProfile);
+      binding = this.createKernel(this.resolveStartProfile());
       command = binding.kernel.startGoal(input);
     } catch (error) {
       return Object.freeze({
@@ -647,9 +798,13 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
   }
 
   public async resumeGoal(input: ResumeGoalRequest): Promise<DrivenGoalCommandResult> {
+    let binding: DriverKernelBinding | undefined;
     try {
       const authority = this.loadAuthority(goalId(input.goalId));
       this.assertPolicyComposition(authority);
+      if (this.#requireLocalCommandVerification) {
+        binding = this.resolveKernel(authority);
+      }
     } catch (error) {
       return Object.freeze({
         command: commandFailure(
@@ -663,6 +818,32 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
       return Object.freeze({ command });
     }
     const drive = await this.driveGoal(command.output.goalId, {
+      ...(binding === undefined ? {} : { kernelBinding: binding }),
+      ownsCurrentAttemptAtEntry: false,
+    });
+    return Object.freeze({ command, drive });
+  }
+
+  public async repairGoal(input: BeginAcceptanceRepairRequest): Promise<DrivenGoalCommandResult> {
+    let binding: DriverKernelBinding;
+    try {
+      const authority = this.loadAuthority(goalId(input.goalId));
+      this.assertPolicyComposition(authority);
+      binding = this.resolveKernel(authority);
+    } catch (error) {
+      return Object.freeze({
+        command: commandFailure(
+          commandId(input.commandId),
+          error instanceof DriverFailure ? error.detailCode : 'REPAIR_GOAL_PREFLIGHT_FAILED',
+        ),
+      });
+    }
+    const command = binding.kernel.beginAcceptanceRepair(input);
+    if (!command.output.ok) {
+      return Object.freeze({ command });
+    }
+    const drive = await this.driveGoal(command.output.goalId, {
+      kernelBinding: binding,
       ownsCurrentAttemptAtEntry: false,
     });
     return Object.freeze({ command, drive });
@@ -746,7 +927,7 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
             operationCount += 1;
             continue;
           }
-          const result = this.completeSpecialAttempt(authority, kernelBinding.kernel);
+          const result = await this.completeSpecialAttempt(authority, kernelBinding);
           operationCount += 1;
           const rejectedSummary = this.rejectedOperationSummary(
             result,
@@ -769,7 +950,7 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
           return acceptanceStop;
         }
 
-        const result = this.executeReadyOperation(authority, kernelBinding.kernel);
+        const result = this.executeReadyOperation(authority, kernelBinding);
         operationCount += 1;
         const rejectedSummary = this.rejectedOperationSummary(
           result,
@@ -968,8 +1149,9 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
 
   private executeReadyOperation(
     authority: DecodedDriverAuthority,
-    kernel: WorkflowRuntimeKernel,
+    binding: DriverKernelBinding,
   ): RuntimeCommandResult {
+    const kernel = binding.kernel;
     const workflow = authority.workflow;
     switch (workflow.phase) {
       case WorkflowPhase.DISCOVERY:
@@ -1013,6 +1195,19 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
             })
           : this.beginAttempt(kernel, workflow);
       case WorkflowPhase.EVIDENCE_BUILD:
+        if (
+          binding.profile.localCommandVerification !== undefined &&
+          !authority.verificationObligations.some(
+            (obligation) =>
+              obligation.requiredEvidenceKind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+          )
+        ) {
+          return kernel.configureLocalCommandVerification({
+            commandId: this.nextCommandId(),
+            workflowId: workflow.id,
+            expectedWorkflowVersion: workflow.version,
+          });
+        }
         return this.nextUncoveredObligation(authority) === undefined
           ? kernel.requestPhaseTransition({
               commandId: this.nextCommandId(),
@@ -1052,10 +1247,11 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
     }
   }
 
-  private completeSpecialAttempt(
+  private async completeSpecialAttempt(
     authority: DecodedDriverAuthority,
-    kernel: WorkflowRuntimeKernel,
-  ): RuntimeCommandResult {
+    binding: DriverKernelBinding,
+  ): Promise<RuntimeCommandResult> {
+    const kernel = binding.kernel;
     const attempt = authority.activeAttempt;
     if (attempt === undefined) {
       throw new DriverFailure(
@@ -1080,14 +1276,17 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
             'DRIVER_RUNNING_VERIFICATION_HAS_NO_OBLIGATION',
           );
         }
-        return kernel.runVerification({
+        const request = {
           commandId: this.nextCommandId(),
           workflowId: authority.workflow.id,
           expectedWorkflowVersion: authority.workflow.version,
           attemptId: attempt.id,
           obligationId: obligation.id,
           reason: 'driver:run-verification',
-        });
+        };
+        return obligation.requiredEvidenceKind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT
+          ? kernel.runLocalCommandVerification(request)
+          : kernel.runVerification(request);
       }
       case WorkflowPhase.DISCOVERY:
       case WorkflowPhase.PLAN:
@@ -1130,11 +1329,16 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
   }
 
   private nextUncoveredObligation(authority: DecodedDriverAuthority) {
-    return authority.verificationObligations.find(
+    const localObligations = authority.verificationObligations.filter(
+      (obligation) => obligation.requiredEvidenceKind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+    );
+    const activeObligations =
+      localObligations.length > 0 ? localObligations : authority.verificationObligations;
+    return activeObligations.find(
       (obligation) =>
         !authority.evidence.some(
           ({ record, eligibility }) =>
-            record.kind === EvidenceKind.TEST_RESULT &&
+            record.kind === obligation.requiredEvidenceKind &&
             record.verificationObligationId === obligation.id &&
             eligibility.state === EvidenceEligibilityState.ELIGIBLE,
         ),
@@ -1237,7 +1441,11 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
     let profile: RuntimeExecutionProfile;
     try {
       const raw = this.#profiles.resolve(installed.profile);
-      profile = decodeRuntimeExecutionProfile(raw, installed.profile);
+      profile = decodeRuntimeExecutionProfile(
+        raw,
+        installed.profile,
+        this.#requireLocalCommandVerification,
+      );
     } catch (error) {
       throw new DriverFailure(
         WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
@@ -1246,6 +1454,37 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
       );
     }
     return this.createKernel(profile);
+  }
+
+  private resolveStartProfile(): RuntimeExecutionProfile {
+    let installed: ExecutionProfile;
+    try {
+      const rawInstalled = this.#store.getExecutionProfile(this.#startProfile.profileId);
+      if (rawInstalled === undefined) {
+        throw new TypeError('Start Execution Profile is not installed');
+      }
+      const parsed = installedExecutionProfileSchema.parse(rawInstalled);
+      installed = decodeExecutionProfile(parsed.profile);
+      isoTimestamp(parsed.installedAt);
+      if (
+        installed.id !== this.#startProfile.profileId ||
+        installed.digest !==
+          sha256Digest(this.#digests.digest(executionProfileProjection(installed)))
+      ) {
+        throw new TypeError('Installed Start Execution Profile has invalid authority identity');
+      }
+      return decodeRuntimeExecutionProfile(
+        this.#startProfile,
+        installed,
+        this.#requireLocalCommandVerification,
+      );
+    } catch (error) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
+        'DRIVER_START_EXECUTION_PROFILE_INCOMPATIBLE',
+        { cause: error },
+      );
+    }
   }
 
   private createKernel(profile: RuntimeExecutionProfile): DriverKernelBinding {
@@ -1272,6 +1511,9 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
           policyBundleId: this.#policyBundleId,
           policyBundleDigest: this.#policyBundleDigest,
         }),
+        ...(profile.localCommandVerification === undefined
+          ? {}
+          : { localCommandVerification: profile.localCommandVerification }),
         acceptance: Object.freeze({
           identities: this.#ids,
           policyBundleId: this.#policyBundleId,
@@ -1298,7 +1540,12 @@ class RuntimeWorkflowDriver implements GoalExecutionCapability {
       profile.profileDigest !== binding.profileDigest ||
       profile.profileId !== installed.id ||
       profile.profileDigest !== installed.digest ||
-      profile.driverVersion !== installed.driverVersion
+      profile.driverVersion !== installed.driverVersion ||
+      (profile.localCommandVerification !== undefined &&
+        (profile.localCommandVerification.profile.check.runnerIdentity !==
+          installed.verificationRunner ||
+          profile.localCommandVerification.profile.check.runnerVersion !==
+            installed.verificationRunnerVersion))
     ) {
       throw new DriverFailure(
         WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
@@ -1393,6 +1640,19 @@ export function createWorkflowDriver(
   return Object.freeze({
     startGoal: (input: StartGoalRequest) => driver.startGoal(input),
     resumeGoal: (input: ResumeGoalRequest) => driver.resumeGoal(input),
+    cancelGoal: (input: CancelGoalRequest) => driver.cancelGoal(input),
+  });
+}
+
+/** Trusted M2 orchestration surface; the public M1 driver remains unchanged. */
+export function createM2WorkflowDriver(
+  dependencies: WorkflowDriverDependencies,
+): WorkflowDriverCapability {
+  const driver = new RuntimeWorkflowDriver(dependencies, true);
+  return Object.freeze({
+    startGoal: (input: StartGoalRequest) => driver.startGoal(input),
+    resumeGoal: (input: ResumeGoalRequest) => driver.resumeGoal(input),
+    repairGoal: (input: BeginAcceptanceRepairRequest) => driver.repairGoal(input),
     cancelGoal: (input: CancelGoalRequest) => driver.cancelGoal(input),
   });
 }

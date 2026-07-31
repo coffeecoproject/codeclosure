@@ -1,6 +1,6 @@
 # M2 Milestone Acceptance Plan
 
-- Status: Prepared; Slices 0 through 4 are implemented, Slice 5 has not started,
+- Status: Prepared; Slices 0 through 5 are implemented, Slice 6 has not started,
   and milestone acceptance has not started
 - Plan date: 2026-07-30
 - Milestone: M2
@@ -275,7 +275,7 @@ the report must preserve each row's individual outcome.
 | `M2-D02` | Base repository, parent generation, allowed paths, project identity, and mutable-generation identity are exact and replayable | Candidate manifest tests |
 | `M2-D03` | Symlink, alias, traversal, case, special-file, ignored-file, and metadata edge cases cannot escape policy | filesystem adversarial suite |
 | `M2-D04` | Freeze creates an exact canonical tree digest and permanently removes Worker mutation authority from that generation | freeze integration suite |
-| `M2-D05` | Any frozen-source mutation before, during, or after verification is detected and invalidates affected Evidence | drift fault-injection suite |
+| `M2-D05` | Any frozen-source mutation before, during, or after verification is detected; when an EVIDENCE_BUILD Attempt is active, its failure, Candidate invalidation, affected-Evidence invalidation, Workflow failure, audit, and processed outcome commit or roll back together | drift transaction fault-injection and reopen suite |
 | `M2-D06` | Repair creates a new generation from the exact eligible parent and leaves the old frozen generation byte-identical | repair-generation suite |
 | `M2-D07` | Partial create/freeze/repair failure leaves no falsely current Candidate authority | transaction/filesystem reconciliation tests |
 | `M2-D08` | Restart compares an exact persisted-authority snapshot before classifying owned, retained, orphaned, and unsafe paths; cleanup requires a current one-time exact-orphan grant and never deletes an unresolved or user-owned target | cleanup/reopen suite |
@@ -292,7 +292,7 @@ the report must preserve each row's individual outcome.
 | `M2-E04` | A failing required check creates current failing Evidence and prevents technical `ACCEPT` and closeout | Runtime integration case |
 | `M2-E05` | A passing check can satisfy only the exact current obligation, Candidate, source, specification, runner, and environment binding | Evidence exact-binding suite |
 | `M2-E06` | Worker-reported tests, App Server command Items, transcript text, and path existence cannot become formal Evidence | authority tests |
-| `M2-E07` | Verification-time mutation, stale Evidence, wrong generation, wrong check, or wrong environment fails closed | Evidence adversarial suite |
+| `M2-E07` | Verification-time mutation, stale Evidence, wrong generation, wrong check, or wrong environment fails closed without a split Attempt/Candidate/Evidence authority state | Evidence adversarial and transaction suite |
 | `M2-E08` | Deterministic Acceptance replay and exact repair authority retain M1 semantics across SQLite reopen | acceptance/reopen suite |
 | `M2-E09` | Final Closeout binds the exact current Candidate and Evidence Set only after the Acceptance Engine issues current `ACCEPT` | black-box closeout proof |
 

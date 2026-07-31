@@ -22,8 +22,12 @@ containment, freeze, repair, drift, restart, and cleanup review. The bounded
 Darwin local-command verification path, strict versioned contracts,
 Runtime-derived Evidence, and atomic SQLite payload persistence are now
 implemented and have passed their focused isolation and authority review.
-Reject/repair/accept orchestration, recovery, trusted production composition,
-and the live Goal-bound path remain later M2 work. The
+The bounded in-process reject/repair/accept orchestration is also implemented:
+it drives a real controlled-copy Candidate and local verifier through failure,
+an exact child repair generation, fresh passing Evidence, deterministic
+Acceptance, closeout, transaction fault injection, and strict SQLite reopen.
+Thread/Compact recovery, trusted production CLI composition, and the live
+Goal-bound Codex path remain later M2 work. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.

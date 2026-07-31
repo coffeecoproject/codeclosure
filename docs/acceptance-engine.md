@@ -6,10 +6,12 @@ This document defines the target Acceptance Engine contract. The audited M1
 implementation provides the deterministic rule set under
 [M1 Rule Set](#m1-rule-set), strict manifest and decision codecs, immutable
 SQLite persistence, current-input replay validation, transactional closeout,
-and immutable exact repair-generation authority. It still uses only logical
-Candidate and fake Evidence inputs. ADR 0030 fixes the planned M2 real
-local-command Evidence contract, but that verifier and its version-2 records
-are not implemented. Intent Admission and Goal Materialization are a separate
+and immutable exact repair-generation authority. ADR 0030's bounded real
+local-command verifier and version-2 Evidence are implemented, and Slice 5 now
+selects one complete local Check family as the current deterministic Acceptance
+input. The same M1 rule set maps real `PASS`, `FAIL`, runner-error, and timeout
+status without granting the runner completion authority. Intent Admission and
+Goal Materialization are a separate
 pre-Goal authority and are not implemented by the Acceptance Engine.
 
 ## Purpose

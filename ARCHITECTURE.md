@@ -17,9 +17,10 @@ homes and assert exact terminal, audit, and reopen state. The
 [M1 completion review](docs/reviews/m1-completion-review.md) records the exact
 source identity, environment, quality stages, migration/schema inspection,
 dependency graph, and invariant coverage. Bounded controlled-copy Candidate
-isolation and bounded Darwin local-command verification are now implemented
-through M2 Slice 4; reject/repair/accept orchestration, recovery, and trusted
-production composition remain later M2 work. Components marked for later
+isolation, bounded Darwin local-command verification, and in-process
+reject/repair/accept orchestration are now implemented through M2 Slice 5;
+external-execution recovery and trusted production composition remain later M2
+work. Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
@@ -58,9 +59,23 @@ derives version-2 local-command Evidence; SQLite atomically commits retained
 content-addressed stdout/stderr payloads with Evidence, eligibility, Workflow
 effects, audit, and command outcome. The
 [Slice 4 review](docs/reviews/m2-slice4-real-verification.md) records the
-focused evidence and limitations. Reject/repair/accept orchestration,
-external-execution persistence and recovery composition, trusted CLI
-composition, and a live Goal-bound execution remain later M2 work.
+focused evidence and limitations. Slice 5 is implemented: trusted Runtime
+composition grants mutable Candidate leases only to `IMPLEMENT`, records a
+fresh read-only local Check family after each freeze, admits real failing or
+passing Evidence, preserves exact repair authority, creates a distinct child
+generation, and closes only through current deterministic Acceptance. Active
+verification drift atomically fails its Attempt and Workflow while invalidating
+the Candidate and dependent Evidence. Mutable Worker leases require the exact
+current `RUNNING` Attempt, local runner configuration is closed and bound to
+the installed Execution Profile, the M2 driver refuses a missing local
+verification capability before Start, Resume, or repair can mutate authority,
+and the selected local Runtime cannot fall back to the M1 fake-verification
+entry point. Verification Evidence cannot predate its
+authorizing Obligation even under clock rollback. The
+[Slice 5 review](docs/reviews/m2-slice5-reject-repair-accept.md) records its
+focused evidence and limitations. External-execution persistence and recovery
+composition, trusted CLI composition, and a live Goal-bound execution remain
+later M2 work.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -263,13 +278,13 @@ with `MATERIALIZE`.
 
 ### Runtime Application Coordinator
 
-The implemented Slice 7 application facade creates Goals, invokes public
+The implemented M1 Slice 7 application facade creates Goals, invokes public
 start/resume/cancel commands, owns startup-recovery and query capabilities, and
 returns schema-versioned Goal status/audit views. It receives narrow Store and
 external-inspection ports; adapters receive neither those ports nor the
 Workflow kernel.
 
-The implemented Slice 7 driver reloads authoritative state before each
+The implemented M1 Slice 7 driver reloads authoritative state before each
 internal operation and stops at a terminal, waiting, blocked, failed,
 decision, or typed infrastructure boundary. Each internal phase operation is
 its own audited transaction so process restart can re-enter from the last
@@ -409,7 +424,7 @@ and [ADR 0021](docs/adr/0021-m1-execution-profile-and-cli-composition.md) plus
 M1 does not yet have a durable resolver for selected Fact, Human Decision, or
 project-source authority. Those selected entries and all omission decisions
 therefore remain closed under
-[ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md). Slice 5 opens
+[ADR 0015](docs/adr/0015-close-m1-worker-authority-causality.md). M1 Slice 5 opens
 only one additional source class: an `IMPLEMENT` package binds the exact active
 `MUTABLE` Candidate generation and its `baseDigest`, resolved through Candidate
 authority and independently rechecked by Runtime and Store. `DISCOVERY` and
@@ -432,8 +447,9 @@ controlled copy, exact source-tree and Git-metadata projections,
 protocol-neutral mutable/read-only lease contract, immutable freeze, exact
 parent-based repair, exact-authority restart classification, and one-time
 owned-leaf cleanup grants. It does not mutate Domain, Workflow, Store, Evidence,
-or Acceptance authority and is not yet composed into the production Runtime/CLI
-path; that integration remains later M2 work.
+or Acceptance authority. Slice 5 composes it through trusted in-process Runtime
+capabilities for the deterministic proof path; production CLI and live Codex
+composition remain later M2 work.
 
 ### Evidence Store
 
@@ -452,6 +468,12 @@ Store commits payload, Evidence, initial eligibility, Workflow effects, audit,
 and command outcome atomically. Missing, corrupt, malformed, or colliding
 payload authority fails closed. Larger or arbitrary-project payload storage
 remains a later explicit decision.
+
+Slice 5 selects one complete Check family for each Evidence Set. The retained
+M1 fake family remains the regression/bootstrap authority, while a current
+local-command family becomes the exact verification authority when installed.
+Mixed or partial families fail in Runtime, Store, SQLite triggers, and reopen
+validation.
 
 ### Acceptance Engine
 
@@ -489,7 +511,8 @@ denies Candidate writes, authority and credential reads, and network access,
 and writes only below a Runtime-owned temporary run root. Runtime observes the
 frozen Candidate before and after execution and admits only a closed bounded
 result. The adapter cannot create Evidence, issue `ACCEPT`, or transition a
-Workflow; later M2 composition owns those control steps.
+Workflow. Slice 5 Runtime composition owns those control steps and keeps the
+adapter observation non-authoritative until validation and atomic persistence.
 
 ## Authority and Storage Topology
 
@@ -744,11 +767,12 @@ packages/verification-local
 ```
 
 The App Server client, Codex Worker Adapter, local Candidate workspace, and
-local Verification packages are implemented through Slice 4. Trusted
-cross-package orchestration remains later M2 work.
+local Verification packages are implemented. Slice 5 adds bounded trusted
+cross-package orchestration for the deterministic repair proof. Restart-aware
+external-execution composition and the public live path remain later M2 work.
 
 M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside
-`domain` and `runtime`. Slice 6 implements that control without introducing a
+`domain` and `runtime`. M1 Slice 6 implements that control without introducing a
 separate package or a worker-facing completion path.
 
 Codex protocol DTOs must remain inside the App Server client/adapter boundary.
@@ -862,7 +886,7 @@ and
 [ADR 0025](docs/adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
 Persisted budgets, backoff, and automatic retry policy remain M4 work.
 
-The implemented Slice 7 startup sequence:
+The implemented M1 Slice 7 startup sequence:
 
 1. lets trusted composition activate and migrate the control Store through the
    verified isolation bootstrap;

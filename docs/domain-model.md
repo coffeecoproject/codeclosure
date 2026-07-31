@@ -31,8 +31,13 @@ their Store codecs/migrations remain unimplemented Domain work for later M2
 slices. Slice 4 implements the closed schema-version-2 `LOCAL_COMMAND` Check,
 `LOCAL_COMMAND_TEST_RESULT` Evidence and environment variants, strict codecs,
 Runtime verification contracts, and immutable SQLite payload authority without
-changing the M1 version-1 digest contract. This bounded verification seam is
-not yet the Slice 5 reject/repair/accept orchestration path.
+changing the M1 version-1 digest contract. Slice 5 composes those existing
+records without adding a new Domain aggregate: a complete local Check family
+may become the current Evidence/Acceptance family, exact M1 repair authority is
+retained for each new child generation, and the child receives a fresh local
+family only after its own freeze. Active verification drift is persisted as one
+Attempt/Workflow/Candidate/Evidence compound failure. External execution and
+lease/session persistence remain later M2 work.
 
 ## Design Rules
 

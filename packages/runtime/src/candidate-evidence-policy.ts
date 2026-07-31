@@ -51,6 +51,12 @@ export interface LocalCommandVerificationPolicy {
   readonly obligations: readonly VerificationObligation[];
 }
 
+export interface AcceptanceCandidateEvidencePolicy {
+  readonly freeze: CheckSpecification;
+  readonly verification: CheckSpecification;
+  readonly obligations: readonly VerificationObligation[];
+}
+
 function hasExactValues(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -82,6 +88,21 @@ function assertM1CheckSpecification(
   ) {
     throw new TypeError(`Check Specification ${specification.id} is not the exact M1 policy`);
   }
+}
+
+export function validateM1CandidateFreezeCheck(
+  generation: CandidateGeneration,
+  rawSpecification: CheckSpecification,
+): CheckSpecification {
+  const specification = decodeCheckSpecification(rawSpecification);
+  assertM1CheckSpecification(specification, generation, {
+    kind: CheckSpecificationKind.CANDIDATE_FREEZE,
+    producerType: EvidenceProducerType.CANDIDATE_MANAGER,
+    producerIdentity: M1CandidateEvidenceProducerIdentity.CANDIDATE_MANAGER,
+    operation: 'm1.logical.candidate.freeze',
+    observationSchema: 'codeclosure.candidate-freeze-observation.v1',
+  });
+  return specification;
 }
 
 export function validateM1CandidateEvidencePolicy(
@@ -289,6 +310,32 @@ export function validateLocalCommandVerificationPolicy(
         return obligation;
       }),
     ),
+  });
+}
+
+export function validateAcceptanceCandidateEvidencePolicy(
+  goal: Goal,
+  generation: CandidateGeneration,
+  rawPolicy: AcceptanceCandidateEvidencePolicy,
+  createdAt: IsoTimestamp,
+): AcceptanceCandidateEvidencePolicy {
+  if (rawPolicy.verification.kind === CheckSpecificationKind.FAKE_VERIFICATION) {
+    return validateM1CandidateEvidencePolicy(goal, generation, rawPolicy, createdAt);
+  }
+  if (rawPolicy.verification.kind !== CheckSpecificationKind.LOCAL_COMMAND) {
+    throw new TypeError('Acceptance verification Check kind is unsupported');
+  }
+  const freeze = validateM1CandidateFreezeCheck(generation, rawPolicy.freeze);
+  const local = validateLocalCommandVerificationPolicy(
+    goal,
+    generation,
+    { verification: rawPolicy.verification, obligations: rawPolicy.obligations },
+    createdAt,
+  );
+  return Object.freeze({
+    freeze,
+    verification: local.verification,
+    obligations: local.obligations,
   });
 }
 

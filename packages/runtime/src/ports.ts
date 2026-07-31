@@ -390,6 +390,24 @@ export interface CommittedCandidateIntegrityFailure {
   readonly invalidatedEvidence: readonly EvidenceEligibility[];
 }
 
+/**
+ * Closes an active EVIDENCE_BUILD Attempt after frozen-source drift and
+ * invalidates every authority object that depended on the former digest in
+ * the same Store transaction.
+ */
+export interface CommitVerificationIntegrityFailure extends CommitAttemptEvent {
+  readonly candidateEvent: CandidateStateChanged;
+  readonly expectedFrozenDigest: Sha256Digest;
+  readonly observedDigest: Sha256Digest;
+  readonly candidateAuditEventId: AuditEventId;
+  readonly invalidatedEvidenceAuditEventIds: readonly AuditEventId[];
+}
+
+export interface CommittedVerificationIntegrityFailure extends AppliedAttemptEvent {
+  readonly authority: CandidateAuthorityView;
+  readonly invalidatedEvidence: readonly EvidenceEligibility[];
+}
+
 export interface CommitCandidateAttemptOutcome extends CommitAttemptEvent {
   readonly candidateEvent: CandidateStateChanged;
   readonly candidateAuditEventId: AuditEventId;
@@ -619,6 +637,9 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
   commitCandidateIntegrityFailure(
     input: CommitCandidateIntegrityFailure,
   ): StoreCommandResult<CommittedCandidateIntegrityFailure>;
+  commitVerificationIntegrityFailure(
+    input: CommitVerificationIntegrityFailure,
+  ): StoreCommandResult<CommittedVerificationIntegrityFailure>;
   commitCandidateAttemptOutcome(
     input: CommitCandidateAttemptOutcome,
   ): StoreCommandResult<CommittedCandidateAttemptOutcome>;

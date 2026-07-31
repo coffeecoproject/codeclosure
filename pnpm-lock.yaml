@@ -102,6 +102,12 @@ importers:
       '@codeclosure/testing':
         specifier: workspace:*
         version: link:../testing
+      '@codeclosure/verification-local':
+        specifier: workspace:*
+        version: link:../verification-local
+      '@codeclosure/workspace-local':
+        specifier: workspace:*
+        version: link:../workspace-local
       '@types/better-sqlite3':
         specifier: 7.6.13
         version: 7.6.13

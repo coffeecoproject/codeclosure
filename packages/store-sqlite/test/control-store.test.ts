@@ -668,6 +668,8 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0018_m1_retry_boundary_closure.sql',
       '0019_m1_attempt_authority_closure.sql',
       '0020_local_command_verification_evidence.sql',
+      '0021_evidence_set_check_family_authority.sql',
+      '0022_evidence_obligation_causal_time.sql',
     ],
   );
   store.close();

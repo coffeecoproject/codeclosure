@@ -10,8 +10,16 @@ authority boundary; Evidence still cannot approve itself. ADR 0030 fixes the
 M2 real local-command variants and bounded payload-storage contract. Slice 4
 implements the strict version-2 codecs, Runtime-derived local-command Evidence,
 Darwin local verifier, and immutable SQLite payload table with transactional
-and reopen backstops. It does not compose technical Acceptance or closeout;
-that remains Slice 5. Pre-Goal Intake observations are not part of the
+and reopen backstops. Slice 5 now composes one complete local-command Check
+family into canonical Evidence selection, deterministic Acceptance, repair,
+and closeout while retaining the M1 family as separate bootstrap authority.
+Mixed or partial families fail closed, and verification-time drift invalidates
+all dependent eligible Evidence in the same transaction that ends the active
+Attempt. Selecting the M2 local-verification capability makes that family
+mandatory rather than permitting fallback to M1 fake Evidence. Runtime causal
+floors plus Store, migration, and reopen backstops prevent verification
+Evidence from predating its exact Obligation. Pre-Goal
+Intake observations are not part of the
 implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
 
 ## Purpose
@@ -407,11 +415,12 @@ The preserved M1 Candidate/Evidence boundary includes:
 Slice 4 adds one closed local-command Check and Evidence variant, bounded
 Darwin process isolation, pre/post frozen-Candidate observation, Runtime-owned
 status and payload-reference derivation, and atomic SQLite payload persistence.
-It does not add an Acceptance rule, repair transition, closeout path, general
-container runner, browser/device verifier, or arbitrary blob store.
+Slice 5 reuses the existing deterministic Acceptance rules and repair/closeout
+transitions with that exact local family; it adds no second Acceptance issuer,
+general container runner, browser/device verifier, or arbitrary blob store.
 
 The Evidence boundary does not interpret its own records as Goal acceptance.
-The current Slice 6 Acceptance Engine separately maps pass, fail, runner-error,
+The existing M1 Slice 6 Acceptance Engine separately maps pass, fail, runner-error,
 and timeout observations into a technical decision over an exact manifest.
 
 M1 does not need real project test runners, containers, browsers, devices, or

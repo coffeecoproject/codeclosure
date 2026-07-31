@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 through 4 are implemented and Slice 5 has not started
+- Status: In progress; Slices 0 through 5 are implemented and Slice 6 has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -65,7 +65,7 @@ From the user's point of view, M2 should behave plainly:
 | 2 | Goal-bound Codex Worker Adapter | Implemented | [Slice 2 review](../reviews/m2-slice2-codex-worker-adapter.md), adapter contract and phase-mapping tests |
 | 3 | real isolated Candidate workspace | Implemented | [Slice 3 review](../reviews/m2-slice3-candidate-workspace.md), controlled-copy, lease, freeze, repair, drift, restart, and cleanup tests |
 | 4 | real Verification Runner | Implemented | [Slice 4 review](../reviews/m2-slice4-real-verification.md), runner isolation, v2 Evidence, payload, mutation, and limit tests |
-| 5 | reject, repair, and accept orchestration | Not started | Runtime integration and adversarial tests |
+| 5 | reject, repair, and accept orchestration | Implemented | [Slice 5 review](../reviews/m2-slice5-reject-repair-accept.md), real Candidate/verifier orchestration, compound drift transaction, repair, Acceptance, and reopen tests |
 | 6 | Thread, Compact, interruption, and restart policy | Not started | recovery and protocol-lifecycle tests |
 | 7 | trusted composition, CLI, and live demonstration | Not started | subprocess and bounded live proof |
 | 8 | milestone audit and acceptance harness | Not started | M2 acceptance run and dated review |
@@ -947,7 +947,8 @@ Current execution record on 2026-07-31:
   transaction. Reopen rejects missing, corrupt, colliding, or malformed
   payload authority; and
 - the [Slice 4 review](../reviews/m2-slice4-real-verification.md) records a
-  `PASS`. Slice 4 is implemented and Slice 5 may begin, but has not started.
+  `PASS`. Slice 4 is implemented and its entry evidence remains the Slice 5
+  regression baseline.
 
 ### Slice 5 — Reject, repair, and accept orchestration
 
@@ -959,6 +960,9 @@ Work:
 - compose the exact M2 Policy and Execution Profile;
 - drive one deterministic controlled execution through a real Candidate,
   source freeze, and required verification;
+- when verification observes frozen-source drift while its Attempt is active,
+  atomically finish that Attempt, invalidate the Candidate and all affected
+  Evidence, fail the Workflow, append audit, and retain the processed outcome;
 - preserve a failed Acceptance Decision and exact repair authority;
 - create and dispatch a new repair generation;
 - rebuild Evidence from the repaired frozen source; and
@@ -968,11 +972,47 @@ Exit proof:
 
 - the first Worker completion claim cannot close after required verification
   fails;
+- verification-time drift cannot leave a terminal Attempt paired with a
+  still-current Candidate or eligible Evidence, including under transaction
+  fault injection and SQLite reopen;
 - the failed frozen generation remains immutable and auditable;
 - repaired Evidence binds only the new generation and digest;
 - stale first-generation Evidence and Acceptance cannot close the Goal; and
 - the final Closeout Record binds the exact accepted Candidate, Evidence Set,
   Policy, checker, and Acceptance Decision.
+
+Implementation record:
+
+- a trusted composition-only Candidate-leased Worker gives `IMPLEMENT` a
+  mutable lease only for the exact current `RUNNING` Attempt and generation,
+  releases the lease across assertion/factory/stream failures, and preserves
+  the public M1 driver surface;
+- Runtime Execution Profile admission closes the nested local-verification
+  configuration and binds its runner identity and version to the exact
+  installed Profile before `StartGoal` may mutate authority; the M2 driver
+  requires that capability at initial and resolved Profile boundaries,
+  preflights the resolved binding before Resume or repair may mutate authority,
+  and a selected local-verification Runtime cannot begin Evidence work through
+  the M1 fake-verification path;
+- the M2 driver installs one fresh local-command Check family for each frozen
+  generation, uses real local Evidence for canonical selection, and exposes a
+  separate trusted repair continuation that consumes only an exact current
+  `REJECT_REPAIRABLE` decision;
+- migration 0021 permits exactly one complete Check family in an Evidence Set
+  and rejects mixed or partial families without changing the M1 family;
+- Runtime causal floors, Store admission/reopen validation, and migration 0022
+  prevent a backing-clock rollback from placing verification Evidence before
+  the exact Obligation that authorized it;
+- active pre-run or during-run Candidate drift commits Attempt failure,
+  Workflow failure, Candidate invalidation, all affected Evidence
+  invalidations, audit, and processed outcome atomically; every transaction
+  probe and strict reopen are covered; and
+- the deterministic real-Candidate/real-verifier fixture preserves generation
+  1 after a real failure, repairs only generation 2, obtains fresh real passing
+  Evidence, closes through deterministic Acceptance, and leaves the source
+  checkout unchanged. The
+  [Slice 5 review](../reviews/m2-slice5-reject-repair-accept.md) records exact
+  evidence and limitations. Slice 6 may begin but has not started.
 
 ### Slice 6 — Thread, Compact, interruption, and restart
 

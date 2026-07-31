@@ -75,6 +75,8 @@ const packagePolicies = Object.freeze([
     }),
     devDependencies: Object.freeze({
       '@codeclosure/testing': 'workspace:*',
+      '@codeclosure/verification-local': 'workspace:*',
+      '@codeclosure/workspace-local': 'workspace:*',
       '@types/better-sqlite3': '7.6.13',
     }),
   }),

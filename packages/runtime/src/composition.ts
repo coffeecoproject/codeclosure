@@ -7,12 +7,19 @@
  */
 export { createRecoveryCoordinator } from './recovery.js';
 export type { RecoveryCoordinatorDependencies } from './recovery.js';
-export { createWorkflowDriver } from './workflow-driver.js';
+export { createM2WorkflowDriver, createWorkflowDriver } from './workflow-driver.js';
 export type {
   RuntimeExecutionProfile,
   RuntimeExecutionProfileResolver,
   WorkflowDriverDependencies,
+  WorkflowDriverCapability,
   WorkflowDriverIdentityGenerator,
 } from './workflow-driver.js';
 export { CryptographicIdentityGenerator, SystemUtcClock } from './production-adapters.js';
 export { createM1DeterministicPhaseGuardEvaluator } from './m1-phase-guards.js';
+export { createCandidateLeasedWorker } from './candidate-leased-worker.js';
+export type {
+  CandidateLeasedWorkerAuthorityReader,
+  CandidateLeasedWorkerDependencies,
+  CandidateLeasedWorkerFactory,
+} from './candidate-leased-worker.js';

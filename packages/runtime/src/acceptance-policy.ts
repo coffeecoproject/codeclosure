@@ -1,7 +1,7 @@
 import {
   CandidateGenerationState,
+  CheckSpecificationKind,
   EvidenceEligibilityState,
-  EvidenceKind,
   EvidenceResultStatus,
   PendingIssueRepairability,
   PendingIssueSeverity,
@@ -35,7 +35,7 @@ import {
   type WorkflowInstance,
 } from '@codeclosure/domain';
 
-import { validateM1CandidateEvidencePolicy } from './candidate-evidence-policy.js';
+import { validateAcceptanceCandidateEvidencePolicy } from './candidate-evidence-policy.js';
 import { verifyEvidenceSetAuthority } from './evidence-factory.js';
 import type { DigestProvider } from './ports.js';
 
@@ -231,7 +231,14 @@ export function compileM1AcceptanceInput(
     throw new TypeError('M1 Acceptance authority does not describe one FINAL_VERIFY Candidate');
   }
   const candidateDigest = authority.generation.frozenDigest;
-  const candidatePolicy = validateM1CandidateEvidencePolicy(
+  const candidatePolicyCreatedAt =
+    authority.verificationCheck.kind === CheckSpecificationKind.LOCAL_COMMAND
+      ? authority.obligations[0]?.createdAt
+      : authority.generation.createdAt;
+  if (candidatePolicyCreatedAt === undefined) {
+    throw new TypeError('Acceptance verification policy has no creation authority');
+  }
+  const candidatePolicy = validateAcceptanceCandidateEvidencePolicy(
     authority.goal,
     authority.generation,
     {
@@ -239,7 +246,7 @@ export function compileM1AcceptanceInput(
       verification: authority.verificationCheck,
       obligations: authority.obligations,
     },
-    authority.generation.createdAt,
+    candidatePolicyCreatedAt,
   );
   const evidenceSet = verifyEvidenceSetAuthority(
     authority.evidenceSet,
@@ -362,7 +369,7 @@ export function evidenceRuleOutcome(input: CompiledM1AcceptanceInput): RuleOutco
       const entry = authorityById.get(identifier);
       if (
         entry?.eligibility.state !== EvidenceEligibilityState.ELIGIBLE ||
-        entry.record.kind !== EvidenceKind.TEST_RESULT ||
+        entry.record.kind !== obligation.requiredEvidenceKind ||
         entry.record.verificationObligationId !== obligation.id ||
         entry.record.candidateDigest !== input.manifest.candidateDigest
       ) {

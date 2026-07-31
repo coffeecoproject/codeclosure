@@ -8,7 +8,7 @@ and Attempt Runtime, the Context-bound `FakeWorker` proof path, logical
 Candidate preparation and irreversible freeze, independent fake verification,
 Evidence persistence/invalidation, canonical Evidence Set transition into
 `FINAL_VERIFY`, deterministic Acceptance evaluation, accepted closeout, and
-repair-generation coordination. The Slice 7 Runtime application facade,
+repair-generation coordination. The M1 Slice 7 Runtime application facade,
 execution-profile binding, recovery, read views, and deterministic application
 driver are also implemented. Verified local production composition is now
 implemented. The real CLI currently implements Goal creation, start, status,
@@ -35,9 +35,23 @@ owns filesystem mechanics only: it does not mutate Workflow or Store state, and
 trusted Runtime/Store composition remains later M2 work. Slice 4 now implements
 the separate local Verification adapter, closed Runtime request/result
 boundary, Runtime-derived local-command Evidence, and atomic SQLite payload
-transaction. It deliberately adds no new Workflow transition: Slice 5 must
-compose verification, rejection, repair, Acceptance, and closeout through the
-existing Runtime authority. Goal Intake is an accepted pre-Goal target for
+transaction. It deliberately added no new Workflow transition. Slice 5 now
+composes verification, rejection, repair, Acceptance, and closeout through the
+existing Runtime authority and implements that bounded in-process
+composition without adding a Workflow phase: failing required Evidence reaches
+`REJECT_REPAIRABLE`, repair creates a distinct child generation, fresh Evidence
+is selected for deterministic Acceptance, and closeout consumes only the exact
+current decision. Verification-time Candidate drift uses one compound Store
+transaction to fail the active Attempt and Workflow and invalidate Candidate
+and Evidence authority. Candidate Worker leases require the exact current
+`IMPLEMENT` Attempt, and an `EVIDENCE_BUILD` Attempt cannot begin before its
+selected Verification Obligations. When the M2 local-verification capability
+is selected, the Runtime also requires its current Check, Obligation, and
+read-only lease session before that Attempt and rejects the M1 fake-verification
+entry point. The M2 driver resolves the exact bound Profile before Start,
+Resume, or repair may mutate authority; Resume reuses that preflighted binding
+after the Recovery owner commits. Restart reconstruction of its external
+execution session remains M2 Slice 6. Goal Intake is an accepted pre-Goal target for
 M2.5; it is not implemented and does not add another Workflow phase.
 
 ## Purpose
@@ -128,7 +142,7 @@ and `CancelGoal` resolve the Goal's M1 Workflow and carry both the expected Goal
 revision and expected Workflow version. Users and CLI adapters do not start,
 interrupt, or mutate Attempts directly.
 
-The implemented Slice 7 application facade exposes `CreateGoal` as a Runtime
+The implemented M1 Slice 7 application facade exposes `CreateGoal` as a Runtime
 operation. It requires explicit success criteria and atomically creates one
 Goal plus its unique `DISCOVERY`/`READY` Workflow; it does not dispatch work.
 The first Context-bound `StartGoal` transaction binds one installed Execution
@@ -250,7 +264,7 @@ another or nonexistent aggregate fails closed. See
 
 ## Runtime Application Driver
 
-The implemented Slice 7 Runtime application driver selects the next
+The implemented M1 Slice 7 Runtime application driver selects the next
 deterministic internal operation after a successful public start or resume;
 the CLI cannot sequence those operations. It reloads the current
 authoritative view before every phase transition, Attempt, Candidate, Evidence,
@@ -295,7 +309,7 @@ the owning internal evaluators, strictly validates their complete runtime
 shape, and records valid results on the transition event. A thrown evaluator or
 malformed evaluator return is an evaluation failure and creates no command
 outcome. `CURRENT_ACCEPTANCE` is reserved for the dedicated closeout path,
-which reloads an Acceptance Engine decision and its exact bindings. The Slice 6
+which reloads an Acceptance Engine decision and its exact bindings. The M1 Slice 6
 `CloseAcceptedGoal` command alone constructs that guard and atomically accepts
 the Candidate, closes the Workflow/Goal, and records the closeout binding.
 `BeginAcceptanceRepair` similarly owns `REJECT_REPAIRABLE_RECORDED` and creates
@@ -306,7 +320,7 @@ outcome. Generic phase requests remain unable to construct or consume either
 proof. See
 [ADR 0019](adr/0019-exact-acceptance-repair-authority.md).
 
-Slice 5 phase guards are not supplied by that generic evaluator. The Runtime
+M1 Slice 5 phase guards are not supplied by that generic evaluator. The Runtime
 constructs Candidate and Evidence guards only from decoded Candidate,
 Verification Obligation, Check Specification, Evidence, eligibility, and
 source-observation authority; the Store reconstructs the persisted portion of
