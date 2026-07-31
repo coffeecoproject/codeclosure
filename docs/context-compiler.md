@@ -17,9 +17,10 @@ Turn prompt and closed output schema, while configured size, lease, profile,
 policy, and response bindings are revalidated. Slice 5 composes the smaller M1
 Context shape through the deterministic reject/repair/accept path, but it does
 not yet compile exact rejection Evidence or structured `priorAttemptFeedback`
-for a fresh repair Thread. Slice 6 owns that M2 extension. The existing
-Compiler and Manifest authority are otherwise unchanged, and trusted live
-composition remains later M2 work. This is the Goal-bound Worker Context Compiler;
+for a fresh repair Thread. Slice 6 owns that M2 extension using the closed
+bounded-M2 failure-source set defined below. The existing Compiler and Manifest
+authority are otherwise unchanged, and trusted live composition remains later
+M2 work. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
 that are not implemented.
 
@@ -89,8 +90,8 @@ worker misunderstands an accurate context package.
   explicit durable source record;
 - proposed facts;
 - hypotheses and search hints;
-- bounded `priorAttemptFeedback` deterministically projected from exact current
-  failure authority and retained project observations; and
+- bounded `priorAttemptFeedback` deterministically projected from the closed
+  bounded-M2 failure-source set defined below; and
 - optional bounded worker-authored rationale, hypothesis, or search-state
   summaries only when an explicit durable source record exists.
 
@@ -168,22 +169,27 @@ The canonical identity is the `ContextManifest`, not presentation formatting.
 current repair authority and failing Evidence retained for the parent
 generation. `priorAttemptFeedback` is a bounded, fixed-schema working
 projection. The required M2 projection MUST be deterministically derived from
-the exact current Acceptance repair record and decision, Acceptance Input
-Manifest, failing Evidence, parent/child Candidate relationship, actual change
-set digest (`changeSetDigest`) retained by Candidate-freeze Evidence, other explicitly retained
-project observations, and Goal preservation constraints. It may describe
-changed files and observed failure causes only to the extent a decoded retained
-source establishes them. The change-set digest alone does not authorize a
-Worker-authored changed-file list. Every item MUST cite its source records and
-digests. It remains non-authoritative and cannot override Goal, Policy,
-Evidence, Runtime Decisions, or preservation constraints.
+this fixed source set and no other source class:
 
-Attempted approaches, eliminated directions, hypotheses, and free-form Worker
-summaries are not required M2 repair inputs. The bounded M2 profile omits them
-unless a separately defined durable, provenance-labelled, non-authoritative
-record exists. A decoded per-file change history is likewise optional unless an
-exact retained source exists. M2 does not derive any of those inputs from old
-chat. M3 owns their general durable fact model and relevance selection.
+- the exact current `AcceptanceRepairRecord` and `REJECT_REPAIRABLE` decision;
+- that decision's `AcceptanceInputManifest`;
+- the failing Evidence records selected by that exact manifest;
+- the exact rejected parent and repair-child Candidate relationship;
+- the parent Candidate-freeze Evidence's `changeSetDigest`; and
+- the current Goal preservation constraints.
+
+The projection may describe an observed failure cause only to the extent one
+of those decoded records establishes it. The `changeSetDigest` alone does not
+authorize a Worker-authored changed-file list. Every item MUST cite its source
+records and digests. It remains non-authoritative and cannot override Goal,
+Policy, Evidence, Runtime Decisions, or preservation constraints.
+
+The bounded M2 profile emits no optional feedback source classes. Decoded
+changed-file lists, attempted approaches, eliminated directions, hypotheses,
+unrelated project observations, and free-form Worker summaries are omitted even
+when retained elsewhere. A later versioned profile and durable source contract
+may select such inputs; M3 owns their general fact model and relevance
+selection. M2 does not derive any of them from old chat.
 
 The bound Context policy sets maximum feedback items, maximum canonical bytes
 per item, and maximum total canonical bytes. Required authoritative failure

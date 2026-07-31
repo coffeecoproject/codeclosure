@@ -15,7 +15,9 @@ controlled-copy workspace-lease, and real local-verification contracts in ADR
 0028 through ADR 0030. ADR 0031 fixes the planned acceptance-critical
 Verification Plan and protected-asset authority, and ADR 0032 closes the
 bounded M2 plan cardinality, lease value, isolation-profile version, and
-Evidence-family composition. The bounded 0.146.0 live
+Evidence-family composition. ADR 0033 aligns protected-plan creation with the
+first Start transaction and the lease with the existing Check-before-Attempt
+lifecycle. The bounded 0.146.0 live
 capability probe now passes;
 the Slice 1 lower client, protocol snapshot, offline fixtures, and live
 compatibility preflight are implemented without allowing a generated Codex
@@ -43,7 +45,8 @@ family only after its own freeze. Active verification drift is persisted as one
 Attempt/Workflow/Candidate/Evidence compound failure. External execution and
 lease/session persistence, the ADR 0031 plan plus schema-version-3
 Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
-and their Acceptance binding remain later M2 work.
+ADR 0033's first-Start/static-lease alignment, and their Acceptance binding
+remain later M2 work.
 
 ## Design Rules
 
@@ -1127,10 +1130,16 @@ AcceptanceCriticalVerificationPlan
   planDigest
 ```
 
-Trusted composition proposes the plan before the first Worker dispatch.
-Runtime validates and digests it, and Store persists it with its creation audit
-atomically. It is immutable for the Workflow and reused by repair generations.
-Worker output cannot create, revise, or replace it.
+Trusted composition supplies the installed immutable Policy/Profile inputs
+from which Runtime derives the plan proposal. For the bounded protected
+profile, Runtime validates, digests, and persists the plan and creation audit
+inside the first successful `StartGoal` transaction alongside the immutable
+Policy/Profile bindings, first Context Manifest, first Attempt, Workflow/Goal
+projections, command outcome, and their audits. `workflowVersionAtLock` is the
+resulting Workflow version from that transaction, and the first protected
+Context Manifest repeats the plan ID/digest. The plan is immutable for the
+Workflow and reused by repair generations. Worker output cannot create,
+revise, or replace it.
 
 Under ADR 0032, a Workflow started with the bounded M2 acceptance-critical
 profile has exactly one such plan. Its ordered Criterion and rule arrays cover
@@ -1145,13 +1154,16 @@ schema-version-3 `LOCAL_COMMAND_TEST_RESULT` Evidence repeats those bindings.
 Existing version-2 records remain unchanged and cannot be the sole decisive
 Evidence for an acceptance-critical M2 obligation.
 
-ADR 0032 defines `ProtectedAssetReadLease` as a deterministic protocol-neutral
-Runtime request value derived per concrete verification. Its canonical
-projection binds current Attempt, Candidate, plan, manifest, obligation, Check,
-isolation Profile, exact protected file identities, access mode, and
-single-invocation lifecycle. The complete value travels in the version-3 local
-verification request; Check and Evidence retain its recomputable digest. M2
-adds no separately mutable lease aggregate.
+ADRs 0032 and 0033 define `ProtectedAssetReadLease` as a deterministic,
+protocol-neutral Check-configuration value derived for one frozen Candidate.
+Its canonical projection binds Goal/Workflow, Candidate, plan, manifest,
+Check, isolation Profile, exact protected file identities, access mode, and
+single-invocation lifecycle. It deliberately excludes Workflow version,
+Attempt, and Verification Obligation, which do not exist at the existing
+Check-configuration boundary. The complete lease travels in the later
+version-3 local verification request; that request and matching Evidence bind
+Attempt and Obligation causality separately. Check and Evidence retain the
+recomputable lease digest. M2 adds no separately mutable lease aggregate.
 
 ## Protected Asset Read Lease — planned M2 Slice 7
 
@@ -1161,14 +1173,11 @@ ProtectedAssetReadLease
   goalId
   goalRevision
   workflowId
-  workflowVersion
-  attemptId
   candidateGenerationId
   candidateDigest
   acceptanceCriticalVerificationPlanId
   acceptanceCriticalVerificationPlanDigest
   protectedAssetManifestDigest
-  verificationObligationId
   checkSpecificationId
   checkSpecificationVersion
   isolationProfileId
@@ -1187,9 +1196,12 @@ ProtectedAssetReadLease
 ```
 
 The full value is deterministically derived from retained authority and carried
-in the verification request. Its digest is repeated by the version-3 Check and
-Evidence. Runtime and Store recompute it; M2 does not persist an independently
-mutable lease row. The protected path uses
+in the verification request. It is constructed with the concrete Check while
+`EVIDENCE_BUILD` is idle and before its Attempt exists. Its digest is repeated
+by the version-3 Check and Evidence; the request and Evidence independently
+bind the current Workflow version, Attempt, and Obligation. Runtime and Store
+recompute and cross-check those separate identities; M2 does not persist an
+independently mutable lease row. The protected path uses
 `codeclosure.darwin-seatbelt.local-command` isolation profile version `2` with
 a distinct digest. Version `1` retains its Slice 4 meaning and cannot execute
 this protected path.

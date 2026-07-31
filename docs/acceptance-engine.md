@@ -13,8 +13,9 @@ input. The same M1 rule set maps real `PASS`, `FAIL`, runner-error, and timeout
 status without granting the runner completion authority. ADR 0031 fixes a
 planned additive acceptance-critical Verification Plan and protected-asset
 rule, while ADR 0032 closes the bounded single-plan, lease, Profile, and
-Evidence-family composition. Slice 7 has not implemented that Acceptance input
-or checker.
+Evidence-family composition. ADR 0033 aligns the plan with first-Start
+atomicity and separates the static Check lease from later Attempt/Obligation
+causality. Slice 7 has not implemented that Acceptance input or checker.
 Intent Admission and
 Goal Materialization are a separate
 pre-Goal authority and are not implemented by the Acceptance Engine.

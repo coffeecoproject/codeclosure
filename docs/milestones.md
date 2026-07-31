@@ -157,13 +157,16 @@ the M1 authority boundary.
 - isolated real Candidate workspace/generation;
 - hard freeze digest and mutation detection;
 - one real verification runner path;
-- one pre-Worker protected Check/Oracle path for acceptance-critical
-  verification, with exact asset identity and no sole reliance on
-  Worker-writable tests;
+- one protected Check/Oracle path for acceptance-critical verification whose
+  immutable Plan is created atomically by the protected Workflow's first
+  successful Start, with exact asset identity, a static Check-time read lease,
+  and no sole reliance on Worker-writable tests;
 - acceptance rejection and repair generation loop;
 - exact failure Evidence plus bounded structured `priorAttemptFeedback`
-  deterministically projected from retained authority and recompiled into a
-  fresh repair Worker Session and Thread;
+  deterministically projected only from the current repair record/decision,
+  its manifest-selected failing Evidence, exact parent/child Candidates,
+  parent Candidate-freeze change-set digest, and Goal preservation constraints,
+  then recompiled into a fresh repair Worker Session and Thread;
 - one bounded live repair handoff whose failed parent is produced by a
   controlled fixture before Codex enters only the repair child;
 - one bounded M2 repair continuation followed by a visible persisted stop if
@@ -203,15 +206,16 @@ Verification paths:
 
 Separate deterministic adversarial branches MUST also prove:
 
-1. the acceptance-critical Check and protected Oracle are fixed before Worker
-   mutation;
+1. the protected Workflow's first successful Start atomically fixes the
+   acceptance-critical Plan, and the Check and protected Oracle are fixed
+   before Worker mutation;
 2. an incorrect implementation plus a weakened Worker-writable test cannot
    close the Goal, while the correct implementation passes the same protected
    Oracle;
 3. a repair child uses a fresh Thread whose current Context contains the exact
-   failing Evidence and `priorAttemptFeedback` deterministically projected from
-   retained authority and Candidate-freeze change-set digest, without requiring
-   the old Thread; and
+   failing Evidence and `priorAttemptFeedback` deterministically projected only
+   from the fixed bounded-M2 failure-source set, without requiring the old
+   Thread; and
 4. when the bounded repair fails, no generation 3, Thread, Turn, dispatch,
    retry, or model fallback occurs without a new explicit continuation
    authorization bound to the exact current `REJECT_REPAIRABLE` decision,

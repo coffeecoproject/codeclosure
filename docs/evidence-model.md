@@ -21,8 +21,10 @@ floors plus Store, migration, and reopen backstops prevent verification
 Evidence from predating its exact Obligation. ADR 0031 fixes the planned M2
 acceptance-critical Verification Plan and protected-asset authority, and ADR
 0032 closes its bounded plan, lease, isolation-profile, and Evidence-family
-composition. The additive Check/Evidence binding is not implemented; Slice 7
-owns that work.
+composition. ADR 0033 aligns protected-plan creation with the first Start
+transaction and makes the lease a Check-configuration value that excludes
+later Attempt/Obligation identity. The additive Check/Evidence binding is not
+implemented; Slice 7 owns that work.
 Pre-Goal
 Intake observations are not part of the
 implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
@@ -211,10 +213,13 @@ derives those bindings and creates `LOCAL_COMMAND_TEST_RESULT` Evidence with a
 
 [ADR 0031](adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md)
 requires trusted composition and Runtime to persist an immutable
-`AcceptanceCriticalVerificationPlan` before the first Worker dispatch. The
-plan binds the exact Goal/Workflow/Policy/Profile, acceptance-critical
-Criterion and rule identities, semantic Check template, and protected-asset
-manifest.
+`AcceptanceCriticalVerificationPlan` before the first Worker dispatch. Under
+[ADR 0033](adr/0033-align-protected-verification-with-start-and-check-lifecycle.md),
+the bounded protected profile creates that plan atomically in the first
+successful `StartGoal` transaction and repeats its identity in the first
+Context Manifest. The plan binds the exact Goal/Workflow/Policy/Profile,
+acceptance-critical Criterion and rule identities, semantic Check template,
+and protected-asset manifest.
 
 Each frozen generation's concrete Check uses ADR 0031's schema-version-3
 `LOCAL_COMMAND` variant, and its `LOCAL_COMMAND_TEST_RESULT` Evidence uses the
@@ -231,6 +236,13 @@ executable request. Runtime and Store recompute that digest from retained
 authority. The version-2 verification-isolation request receives the same
 decoded lease and binds Darwin isolation-profile version `2`; profile version
 `1` cannot run the protected path.
+
+ADR 0033 fixes that lease as static authority constructed with the concrete
+Check before the verification Attempt exists. The lease excludes Workflow
+version, Attempt, and Obligation; the later request and Evidence bind and
+cross-check those invocation/causality identities separately. A consumed,
+stale, replayed, or late verification session cannot reuse the lease to invoke
+the Runner or create Evidence.
 
 Worker-authored tests may be independently executed only as
 provenance-labelled supplementary Evidence. Their Check and obligation mapping
@@ -467,8 +479,9 @@ general container runner, browser/device verifier, or arbitrary blob store.
 Slice 7 will add ADR 0031's pre-Worker plan, protected-asset manifest, and
 generation-specific decisive Evidence binding under ADR 0032's bounded
 single-plan, deterministic lease, version-2 isolation-profile, and one-family
-selection rules. That planned extension does not rewrite the Slice 4/5
-version-2 records or their historical review claims.
+selection rules, aligned by ADR 0033 with the first Start transaction and
+Check-before-Attempt lease construction. That planned extension does not
+rewrite the Slice 4/5 version-2 records or their historical review claims.
 
 The Evidence boundary does not interpret its own records as Goal acceptance.
 The existing M1 Slice 6 Acceptance Engine separately maps pass, fail, runner-error,

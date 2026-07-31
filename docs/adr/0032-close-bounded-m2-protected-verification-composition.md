@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-07-31
+- Amendment: [ADR 0033](0033-align-protected-verification-with-start-and-check-lifecycle.md)
+  supersedes this record's protected-Plan timing and schema-version-1 lease
+  field list. Its other decisions remain in force.
 
 ## Context
 
@@ -178,6 +181,10 @@ family invariant.
   evidence can satisfy the critical obligation.
 
 ## Validation
+
+The rows below are subject to ADR 0033: Attempt and Obligation mismatches still
+fail closed, but they are checked as separate request/Evidence causality rather
+than fields of the static lease digest.
 
 Slice 7 implementation and Slice 8 acceptance MUST prove:
 

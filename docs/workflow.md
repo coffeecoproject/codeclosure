@@ -55,8 +55,9 @@ after the Recovery owner commits. Restart reconstruction of its external
 execution session, fresh repair Context, and failed-repair stop proof remain M2
 Slice 6. ADR 0031's protected acceptance-critical Verification Plan and
 schema-version-3 Check/Evidence family, closed for bounded composition by ADR
-0032, remain Slice 7. Goal Intake is an accepted pre-Goal target for M2.5; it is
-not implemented and does not add another Workflow phase.
+0032 and aligned with the existing first-Start and Check-before-Attempt
+lifecycle by ADR 0033, remain Slice 7. Goal Intake is an accepted pre-Goal
+target for M2.5; it is not implemented and does not add another Workflow phase.
 
 ## Purpose
 

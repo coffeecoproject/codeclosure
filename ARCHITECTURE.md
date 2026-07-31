@@ -27,7 +27,7 @@ The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
 current milestone. Slice 0 decision closure is implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
-and ADR 0028 through ADR 0032 are accepted. Slice 1 is implemented: the
+and ADR 0028 through ADR 0033 are accepted. Slice 1 is implemented: the
 version-bound lower client, pinned protocol snapshot, deterministic fake
 server, offline adversarial suite, and bounded live compatibility preflight
 pass. The [Slice 1 review](docs/reviews/m2-slice1-app-server-client.md) records
@@ -436,17 +436,18 @@ port instead of a coding-Worker prompt. See
 [ADR 0016](docs/adr/0016-candidate-and-evidence-authority-boundary.md).
 
 Slice 6 will extend this smaller package for a fresh repair Worker Session and
-Thread. Runtime will compile the exact current `REJECT_REPAIRABLE` decision,
-Acceptance Input Manifest, failing Evidence, parent/child Candidate identities,
-preservation constraints, and bounded source-labelled
+Thread. Runtime will compile the exact current `AcceptanceRepairRecord`,
+`REJECT_REPAIRABLE` decision, Acceptance Input Manifest, failing Evidence,
+parent/child Candidate identities, preservation constraints, and bounded source-labelled
 `priorAttemptFeedback` deterministically projected from those records plus the
-retained Candidate-freeze change-set digest and other explicitly retained
-project observations. A decoded changed-file list, attempted approaches, or
-eliminated directions are not required M2 inputs and cannot be inferred from old
-chat. Full old chat, hidden reasoning, KV cache, and raw tool history remain
-outside the package by default. History retention and Context injection are
-separate policies: deleting the old Thread cannot erase failure authority,
-while retaining it cannot silently make the transcript authoritative. Missing,
+retained Candidate-freeze change-set digest and Goal preservation constraints.
+That list is the closed bounded-M2 source set: decoded changed-file lists,
+attempted approaches, eliminated directions, unrelated project observations,
+and model summaries are not selected and cannot be inferred from old chat.
+Full old chat, hidden reasoning, KV cache, and raw tool history remain outside
+the package by default. History retention and Context injection are separate
+policies: deleting the old Thread cannot erase failure authority, while
+retaining it cannot silently make the transcript authoritative. Missing,
 stale, or mismatched repair inputs block dispatch.
 
 ### Candidate Manager
@@ -553,6 +554,10 @@ as supplementary work and does not claim general test-suite completeness.
 closes the bounded composition with one Workflow-scoped plan, a deterministic
 exact-read lease, Darwin isolation profile version 2, and a decisive Evidence
 Set that excludes supplementary families.
+[ADR 0033](docs/adr/0033-align-protected-verification-with-start-and-check-lifecycle.md)
+aligns that plan with the first `StartGoal` atomic transaction and makes the
+lease a static Check-configuration value; the later request and Evidence bind
+Attempt and Obligation causality separately.
 
 ## Authority and Storage Topology
 

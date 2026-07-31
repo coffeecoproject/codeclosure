@@ -1,7 +1,7 @@
 # M2 Codex Vertical Slice Implementation Plan
 
 - Status: In progress; Slices 0 through 5 are implemented and Slice 6 has not started
-- Plan date: 2026-07-30; authority boundary updated 2026-07-31
+- Plan date: 2026-07-30; authority boundary updated 2026-08-01
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
 - Regression baseline: completed M1 deterministic control plane
@@ -157,6 +157,9 @@ contract or the historical Slice 4 and 5 claims.
 closes the bounded single-plan, deterministic asset-lease,
 isolation-profile-version, and Evidence-family decisions without reinterpreting
 those completed slices.
+[ADR 0033](../adr/0033-align-protected-verification-with-start-and-check-lifecycle.md)
+aligns the protected Plan with the first `StartGoal` transaction and the lease
+with the existing Check-before-Attempt lifecycle without changing Slice 5.
 
 If M2 needs to change a durable decision in those records, implementation must
 stop and a superseding or additional ADR must be accepted first.
@@ -576,16 +579,18 @@ The conservative M2 Thread rules are:
 - `ResumeGoal` creates a fresh Attempt and dispatch claim; the default recovery
   profile uses a fresh Thread;
 - a repair generation also uses a fresh Thread by default and receives the
-  exact current `REJECT_REPAIRABLE` decision, Acceptance Input Manifest,
-  failing Evidence, parent/child Candidate identities, preservation
-  constraints, and bounded `priorAttemptFeedback` through current compiled
-  Context;
+  exact current `AcceptanceRepairRecord`, `REJECT_REPAIRABLE` decision,
+  Acceptance Input Manifest, failing Evidence, parent/child Candidate
+  identities, preservation constraints, and bounded `priorAttemptFeedback`
+  through current compiled Context;
 - required M2 `priorAttemptFeedback` is fixed-schema, source-bound,
   non-authoritative, and deterministically projected from those exact records
-  plus the retained Candidate-freeze change-set digest and other explicitly
-  retained project observations; a decoded changed-file list, attempted
-  approaches, eliminated directions, and free-form Worker summaries are omitted
-  unless a separately defined durable non-authoritative record exists;
+  plus the retained Candidate-freeze change-set digest and current Goal
+  preservation constraints; this is the closed bounded-M2 source set;
+- decoded changed-file lists, attempted approaches, eliminated directions,
+  unrelated project observations, and free-form Worker summaries are omitted
+  from bounded M2 even when retained elsewhere; selecting them requires a later
+  versioned profile and durable source contract;
 - `priorAttemptFeedback` cannot override Goal, Evidence, Policy, Runtime
   Decisions, or repair-preservation constraints;
 - retaining an old Thread or transcript for diagnostics is separate from
@@ -707,11 +712,14 @@ discriminator with real process evidence.
 
 [ADR 0031](../adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md)
 adds the separate verification-standard boundary. Trusted composition must
-persist an immutable acceptance-critical Verification Plan before the first
-Worker Turn. The plan fixes the required Criterion and Policy mapping, Check
-semantics, and every protected test, Oracle, script, fixture, input, and
-expected-output identity. Each frozen generation receives a concrete Check and
-Evidence binding derived from that plan.
+provide immutable Policy/Profile inputs from which Runtime derives an
+acceptance-critical Verification Plan. For the bounded protected profile, the
+first successful `StartGoal` transaction persists that Plan with the immutable
+bindings, first Context Manifest and Attempt, resulting Workflow/Goal, audits,
+and processed command outcome. The plan fixes the required Criterion and Policy
+mapping, Check semantics, and every protected test, Oracle, script, fixture,
+input, and expected-output identity. Each frozen generation receives a
+concrete Check and Evidence binding derived from that plan.
 
 [ADR 0032](../adr/0032-close-bounded-m2-protected-verification-composition.md)
 fixes exactly one such plan for the bounded Workflow and one protected semantic
@@ -719,6 +727,12 @@ Check family. It defines a deterministic full `ProtectedAssetReadLease` value,
 requires Darwin isolation profile version 2 for exact protected-asset reads,
 and keeps supplementary Worker-test Evidence outside the decisive one-family
 Evidence Set.
+
+[ADR 0033](../adr/0033-align-protected-verification-with-start-and-check-lifecycle.md)
+makes that lease a static value constructed with the concrete Check while
+`EVIDENCE_BUILD` is idle, before its Attempt exists. Workflow version, Attempt,
+and Obligation are therefore not lease fields; the later verification request
+and Evidence bind and cross-check those invocation identities separately.
 
 Protected assets must be outside Worker-writable Candidate roots or bound to
 their exact pre-Worker content and revalidated before execution. Mutation,
@@ -1139,14 +1153,16 @@ Work:
 - create a fresh Worker Session and Codex Thread for a repair generation by
   default;
 - extend the Context Compiler, Package, Manifest, Runtime, and Store so the
-  repair dispatch binds the exact current `REJECT_REPAIRABLE` decision,
-  Acceptance Input Manifest, failing Evidence, parent/child Candidate
-  identities, preservation constraints, retained Candidate-freeze change-set
-  digest, and bounded source-labelled `priorAttemptFeedback` deterministically
-  projected from those retained sources;
+  repair dispatch binds the exact current `AcceptanceRepairRecord`,
+  `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, manifest-selected
+  failing Evidence, parent/child Candidate identities, preservation
+  constraints, retained Candidate-freeze change-set digest, and bounded
+  source-labelled `priorAttemptFeedback` deterministically projected from only
+  those retained sources;
 - omit decoded changed-file lists, attempted approaches, eliminated directions,
-  and free-form Worker summaries from the required M2 repair Context unless a
-  separately defined durable non-authoritative source record exists;
+  unrelated project observations, and free-form Worker summaries from the
+  bounded M2 repair Context; a later versioned profile and durable source
+  contract are required before selecting them;
 - separate old-Thread history retention from Context injection and exclude the
   full old chat, hidden reasoning, KV cache, and raw tool transcript by
   default;
@@ -1198,7 +1214,8 @@ Work:
   Plan, protected-asset identity, generation-specific Check/Evidence binding,
   and fail-closed mutation handling together with ADR 0032's exactly-one-plan,
   deterministic full asset-lease, isolation-profile-version-2, and decisive
-  Evidence-family boundaries;
+  Evidence-family boundaries, aligned by ADR 0033 with first-Start atomicity
+  and static Check-before-Attempt lease construction;
 - expose a bounded profile/demo selection without changing direct Goal
   creation;
 - add subprocess coverage for usage, status, governed rejection, repair,
