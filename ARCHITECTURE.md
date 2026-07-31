@@ -16,9 +16,11 @@ reads. All eight named proof scenarios run in isolated temporary authority
 homes and assert exact terminal, audit, and reopen state. The
 [M1 completion review](docs/reviews/m1-completion-review.md) records the exact
 source identity, environment, quality stages, migration/schema inspection,
-dependency graph, and invariant coverage. Real candidate isolation and real
-project verification remain M2 work. Components marked for later milestones
-are architectural boundaries, not current implementation claims.
+dependency graph, and invariant coverage. Bounded controlled-copy Candidate
+isolation is now implemented in M2 Slice 3; real project verification and
+trusted production composition remain later M2 work. Components marked for
+later milestones are architectural boundaries, not current implementation
+claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
 [independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
@@ -37,9 +39,19 @@ most one existing closed-schema Worker event. Its bounded observations retain
 only identities, counts, and typed disposition, not transcript or private
 reasoning content. The
 [Slice 2 review](docs/reviews/m2-slice2-codex-worker-adapter.md) records the
-offline evidence and limitations. Real Candidate creation, Runtime/Store
-external-execution persistence, real verification, trusted composition, and a
-live Goal-bound execution remain later M2 work; Slice 3 has not started.
+offline evidence and limitations. Slice 3 is implemented: the separate local
+workspace adapter creates bounded controlled copies from exact Git source
+projections, issues Runtime-contract workspace leases, freezes every retained
+regular file while rejecting unrepresented empty directories, creates repairs
+only from exact frozen parents, and performs fail-closed restart classification
+against monotonically admitted exact Runtime authority snapshots. Cleanup
+requires a current adapter-issued one-time grant rather than a caller-selected
+path. Its ownership markers remain outside worker-writable Candidate roots, and
+it imports only public Runtime contracts. The
+[Slice 3 review](docs/reviews/m2-slice3-candidate-workspace.md) records the
+focused evidence and limitations. Runtime/Store composition, external-execution
+persistence, real verification, and a live Goal-bound execution remain later
+M2 work.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -405,11 +417,14 @@ invalidates dependent evidence.
 The worker never edits the authoritative control store and should not edit the
 user's source checkout directly in the governed path.
 
-The current M1 adapter is logical and deterministic: it proves generation,
-freeze, and invalidation authority but does not create a filesystem-isolated
-workspace or edit a real project. ADR 0029 selects a Runtime-managed controlled
-copy, exact source/Git projections, and a protocol-neutral workspace lease for
-M2; implementation remains Slice 3 work.
+The M1 adapter remains logical and deterministic. The M2 Slice 3
+`@codeclosure/workspace-local` adapter now implements ADR 0029's bounded
+controlled copy, exact source-tree and Git-metadata projections,
+protocol-neutral mutable/read-only lease contract, immutable freeze, exact
+parent-based repair, exact-authority restart classification, and one-time
+owned-leaf cleanup grants. It does not mutate Domain, Workflow, Store, Evidence,
+or Acceptance authority and is not yet composed into the production Runtime/CLI
+path; that integration remains later M2 work.
 
 ### Evidence Store
 
@@ -700,8 +715,7 @@ packages/store-sqlite
 packages/testing
 ```
 
-ADR 0028 fixes the planned M2 adapter splits while leaving them unimplemented in
-Slice 0:
+ADR 0028 fixes the M2 adapter splits:
 
 ```text
 packages/codex-app-server-client
@@ -709,6 +723,10 @@ packages/adapter-codex
 packages/workspace-local
 packages/verification-local
 ```
+
+The App Server client, Codex Worker Adapter, and local Candidate workspace
+packages are implemented through Slice 3. The local Verification package
+remains planned for Slice 4.
 
 M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside
 `domain` and `runtime`. Slice 6 implements that control without introducing a

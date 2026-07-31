@@ -119,9 +119,10 @@ promotion consent, or a release claim.
 ## M2 — Codex Vertical Slice
 
 Status: In progress. Slice 0 authority/protocol decision closure, Slice 1
-version-bound App Server client, and Slice 2 Goal-bound Worker Adapter are
-implemented. They do not yet constitute a trusted live Goal-bound production
-path; real Candidate creation begins in Slice 3. The detailed work
+version-bound App Server client, Slice 2 Goal-bound Worker Adapter, and Slice 3
+controlled-copy Candidate workspace are implemented. They do not yet
+constitute a trusted live Goal-bound production path; real verification begins
+in Slice 4. The detailed work
 sequence and status are in the [M2 implementation
 plan](plans/m2-codex-vertical-slice.md), and the independent exit procedure is
 in the [M2 acceptance plan](plans/m2-acceptance-plan.md).

@@ -71,7 +71,7 @@ packages:
 
 void test('the current manifest, lockfile, and actual source dependency graph are closed', () => {
   const audit = auditPackageDependencies(repositoryRoot);
-  assert.equal(audit.packageCount, 7);
+  assert.equal(audit.packageCount, 8);
   assert.deepEqual(audit.violations, []);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/adapter-codex'), [
     '@codeclosure/codex-app-server-client',
@@ -82,6 +82,9 @@ void test('the current manifest, lockfile, and actual source dependency graph ar
   assert.deepEqual(audit.productionGraph.get('@codeclosure/runtime'), [
     '@codeclosure/domain',
     'zod',
+  ]);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/workspace-local'), [
+    '@codeclosure/runtime',
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/store-sqlite'), [
     '@codeclosure/domain',
@@ -148,6 +151,36 @@ void test('the Codex adapter reverse fixture cannot import authority owners or p
           specifier.startsWith('@codeclosure/runtime/') ||
           specifier.startsWith('@codeclosure/codex-app-server-client/'),
       ),
+      false,
+    );
+  }
+});
+
+void test('the local workspace adapter depends only on public Runtime Candidate contracts', () => {
+  const packageRoot = resolve(repositoryRoot, 'packages/workspace-local');
+  const sourcePaths = [
+    resolve(packageRoot, 'src/contracts.ts'),
+    resolve(packageRoot, 'src/git-source.ts'),
+    resolve(packageRoot, 'src/index.ts'),
+    resolve(packageRoot, 'src/local-candidate-workspace.ts'),
+    resolve(packageRoot, 'src/manifests.ts'),
+    resolve(packageRoot, 'src/records.ts'),
+  ];
+  const available = new Set(['@codeclosure/runtime', '@codeclosure/workspace-local']);
+  for (const sourcePath of sourcePaths) {
+    for (const forbidden of [
+      '@codeclosure/adapter-codex',
+      '@codeclosure/cli',
+      '@codeclosure/codex-app-server-client',
+      '@codeclosure/domain',
+      '@codeclosure/store-sqlite',
+      '@codeclosure/testing',
+    ]) {
+      assert.notEqual(importViolation(forbidden, sourcePath, packageRoot, available), undefined);
+    }
+    const specifiers = collectModuleSpecifiers(readFileSync(sourcePath, 'utf8'), sourcePath);
+    assert.equal(
+      specifiers.some((specifier) => specifier.startsWith('@codeclosure/runtime/')),
       false,
     );
   }

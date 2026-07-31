@@ -27,9 +27,14 @@ the Slice 2 Goal-bound Adapter now maps one exact `IMPLEMENT` Context and
 strictly decoded terminal payload into the existing Worker event contract. It
 does not mutate Workflow state, persist external execution, create or freeze a
 Candidate, or issue Acceptance; ordinary M1 dispatch and event admission remain
-the only path into Workflow authority. Trusted Runtime/Store composition is
-later M2 work. Goal Intake is an accepted pre-Goal target for M2.5; it is not
-implemented and does not add another Workflow phase.
+the only path into Workflow authority. Slice 3 now implements a separate local
+workspace adapter and public Runtime lease contract for bounded controlled
+copy, freeze, exact-parent repair, restart classification against a monotonically
+admitted canonical authority snapshot, and one-time-grant cleanup. That adapter
+owns filesystem mechanics only: it does not mutate Workflow or Store state, and
+trusted Runtime/Store composition remains later M2 work. Goal Intake is an
+accepted pre-Goal target for M2.5; it is not implemented and does not add
+another Workflow phase.
 
 ## Purpose
 

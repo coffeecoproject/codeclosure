@@ -10,3 +10,4 @@ runtime evidence.
 - [M2 Slice 0 decision-closure review](m2-slice0-decision-closure.md)
 - [M2 Slice 1 App Server client review](m2-slice1-app-server-client.md)
 - [M2 Slice 2 Codex Worker Adapter review](m2-slice2-codex-worker-adapter.md)
+- [M2 Slice 3 Candidate workspace review](m2-slice3-candidate-workspace.md)

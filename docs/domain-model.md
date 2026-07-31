@@ -21,9 +21,15 @@ integration. Its Goal-bound Adapter is implemented outside the Domain: it consum
 the public `WorkerRequest`, an immutable protocol-neutral external-execution
 directive, and an already-resolved full Candidate workspace-lease projection;
 it returns bounded observations and at most one existing `WorkerEvent`. The
-planned `ExternalExecutionRecord`, Execution Profile schema version 2,
-Candidate lease authority, and their Store codecs/migrations remain
-unimplemented Domain work for later M2 slices.
+Slice 3 public Runtime contract and local workspace adapter now produce and
+revalidate that protocol-neutral lease while implementing controlled copy,
+freeze, repair, and filesystem reconciliation outside the Domain. Its
+monotonically admitted Runtime-owned reconciliation snapshot binds exact
+persisted Candidate and Workflow authority; only orphan classifications receive
+a current one-time cleanup grant. The planned `ExternalExecutionRecord`,
+Execution Profile schema version 2, persisted Candidate lease authority, and
+their Store codecs/migrations remain unimplemented Domain work for later M2
+slices.
 
 ## Design Rules
 
@@ -1304,7 +1310,7 @@ describes.
 | Fact | user, project, runner, worker | Fact policy | Fact Store service |
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
-| Candidate workspace lease — planned M2 | trusted workspace composition over persisted Candidate authority | Workflow Runtime, Candidate Manager, and containment policy | Runtime-coordinated workspace adapter; immutable lease versions |
+| Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — planned M2 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |
 | Evidence eligibility | integrity observation / runtime command | Evidence policy | Evidence Store through an audited monotonic transition |

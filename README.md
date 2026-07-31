@@ -16,9 +16,11 @@ complete. M2 is the current implementation milestone. Its pre-implementation
 decision closure has passed against the selected local Codex version. The
 version-bound lower App Server client is implemented and has passed its bounded
 offline and live compatibility review. The Goal-bound Codex Worker Adapter is
-implemented and has passed its bounded offline contract review; real Candidate
-creation, trusted Runtime composition, and the live Goal-bound path remain
-later M2 work. The
+implemented and has passed its bounded offline contract review. The controlled-copy
+Candidate workspace adapter is also implemented and has passed its bounded
+containment, freeze, repair, drift, restart, and cleanup review. Real
+verification, trusted Runtime/Store composition, and the live Goal-bound path
+remain later M2 work. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.

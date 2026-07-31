@@ -4,10 +4,16 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { JsonValue } from '@codeclosure/codex-app-server-client';
-import { canonicalizeJson, decodeWorkerRequest, type WorkerRequest } from '@codeclosure/runtime';
+import {
+  candidateWorkspaceAllowedPathProjection,
+  candidateWorkspaceLeaseProjection as runtimeCandidateWorkspaceLeaseProjection,
+  canonicalizeJson,
+  decodeCandidateWorkspaceLease as decodeRuntimeCandidateWorkspaceLease,
+  decodeWorkerRequest,
+  type WorkerRequest,
+} from '@codeclosure/runtime';
 
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
-const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const portableRelativePathPattern = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\\).+$/u;
 
 export const CODEX_WORKER_ADAPTER_VERSION = 'm2-slice2-v1';
@@ -213,14 +219,6 @@ function positiveInteger(value: unknown, field: string): number {
   return Number(value);
 }
 
-function isoTimestamp(value: unknown, field: string): string {
-  const result = nonBlankString(value, field, 24);
-  if (!isoTimestampPattern.test(result) || new Date(result).toISOString() !== result) {
-    throw new TypeError(`${field} must be a fixed-precision UTC timestamp`);
-  }
-  return result;
-}
-
 function exactLiteral<T extends string | number | boolean>(
   value: unknown,
   expected: T,
@@ -338,55 +336,32 @@ function decodeRequestBinding(value: unknown): CodexWorkerRequestBinding {
 }
 
 function decodeWorkspaceLease(value: unknown): CandidateWorkspaceLease {
-  const input = object(value, 'directive.workspaceLease');
-  exactKeys(
-    input,
-    [
-      'accessMode',
-      'allowedPathPolicyDigest',
-      'allowedPaths',
-      'candidateId',
-      'candidateDigest',
-      'candidateGenerationId',
-      'candidateGenerationVersion',
-      'forbiddenRoots',
-      'generationSequence',
-      'goalId',
-      'goalRevision',
-      'id',
-      'issuedAt',
-      'leaseDigest',
-      'lifecyclePolicy',
-      'parentGenerationId',
-      'reservedPathPolicy',
-      'retentionPolicy',
-      'root',
-      'schemaVersion',
-      'sourceGitMetadataDigest',
-      'sourceProjectRoot',
-      'sourceTreeDigest',
-      'state',
-      'version',
-      'workspaceRootIdentity',
-      'workflowId',
-      'workflowVersion',
-    ],
-    'directive.workspaceLease',
-  );
-  const root = absoluteRealDirectory(input['root'], 'workspaceLease.root');
+  const decoded = decodeRuntimeCandidateWorkspaceLease(value);
+  if (decoded.accessMode !== 'MUTABLE' || decoded.lifecyclePolicy !== 'REVOKE_ON_FREEZE') {
+    throw new TypeError('Codex IMPLEMENT requires one mutable revoke-on-freeze lease');
+  }
+  const root = absoluteRealDirectory(decoded.root, 'workspaceLease.root');
   const sourceProjectRoot = absoluteRealDirectory(
-    input['sourceProjectRoot'],
+    decoded.sourceProjectRoot,
     'workspaceLease.sourceProjectRoot',
   );
   const workspaceRootIdentity = absoluteRealDirectory(
-    input['workspaceRootIdentity'],
+    decoded.workspaceRootIdentity,
     'workspaceLease.workspaceRootIdentity',
   );
   const forbiddenRoots = sortedUniqueStrings(
-    input['forbiddenRoots'],
+    decoded.forbiddenRoots,
     'workspaceLease.forbiddenRoots',
     absoluteRealDirectory,
   );
+  if (
+    root !== decoded.root ||
+    sourceProjectRoot !== decoded.sourceProjectRoot ||
+    workspaceRootIdentity !== decoded.workspaceRootIdentity ||
+    JSON.stringify(forbiddenRoots) !== JSON.stringify(decoded.forbiddenRoots)
+  ) {
+    throw new TypeError('workspaceLease paths must already use exact real identities');
+  }
   if (!forbiddenRoots.includes(sourceProjectRoot)) {
     throw new TypeError('workspaceLease forbidden roots must contain the source project');
   }
@@ -404,7 +379,7 @@ function decodeWorkspaceLease(value: unknown): CandidateWorkspaceLease {
     throw new TypeError('workspaceLease root must be below its owned workspace root');
   }
   const allowedPaths = sortedUniqueStrings(
-    input['allowedPaths'],
+    decoded.allowedPaths,
     'workspaceLease.allowedPaths',
     portableRelativePath,
   );
@@ -416,74 +391,19 @@ function decodeWorkspaceLease(value: unknown): CandidateWorkspaceLease {
   ) {
     throw new TypeError('workspaceLease allowed paths are empty or reserved');
   }
-  const reservedPathPolicy = exactLiteral(
-    input['reservedPathPolicy'],
-    'M2_CONTROLLED_COPY_V1',
-    'workspaceLease.reservedPathPolicy',
-  );
-  const parentGenerationId = input['parentGenerationId'];
-  if (parentGenerationId !== null && typeof parentGenerationId !== 'string') {
-    throw new TypeError('workspaceLease.parentGenerationId must be string or null');
-  }
   const lease = Object.freeze({
-    accessMode: exactLiteral(input['accessMode'], 'MUTABLE', 'workspaceLease.accessMode'),
-    allowedPathPolicyDigest: digest(
-      input['allowedPathPolicyDigest'],
-      'workspaceLease.allowedPathPolicyDigest',
-    ),
+    ...decoded,
+    accessMode: 'MUTABLE' as const,
     allowedPaths,
-    candidateId: nonBlankString(input['candidateId'], 'workspaceLease.candidateId'),
-    candidateDigest: digest(input['candidateDigest'], 'workspaceLease.candidateDigest'),
-    candidateGenerationId: nonBlankString(
-      input['candidateGenerationId'],
-      'workspaceLease.candidateGenerationId',
-    ),
-    candidateGenerationVersion: positiveInteger(
-      input['candidateGenerationVersion'],
-      'workspaceLease.candidateGenerationVersion',
-    ),
     forbiddenRoots,
-    generationSequence: positiveInteger(
-      input['generationSequence'],
-      'workspaceLease.generationSequence',
-    ),
-    goalId: nonBlankString(input['goalId'], 'workspaceLease.goalId'),
-    goalRevision: positiveInteger(input['goalRevision'], 'workspaceLease.goalRevision'),
-    id: nonBlankString(input['id'], 'workspaceLease.id'),
-    issuedAt: isoTimestamp(input['issuedAt'], 'workspaceLease.issuedAt'),
-    leaseDigest: digest(input['leaseDigest'], 'workspaceLease.leaseDigest'),
-    lifecyclePolicy: exactLiteral(
-      input['lifecyclePolicy'],
-      'REVOKE_ON_FREEZE',
-      'workspaceLease.lifecyclePolicy',
-    ),
-    parentGenerationId:
-      parentGenerationId === null
-        ? null
-        : nonBlankString(parentGenerationId, 'workspaceLease.parentGenerationId'),
-    reservedPathPolicy,
-    retentionPolicy: exactLiteral(
-      input['retentionPolicy'],
-      'RUNTIME_OWNED',
-      'workspaceLease.retentionPolicy',
-    ),
+    lifecyclePolicy: 'REVOKE_ON_FREEZE' as const,
     root,
-    schemaVersion: exactLiteral(input['schemaVersion'], 1, 'workspaceLease.schemaVersion'),
-    sourceGitMetadataDigest: digest(
-      input['sourceGitMetadataDigest'],
-      'workspaceLease.sourceGitMetadataDigest',
-    ),
     sourceProjectRoot,
-    sourceTreeDigest: digest(input['sourceTreeDigest'], 'workspaceLease.sourceTreeDigest'),
-    state: exactLiteral(input['state'], 'ACTIVE', 'workspaceLease.state'),
-    version: positiveInteger(input['version'], 'workspaceLease.version'),
     workspaceRootIdentity,
-    workflowId: nonBlankString(input['workflowId'], 'workspaceLease.workflowId'),
-    workflowVersion: positiveInteger(input['workflowVersion'], 'workspaceLease.workflowVersion'),
   });
   if (
     lease.allowedPathPolicyDigest !==
-    digestCanonical({ allowedPaths: lease.allowedPaths, reservedPathPolicy })
+    digestCanonical(candidateWorkspaceAllowedPathProjection(lease.allowedPaths))
   ) {
     throw new TypeError('Candidate allowed-path policy digest is inconsistent');
   }
@@ -718,35 +638,7 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
 export function candidateWorkspaceLeaseProjection(
   lease: Omit<CandidateWorkspaceLease, 'leaseDigest'>,
 ): unknown {
-  return {
-    accessMode: lease.accessMode,
-    allowedPathPolicyDigest: lease.allowedPathPolicyDigest,
-    allowedPaths: lease.allowedPaths,
-    candidateId: lease.candidateId,
-    candidateDigest: lease.candidateDigest,
-    candidateGenerationId: lease.candidateGenerationId,
-    candidateGenerationVersion: lease.candidateGenerationVersion,
-    forbiddenRoots: lease.forbiddenRoots,
-    generationSequence: lease.generationSequence,
-    goalId: lease.goalId,
-    goalRevision: lease.goalRevision,
-    id: lease.id,
-    issuedAt: lease.issuedAt,
-    lifecyclePolicy: lease.lifecyclePolicy,
-    parentGenerationId: lease.parentGenerationId,
-    reservedPathPolicy: lease.reservedPathPolicy,
-    retentionPolicy: lease.retentionPolicy,
-    root: lease.root,
-    schemaVersion: lease.schemaVersion,
-    sourceGitMetadataDigest: lease.sourceGitMetadataDigest,
-    sourceProjectRoot: lease.sourceProjectRoot,
-    sourceTreeDigest: lease.sourceTreeDigest,
-    state: lease.state,
-    version: lease.version,
-    workspaceRootIdentity: lease.workspaceRootIdentity,
-    workflowId: lease.workflowId,
-    workflowVersion: lease.workflowVersion,
-  };
+  return runtimeCandidateWorkspaceLeaseProjection(lease);
 }
 
 export function codexExternalExecutionIntentProjection(

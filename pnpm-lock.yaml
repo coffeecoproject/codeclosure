@@ -119,6 +119,16 @@ importers:
         specifier: 4.9.0
         version: 4.9.0
 
+  packages/workspace-local:
+    dependencies:
+      '@codeclosure/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+    devDependencies:
+      '@codeclosure/domain':
+        specifier: workspace:*
+        version: link:../domain
+
 packages:
 
   '@eslint-community/eslint-utils@4.10.1':

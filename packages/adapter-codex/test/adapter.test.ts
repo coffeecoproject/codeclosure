@@ -560,7 +560,7 @@ void test('[I-027] stale lease state and launch/intent drift are rejected at com
         ...harness.directive,
         workspaceLease: { ...harness.directive.workspaceLease, state: 'REVOKED' },
       }),
-    /workspaceLease\.state/u,
+    /state/u,
   );
   assert.throws(
     () =>

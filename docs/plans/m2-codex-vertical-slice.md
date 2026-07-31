@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 through 2 are implemented and Slice 3 has not started
+- Status: In progress; Slices 0 through 3 are implemented and Slice 4 has not started
 - Plan date: 2026-07-30
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -63,7 +63,7 @@ From the user's point of view, M2 should behave plainly:
 | 0 | authority and protocol decision closure | Implemented | [Slice 0 decision-closure review](../reviews/m2-slice0-decision-closure.md), accepted ADRs, focused probes |
 | 1 | version-bound App Server client | Implemented | [Slice 1 App Server client review](../reviews/m2-slice1-app-server-client.md), pinned snapshot, offline fixtures, and bounded live preflight |
 | 2 | Goal-bound Codex Worker Adapter | Implemented | [Slice 2 review](../reviews/m2-slice2-codex-worker-adapter.md), adapter contract and phase-mapping tests |
-| 3 | real isolated Candidate workspace | Not started | containment, freeze, drift, and recovery tests |
+| 3 | real isolated Candidate workspace | Implemented | [Slice 3 review](../reviews/m2-slice3-candidate-workspace.md), controlled-copy, lease, freeze, repair, drift, restart, and cleanup tests |
 | 4 | real Verification Runner | Not started | runner, Evidence, mutation, and limit tests |
 | 5 | reject, repair, and accept orchestration | Not started | Runtime integration and adversarial tests |
 | 6 | Thread, Compact, interruption, and restart policy | Not started | recovery and protocol-lifecycle tests |
@@ -841,7 +841,8 @@ Current execution record on 2026-07-31:
 - the 41-case lower-client suite and the complete M1 regression baseline remain
   green; and
 - the [Slice 2 review](../reviews/m2-slice2-codex-worker-adapter.md) records a
-  `PASS`. Slice 2 is implemented and Slice 3 may begin, but has not started.
+  `PASS`. Slice 2 is implemented and supplied the lease-consumer entry boundary
+  used by Slice 3.
 
 ### Slice 3 — Real isolated Candidate workspace
 
@@ -866,6 +867,32 @@ Exit proof:
 - frozen generations never regain mutable authority;
 - repair creates a new generation and leaves its parent byte-identical; and
 - cleanup touches only exact Runtime-owned paths and fails closed on ambiguity.
+
+Current execution record on 2026-07-31:
+
+- `@codeclosure/workspace-local` depends only on public Runtime Candidate and
+  lease contracts; production import audits reject Domain, Store, testing,
+  Codex, CLI, and Runtime-internal access;
+- the adapter copies exact tracked plus non-ignored untracked current bytes from
+  one bounded Git checkout, persists separate source-tree and Git-metadata
+  projections outside the Candidate, and rejects links, gitlinks, nested Git
+  control, special entries, non-portable paths, collisions, aliases, and bound
+  overflow;
+- mutable and read-only leases bind the exact Goal, Workflow, Candidate,
+  generation, source, workspace, path policy, lifecycle, and canonical digest;
+  mutable authority is revoked before freeze and cannot be reissued for a
+  frozen generation;
+- freeze scans twice around physical write removal, detects concurrent and
+  post-freeze drift, rejects unrepresented empty directories, revalidates
+  read-only state, and repair copies only an exact frozen parent into a new leaf
+  while leaving the parent byte-identical;
+- external ownership records, atomic file/namespace persistence, monotonically
+  admitted exact Runtime-authority snapshots, restart lifecycle/source
+  comparison, one-time cleanup grants, injected partial failures, and
+  pre-persistence lease bounds preserve ambiguous, aliased, stale, active,
+  current, retained, and user-owned paths; and
+- the [Slice 3 review](../reviews/m2-slice3-candidate-workspace.md) records a
+  `PASS`. Slice 3 is implemented and Slice 4 may begin, but has not started.
 
 ### Slice 4 — Real Verification Runner
 

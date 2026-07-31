@@ -1,6 +1,6 @@
 # M2 Milestone Acceptance Plan
 
-- Status: Prepared; Slices 0 through 2 are implemented, Slice 3 has not started,
+- Status: Prepared; Slices 0 through 3 are implemented, Slice 4 has not started,
   and milestone acceptance has not started
 - Plan date: 2026-07-30
 - Milestone: M2
@@ -278,7 +278,7 @@ the report must preserve each row's individual outcome.
 | `M2-D05` | Any frozen-source mutation before, during, or after verification is detected and invalidates affected Evidence | drift fault-injection suite |
 | `M2-D06` | Repair creates a new generation from the exact eligible parent and leaves the old frozen generation byte-identical | repair-generation suite |
 | `M2-D07` | Partial create/freeze/repair failure leaves no falsely current Candidate authority | transaction/filesystem reconciliation tests |
-| `M2-D08` | Restart classifies owned, retained, orphaned, and unsafe paths without deleting an unresolved or user-owned target | cleanup/reopen suite |
+| `M2-D08` | Restart compares an exact persisted-authority snapshot before classifying owned, retained, orphaned, and unsafe paths; cleanup requires a current one-time exact-orphan grant and never deletes an unresolved or user-owned target | cleanup/reopen suite |
 | `M2-D09` | The source fixture's declared content projection remains byte-identical, while separately recorded Git metadata changes are either absent or explicitly attributable to the acceptance harness | source-manifest and Git-metadata comparison |
 | `M2-D10` | The authority home and controlled Codex state root are inaccessible from the Worker-writable Candidate | black-box isolation proof |
 
