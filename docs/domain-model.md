@@ -31,10 +31,7 @@ revalidate that protocol-neutral lease while implementing controlled copy,
 freeze, repair, and filesystem reconciliation outside the Domain. Its
 monotonically admitted Runtime-owned reconciliation snapshot binds exact
 persisted Candidate and Workflow authority; only orphan classifications receive
-a current one-time cleanup grant. The planned `ExternalExecutionRecord`,
-Execution Profile schema version 2, persisted Candidate lease authority, and
-their Store codecs/migrations remain unimplemented Domain work for later M2
-slices. Slice 4 implements the closed schema-version-2 `LOCAL_COMMAND` Check,
+a current one-time cleanup grant. Slice 4 implements the closed schema-version-2 `LOCAL_COMMAND` Check,
 `LOCAL_COMMAND_TEST_RESULT` Evidence and environment variants, strict codecs,
 Runtime verification contracts, and immutable SQLite payload authority without
 changing the M1 version-1 digest contract. Slice 5 composes those existing
@@ -42,8 +39,12 @@ records without adding a new Domain aggregate: a complete local Check family
 may become the current Evidence/Acceptance family, exact M1 repair authority is
 retained for each new child generation, and the child receives a fresh local
 family only after its own freeze. Active verification drift is persisted as one
-Attempt/Workflow/Candidate/Evidence compound failure. External execution and
-lease/session persistence, the ADR 0031 plan plus schema-version-3
+Attempt/Workflow/Candidate/Evidence compound failure. Slice 6 implements
+Execution Profile schema version 2, external backend capability authority,
+Runtime-owned external execution and Compact-maintenance lifecycles, their
+strict codecs and SQLite migration, and repair Context Package/Manifest version
+3. External records retain the exact Candidate workspace lease identity without
+turning the lease into a second mutable Store aggregate. The ADR 0031 plan plus schema-version-3
 Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
 ADR 0033's first-Start/static-lease alignment, and their Acceptance binding
 remain later M2 work.
@@ -916,7 +917,7 @@ FakeWorker enum fields on Goal or Workflow. Context, dispatch, recovery, and
 specialized Candidate/Verification operations resolve the same binding. See
 [ADR 0021](adr/0021-m1-execution-profile-and-cli-composition.md).
 
-Execution Profile schema version 2 is planned for M2 as an additive union. It
+Execution Profile schema version 2 is implemented in M2 Slice 6 as an additive union. It
 retains the fields above and adds one non-secret `externalExecution` definition
 binding binary/protocol/schema, model/provider/effort, controlled roots,
 permission and instruction manifests, environment, managed requirements,
@@ -924,7 +925,7 @@ disabled integrations, continuity, compaction, interruption, and retention.
 M1 version-1 profiles are not upgraded or rehashed. See
 [ADR 0028](adr/0028-runtime-owned-external-execution-and-codex-profile.md).
 
-## External Execution — planned M2
+## External Execution — implemented M2 Slice 6
 
 ```text
 ExternalExecutionRecord
@@ -942,25 +943,70 @@ ExternalExecutionRecord
   workerSessionId
   dispatchClaimDigest
   contextManifestId
+  contextManifestDigest
   contextPackageDigest
   executionProfileId
   executionProfileDigest
   policyBundleId
   policyBundleDigest
   backendKind
+  binaryIdentityDigest
   binaryProtocolSchemaDigest
   executionConfigDigest
   managedRequirementsDigest
   instructionSourceManifestDigest
   controlledStateRootIdentity
+  processLaunchNonce
+  thread
+  continuityPolicy
+  compactionPolicy
+  retentionPolicy
+  fallbackPolicy
+  interruptionPolicy
   candidateWorkspaceLeaseId?
   candidateWorkspaceLeaseDigest?
+  candidateWorkspaceCwdIdentity?
+  processIdentity?
   backendSessionRef?
   backendOperationRef?
+  compactionCount
+  turnInterruptCount
+  failureCode?
+  resultEventId?
   authorizedAt
   updatedAt
   terminalAt?
+  lastObservationId?
   auditSequence
+  intentDigest
+  recordDigest
+
+ExternalExecutionObservation
+  id
+  externalExecutionId
+  intentDigest
+  expectedRecordVersion
+  state
+  processIdentity?
+  backendSessionRef?
+  backendOperationRef?
+  compactionCount
+  turnInterruptCount
+  failureCode?
+  resultEventId?
+  observedAt
+  observationDigest
+
+ExternalProcessIdentity
+  schemaVersion
+  launchNonce
+  processId
+  processGroupId
+  processGroupKind
+  processStartIdentity
+  executableIdentityDigest
+  controlledStateRootIdentity
+  identityDigest
 
 ExternalMaintenanceIntent
   id
@@ -971,6 +1017,8 @@ ExternalMaintenanceIntent
   state
   authorizedAt
   observedAt?
+  failureCode?
+  recordDigest
 
 ExternalBackendCapabilityRecord
   schemaVersion
@@ -994,6 +1042,15 @@ before spawn. Later states are `PROCESS_OBSERVED`, `SESSION_OBSERVED`,
 `OPERATION_RUNNING`, then `COMPLETED`, `INTERRUPTED`, `FAILED`, or `ABANDONED`.
 Backend completion is not a Worker result or Goal completion.
 
+Runtime issues `processLaunchNonce` before adapter invocation. The
+`PROCESS_OBSERVED` observation alone introduces the closed, digest-bound
+`ExternalProcessIdentity`; later records retain that exact identity without
+allowing an adapter to revise it. PID or process-group existence alone is not
+ownership. Restart reconciliation may terminate only the exact process whose
+start identity, executable identity, launch nonce, and controlled state root
+match retained authority. Missing, malformed, reused, or otherwise ambiguous
+identity remains a visible blocker.
+
 The immutable capability record belongs to trusted Runtime composition. An
 installed Execution Profile may select only entries classified `SUPPORTED` for
 the same exact binary, protocol schema, and configuration identity. Schema
@@ -1002,7 +1059,9 @@ requires a live Thread, Turn, tool call, Compact lifecycle, or resume.
 
 The adapter receives an immutable intent-bound directive and no Store. Exact
 duplicate observations replay their original disposition; conflicting or late
-observations fail closed. Restart reconciles the old Attempt and does not
+observations fail closed. Runtime admits process, session, operation, and
+terminal observations when they occur rather than reconstructing an apparent
+lifecycle from a final adapter summary. Restart reconciles the old Attempt and does not
 redispatch or resume it. See
 [ADR 0028](adr/0028-runtime-owned-external-execution-and-codex-profile.md).
 
@@ -1439,11 +1498,11 @@ describes.
 | Goal intent and revision | user / CLI | Goal Manager | Goal Manager through runtime transaction |
 | Goal lifecycle projection | Workflow run status | Workflow Runtime | Persistence synchronization inside the Workflow transaction |
 | Execution Profile | trusted composition definition | Runtime and Store profile validation | Runtime installer, immutable Store persistence |
-| External backend capability — planned M2 | version-bound probe and trusted composition | Runtime profile installer and exact identity validation | Runtime installer, immutable Store persistence |
+| External backend capability — implemented M2 Slice 6 | version-bound probe and trusted composition | Runtime profile installer and exact identity validation | Runtime installer, immutable Store persistence |
 | Workflow Policy binding | selected installed Policy | Workflow Runtime and Store | First `StartGoal` compound transaction |
 | Workflow Execution Profile binding | selected installed profile | Workflow Runtime and Store | First `StartGoal` compound transaction |
-| External Execution — planned M2 | Runtime-authorized dispatch plus bounded backend observations | Workflow Runtime and Store external-execution backstops | Workflow Runtime through audited versioned transactions |
-| External maintenance — planned M2 | Runtime policy over one admitted backend session | Workflow Runtime and Store maintenance backstops | Workflow Runtime; never the Worker adapter |
+| External Execution — implemented M2 Slice 6 | Runtime-authorized dispatch plus bounded backend observations | Workflow Runtime and Store external-execution backstops | Workflow Runtime through audited versioned transactions |
+| External maintenance — implemented M2 Slice 6 | Runtime policy over one admitted backend session | Workflow Runtime and Store maintenance backstops | Workflow Runtime; never the Worker adapter |
 | Recovery reconciliation | Runtime inspection of external reality | Recovery policy and Store | Workflow Runtime compound transaction, immutable record |
 | Fact | user, project, runner, worker | Fact policy | Fact Store service |
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |

@@ -26,10 +26,13 @@ import {
   type ContextManifestId,
   type ExecutionProfileId,
   type ContextOmissionDecision,
+  type ContextPackage,
   type ContextPackageEntry,
   type Goal,
   type IsoTimestamp,
   type PolicyBundleId,
+  type PriorAttemptFeedback,
+  type RepairContext,
   type Sha256Digest,
   type WorkerResponseContract,
   type WorkflowInstance,
@@ -58,6 +61,10 @@ export interface CompileContextInput {
   readonly selectedEntries?: readonly ContextSourceInput[];
   readonly omissionDecisions?: readonly ContextOmissionDecision[];
   readonly candidate?: ContextCandidateBinding;
+  readonly repair?: {
+    readonly repairContext: RepairContext;
+    readonly priorAttemptFeedback: PriorAttemptFeedback;
+  };
 }
 
 export interface MinimalContextCompilerOptions {
@@ -227,9 +234,121 @@ export function deriveContextManifestEntries(
             }),
           }),
         ]),
+    ...(contextPackage.repairContext === undefined ||
+    contextPackage.priorAttemptFeedback === undefined
+      ? []
+      : repairManifestEntries(
+          contextPackage.repairContext,
+          contextPackage.priorAttemptFeedback,
+          contextPackage.goalId,
+          contextPackage.goalRevision,
+          digests,
+        )),
   ];
   entries.sort((left, right) => compareKey(entryKey(left), entryKey(right)));
   return Object.freeze(entries);
+}
+
+function repairManifestEntries(
+  repair: RepairContext,
+  feedback: PriorAttemptFeedback,
+  goalIdentifier: ContextPackage['goalId'],
+  goalRevisionNumber: ContextPackage['goalRevision'],
+  digests: DigestProvider,
+): readonly ContextManifestEntry[] {
+  const digest = (value: unknown): Sha256Digest => sha256Digest(digests.digest(value));
+  return [
+    Object.freeze({
+      kind: ContextEntryKind.ACCEPTANCE_REPAIR,
+      sourceRef: `acceptance-repair:${repair.acceptanceRepairDigest}`,
+      sourceRevision: '1',
+      sourceDigest: repair.acceptanceRepairDigest,
+      authorityClass: ContextAuthorityClass.RUNTIME_DECISION,
+      renderedDigest: digest(repair),
+    }),
+    Object.freeze({
+      kind: ContextEntryKind.ACCEPTANCE_DECISION,
+      sourceRef: repair.acceptanceDecisionId,
+      sourceRevision: '1',
+      sourceDigest: repair.acceptanceDecisionDigest,
+      authorityClass: ContextAuthorityClass.RUNTIME_DECISION,
+      renderedDigest: digest({
+        acceptanceDecisionId: repair.acceptanceDecisionId,
+        acceptanceDecisionDigest: repair.acceptanceDecisionDigest,
+      }),
+    }),
+    Object.freeze({
+      kind: ContextEntryKind.ACCEPTANCE_INPUT_MANIFEST,
+      sourceRef: `acceptance-input:${repair.inputManifestDigest}`,
+      sourceRevision: '1',
+      sourceDigest: repair.inputManifestDigest,
+      authorityClass: ContextAuthorityClass.RUNTIME_DECISION,
+      renderedDigest: digest({ inputManifestDigest: repair.inputManifestDigest }),
+    }),
+    Object.freeze({
+      kind: ContextEntryKind.EVIDENCE_SET,
+      sourceRef: `evidence-set:${repair.evidenceSetDigest}`,
+      sourceRevision: '1',
+      sourceDigest: repair.evidenceSetDigest,
+      authorityClass: ContextAuthorityClass.EVIDENCE_AUTHORITY,
+      renderedDigest: digest({ evidenceSetDigest: repair.evidenceSetDigest }),
+    }),
+    ...repair.failedEvidence.flatMap((evidence) => [
+      Object.freeze({
+        kind: ContextEntryKind.EVIDENCE,
+        sourceRef: evidence.evidenceId,
+        sourceRevision: '1',
+        sourceDigest: evidence.evidenceRecordDigest,
+        authorityClass: ContextAuthorityClass.EVIDENCE_AUTHORITY,
+        renderedDigest: digest(evidence),
+      }),
+      Object.freeze({
+        kind: ContextEntryKind.EVIDENCE_ELIGIBILITY,
+        sourceRef: evidence.evidenceId,
+        sourceRevision: String(evidence.evidenceEligibilityVersion),
+        authorityClass: ContextAuthorityClass.EVIDENCE_AUTHORITY,
+        renderedDigest: digest({
+          evidenceId: evidence.evidenceId,
+          version: evidence.evidenceEligibilityVersion,
+          state: evidence.evidenceEligibilityState,
+        }),
+      }),
+    ]),
+    Object.freeze({
+      kind: ContextEntryKind.CANDIDATE_RELATIONSHIP,
+      sourceRef: repair.repairCandidateGenerationId,
+      sourceRevision: String(repair.repairCandidateSequence),
+      sourceDigest: repair.acceptanceRepairDigest,
+      authorityClass: ContextAuthorityClass.RUNTIME_DECISION,
+      renderedDigest: digest({
+        rejectedCandidateGenerationId: repair.rejectedCandidateGenerationId,
+        rejectedCandidateVersion: repair.rejectedCandidateVersion,
+        rejectedCandidateDigest: repair.rejectedCandidateDigest,
+        repairCandidateGenerationId: repair.repairCandidateGenerationId,
+        repairCandidateSequence: repair.repairCandidateSequence,
+        repairCandidateBaseDigest: repair.repairCandidateBaseDigest,
+        parentChangeSetDigest: repair.parentChangeSetDigest,
+      }),
+    }),
+    ...repair.constraintsToPreserve.map((constraint, index) =>
+      Object.freeze({
+        kind: ContextEntryKind.PRESERVATION_CONSTRAINT,
+        sourceRef: `${goalIdentifier}:preservation:${String(index + 1)}`,
+        sourceRevision: String(goalRevisionNumber),
+        sourceDigest: constraint.sourceDigest,
+        authorityClass: ContextAuthorityClass.RUNTIME_DECISION,
+        renderedDigest: digest(constraint),
+      }),
+    ),
+    Object.freeze({
+      kind: ContextEntryKind.PRIOR_ATTEMPT_FEEDBACK,
+      sourceRef: `prior-attempt-feedback:${repair.repairCandidateGenerationId}`,
+      sourceRevision: '1',
+      sourceDigest: feedback.feedbackDigest,
+      authorityClass: ContextAuthorityClass.NON_AUTHORITATIVE_WORKING,
+      renderedDigest: digest(feedback),
+    }),
+  ];
 }
 
 export function contextManifestDigestProjection(
@@ -256,6 +375,12 @@ export function contextManifestDigestProjection(
     policyBundleDigest: manifest.policyBundleDigest,
     capabilityGrantDigest: manifest.capabilityGrantDigest,
     responseContractDigest: manifest.responseContractDigest,
+    ...(manifest.repairContextDigest === undefined
+      ? {}
+      : { repairContextDigest: manifest.repairContextDigest }),
+    ...(manifest.priorAttemptFeedbackDigest === undefined
+      ? {}
+      : { priorAttemptFeedbackDigest: manifest.priorAttemptFeedbackDigest }),
     entries: manifest.entries,
     omissionDecisions: manifest.omissionDecisions,
     packageDigest: manifest.packageDigest,
@@ -328,6 +453,34 @@ export class MinimalContextCompiler {
             digest: sha256Digest(candidate.digest),
           });
 
+    const repair = rawInput.repair;
+    if (
+      (repair !== undefined && candidateBinding === undefined) ||
+      (repair !== undefined && workflow.phase !== WorkflowPhase.IMPLEMENT)
+    ) {
+      throw new TypeError('Repair Context requires one active IMPLEMENT Candidate');
+    }
+    if (repair !== undefined) {
+      if (candidateBinding === undefined) {
+        throw new TypeError('Repair Context has no active Candidate binding');
+      }
+      if (
+        repair.repairContext.repairCandidateGenerationId !== candidateBinding.generationId ||
+        repair.repairContext.repairCandidateBaseDigest !== candidateBinding.digest
+      ) {
+        throw new TypeError('Repair Context does not bind the active repair child');
+      }
+      const expectedFeedbackDigest = sha256Digest(
+        this.#digests.digest({
+          schemaVersion: repair.priorAttemptFeedback.schemaVersion,
+          items: repair.priorAttemptFeedback.items,
+        }),
+      );
+      if (repair.priorAttemptFeedback.feedbackDigest !== expectedFeedbackDigest) {
+        throw new TypeError('Prior-Attempt feedback digest is inconsistent');
+      }
+    }
+
     const selectedEntries = canonicalEntries(rawInput.selectedEntries ?? []);
     const omissionDecisions = canonicalOmissions(rawInput.omissionDecisions ?? []);
     const contract = m1WorkerResponseContract(workflow.phase);
@@ -345,7 +498,7 @@ export class MinimalContextCompiler {
     }
 
     const contextPackage = decodeContextPackage({
-      schemaVersion: 2,
+      schemaVersion: repair === undefined ? 2 : 3,
       goalId: goal.id,
       goalRevision: goal.revision,
       workflowId: workflow.id,
@@ -367,6 +520,12 @@ export class MinimalContextCompiler {
         nonGoals: goal.nonGoals,
       },
       selectedEntries,
+      ...(repair === undefined
+        ? {}
+        : {
+            repairContext: repair.repairContext,
+            priorAttemptFeedback: repair.priorAttemptFeedback,
+          }),
       executionProfileId: profileIdentifier,
       executionProfileDigest: profileDigest,
       policyBundleId: policyIdentifier,
@@ -389,11 +548,12 @@ export class MinimalContextCompiler {
       schemaVersion: 1,
       responseContract: contract,
     });
+    const repairContextDigest = repair === undefined ? undefined : digest(repair.repairContext);
 
     const synthesizedEntries = deriveContextManifestEntries(contextPackage, this.#digests);
 
     const manifestWithoutDigest = {
-      schemaVersion: 2 as const,
+      schemaVersion: contextPackage.schemaVersion,
       compilerVersion: this.#compilerVersion,
       goalId: goal.id,
       goalRevision: goal.revision,
@@ -413,6 +573,10 @@ export class MinimalContextCompiler {
       policyBundleDigest: policyDigest,
       capabilityGrantDigest,
       responseContractDigest,
+      ...(repairContextDigest === undefined ? {} : { repairContextDigest }),
+      ...(repair === undefined
+        ? {}
+        : { priorAttemptFeedbackDigest: repair.priorAttemptFeedback.feedbackDigest }),
       entries: Object.freeze(synthesizedEntries),
       omissionDecisions,
       packageDigest,

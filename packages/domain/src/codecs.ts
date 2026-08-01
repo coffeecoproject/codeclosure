@@ -40,6 +40,8 @@ import {
   type ContextOmissionDecision,
   type ContextPackage,
   type ContextPackageEntry,
+  type PriorAttemptFeedback,
+  type RepairContext,
   type WorkerResponseContract,
 } from './context.js';
 import {
@@ -70,6 +72,7 @@ import {
   type VerificationObligation,
 } from './evidence.js';
 import {
+  acceptanceDecisionId,
   aggregateVersion,
   attemptId,
   candidateGenerationId,
@@ -436,9 +439,126 @@ function materializeContextPackageEntry(
   });
 }
 
+const repairFailedEvidenceSchema = z
+  .object({
+    evidenceId: z.string(),
+    evidenceRecordDigest: z.string(),
+    evidenceEligibilityVersion: z.number().int().positive(),
+    evidenceEligibilityState: z.literal('ELIGIBLE'),
+    resultStatus: z.literal('FAIL'),
+    verificationObligationId: z.string(),
+    checkSpecificationId: z.string(),
+    checkSpecificationDigest: z.string(),
+  })
+  .strict();
+
+const repairPreservationConstraintSchema = z
+  .object({
+    kind: z.enum(['ALLOWED_PATH', 'NON_GOAL']),
+    content: nonBlankStringSchema,
+    sourceRef: nonBlankStringSchema,
+    sourceDigest: z.string(),
+  })
+  .strict();
+
+const repairContextSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    acceptanceRepairDigest: z.string(),
+    acceptanceDecisionId: z.string(),
+    acceptanceDecisionDigest: z.string(),
+    inputManifestDigest: z.string(),
+    evidenceSetDigest: z.string(),
+    rejectedCandidateGenerationId: z.string(),
+    rejectedCandidateVersion: z.number().int().positive(),
+    rejectedCandidateDigest: z.string(),
+    repairCandidateGenerationId: z.string(),
+    repairCandidateSequence: z.number().int().positive(),
+    repairCandidateBaseDigest: z.string(),
+    parentChangeSetDigest: z.string(),
+    failedEvidence: z.array(repairFailedEvidenceSchema),
+    constraintsToPreserve: z.array(repairPreservationConstraintSchema),
+  })
+  .strict();
+
+const priorAttemptFeedbackSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    items: z.array(
+      z
+        .object({
+          kind: z.enum(['FAILED_CHECK', 'PARENT_CHANGE_SET', 'PRESERVATION_CONSTRAINT']),
+          content: nonBlankStringSchema,
+          sourceRefs: z.array(nonBlankStringSchema),
+          sourceDigests: z.array(z.string()),
+        })
+        .strict(),
+    ),
+    feedbackDigest: z.string(),
+  })
+  .strict();
+
+function materializeRepairContext(parsed: z.infer<typeof repairContextSchema>): RepairContext {
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    acceptanceRepairDigest: sha256Digest(parsed.acceptanceRepairDigest),
+    acceptanceDecisionId: acceptanceDecisionId(parsed.acceptanceDecisionId),
+    acceptanceDecisionDigest: sha256Digest(parsed.acceptanceDecisionDigest),
+    inputManifestDigest: sha256Digest(parsed.inputManifestDigest),
+    evidenceSetDigest: sha256Digest(parsed.evidenceSetDigest),
+    rejectedCandidateGenerationId: candidateGenerationId(parsed.rejectedCandidateGenerationId),
+    rejectedCandidateVersion: aggregateVersion(parsed.rejectedCandidateVersion),
+    rejectedCandidateDigest: sha256Digest(parsed.rejectedCandidateDigest),
+    repairCandidateGenerationId: candidateGenerationId(parsed.repairCandidateGenerationId),
+    repairCandidateSequence: parsed.repairCandidateSequence,
+    repairCandidateBaseDigest: sha256Digest(parsed.repairCandidateBaseDigest),
+    parentChangeSetDigest: sha256Digest(parsed.parentChangeSetDigest),
+    failedEvidence: Object.freeze(
+      parsed.failedEvidence.map((entry) =>
+        Object.freeze({
+          evidenceId: evidenceId(entry.evidenceId),
+          evidenceRecordDigest: sha256Digest(entry.evidenceRecordDigest),
+          evidenceEligibilityVersion: aggregateVersion(entry.evidenceEligibilityVersion),
+          evidenceEligibilityState: entry.evidenceEligibilityState,
+          resultStatus: entry.resultStatus,
+          verificationObligationId: verificationObligationId(entry.verificationObligationId),
+          checkSpecificationId: checkSpecificationId(entry.checkSpecificationId),
+          checkSpecificationDigest: sha256Digest(entry.checkSpecificationDigest),
+        }),
+      ),
+    ),
+    constraintsToPreserve: Object.freeze(
+      parsed.constraintsToPreserve.map((constraint) =>
+        Object.freeze({
+          ...constraint,
+          sourceDigest: sha256Digest(constraint.sourceDigest),
+        }),
+      ),
+    ),
+  });
+}
+
+function materializePriorAttemptFeedback(
+  parsed: z.infer<typeof priorAttemptFeedbackSchema>,
+): PriorAttemptFeedback {
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    items: Object.freeze(
+      parsed.items.map((item) =>
+        Object.freeze({
+          ...item,
+          sourceRefs: Object.freeze([...item.sourceRefs]),
+          sourceDigests: Object.freeze(item.sourceDigests.map((digest) => sha256Digest(digest))),
+        }),
+      ),
+    ),
+    feedbackDigest: sha256Digest(parsed.feedbackDigest),
+  });
+}
+
 const contextPackageSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.union([z.literal(2), z.literal(3)]),
     goalId: z.string(),
     goalRevision: z.number().int().positive(),
     workflowId: z.string(),
@@ -463,6 +583,8 @@ const contextPackageSchema = z
       })
       .strict(),
     selectedEntries: z.array(contextPackageEntrySchema),
+    repairContext: repairContextSchema.optional(),
+    priorAttemptFeedback: priorAttemptFeedbackSchema.optional(),
     executionProfileId: z.string(),
     executionProfileDigest: z.string(),
     policyBundleId: z.string(),
@@ -472,7 +594,12 @@ const contextPackageSchema = z
   .strict();
 
 export function decodeContextPackage(value: unknown): ContextPackage {
-  assertNoExplicitUndefined(value, ['candidateGenerationId', 'candidateDigest']);
+  assertNoExplicitUndefined(value, [
+    'candidateGenerationId',
+    'candidateDigest',
+    'repairContext',
+    'priorAttemptFeedback',
+  ]);
   const parsed = contextPackageSchema.parse(value);
   for (const entry of parsed.selectedEntries) {
     assertNoExplicitUndefined(entry, ['sourceDigest']);
@@ -513,6 +640,12 @@ export function decodeContextPackage(value: unknown): ContextPackage {
     selectedEntries: Object.freeze(
       parsed.selectedEntries.map((entry) => materializeContextPackageEntry(entry)),
     ),
+    ...(parsed.repairContext === undefined
+      ? {}
+      : { repairContext: materializeRepairContext(parsed.repairContext) }),
+    ...(parsed.priorAttemptFeedback === undefined
+      ? {}
+      : { priorAttemptFeedback: materializePriorAttemptFeedback(parsed.priorAttemptFeedback) }),
     executionProfileId: executionProfileId(parsed.executionProfileId),
     executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     policyBundleId: policyBundleId(parsed.policyBundleId),
@@ -560,7 +693,7 @@ const contextOmissionDecisionSchema = z
 const contextManifestSchema = z
   .object({
     id: z.string(),
-    schemaVersion: z.literal(2),
+    schemaVersion: z.union([z.literal(2), z.literal(3)]),
     compilerVersion: nonBlankStringSchema,
     createdAt: z.string(),
     goalId: z.string(),
@@ -577,6 +710,8 @@ const contextManifestSchema = z
     policyBundleDigest: z.string(),
     capabilityGrantDigest: z.string(),
     responseContractDigest: z.string(),
+    repairContextDigest: z.string().optional(),
+    priorAttemptFeedbackDigest: z.string().optional(),
     entries: z.array(contextManifestEntrySchema),
     omissionDecisions: z.array(contextOmissionDecisionSchema),
     packageDigest: z.string(),
@@ -585,7 +720,12 @@ const contextManifestSchema = z
   .strict();
 
 export function decodeContextManifest(value: unknown): ContextManifest {
-  assertNoExplicitUndefined(value, ['candidateGenerationId', 'candidateDigest']);
+  assertNoExplicitUndefined(value, [
+    'candidateGenerationId',
+    'candidateDigest',
+    'repairContextDigest',
+    'priorAttemptFeedbackDigest',
+  ]);
   const parsed = contextManifestSchema.parse(value);
   for (const entry of parsed.entries) {
     assertNoExplicitUndefined(entry, ['sourceDigest']);
@@ -619,6 +759,12 @@ export function decodeContextManifest(value: unknown): ContextManifest {
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
     capabilityGrantDigest: sha256Digest(parsed.capabilityGrantDigest),
     responseContractDigest: sha256Digest(parsed.responseContractDigest),
+    ...(parsed.repairContextDigest === undefined
+      ? {}
+      : { repairContextDigest: sha256Digest(parsed.repairContextDigest) }),
+    ...(parsed.priorAttemptFeedbackDigest === undefined
+      ? {}
+      : { priorAttemptFeedbackDigest: sha256Digest(parsed.priorAttemptFeedbackDigest) }),
     entries,
     omissionDecisions,
     packageDigest: sha256Digest(parsed.packageDigest),

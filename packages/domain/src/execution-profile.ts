@@ -12,10 +12,13 @@ import {
   type Sha256Digest,
   type WorkflowId,
 } from './identifiers.js';
+import {
+  assertExternalExecutionProfileDefinitionInvariant,
+  type ExternalExecutionProfileDefinition,
+} from './external-execution.js';
 
-export interface ExecutionProfileDefinition {
+interface ExecutionProfileDefinitionBase {
   readonly id: ExecutionProfileId;
-  readonly schemaVersion: 1;
   readonly version: string;
   readonly workerAdapter: string;
   readonly workerAdapterVersion: string;
@@ -26,9 +29,19 @@ export interface ExecutionProfileDefinition {
   readonly driverVersion: string;
 }
 
-export interface ExecutionProfile extends ExecutionProfileDefinition {
-  readonly digest: Sha256Digest;
+export interface ExecutionProfileDefinitionV1 extends ExecutionProfileDefinitionBase {
+  readonly schemaVersion: 1;
 }
+
+export interface ExecutionProfileDefinitionV2 extends ExecutionProfileDefinitionBase {
+  readonly schemaVersion: 2;
+  readonly externalExecution: ExternalExecutionProfileDefinition;
+}
+
+export type ExecutionProfileDefinition =
+  ExecutionProfileDefinitionV1 | ExecutionProfileDefinitionV2;
+
+export type ExecutionProfile = ExecutionProfileDefinition & Readonly<{ digest: Sha256Digest }>;
 
 export interface ExecutionProfileBinding {
   readonly schemaVersion: 1;
@@ -56,7 +69,7 @@ export function assertExecutionProfileDefinitionInvariant(
   profile: ExecutionProfileDefinition,
 ): void {
   executionProfileId(profile.id);
-  if (field(profile, 'schemaVersion') !== 1) {
+  if (field(profile, 'schemaVersion') !== 1 && field(profile, 'schemaVersion') !== 2) {
     throw new TypeError('Execution Profile schema version is unsupported');
   }
   assertNonBlank(profile.version, 'Execution Profile version');
@@ -70,6 +83,9 @@ export function assertExecutionProfileDefinitionInvariant(
     'Execution Profile Verification Runner version',
   );
   assertNonBlank(profile.driverVersion, 'Execution Profile driver version');
+  if (profile.schemaVersion === 2) {
+    assertExternalExecutionProfileDefinitionInvariant(profile.externalExecution);
+  }
 }
 
 export function assertExecutionProfileInvariant(profile: ExecutionProfile): void {
@@ -89,6 +105,7 @@ export function executionProfileProjection(profile: ExecutionProfileDefinition):
     verificationRunner: profile.verificationRunner,
     verificationRunnerVersion: profile.verificationRunnerVersion,
     driverVersion: profile.driverVersion,
+    ...(profile.schemaVersion === 1 ? {} : { externalExecution: profile.externalExecution }),
   };
 }
 

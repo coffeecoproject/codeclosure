@@ -9,6 +9,9 @@ import {
   contextManifestId,
   goalId,
   evidenceId,
+  externalExecutionId,
+  externalExecutionObservationId,
+  externalMaintenanceIntentId,
   isoTimestamp,
   recoveryReconciliationId,
   successCriterionId,
@@ -26,6 +29,9 @@ import {
   type ContextManifestId,
   type GoalId,
   type EvidenceId,
+  type ExternalExecutionId,
+  type ExternalExecutionObservationId,
+  type ExternalMaintenanceIntentId,
   type IsoTimestamp,
   type RecoveryReconciliationId,
   type SuccessCriterionId,
@@ -125,6 +131,18 @@ export class DeterministicIds {
 
   public nextWorkerSessionId(): WorkerSessionId {
     return workerSessionId(`worker_${this.nextSuffix()}`);
+  }
+
+  public nextExternalExecutionId(): ExternalExecutionId {
+    return externalExecutionId(`external_${this.nextSuffix()}`);
+  }
+
+  public nextExternalExecutionObservationId(): ExternalExecutionObservationId {
+    return externalExecutionObservationId(`external-observation_${this.nextSuffix()}`);
+  }
+
+  public nextExternalMaintenanceIntentId(): ExternalMaintenanceIntentId {
+    return externalMaintenanceIntentId(`maintenance_${this.nextSuffix()}`);
   }
 
   public nextWorkerEventId(): WorkerEventId {

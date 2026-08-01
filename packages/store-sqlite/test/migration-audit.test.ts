@@ -39,6 +39,7 @@ const migrationNames = Object.freeze([
   '0020_local_command_verification_evidence.sql',
   '0021_evidence_set_check_family_authority.sql',
   '0022_evidence_obligation_causal_time.sql',
+  '0023_external_execution_and_repair_context.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -114,7 +115,7 @@ function inspectDatabase(database: Database.Database) {
   });
 }
 
-void test('[I-006][I-009] M1 migration ledger and reopened SQLite schema match one exact fingerprint', (t) => {
+void test('[I-006][I-009] migration ledger and reopened SQLite schema match one exact fingerprint', (t) => {
   const migrationsDirectory = defaultMigrationsDirectory();
   const entries = readdirSync(migrationsDirectory, { withFileTypes: true }).sort((left, right) =>
     left.name.localeCompare(right.name),
@@ -151,12 +152,12 @@ void test('[I-006][I-009] M1 migration ledger and reopened SQLite schema match o
     })),
   );
   assert.deepEqual(firstInspection, {
-    counts: { table: 30, index: 18, trigger: 131, view: 0 },
+    counts: { table: 36, index: 20, trigger: 149, view: 0 },
     foreignKeyViolationCount: 0,
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:ca9df64657feb1e1c250710c3d61ec879694890c4c68b7b1f76fa1d8bc4c1407',
+    schemaDigest: 'sha256:8780ab23fb329cf5ca9339e0c2e6cf1446c64a748b9f4344ed6e222ebc1f368f',
   });
 
   const reopened = new Database(filename);

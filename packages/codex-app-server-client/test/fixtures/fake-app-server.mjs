@@ -255,6 +255,13 @@ function handleRequest(message) {
         turnId: 'compaction-turn-1',
       },
     });
+    send({
+      method: 'turn/completed',
+      params: {
+        threadId: message.params.threadId,
+        turn: { id: 'compaction-turn-1', items: [item], status: 'completed' },
+      },
+    });
     return;
   }
   if (message.method === 'turn/interrupt') {

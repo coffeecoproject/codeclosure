@@ -13,3 +13,4 @@ runtime evidence.
 - [M2 Slice 3 Candidate workspace review](m2-slice3-candidate-workspace.md)
 - [M2 Slice 4 real Verification review](m2-slice4-real-verification.md)
 - [M2 Slice 5 reject, repair, and accept review](m2-slice5-reject-repair-accept.md)
+- [M2 Slice 6 Thread, Compact, interruption, and restart review](m2-slice6-thread-compact-restart.md)

@@ -3728,7 +3728,7 @@ void test('[I-005][I-006][I-009] reopen recomputes Context from authoritative M1
 
   assert.throws(
     () => openSqliteControlStore({ filename, now: () => createdAt }),
-    /does not match its authoritative M1 sources/,
+    /does not match its authoritative sources/,
   );
 });
 

@@ -442,15 +442,21 @@ function orchestrationDriver(
 function withoutLocalCommandVerification(
   profile: RuntimeExecutionProfile,
 ): RuntimeExecutionProfile {
-  return Object.freeze({
-    schemaVersion: profile.schemaVersion,
+  const common = {
     profileId: profile.profileId,
     profileDigest: profile.profileDigest,
     driverVersion: profile.driverVersion,
     worker: profile.worker,
     candidateSource: profile.candidateSource,
     verification: profile.verification,
-  });
+  };
+  return profile.schemaVersion === 1
+    ? Object.freeze({ schemaVersion: profile.schemaVersion, ...common })
+    : Object.freeze({
+        schemaVersion: profile.schemaVersion,
+        ...common,
+        externalWorker: profile.externalWorker,
+      });
 }
 
 void test('[I-001][I-005][I-008][M2-F01][M2-F02][M2-F03] real Candidate and verifier reject, repair, and close on generation 2', async (t) => {

@@ -8,6 +8,7 @@ import {
   type ExecutionProfileBinding,
   type ExecutionProfileDefinition,
 } from './execution-profile.js';
+import { decodeExternalExecutionProfileDefinition } from './external-execution-codecs.js';
 import {
   commandId,
   executionProfileId,
@@ -21,24 +22,42 @@ const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 
   error: 'String must not be blank',
 });
 
-const executionProfileDefinitionSchema = z
+const executionProfileDefinitionBaseShape = {
+  id: z.string(),
+  version: nonBlankStringSchema,
+  workerAdapter: nonBlankStringSchema,
+  workerAdapterVersion: nonBlankStringSchema,
+  candidateSource: nonBlankStringSchema,
+  candidateSourceVersion: nonBlankStringSchema,
+  verificationRunner: nonBlankStringSchema,
+  verificationRunnerVersion: nonBlankStringSchema,
+  driverVersion: nonBlankStringSchema,
+} as const;
+
+const executionProfileDefinitionV1Schema = z
   .object({
-    id: z.string(),
+    ...executionProfileDefinitionBaseShape,
     schemaVersion: z.literal(1),
-    version: nonBlankStringSchema,
-    workerAdapter: nonBlankStringSchema,
-    workerAdapterVersion: nonBlankStringSchema,
-    candidateSource: nonBlankStringSchema,
-    candidateSourceVersion: nonBlankStringSchema,
-    verificationRunner: nonBlankStringSchema,
-    verificationRunnerVersion: nonBlankStringSchema,
-    driverVersion: nonBlankStringSchema,
   })
   .strict();
 
-const executionProfileSchema = executionProfileDefinitionSchema
-  .extend({ digest: z.string() })
+const executionProfileDefinitionV2Schema = z
+  .object({
+    ...executionProfileDefinitionBaseShape,
+    schemaVersion: z.literal(2),
+    externalExecution: z.unknown(),
+  })
   .strict();
+
+const executionProfileDefinitionSchema = z.discriminatedUnion('schemaVersion', [
+  executionProfileDefinitionV1Schema,
+  executionProfileDefinitionV2Schema,
+]);
+
+const executionProfileSchema = z.discriminatedUnion('schemaVersion', [
+  executionProfileDefinitionV1Schema.extend({ digest: z.string() }).strict(),
+  executionProfileDefinitionV2Schema.extend({ digest: z.string() }).strict(),
+]);
 
 const executionProfileBindingSchema = z
   .object({
@@ -57,9 +76,8 @@ const executionProfileBindingSchema = z
 function materializeDefinition(
   parsed: z.infer<typeof executionProfileDefinitionSchema>,
 ): ExecutionProfileDefinition {
-  const definition: ExecutionProfileDefinition = Object.freeze({
+  const common = {
     id: executionProfileId(parsed.id),
-    schemaVersion: parsed.schemaVersion,
     version: parsed.version,
     workerAdapter: parsed.workerAdapter,
     workerAdapterVersion: parsed.workerAdapterVersion,
@@ -68,7 +86,15 @@ function materializeDefinition(
     verificationRunner: parsed.verificationRunner,
     verificationRunnerVersion: parsed.verificationRunnerVersion,
     driverVersion: parsed.driverVersion,
-  });
+  };
+  const definition: ExecutionProfileDefinition =
+    parsed.schemaVersion === 1
+      ? Object.freeze({ ...common, schemaVersion: parsed.schemaVersion })
+      : Object.freeze({
+          ...common,
+          schemaVersion: parsed.schemaVersion,
+          externalExecution: decodeExternalExecutionProfileDefinition(parsed.externalExecution),
+        });
   assertExecutionProfileDefinitionInvariant(definition);
   return definition;
 }

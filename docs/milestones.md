@@ -118,18 +118,21 @@ promotion consent, or a release claim.
 
 ## M2 — Codex Vertical Slice
 
-Status: In progress. Slices 0 through 5 implement authority/protocol closure,
+Status: In progress. Slices 0 through 6 implement authority/protocol closure,
 the version-bound App Server client, Goal-bound Worker Adapter, controlled-copy
 Candidate workspace, bounded real local-command verification, and the
 deterministic in-process reject/repair/accept path. Slice 5 includes complete
 local Check-family selection, current-Attempt Candidate leases, Profile-bound
 local runner admission with no M1 fake-verification fallback, causal
 Obligation/Evidence time, atomic active-verification drift failure, fresh
-repair Evidence, deterministic Acceptance, closeout, and strict reopen proof. These
-slices do not yet constitute a trusted live Goal-bound production path; Thread,
-Compact, interruption, restart composition, fresh repair Context, protected
-acceptance-critical verification, and failed-repair stop proof remain later M2
-work. Slice 4's independent execution and Slice 5's orchestration do not yet
+repair Evidence, deterministic Acceptance, closeout, and strict reopen proof.
+Slice 6 adds Runtime-owned external execution and maintenance persistence,
+bounded Thread/Compact and interruption policy, restart reconciliation, exact
+repair Context version 3, and the persisted no-generation-3 stop after a failed
+repair. These slices do not yet constitute a trusted live Goal-bound production
+path; protected acceptance-critical verification, trusted CLI composition, the
+live Codex path, and milestone audit remain later M2 work. Slice 4's independent
+execution and Slices 5 through 6's orchestration do not yet
 prove independent verification-standard authority. The
 detailed work sequence and status are in the
 [M2 implementation plan](plans/m2-codex-vertical-slice.md), and the independent

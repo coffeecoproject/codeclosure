@@ -27,6 +27,10 @@ import type { InitializeResponse } from './protocol/InitializeResponse.js';
 import type { ServerNotification } from './protocol/ServerNotification.js';
 import type { ServerRequest } from './protocol/ServerRequest.js';
 import { isJsonObject, parseBoundedJson, type JsonObject, type JsonValue } from './strict-json.js';
+import {
+  captureAppServerProcessIdentity,
+  type AppServerProcessIdentity,
+} from './process-ownership.js';
 
 type GeneratedClientMethod = ClientRequest['method'];
 type GeneratedNotificationMethod = ServerNotification['method'];
@@ -108,9 +112,11 @@ export function serverRequestHandler<
 export interface StartAppServerClientInput {
   readonly initialize: InitializeParams;
   readonly launch: AppServerProcessLaunch;
+  readonly launchNonce: string;
   readonly limits?: Partial<AppServerClientLimits>;
   readonly onCompactionEvent?: (event: AppServerCompactionEvent) => void;
   readonly onNotification?: (notification: AppServerNotification) => void;
+  readonly onProcessStarted?: (identity: AppServerProcessIdentity) => void;
   readonly serverRequestHandlers?: readonly RegisteredServerRequestHandler[];
 }
 
@@ -124,12 +130,14 @@ interface PendingRequest {
 }
 
 interface ManualCompactionTracker {
+  completedItem?: CompletedManualCompaction;
   itemId?: string;
   readonly promise: Promise<CompletedManualCompaction>;
   readonly reject: (error: AppServerClientError) => void;
   readonly resolve: (result: CompletedManualCompaction) => void;
   readonly threadId: string;
   readonly timer: NodeJS.Timeout;
+  turnCompleted?: boolean;
   turnId?: string;
 }
 
@@ -303,11 +311,13 @@ export class AppServerClient {
   readonly #observedCompactions = new Map<string, ObservedCompaction>();
   readonly #onCompactionEvent: ((event: AppServerCompactionEvent) => void) | undefined;
   readonly #onNotification: ((notification: AppServerNotification) => void) | undefined;
+  readonly #onProcessStarted: ((identity: AppServerProcessIdentity) => void) | undefined;
   readonly #pending = new Map<string, PendingRequest>();
   #ready = false;
   #requestedShutdown = false;
   readonly #seenServerRequestIds = new Set<string>();
   #spawnPromise: Promise<void>;
+  #processIdentity: AppServerProcessIdentity | undefined;
   #stderrCapturedBytes = 0;
   readonly #stderrHash: Hash = createHash('sha256');
   #stderrTruncated = false;
@@ -321,6 +331,7 @@ export class AppServerClient {
     this.#limits = appServerClientLimits(input.limits);
     this.#onCompactionEvent = input.onCompactionEvent;
     this.#onNotification = input.onNotification;
+    this.#onProcessStarted = input.onProcessStarted;
     for (const handler of input.serverRequestHandlers ?? []) {
       if (this.#handlers.has(handler.method)) {
         throw clientError(
@@ -335,6 +346,7 @@ export class AppServerClient {
     try {
       this.#child = spawn(input.launch.executablePath, [...input.launch.arguments], {
         cwd: input.launch.cwd,
+        detached: process.platform !== 'win32',
         env: { ...input.launch.environment },
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -347,7 +359,35 @@ export class AppServerClient {
       this.#closeResolve = resolve;
     });
     this.#spawnPromise = new Promise((resolve, reject) => {
-      this.#child.once('spawn', resolve);
+      this.#child.once('spawn', () => {
+        try {
+          const processId = this.#child.pid;
+          if (processId === undefined) {
+            throw clientError(
+              AppServerClientErrorCode.SPAWN_FAILED,
+              'App Server process has no host process identity',
+            );
+          }
+          this.#processIdentity = captureAppServerProcessIdentity({
+            processId,
+            launchNonce: input.launchNonce,
+            executableIdentityDigest: input.launch.summary.delegatedExecutableDigest,
+            controlledStateRootIdentity: input.launch.summary.codexHome,
+          });
+          this.#onProcessStarted?.(this.#processIdentity);
+          resolve();
+        } catch (error) {
+          const failure =
+            error instanceof AppServerClientError
+              ? error
+              : clientError(
+                  AppServerClientErrorCode.SPAWN_FAILED,
+                  'App Server process identity could not be admitted',
+                );
+          this.#fail(failure);
+          reject(failure);
+        }
+      });
       this.#child.once('error', () => {
         const error = clientError(
           AppServerClientErrorCode.SPAWN_FAILED,
@@ -378,6 +418,16 @@ export class AppServerClient {
 
   public get launchSummary(): AppServerLaunchSummary {
     return this.#launch.summary;
+  }
+
+  public get processIdentity(): AppServerProcessIdentity {
+    if (this.#processIdentity === undefined) {
+      throw clientError(
+        AppServerClientErrorCode.SPAWN_FAILED,
+        'App Server process identity is not available',
+      );
+    }
+    return this.#processIdentity;
   }
 
   public get closed(): Promise<AppServerCloseResult> {
@@ -577,7 +627,7 @@ export class AppServerClient {
     if (graceful !== 'TIMEOUT') {
       return graceful;
     }
-    this.#child.kill('SIGTERM');
+    this.#signalOwnedProcess('SIGTERM');
     const terminated = await Promise.race([
       this.#closePromise,
       timeoutResult(this.#limits.shutdownKillMilliseconds),
@@ -585,7 +635,7 @@ export class AppServerClient {
     if (terminated !== 'TIMEOUT') {
       return terminated;
     }
-    this.#child.kill('SIGKILL');
+    this.#signalOwnedProcess('SIGKILL');
     const killed = await Promise.race([
       this.#closePromise,
       timeoutResult(this.#limits.shutdownKillMilliseconds),
@@ -1032,6 +1082,29 @@ export class AppServerClient {
   }
 
   #observeCompaction(notification: AppServerNotification): void {
+    if (notification.method === 'turn/completed') {
+      const threadId = safeString(notification.params['threadId'], 256);
+      const turn = notification.params['turn'];
+      const turnId = isJsonObject(turn) ? safeString(turn['id'], 256) : undefined;
+      if (threadId === undefined || turnId === undefined) {
+        return;
+      }
+      const tracker = this.#manualCompactions.get(threadId);
+      if (tracker?.turnId === turnId) {
+        if (tracker.turnCompleted) {
+          this.#fail(
+            clientError(
+              AppServerClientErrorCode.PROTOCOL_CORRELATION,
+              'Manual compaction terminal Turn is duplicate',
+            ),
+          );
+          return;
+        }
+        tracker.turnCompleted = true;
+        this.#completeManualCompaction(tracker);
+      }
+      return;
+    }
     if (notification.method !== 'item/started' && notification.method !== 'item/completed') {
       return;
     }
@@ -1113,10 +1186,27 @@ export class AppServerClient {
         );
         return;
       }
-      this.#manualCompactions.delete(threadId);
-      clearTimeout(tracker.timer);
-      tracker.resolve(Object.freeze({ itemId, threadId, turnId }));
+      tracker.completedItem = Object.freeze({ itemId, threadId, turnId });
+      this.#completeManualCompaction(tracker);
     }
+  }
+
+  #completeManualCompaction(tracker: ManualCompactionTracker): void {
+    if (tracker.completedItem === undefined || tracker.turnCompleted !== true) {
+      return;
+    }
+    if (this.#manualCompactions.get(tracker.threadId) !== tracker) {
+      this.#fail(
+        clientError(
+          AppServerClientErrorCode.PROTOCOL_CORRELATION,
+          'Manual compaction completion lost its pending request',
+        ),
+      );
+      return;
+    }
+    this.#manualCompactions.delete(tracker.threadId);
+    clearTimeout(tracker.timer);
+    tracker.resolve(tracker.completedItem);
   }
 
   #emitCompaction(event: AppServerCompactionEvent): void {
@@ -1207,7 +1297,20 @@ export class AppServerClient {
     this.#ready = false;
     this.#rejectPending(error);
     this.#rejectCompactions(error);
-    this.#child.kill('SIGTERM');
+    this.#signalOwnedProcess('SIGTERM');
+  }
+
+  #signalOwnedProcess(signal: NodeJS.Signals): void {
+    const identity = this.#processIdentity;
+    if (identity?.processGroupKind === 'POSIX_PROCESS_GROUP') {
+      try {
+        process.kill(-identity.processGroupId, signal);
+        return;
+      } catch {
+        // Fall through to the exact child handle when the group already exited.
+      }
+    }
+    this.#child.kill(signal);
   }
 
   #rejectPending(error: AppServerClientError): void {

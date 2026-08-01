@@ -34,10 +34,21 @@ function hash(character: string): string {
   return `sha256:${character.repeat(64)}`;
 }
 
+function lifecycleKinds(events: readonly unknown[]): readonly unknown[] {
+  return events.map((event) => {
+    if (typeof event !== 'object' || event === null) {
+      return undefined;
+    }
+    const kind: unknown = Reflect.get(event, 'kind');
+    return kind;
+  });
+}
+
 interface Harness {
   readonly adapter: CodexWorkerAdapter;
   readonly directive: CodexWorkerDirective;
   readonly launch: ReturnType<typeof createFixtureAppServerLaunch>;
+  readonly lifecycleEvents: readonly unknown[];
   readonly request: WorkerRequest;
   readonly root: string;
 }
@@ -225,13 +236,14 @@ const permissionProfile = Object.freeze({
 function profileDirective(
   launch: ReturnType<typeof createFixtureAppServerLaunch>,
   thread: CodexExecutionProfileDirective['thread'] = Object.freeze({ kind: 'FRESH' }),
+  compactionPolicy: CodexExecutionProfileDirective['compactionPolicy'] = 'FAIL_ON_OBSERVATION',
 ): CodexExecutionProfileDirective {
   const instructionSources = Object.freeze([]);
   return Object.freeze({
     approvalPolicy: 'never',
     approvalsReviewer: 'user',
     codexVersion: launch.summary.codexVersion,
-    compactionPolicy: 'FAIL_ON_OBSERVATION',
+    compactionPolicy,
     configReadDigest: digestCanonical(effectiveConfig),
     controlledStateRootIdentity: launch.summary.codexHome,
     delegatedExecutableDigest: launch.summary.delegatedExecutableDigest,
@@ -276,6 +288,7 @@ function directive(
   profile: CodexExecutionProfileDirective,
 ): CodexWorkerDirective {
   const base: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'> = Object.freeze({
+    processLaunchNonce: hash('9'),
     profile,
     request: requestBinding(request),
     schemaVersion: 1,
@@ -291,6 +304,7 @@ function createHarness(
   t: TestContext,
   scenario: string,
   thread?: CodexExecutionProfileDirective['thread'],
+  compactionPolicy?: CodexExecutionProfileDirective['compactionPolicy'],
 ): Harness {
   const directories = fixtureDirectories(t);
   const launch = createFixtureAppServerLaunch({
@@ -310,7 +324,12 @@ function createHarness(
     directories.source,
     directories.workspaceRoot,
   );
-  const selectedDirective = directive(request, lease, profileDirective(launch, thread));
+  const selectedDirective = directive(
+    request,
+    lease,
+    profileDirective(launch, thread, compactionPolicy),
+  );
+  const lifecycleEvents: unknown[] = [];
   return Object.freeze({
     adapter: new CodexWorkerAdapter({
       clientLimits: {
@@ -320,10 +339,12 @@ function createHarness(
       },
       directive: selectedDirective,
       launch,
+      onLifecycleEvent: (event) => lifecycleEvents.push(event),
       observedAt: () => fixedObservedAt,
     }),
     directive: selectedDirective,
     launch,
+    lifecycleEvents,
     request,
     root: directories.root,
   });
@@ -354,7 +375,7 @@ async function waitForBoundTurn(adapter: CodexWorkerAdapter): Promise<void> {
 void test('[I-004][I-019] one exact structured IMPLEMENT payload becomes one bounded Worker result', async (t) => {
   const harness = createHarness(t, 'happy');
   const events = await collect(harness.adapter, harness.request);
-  assert.equal(events.length, 1);
+  assert.equal(events.length, 1, JSON.stringify(harness.adapter.observation()));
   const event = events[0];
   if (event?.type !== 'WORKER_RESULT') {
     assert.fail('fixture did not emit a Worker result');
@@ -376,6 +397,49 @@ void test('[I-004][I-019] one exact structured IMPLEMENT payload becomes one bou
   assert.equal(observation.backendOperationRef, 'turn-fixture');
   assert.equal(JSON.stringify(event).includes('thread-fixture'), false);
   assert.equal(JSON.stringify(event).includes('ACCEPT'), false);
+});
+
+void test('[I-027][M2-G13] authorized manual compaction continues on the same Thread before one Worker Turn', async (t) => {
+  const harness = createHarness(t, 'happy', undefined, 'MANUAL_BEFORE_OPERATION');
+  const events = await collect(harness.adapter, harness.request);
+  assert.equal(events.length, 1, JSON.stringify(harness.adapter.observation()));
+  const observation = harness.adapter.observation();
+  assert.equal(observation.state, 'COMPLETED');
+  assert.equal(observation.compactionCount, 1);
+  assert.equal(observation.backendSessionRef, 'thread-fixture');
+  assert.equal(observation.backendOperationRef, 'turn-fixture');
+  assert.equal(observation.threadRequestCount, 1);
+  assert.equal(observation.turnRequestCount, 1);
+  assert.deepEqual(lifecycleKinds(harness.lifecycleEvents), [
+    'PROCESS_STARTED',
+    'SESSION_STARTED',
+    'OPERATION_STARTED',
+    'TERMINAL',
+  ]);
+  const processEvent = harness.lifecycleEvents[0];
+  assert.equal(
+    Reflect.get(Reflect.get(processEvent as object, 'processIdentity') as object, 'launchNonce'),
+    harness.directive.processLaunchNonce,
+  );
+});
+
+void test('[I-027][M2-G13] an extra Turn during manual compaction is not admitted as maintenance', async (t) => {
+  const harness = createHarness(
+    t,
+    'manual-compaction-extra-turn',
+    undefined,
+    'MANUAL_BEFORE_OPERATION',
+  );
+  assert.deepEqual(await collect(harness.adapter, harness.request), []);
+  const observation = harness.adapter.observation();
+  assert.equal(observation.failureCode, 'COMPACTION_POLICY_VIOLATION');
+  assert.equal(observation.turnRequestCount, 0);
+  assert.equal(observation.backendOperationRef, undefined);
+  assert.deepEqual(lifecycleKinds(harness.lifecycleEvents), [
+    'PROCESS_STARTED',
+    'SESSION_STARTED',
+    'TERMINAL',
+  ]);
 });
 
 void test('[I-004] plan, command, diff, reasoning, and passing-looking diagnostics remain non-authoritative', async (t) => {
@@ -500,6 +564,7 @@ void test('[I-027] cancellation after the terminal payload but before event admi
     },
     directive: harness.directive,
     launch: harness.launch,
+    onLifecycleEvent: () => undefined,
     observedAt: () => {
       controller.abort('post-terminal fixture cancellation');
       return fixedObservedAt;
@@ -583,6 +648,7 @@ void test('[I-027] stale lease state and launch/intent drift are rejected at com
     },
   ]) {
     const base: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'> = {
+      processLaunchNonce: harness.directive.processLaunchNonce,
       profile,
       request: harness.directive.request,
       schemaVersion: 1,
@@ -597,6 +663,7 @@ void test('[I-027] stale lease state and launch/intent drift are rejected at com
         new CodexWorkerAdapter({
           directive: rebound,
           launch: harness.launch,
+          onLifecycleEvent: () => undefined,
           observedAt: () => fixedObservedAt,
         }),
       /launch does not bind/u,
@@ -630,6 +697,7 @@ void test('[I-019][I-027] every non-secret launch environment value is bound at 
         new CodexWorkerAdapter({
           directive: harness.directive,
           launch,
+          onLifecycleEvent: () => undefined,
           observedAt: () => fixedObservedAt,
         }),
       /launch does not bind/u,
@@ -669,6 +737,7 @@ void test('[I-019][I-027] controlled host roots cannot overlap Candidate or sour
       nonSecretEnvironmentDigest: digestCanonical(overlappingLaunch.summary.nonSecretEnvironment),
     });
     const base: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'> = Object.freeze({
+      processLaunchNonce: harness.directive.processLaunchNonce,
       profile,
       request: harness.directive.request,
       schemaVersion: 1,
@@ -681,6 +750,7 @@ void test('[I-019][I-027] controlled host roots cannot overlap Candidate or sour
     const adapter = new CodexWorkerAdapter({
       directive: rebound,
       launch: overlappingLaunch,
+      onLifecycleEvent: () => undefined,
       observedAt: () => fixedObservedAt,
     });
     assert.deepEqual(await collect(adapter, harness.request), []);
@@ -714,6 +784,7 @@ void test('[I-004][I-027] event identity is request-bound: exact replay matches 
   const exactReplay = new CodexWorkerAdapter({
     directive: first.directive,
     launch: first.launch,
+    onLifecycleEvent: () => undefined,
     observedAt: () => fixedObservedAt,
   });
   const replayEvent = (await collect(exactReplay, first.request))[0];
@@ -730,6 +801,7 @@ void test('[I-004][I-027] event identity is request-bound: exact replay matches 
       scriptPath: fixtureScript,
       temporaryDirectory: join(first.root, 'process-tmp'),
     }),
+    onLifecycleEvent: () => undefined,
     observedAt: () => fixedObservedAt,
   });
   const conflictingEvent = (await collect(conflicting, first.request))[0];

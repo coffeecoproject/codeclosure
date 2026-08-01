@@ -1,6 +1,10 @@
 import {
+  acceptanceDecisionId,
+  aggregateVersion,
   candidateGenerationId,
+  checkSpecificationId,
   contextManifestId,
+  evidenceId,
   executionProfileId,
   goalId,
   goalRevision,
@@ -8,17 +12,23 @@ import {
   policyBundleId,
   sha256Digest,
   attemptId,
+  verificationObligationId,
   workflowId,
   workflowVersion,
   type AttemptId,
+  type AcceptanceDecisionId,
+  type AggregateVersion,
   type CandidateGenerationId,
+  type CheckSpecificationId,
   type ContextManifestId,
   type ExecutionProfileId,
+  type EvidenceId,
   type GoalId,
   type GoalRevision,
   type IsoTimestamp,
   type PolicyBundleId,
   type Sha256Digest,
+  type VerificationObligationId,
   type WorkflowId,
   type WorkflowVersion,
 } from './identifiers.js';
@@ -35,6 +45,8 @@ export const ContextAuthorityClass = {
   HUMAN_DECISION: 'HUMAN_DECISION',
   PROJECT_OBSERVATION: 'PROJECT_OBSERVATION',
   NON_AUTHORITATIVE_WORKING: 'NON_AUTHORITATIVE_WORKING',
+  RUNTIME_DECISION: 'RUNTIME_DECISION',
+  EVIDENCE_AUTHORITY: 'EVIDENCE_AUTHORITY',
 } as const;
 export type ContextAuthorityClass =
   (typeof ContextAuthorityClass)[keyof typeof ContextAuthorityClass];
@@ -48,6 +60,15 @@ export const ContextEntryKind = {
   PROJECT_OBSERVATION: 'PROJECT_OBSERVATION',
   WORKING_CONTEXT: 'WORKING_CONTEXT',
   CANDIDATE: 'CANDIDATE',
+  ACCEPTANCE_REPAIR: 'ACCEPTANCE_REPAIR',
+  ACCEPTANCE_DECISION: 'ACCEPTANCE_DECISION',
+  ACCEPTANCE_INPUT_MANIFEST: 'ACCEPTANCE_INPUT_MANIFEST',
+  EVIDENCE_SET: 'EVIDENCE_SET',
+  EVIDENCE: 'EVIDENCE',
+  EVIDENCE_ELIGIBILITY: 'EVIDENCE_ELIGIBILITY',
+  CANDIDATE_RELATIONSHIP: 'CANDIDATE_RELATIONSHIP',
+  PRESERVATION_CONSTRAINT: 'PRESERVATION_CONSTRAINT',
+  PRIOR_ATTEMPT_FEEDBACK: 'PRIOR_ATTEMPT_FEEDBACK',
 } as const;
 export type ContextEntryKind = (typeof ContextEntryKind)[keyof typeof ContextEntryKind];
 
@@ -84,8 +105,64 @@ export interface ContextPackageGoal {
   readonly nonGoals: readonly string[];
 }
 
+export interface RepairContextFailedEvidence {
+  readonly evidenceId: EvidenceId;
+  readonly evidenceRecordDigest: Sha256Digest;
+  readonly evidenceEligibilityVersion: AggregateVersion;
+  readonly evidenceEligibilityState: 'ELIGIBLE';
+  readonly resultStatus: 'FAIL';
+  readonly verificationObligationId: VerificationObligationId;
+  readonly checkSpecificationId: CheckSpecificationId;
+  readonly checkSpecificationDigest: Sha256Digest;
+}
+
+export const RepairPreservationConstraintKind = {
+  ALLOWED_PATH: 'ALLOWED_PATH',
+  NON_GOAL: 'NON_GOAL',
+} as const;
+export type RepairPreservationConstraintKind =
+  (typeof RepairPreservationConstraintKind)[keyof typeof RepairPreservationConstraintKind];
+
+export interface RepairPreservationConstraint {
+  readonly kind: RepairPreservationConstraintKind;
+  readonly content: string;
+  readonly sourceRef: string;
+  readonly sourceDigest: Sha256Digest;
+}
+
+export interface RepairContext {
+  readonly schemaVersion: 1;
+  readonly acceptanceRepairDigest: Sha256Digest;
+  readonly acceptanceDecisionId: AcceptanceDecisionId;
+  readonly acceptanceDecisionDigest: Sha256Digest;
+  readonly inputManifestDigest: Sha256Digest;
+  readonly evidenceSetDigest: Sha256Digest;
+  readonly rejectedCandidateGenerationId: CandidateGenerationId;
+  readonly rejectedCandidateVersion: AggregateVersion;
+  readonly rejectedCandidateDigest: Sha256Digest;
+  readonly repairCandidateGenerationId: CandidateGenerationId;
+  readonly repairCandidateSequence: number;
+  readonly repairCandidateBaseDigest: Sha256Digest;
+  readonly parentChangeSetDigest: Sha256Digest;
+  readonly failedEvidence: readonly RepairContextFailedEvidence[];
+  readonly constraintsToPreserve: readonly RepairPreservationConstraint[];
+}
+
+export interface PriorAttemptFeedbackItem {
+  readonly kind: 'FAILED_CHECK' | 'PARENT_CHANGE_SET' | 'PRESERVATION_CONSTRAINT';
+  readonly content: string;
+  readonly sourceRefs: readonly string[];
+  readonly sourceDigests: readonly Sha256Digest[];
+}
+
+export interface PriorAttemptFeedback {
+  readonly schemaVersion: 1;
+  readonly items: readonly PriorAttemptFeedbackItem[];
+  readonly feedbackDigest: Sha256Digest;
+}
+
 export interface ContextPackage {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 2 | 3;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
   readonly workflowId: WorkflowId;
@@ -98,6 +175,8 @@ export interface ContextPackage {
   readonly capabilityGrant: CapabilityGrant;
   readonly goal: ContextPackageGoal;
   readonly selectedEntries: readonly ContextPackageEntry[];
+  readonly repairContext?: RepairContext;
+  readonly priorAttemptFeedback?: PriorAttemptFeedback;
   readonly executionProfileId: ExecutionProfileId;
   readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
@@ -122,7 +201,7 @@ export interface ContextOmissionDecision {
 
 export interface ContextManifest {
   readonly id: ContextManifestId;
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 2 | 3;
   readonly compilerVersion: string;
   readonly createdAt: IsoTimestamp;
   readonly goalId: GoalId;
@@ -139,6 +218,8 @@ export interface ContextManifest {
   readonly policyBundleDigest: Sha256Digest;
   readonly capabilityGrantDigest: Sha256Digest;
   readonly responseContractDigest: Sha256Digest;
+  readonly repairContextDigest?: Sha256Digest;
+  readonly priorAttemptFeedbackDigest?: Sha256Digest;
   readonly entries: readonly ContextManifestEntry[];
   readonly omissionDecisions: readonly ContextOmissionDecision[];
   readonly packageDigest: Sha256Digest;
@@ -213,6 +294,27 @@ export function assertContextEntryAuthorityInvariant(
         throw new TypeError('Working Context entry must remain explicitly non-authoritative');
       }
       return;
+    case ContextEntryKind.ACCEPTANCE_REPAIR:
+    case ContextEntryKind.ACCEPTANCE_DECISION:
+    case ContextEntryKind.ACCEPTANCE_INPUT_MANIFEST:
+    case ContextEntryKind.CANDIDATE_RELATIONSHIP:
+    case ContextEntryKind.PRESERVATION_CONSTRAINT:
+      if (entry.authorityClass !== ContextAuthorityClass.RUNTIME_DECISION) {
+        throw new TypeError(`${entry.kind} Context entry must retain Runtime decision authority`);
+      }
+      return;
+    case ContextEntryKind.EVIDENCE_SET:
+    case ContextEntryKind.EVIDENCE:
+    case ContextEntryKind.EVIDENCE_ELIGIBILITY:
+      if (entry.authorityClass !== ContextAuthorityClass.EVIDENCE_AUTHORITY) {
+        throw new TypeError(`${entry.kind} Context entry must retain Evidence authority`);
+      }
+      return;
+    case ContextEntryKind.PRIOR_ATTEMPT_FEEDBACK:
+      if (entry.authorityClass !== ContextAuthorityClass.NON_AUTHORITATIVE_WORKING) {
+        throw new TypeError('Prior-Attempt feedback must remain explicitly non-authoritative');
+      }
+      return;
   }
 }
 
@@ -244,6 +346,100 @@ function assertCandidateBinding(
   }
 }
 
+function assertRepairContextInvariant(repair: RepairContext): void {
+  if (field(repair, 'schemaVersion') !== 1) {
+    throw new TypeError('Repair Context schema is unsupported');
+  }
+  for (const digest of [
+    repair.acceptanceRepairDigest,
+    repair.acceptanceDecisionDigest,
+    repair.inputManifestDigest,
+    repair.evidenceSetDigest,
+    repair.rejectedCandidateDigest,
+    repair.repairCandidateBaseDigest,
+    repair.parentChangeSetDigest,
+  ]) {
+    sha256Digest(digest);
+  }
+  acceptanceDecisionId(repair.acceptanceDecisionId);
+  candidateGenerationId(repair.rejectedCandidateGenerationId);
+  aggregateVersion(repair.rejectedCandidateVersion);
+  candidateGenerationId(repair.repairCandidateGenerationId);
+  if (!Number.isSafeInteger(repair.repairCandidateSequence) || repair.repairCandidateSequence < 2) {
+    throw new TypeError('Repair child sequence must be a safe integer of at least 2');
+  }
+  if (repair.failedEvidence.length === 0) {
+    throw new TypeError('Repair Context requires selected failing Evidence');
+  }
+  assertCanonicalOrder(repair.failedEvidence, (entry) => entry.evidenceId, 'Repair Evidence');
+  for (const entry of repair.failedEvidence) {
+    evidenceId(entry.evidenceId);
+    sha256Digest(entry.evidenceRecordDigest);
+    aggregateVersion(entry.evidenceEligibilityVersion);
+    if (
+      field(entry, 'evidenceEligibilityState') !== 'ELIGIBLE' ||
+      field(entry, 'resultStatus') !== 'FAIL'
+    ) {
+      throw new TypeError('Repair Context may select only eligible failing Evidence');
+    }
+    verificationObligationId(entry.verificationObligationId);
+    checkSpecificationId(entry.checkSpecificationId);
+    sha256Digest(entry.checkSpecificationDigest);
+  }
+  assertCanonicalOrder(
+    repair.constraintsToPreserve,
+    (constraint) => `${constraint.kind}\u0000${constraint.content}`,
+    'Repair preservation constraints',
+  );
+  for (const constraint of repair.constraintsToPreserve) {
+    if (!isKnown(RepairPreservationConstraintKind, constraint.kind)) {
+      throw new TypeError('Repair preservation constraint kind is unknown');
+    }
+    assertNonBlank(constraint.content, 'Repair preservation constraint');
+    assertNonBlank(constraint.sourceRef, 'Repair preservation source');
+    sha256Digest(constraint.sourceDigest);
+  }
+}
+
+function assertPriorAttemptFeedbackInvariant(feedback: PriorAttemptFeedback): void {
+  if (
+    field(feedback, 'schemaVersion') !== 1 ||
+    feedback.items.length === 0 ||
+    feedback.items.length > 128
+  ) {
+    throw new TypeError('Prior-Attempt feedback schema or item count is invalid');
+  }
+  assertCanonicalOrder(
+    feedback.items,
+    (item) => `${item.kind}\u0000${item.content}`,
+    'Prior-Attempt feedback',
+  );
+  for (const item of feedback.items) {
+    if (
+      field(item, 'kind') !== 'FAILED_CHECK' &&
+      field(item, 'kind') !== 'PARENT_CHANGE_SET' &&
+      field(item, 'kind') !== 'PRESERVATION_CONSTRAINT'
+    ) {
+      throw new TypeError('Prior-Attempt feedback kind is unknown');
+    }
+    assertNonBlank(item.content, 'Prior-Attempt feedback content');
+    if (Buffer.byteLength(item.content, 'utf8') > 4_096) {
+      throw new TypeError('Prior-Attempt feedback item exceeds its byte budget');
+    }
+    if (item.sourceRefs.length === 0 || item.sourceRefs.length !== item.sourceDigests.length) {
+      throw new TypeError('Prior-Attempt feedback requires aligned source references and digests');
+    }
+    assertCanonicalOrder(item.sourceRefs, (source) => source, 'Feedback source references');
+    for (const source of item.sourceRefs) {
+      assertNonBlank(source, 'Feedback source reference');
+    }
+    for (const digest of item.sourceDigests) {
+      sha256Digest(digest);
+    }
+  }
+  sha256Digest(feedback.feedbackDigest);
+}
+
 export function assertWorkerResponseContractInvariant(contract: WorkerResponseContract): void {
   if (
     field(contract, 'schemaVersion') !== 1 ||
@@ -268,7 +464,10 @@ export function assertWorkerResponseContractInvariant(contract: WorkerResponseCo
 }
 
 export function assertContextPackageInvariant(contextPackage: ContextPackage): void {
-  if (field(contextPackage, 'schemaVersion') !== 2) {
+  if (
+    field(contextPackage, 'schemaVersion') !== 2 &&
+    field(contextPackage, 'schemaVersion') !== 3
+  ) {
     throw new TypeError('Context Package schema version is unsupported');
   }
   goalId(contextPackage.goalId);
@@ -330,11 +529,37 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
     assertContextEntryAuthorityInvariant(entry);
   }
   assertCanonicalOrder(contextPackage.selectedEntries, contextEntryKey, 'Context Package entries');
+  if (contextPackage.schemaVersion === 2) {
+    if (
+      contextPackage.repairContext !== undefined ||
+      contextPackage.priorAttemptFeedback !== undefined
+    ) {
+      throw new TypeError('Context Package v2 cannot contain repair authority');
+    }
+  } else {
+    if (
+      contextPackage.phase !== WorkflowPhase.IMPLEMENT ||
+      contextPackage.candidateGenerationId === undefined ||
+      contextPackage.repairContext === undefined ||
+      contextPackage.priorAttemptFeedback === undefined
+    ) {
+      throw new TypeError('Repair Context Package v3 requires exact IMPLEMENT authority');
+    }
+    assertRepairContextInvariant(contextPackage.repairContext);
+    assertPriorAttemptFeedbackInvariant(contextPackage.priorAttemptFeedback);
+    if (
+      contextPackage.repairContext.repairCandidateGenerationId !==
+        contextPackage.candidateGenerationId ||
+      contextPackage.repairContext.repairCandidateBaseDigest !== contextPackage.candidateDigest
+    ) {
+      throw new TypeError('Repair Context does not bind the Package Candidate child');
+    }
+  }
   assertWorkerResponseContractInvariant(contextPackage.responseContract);
 }
 
 export function assertContextManifestInvariant(manifest: ContextManifest): void {
-  if (field(manifest, 'schemaVersion') !== 2) {
+  if (field(manifest, 'schemaVersion') !== 2 && field(manifest, 'schemaVersion') !== 3) {
     throw new TypeError('Context Manifest schema version is unsupported');
   }
   contextManifestId(manifest.id);
@@ -355,6 +580,26 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
   sha256Digest(manifest.policyBundleDigest);
   sha256Digest(manifest.capabilityGrantDigest);
   sha256Digest(manifest.responseContractDigest);
+  if (manifest.schemaVersion === 2) {
+    if (
+      manifest.repairContextDigest !== undefined ||
+      manifest.priorAttemptFeedbackDigest !== undefined
+    ) {
+      throw new TypeError('Context Manifest v2 cannot contain repair digests');
+    }
+  } else {
+    if (
+      manifest.phase !== WorkflowPhase.IMPLEMENT ||
+      manifest.candidateGenerationId === undefined ||
+      manifest.candidateDigest === undefined ||
+      manifest.repairContextDigest === undefined ||
+      manifest.priorAttemptFeedbackDigest === undefined
+    ) {
+      throw new TypeError('Repair Context Manifest v3 requires both repair digests');
+    }
+    sha256Digest(manifest.repairContextDigest);
+    sha256Digest(manifest.priorAttemptFeedbackDigest);
+  }
   sha256Digest(manifest.packageDigest);
   sha256Digest(manifest.manifestDigest);
   const goalEntries: ContextManifestEntry[] = [];

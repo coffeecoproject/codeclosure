@@ -20,6 +20,17 @@ import type {
   EvidenceId,
   EvidenceRecord,
   EvidenceSet,
+  ExternalBackendCapabilityRecord,
+  ExternalExecutionId,
+  ExternalExecutionIntent,
+  ExternalExecutionObservation,
+  ExternalExecutionObservationId,
+  ExternalExecutionProfileDefinition,
+  ExternalExecutionRecord,
+  ExternalMaintenanceIntent,
+  ExternalMaintenanceIntentId,
+  ExternalProcessIdentity,
+  ExternalThreadDirective,
   ExecutionProfile,
   ExecutionProfileBinding,
   ExecutionProfileId,
@@ -49,6 +60,9 @@ import type {
 import type { CommandTarget, DeterministicCommandError, JsonValue } from './contracts.js';
 import type {
   AdmittedWorkerEventReceipt,
+  ExternalExecutionAbandonReasonCode,
+  ExternalMaintenanceFailureCode,
+  ExternalWorkerFailureCode,
   IgnoredWorkerEventReceipt,
   WorkerDispatchClaim,
   WorkerEventReceipt,
@@ -79,6 +93,12 @@ export interface WorkerIdentityGenerator {
   nextWorkerSessionId(): WorkerSessionId;
 }
 
+export interface ExternalExecutionIdentityGenerator {
+  nextExternalExecutionId(): ExternalExecutionId;
+  nextExternalExecutionObservationId(): ExternalExecutionObservationId;
+  nextExternalMaintenanceIntentId(): ExternalMaintenanceIntentId;
+}
+
 export interface AcceptanceIdentityGenerator {
   nextAcceptanceDecisionId(): AcceptanceDecisionId;
 }
@@ -105,6 +125,103 @@ export interface Canonicalizer {
 
 export interface WorkerPort {
   run(request: WorkerRequest, signal: AbortSignal): AsyncIterable<unknown>;
+}
+
+export interface ExternalWorkerObservation {
+  readonly schemaVersion: 1;
+  readonly externalExecutionIntentDigest: Sha256Digest;
+  readonly requestAttemptId: AttemptId;
+  readonly requestWorkerSessionId: WorkerSessionId;
+  readonly state: 'READY' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED';
+  readonly processLaunchCount: number;
+  readonly backendSessionRef?: string;
+  readonly backendOperationRef?: string;
+  readonly compactionCount: number;
+  readonly turnInterruptCount: number;
+  readonly failureCode?: ExternalWorkerFailureCode;
+  readonly resultEventId?: WorkerEventId;
+}
+
+interface ExternalWorkerLifecycleBinding {
+  readonly schemaVersion: 1;
+  readonly externalExecutionIntentDigest: Sha256Digest;
+  readonly requestAttemptId: AttemptId;
+  readonly requestWorkerSessionId: WorkerSessionId;
+}
+
+export type ExternalWorkerLifecycleEvent =
+  | (ExternalWorkerLifecycleBinding &
+      Readonly<{
+        readonly kind: 'PROCESS_STARTED';
+        readonly processIdentity: ExternalProcessIdentity;
+      }>)
+  | (ExternalWorkerLifecycleBinding &
+      Readonly<{
+        readonly kind: 'SESSION_STARTED';
+        readonly backendSessionRef: string;
+      }>)
+  | (ExternalWorkerLifecycleBinding &
+      Readonly<{
+        readonly kind: 'OPERATION_STARTED';
+        readonly backendSessionRef: string;
+        readonly backendOperationRef: string;
+        readonly compactionCount: number;
+      }>)
+  | (ExternalWorkerLifecycleBinding &
+      Readonly<{
+        readonly kind: 'TERMINAL';
+        readonly state: 'COMPLETED' | 'FAILED' | 'INTERRUPTED';
+        readonly processLaunchCount: number;
+        readonly backendSessionRef?: string;
+        readonly backendOperationRef?: string;
+        readonly compactionCount: number;
+        readonly turnInterruptCount: number;
+        readonly failureCode?: ExternalWorkerFailureCode;
+        readonly resultEventId?: WorkerEventId;
+      }>);
+
+export interface ExternalObservedWorkerPort extends WorkerPort {
+  observation(): unknown;
+}
+
+export interface PreparedExternalWorkerInvocation {
+  readonly candidateWorkspaceLeaseId?: string;
+  readonly candidateWorkspaceLeaseDigest?: Sha256Digest;
+  readonly candidateWorkspaceCwdIdentity?: string;
+  createWorker(input: {
+    readonly intent: ExternalExecutionIntent;
+    readonly onLifecycleEvent: (event: unknown) => void;
+  }): ExternalObservedWorkerPort;
+  release(): void | Promise<void>;
+}
+
+export const ExternalProcessReconciliationDisposition = {
+  ABSENT: 'ABSENT',
+  TERMINATED: 'TERMINATED',
+  IDENTITY_MISMATCH: 'IDENTITY_MISMATCH',
+  TERMINATION_FAILED: 'TERMINATION_FAILED',
+  UNAVAILABLE: 'UNAVAILABLE',
+} as const;
+export type ExternalProcessReconciliationDisposition =
+  (typeof ExternalProcessReconciliationDisposition)[keyof typeof ExternalProcessReconciliationDisposition];
+
+export interface ExternalProcessReconciliationResult {
+  readonly schemaVersion: 1;
+  readonly processIdentityDigest: Sha256Digest;
+  readonly disposition: ExternalProcessReconciliationDisposition;
+  readonly observationRef: string;
+}
+
+export interface ExternalProcessReconciler {
+  reconcile(identity: ExternalProcessIdentity): unknown;
+}
+
+export interface ExternalWorkerInvocationPort {
+  prepare(input: {
+    readonly request: WorkerRequest;
+    readonly profile: ExternalExecutionProfileDefinition;
+    readonly thread: ExternalThreadDirective;
+  }): PreparedExternalWorkerInvocation | Promise<PreparedExternalWorkerInvocation>;
 }
 
 interface ProcessedCommandBase {
@@ -205,6 +322,8 @@ export interface RecoveryCatalogEntry extends GoalWorkflowView {
   readonly policyBinding: WorkflowPolicyBinding;
   readonly executionProfileBinding: ExecutionProfileBinding;
   readonly dispatchClaim?: WorkerDispatchClaim;
+  readonly externalExecution?: ExternalExecutionRecord;
+  readonly externalMaintenance?: ExternalMaintenanceIntent;
   readonly candidateAuthority?: CandidateAuthorityView;
   readonly lastAuditSequence: number;
   readonly latestReconciliation?: RecoveryReconciliationRecord;
@@ -217,6 +336,8 @@ export interface CommitStartupRecovery extends AuditWriteIdentity {
   readonly workflowAuditEventId: AuditEventId;
   readonly recovery: RecoveryReconciliationRecord;
   readonly recoveryAuditEventId: AuditEventId;
+  readonly externalExecutionAuditEventId?: AuditEventId;
+  readonly externalMaintenanceAuditEventId?: AuditEventId;
 }
 
 export interface CommitResumeRecovery extends AuditWriteIdentity {
@@ -483,6 +604,43 @@ export interface InstallExecutionProfile extends AuditWriteIdentity {
   readonly installedAt: IsoTimestamp;
 }
 
+export interface InstallExternalBackendCapabilityRecord extends AuditWriteIdentity {
+  readonly record: ExternalBackendCapabilityRecord;
+}
+
+export interface ClaimExternalWorkerDispatch extends ClaimWorkerDispatch {
+  readonly intent: ExternalExecutionIntent;
+  readonly externalAuditEventId: AuditEventId;
+}
+
+export interface AdmitExternalExecutionObservation {
+  readonly observation: ExternalExecutionObservation;
+  readonly observationAuditEventId: AuditEventId;
+  readonly recordAuditEventId: AuditEventId;
+}
+
+export interface AbandonExternalExecution {
+  readonly externalExecutionId: ExternalExecutionId;
+  readonly expectedRecordVersion: number;
+  readonly reasonCode: ExternalExecutionAbandonReasonCode;
+  readonly abandonedAt: IsoTimestamp;
+  readonly auditEventId: AuditEventId;
+}
+
+export interface AuthorizeExternalMaintenance {
+  readonly intent: ExternalMaintenanceIntent;
+  readonly auditEventId: AuditEventId;
+}
+
+export interface CompleteExternalMaintenance {
+  readonly maintenanceIntentId: ExternalMaintenanceIntentId;
+  readonly expectedState: 'AUTHORIZED';
+  readonly state: 'OBSERVED' | 'FAILED' | 'ABANDONED';
+  readonly observedAt: IsoTimestamp;
+  readonly failureCode?: ExternalMaintenanceFailureCode;
+  readonly auditEventId: AuditEventId;
+}
+
 export interface InstalledExecutionProfile {
   readonly profile: ExecutionProfile;
   readonly installedAt: IsoTimestamp;
@@ -537,6 +695,39 @@ export type ExecutionProfileInstallResult =
   | { readonly status: 'EXISTING'; readonly value: InstalledExecutionProfile }
   | { readonly status: 'PROFILE_CONFLICT'; readonly message: string };
 
+export type ExternalBackendCapabilityInstallResult =
+  | { readonly status: 'INSTALLED'; readonly value: ExternalBackendCapabilityRecord }
+  | { readonly status: 'EXISTING'; readonly value: ExternalBackendCapabilityRecord }
+  | { readonly status: 'CAPABILITY_CONFLICT'; readonly message: string };
+
+export type ExternalWorkerDispatchClaimResult =
+  | {
+      readonly status: 'CLAIMED';
+      readonly claim: WorkerDispatchClaim;
+      readonly execution: ExternalExecutionRecord;
+    }
+  | {
+      readonly status: 'EXISTING';
+      readonly claim: WorkerDispatchClaim;
+      readonly execution: ExternalExecutionRecord;
+    }
+  | { readonly status: 'VERSION_CONFLICT'; readonly message: string }
+  | { readonly status: 'NOT_ELIGIBLE'; readonly message: string }
+  | { readonly status: 'DISPATCH_CONFLICT'; readonly message: string };
+
+export type ExternalExecutionObservationStoreResult =
+  | { readonly status: 'APPLIED'; readonly value: ExternalExecutionRecord }
+  | { readonly status: 'REPLAYED'; readonly value: ExternalExecutionRecord }
+  | { readonly status: 'VERSION_CONFLICT'; readonly message: string }
+  | { readonly status: 'OBSERVATION_CONFLICT'; readonly message: string }
+  | { readonly status: 'TERMINAL'; readonly message: string };
+
+export type ExternalMaintenanceStoreResult =
+  | { readonly status: 'APPLIED'; readonly value: ExternalMaintenanceIntent }
+  | { readonly status: 'REPLAYED'; readonly value: ExternalMaintenanceIntent }
+  | { readonly status: 'STATE_CONFLICT'; readonly message: string }
+  | { readonly status: 'MAINTENANCE_CONFLICT'; readonly message: string };
+
 export type WorkerDispatchClaimResult =
   | { readonly status: 'CLAIMED'; readonly value: WorkerDispatchClaim }
   | { readonly status: 'EXISTING'; readonly value: WorkerDispatchClaim }
@@ -589,6 +780,44 @@ export interface WorkerControlStore extends WorkflowControlStore {
     input: CommitWorkerAttemptEvent,
   ): WorkerEventStoreResult<AppliedAttemptEvent>;
   recordIgnoredWorkerEvent(input: RecordIgnoredWorkerEvent): WorkerEventStoreResult<undefined>;
+  getExternalExecutionForAttempt?(attemptId: AttemptId): ExternalExecutionRecord | undefined;
+  abandonExternalExecution?(
+    input: AbandonExternalExecution,
+  ): ExternalExecutionObservationStoreResult;
+}
+
+export interface ExternalExecutionControlStore {
+  getExternalBackendCapabilityRecord(
+    digest: Sha256Digest,
+  ): ExternalBackendCapabilityRecord | undefined;
+  getExternalExecution(
+    externalExecutionId: ExternalExecutionId,
+  ): ExternalExecutionRecord | undefined;
+  getExternalExecutionForAttempt(attemptId: AttemptId): ExternalExecutionRecord | undefined;
+  getExternalExecutionObservation(
+    observationId: ExternalExecutionObservationId,
+  ): ExternalExecutionObservation | undefined;
+  getExternalMaintenanceIntent(
+    maintenanceIntentId: ExternalMaintenanceIntentId,
+  ): ExternalMaintenanceIntent | undefined;
+  getExternalMaintenanceIntentForExecution(
+    externalExecutionId: ExternalExecutionId,
+    sequence: number,
+  ): ExternalMaintenanceIntent | undefined;
+  installExternalBackendCapabilityRecord(
+    input: InstallExternalBackendCapabilityRecord,
+  ): ExternalBackendCapabilityInstallResult;
+  claimExternalWorkerDispatch(
+    input: ClaimExternalWorkerDispatch,
+  ): ExternalWorkerDispatchClaimResult;
+  admitExternalExecutionObservation(
+    input: AdmitExternalExecutionObservation,
+  ): ExternalExecutionObservationStoreResult;
+  abandonExternalExecution(
+    input: AbandonExternalExecution,
+  ): ExternalExecutionObservationStoreResult;
+  authorizeExternalMaintenance(input: AuthorizeExternalMaintenance): ExternalMaintenanceStoreResult;
+  completeExternalMaintenance(input: CompleteExternalMaintenance): ExternalMaintenanceStoreResult;
 }
 
 export interface RecoveryControlStore extends WorkerControlStore {
@@ -624,6 +853,10 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
   getEvidence(evidenceId: EvidenceId): EvidenceRecord | undefined;
   getEvidencePayload(digest: Sha256Digest, byteLength: number): EvidencePayload | undefined;
   getEvidenceEligibility(evidenceId: EvidenceId): EvidenceEligibility | undefined;
+  getEvidenceEligibilityVersion(
+    evidenceId: EvidenceId,
+    version: EvidenceEligibility['version'],
+  ): EvidenceEligibility | undefined;
   listEvidenceForGeneration(
     candidateGenerationId: CandidateGeneration['id'],
   ): readonly { readonly record: EvidenceRecord; readonly eligibility: EvidenceEligibility }[];
@@ -665,6 +898,9 @@ export interface AcceptanceControlStore extends CandidateEvidenceControlStore {
   getAcceptanceRepairForRejectedGeneration(
     candidateGenerationId: CandidateGenerationId,
   ): AcceptanceRepairRecord | undefined;
+  getAcceptanceRepairForRepairGeneration?(
+    candidateGenerationId: CandidateGenerationId,
+  ): AcceptanceRepairRecord | undefined;
   commitAcceptanceEvaluation(
     input: CommitAcceptanceEvaluation,
   ): StoreCommandResult<CommittedAcceptanceEvaluation>;
@@ -676,6 +912,7 @@ export interface AcceptanceControlStore extends CandidateEvidenceControlStore {
   ): StoreCommandResult<CommittedAcceptanceRepair>;
 }
 
-export interface WorkflowDriverControlStore extends AcceptanceControlStore {
-  getWorkflowDriverAuthority(goalId: GoalId): WorkflowDriverAuthoritySnapshot | undefined;
-}
+export type WorkflowDriverControlStore = AcceptanceControlStore &
+  ExternalExecutionControlStore & {
+    getWorkflowDriverAuthority(goalId: GoalId): WorkflowDriverAuthoritySnapshot | undefined;
+  };

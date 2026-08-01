@@ -10,6 +10,9 @@ import {
   commandId,
   contextManifestId,
   evidenceId,
+  externalExecutionId,
+  externalExecutionObservationId,
+  externalMaintenanceIntentId,
   goalId,
   isoTimestamp,
   recoveryReconciliationId,
@@ -26,6 +29,9 @@ import {
   type CommandId,
   type ContextManifestId,
   type EvidenceId,
+  type ExternalExecutionId,
+  type ExternalExecutionObservationId,
+  type ExternalMaintenanceIntentId,
   type GoalId,
   type IsoTimestamp,
   type RecoveryReconciliationId,
@@ -39,6 +45,7 @@ import type { CandidateEvidenceIdentityGenerator } from './candidate-evidence-co
 import type {
   AcceptanceIdentityGenerator,
   Clock,
+  ExternalExecutionIdentityGenerator,
   GoalCreationIdentityGenerator,
   RecoveryIdentityGenerator,
   WorkerIdentityGenerator,
@@ -64,6 +71,7 @@ export class CryptographicIdentityGenerator
     WorkerIdentityGenerator,
     CandidateEvidenceIdentityGenerator,
     AcceptanceIdentityGenerator,
+    ExternalExecutionIdentityGenerator,
     RecoveryIdentityGenerator
 {
   public nextGoalId(): GoalId {
@@ -96,6 +104,18 @@ export class CryptographicIdentityGenerator
 
   public nextWorkerSessionId(): WorkerSessionId {
     return workerSessionId(`worker_${this.nextSuffix()}`);
+  }
+
+  public nextExternalExecutionId(): ExternalExecutionId {
+    return externalExecutionId(`external_${this.nextSuffix()}`);
+  }
+
+  public nextExternalExecutionObservationId(): ExternalExecutionObservationId {
+    return externalExecutionObservationId(`external-observation_${this.nextSuffix()}`);
+  }
+
+  public nextExternalMaintenanceIntentId(): ExternalMaintenanceIntentId {
+    return externalMaintenanceIntentId(`maintenance_${this.nextSuffix()}`);
   }
 
   public nextCandidateId(): CandidateId {

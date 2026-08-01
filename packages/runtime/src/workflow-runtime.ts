@@ -19,6 +19,7 @@ import {
   WorkflowRejectionCode,
   acceptanceRepairRecordProjection,
   acceptanceDecisionId,
+  aggregateVersion,
   attemptId,
   applyCandidateEvent,
   applyAttemptEvent,
@@ -97,6 +98,8 @@ import {
   type PolicyBundle,
   type PolicyBundleId,
   type Sha256Digest,
+  type PriorAttemptFeedback,
+  type RepairContext,
   type VerificationObligationId,
   type VerificationObligation,
   type WorkflowId,
@@ -195,6 +198,7 @@ import {
   executeLocalCommandVerification,
   type LocalCommandVerificationExecution,
 } from './local-command-verification.js';
+import { compileBoundedM2RepairContext } from './repair-context.js';
 import {
   WorkerEventDisposition,
   WorkerEventNonAdmissionClass,
@@ -272,6 +276,10 @@ export interface AttemptContextCompilationRequest {
   readonly candidate?: {
     readonly generationId: CandidateGenerationId;
     readonly digest: Sha256Digest;
+  };
+  readonly repair?: {
+    readonly repairContext: RepairContext;
+    readonly priorAttemptFeedback: PriorAttemptFeedback;
   };
 }
 
@@ -559,6 +567,7 @@ function isCandidateEvidenceControlStore(
       'getEvidence',
       'getEvidencePayload',
       'getEvidenceEligibility',
+      'getEvidenceEligibilityVersion',
       'listEvidenceForGeneration',
       'getEvidenceSet',
       'commitCandidatePreparation',
@@ -6260,6 +6269,218 @@ export class WorkflowRuntimeKernel {
     return Object.freeze({ policy: activePolicy, binding });
   }
 
+  private resolveRepairCompilationInput(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    candidateBinding: {
+      readonly generationId: CandidateGenerationId;
+      readonly digest: Sha256Digest;
+    },
+  ): AttemptContextCompilationRequest['repair'] | undefined {
+    const store = this.requireAcceptanceStore();
+    if (store.getAcceptanceRepairForRepairGeneration === undefined) {
+      return undefined;
+    }
+    const rawRepair = this.storeOperation(
+      commandIdentifier,
+      'REPAIR_CONTEXT_RECORD_READ_FAILURE',
+      () => store.getAcceptanceRepairForRepairGeneration?.(candidateBinding.generationId),
+    );
+    if (rawRepair === undefined) {
+      return undefined;
+    }
+    const repair = decodeAcceptanceRepairRecord(rawRepair);
+    const decision = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'REPAIR_CONTEXT_DECISION_INVALID',
+      () => {
+        const raw = store.getAcceptanceDecision(repair.acceptanceDecisionId);
+        if (raw === undefined) {
+          throw new TypeError('Repair Context has no Acceptance Decision');
+        }
+        return decodeAcceptanceDecision(raw);
+      },
+    );
+    const manifest = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'REPAIR_CONTEXT_INPUT_MANIFEST_INVALID',
+      () => {
+        const raw = store.getAcceptanceInputManifest(repair.inputManifestDigest);
+        if (raw === undefined) {
+          throw new TypeError('Repair Context has no Acceptance Input Manifest');
+        }
+        return decodeAcceptanceInputManifest(raw);
+      },
+    );
+    const evidenceSet = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'REPAIR_CONTEXT_EVIDENCE_SET_INVALID',
+      () => {
+        const raw = store.getEvidenceSet(repair.evidenceSetDigest);
+        if (raw === undefined) {
+          throw new TypeError('Repair Context has no exact Evidence Set');
+        }
+        return decodeEvidenceSet(raw);
+      },
+    );
+    const parent = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'REPAIR_CONTEXT_PARENT_INVALID',
+      () => {
+        const raw = store.getCandidateGeneration(repair.rejectedCandidateGenerationId);
+        if (raw === undefined) {
+          throw new TypeError('Repair Context has no rejected parent');
+        }
+        return decodeCandidateGeneration(raw);
+      },
+    );
+    const child = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'REPAIR_CONTEXT_CHILD_INVALID',
+      () => {
+        const raw = store.getCandidateGeneration(repair.repairCandidateGenerationId);
+        if (raw === undefined) {
+          throw new TypeError('Repair Context has no repair child');
+        }
+        return decodeCandidateGeneration(raw);
+      },
+    );
+    if (
+      repair.goalId !== goal.id ||
+      repair.goalRevision !== goal.revision ||
+      repair.workflowId !== workflow.id ||
+      repair.workflowVersion !== workflow.version ||
+      repair.repairCandidateGenerationId !== candidateBinding.generationId ||
+      repair.repairCandidateBaseDigest !== candidateBinding.digest ||
+      repair.policyBundleId !== this.#acceptance?.policyBundleId ||
+      repair.policyBundleDigest !== this.#acceptance.policyBundleDigest ||
+      decision.id !== repair.acceptanceDecisionId ||
+      decision.decisionDigest !== repair.acceptanceDecisionDigest ||
+      decision.inputManifestDigest !== repair.inputManifestDigest ||
+      decision.outcome !== AcceptanceOutcome.REJECT_REPAIRABLE ||
+      manifest.manifestDigest !== repair.inputManifestDigest ||
+      manifest.goalId !== goal.id ||
+      manifest.goalRevision !== goal.revision ||
+      manifest.workflowId !== workflow.id ||
+      manifest.candidateGenerationId !== repair.rejectedCandidateGenerationId ||
+      manifest.candidateDigest !== repair.rejectedCandidateDigest ||
+      manifest.evidenceSetDigest !== repair.evidenceSetDigest ||
+      evidenceSet.digest !== repair.evidenceSetDigest ||
+      evidenceSet.goalId !== goal.id ||
+      evidenceSet.goalRevision !== goal.revision ||
+      evidenceSet.candidateGenerationId !== repair.rejectedCandidateGenerationId ||
+      evidenceSet.candidateDigest !== repair.rejectedCandidateDigest ||
+      parent.id !== repair.rejectedCandidateGenerationId ||
+      parent.version !== repair.rejectedCandidateVersion ||
+      parent.state !== CandidateGenerationState.REJECTED ||
+      parent.frozenDigest !== repair.rejectedCandidateDigest ||
+      child.id !== repair.repairCandidateGenerationId ||
+      child.parentGenerationId !== parent.id ||
+      child.sequence !== repair.repairCandidateSequence ||
+      child.state !== CandidateGenerationState.MUTABLE ||
+      child.baseDigest !== repair.repairCandidateBaseDigest
+    ) {
+      throw new TypeError('Repair Context sources do not share exact current repair authority');
+    }
+
+    const evidenceSnapshots = evidenceSet.evidenceRefs.map((reference) => {
+      const record = this.decodeStoreSnapshot(
+        commandIdentifier,
+        'REPAIR_CONTEXT_EVIDENCE_INVALID',
+        () => {
+          const raw = store.getEvidence(reference.evidenceId);
+          if (raw === undefined) {
+            throw new TypeError('Repair Context Evidence is missing');
+          }
+          return decodeEvidenceRecord(raw);
+        },
+      );
+      const eligibility = this.decodeStoreSnapshot(
+        commandIdentifier,
+        'REPAIR_CONTEXT_ELIGIBILITY_INVALID',
+        () => {
+          const raw = store.getEvidenceEligibilityVersion(
+            reference.evidenceId,
+            reference.eligibilityVersion,
+          );
+          if (raw === undefined) {
+            throw new TypeError('Repair Context eligibility is missing');
+          }
+          return decodeEvidenceEligibility(raw);
+        },
+      );
+      if (
+        record.id !== reference.evidenceId ||
+        record.recordDigest !== reference.evidenceRecordDigest ||
+        record.goalId !== goal.id ||
+        record.goalRevision !== goal.revision ||
+        record.workflowId !== workflow.id ||
+        record.candidateGenerationId !== parent.id ||
+        record.candidateDigest !== repair.rejectedCandidateDigest ||
+        eligibility.evidenceId !== reference.evidenceId ||
+        eligibility.version !== reference.eligibilityVersion ||
+        eligibility.state !== reference.eligibilityState
+      ) {
+        throw new TypeError('Repair Context Evidence snapshot is stale or mismatched');
+      }
+      return Object.freeze({ record, eligibility });
+    });
+    const freezeEvidenceRecords = this.resolveGenerationEvidence(
+      commandIdentifier,
+      parent.id,
+    ).filter(({ record }) => record.kind === EvidenceKind.CANDIDATE_FREEZE);
+    const freezeRecord = freezeEvidenceRecords[0]?.record;
+    const freezeEligibility =
+      freezeRecord === undefined
+        ? undefined
+        : this.decodeStoreSnapshot(
+            commandIdentifier,
+            'REPAIR_CONTEXT_FREEZE_ELIGIBILITY_INVALID',
+            () => {
+              const raw = store.getEvidenceEligibilityVersion(freezeRecord.id, aggregateVersion(1));
+              if (raw === undefined) {
+                throw new TypeError('Repair Context parent freeze eligibility is missing');
+              }
+              return decodeEvidenceEligibility(raw);
+            },
+          );
+    const freezeEvidence =
+      freezeRecord === undefined || freezeEligibility === undefined
+        ? undefined
+        : Object.freeze({ record: freezeRecord, eligibility: freezeEligibility });
+    if (
+      freezeEvidenceRecords.length !== 1 ||
+      freezeEvidence?.record.observation.kind !== EvidenceKind.CANDIDATE_FREEZE ||
+      freezeEvidence.record.goalId !== goal.id ||
+      freezeEvidence.record.goalRevision !== goal.revision ||
+      freezeEvidence.record.workflowId !== workflow.id ||
+      freezeEvidence.record.candidateGenerationId !== parent.id ||
+      freezeEvidence.record.candidateDigest !== repair.rejectedCandidateDigest ||
+      freezeEvidence.eligibility.state !== EvidenceEligibilityState.ELIGIBLE
+    ) {
+      throw new TypeError('Repair Context has no eligible parent Candidate-freeze Evidence');
+    }
+    return compileBoundedM2RepairContext(
+      {
+        goal,
+        workflowId: workflow.id,
+        contextWorkflowVersion: workflowVersion(workflow.version + 1),
+        policyBundleId: repair.policyBundleId,
+        policyBundleDigest: repair.policyBundleDigest,
+        repair,
+        decision,
+        manifest,
+        evidenceSet,
+        parent,
+        child,
+        freezeEvidence,
+        evidence: evidenceSnapshots,
+      },
+      this.#digests,
+    );
+  }
+
   private prepareAttemptContext(
     commandIdentifier: CommandId,
     goal: Goal,
@@ -6347,6 +6568,15 @@ export class WorkflowRuntimeKernel {
     } else if (applied.workflow.activeCandidateGenerationId !== undefined) {
       throw new TypeError('DISCOVERY and PLAN Context cannot bind a Candidate generation');
     }
+    const repair =
+      candidateBinding === undefined
+        ? undefined
+        : this.resolveRepairCompilationInput(
+            commandIdentifier,
+            goal,
+            currentWorkflow,
+            candidateBinding,
+          );
     const raw = workerContext.factory.compile({
       manifestId: applied.attempt.contextManifestId,
       createdAt: event.occurredAt,
@@ -6358,6 +6588,7 @@ export class WorkflowRuntimeKernel {
       policyBundleId: installedPolicy.id,
       policyBundleDigest: installedPolicy.digest,
       ...(candidateBinding === undefined ? {} : { candidate: candidateBinding }),
+      ...(repair === undefined ? {} : { repair }),
     });
     if (typeof raw !== 'object' || raw === null) {
       throw new TypeError('Context factory returned a malformed compilation');
@@ -6367,6 +6598,20 @@ export class WorkflowRuntimeKernel {
     if (
       contextPackage.selectedEntries.length !== 0 ||
       manifest.omissionDecisions.length !== 0 ||
+      (repair === undefined &&
+        (contextPackage.schemaVersion !== 2 ||
+          manifest.schemaVersion !== 2 ||
+          contextPackage.repairContext !== undefined ||
+          contextPackage.priorAttemptFeedback !== undefined ||
+          manifest.repairContextDigest !== undefined ||
+          manifest.priorAttemptFeedbackDigest !== undefined)) ||
+      (repair !== undefined &&
+        (contextPackage.schemaVersion !== 3 ||
+          manifest.schemaVersion !== 3 ||
+          canonicalizeJson(contextPackage.repairContext) !==
+            canonicalizeJson(repair.repairContext) ||
+          canonicalizeJson(contextPackage.priorAttemptFeedback) !==
+            canonicalizeJson(repair.priorAttemptFeedback))) ||
       (candidateBinding === undefined &&
         (contextPackage.candidateGenerationId !== undefined ||
           contextPackage.candidateDigest !== undefined ||
@@ -6405,6 +6650,10 @@ export class WorkflowRuntimeKernel {
       { schemaVersion: 1, responseContract: contextPackage.responseContract },
       'CONTEXT_RESPONSE_CONTRACT_DIGEST_FAILURE',
     );
+    const expectedRepairContextDigest =
+      repair === undefined
+        ? undefined
+        : this.digest(commandIdentifier, repair.repairContext, 'CONTEXT_REPAIR_DIGEST_FAILURE');
     const authoritativeGoalDigest = this.digest(
       commandIdentifier,
       {
@@ -6496,6 +6745,8 @@ export class WorkflowRuntimeKernel {
       manifest.capabilityGrantDigest !== expectedCapabilityGrantDigest ||
       manifest.responseContractDigest !== responseContractDigest ||
       manifest.responseContractDigest !== expectedResponseContractDigest ||
+      manifest.repairContextDigest !== expectedRepairContextDigest ||
+      manifest.priorAttemptFeedbackDigest !== repair?.priorAttemptFeedback.feedbackDigest ||
       expectedEntriesDigest !== manifestedEntriesDigest ||
       contradictsOmission
     ) {

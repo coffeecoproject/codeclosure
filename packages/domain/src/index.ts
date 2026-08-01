@@ -6,6 +6,8 @@ export * from './capabilities.js';
 export * from './codecs.js';
 export * from './context.js';
 export * from './evidence.js';
+export * from './external-execution-codecs.js';
+export * from './external-execution.js';
 export * from './execution-profile-codecs.js';
 export * from './execution-profile.js';
 export * from './identifiers.js';

@@ -15,6 +15,9 @@ import {
   ContextEntryKind,
   EvidenceEligibilityState,
   EvidenceKind,
+  ExternalBackendCapabilityClassification,
+  ExternalExecutionState,
+  ExternalMaintenanceState,
   GoalStatus,
   GuardOutcome,
   RecoveryReconciliationDisposition,
@@ -32,6 +35,7 @@ import {
   acceptanceInputManifestProjection,
   acceptanceRepairRecordProjection,
   acceptanceDecisionId,
+  aggregateVersion,
   attemptId,
   auditEventId,
   candidateGenerationId,
@@ -52,6 +56,11 @@ import {
   decodeEvidenceSet,
   decodeExecutionProfile,
   decodeExecutionProfileBinding,
+  decodeExternalBackendCapabilityRecord,
+  decodeExternalExecutionIntent,
+  decodeExternalExecutionObservation,
+  decodeExternalExecutionRecord,
+  decodeExternalMaintenanceIntent,
   decodeRecoveryReconciliationRecord,
   decodeRecoveryWorkflowEvent,
   decodeCloseoutRecord,
@@ -75,6 +84,16 @@ import {
   executionProfileBindingProjection,
   executionProfileId,
   executionProfileProjection,
+  externalBackendCapabilityRecordProjection,
+  externalExecutionId,
+  externalExecutionIntentProjection,
+  externalExecutionObservationId,
+  externalExecutionObservationProjection,
+  externalExecutionRecordProjection,
+  externalMaintenanceAuthorizationProjection,
+  externalMaintenanceIntentId,
+  externalMaintenanceRecordProjection,
+  externalProcessIdentityProjection,
   isoTimestamp,
   isTerminalAttemptWorkflowRunStatusAuthorized,
   policyBundleId,
@@ -111,6 +130,14 @@ import {
   type ExecutionProfile,
   type ExecutionProfileBinding,
   type ExecutionProfileId,
+  type ExternalBackendCapabilityRecord,
+  type ExternalExecutionId,
+  type ExternalExecutionObservation,
+  type ExternalExecutionObservationId,
+  type ExternalExecutionRecord,
+  type ExternalMaintenanceIntent,
+  type ExternalMaintenanceIntentId,
+  type ExternalProcessIdentity,
   type RecoveryReconciliationId,
   type RecoveryReconciliationRecord,
   type CloseoutRecord,
@@ -131,6 +158,9 @@ import {
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
+  ExternalExecutionAbandonReasonCode,
+  ExternalMaintenanceFailureReasonCode,
+  compileBoundedM2RepairContext,
   contextManifestDigestProjection,
   compileM1AcceptanceInput,
   createAppliedStoredCommandOutcome,
@@ -145,6 +175,9 @@ import {
   deriveContextManifestEntries,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
+  externalExecutionAbandonReasonCode,
+  externalMaintenanceFailureCode,
+  externalWorkerFailureCode,
   LocalCommandVerificationFailureCode,
   workerDispatchClaimProjection,
   attemptFailureClassForKnownWorkerReasonCode,
@@ -163,7 +196,13 @@ import {
   type AdmittedWorkerEventReceipt,
   type AcceptanceAuthorityView,
   type AcceptanceControlStore,
+  type AbandonExternalExecution,
+  type AdmitExternalExecutionObservation,
+  type AuthorizeExternalMaintenance,
+  type ClaimExternalWorkerDispatch,
   type ClaimWorkerDispatch,
+  type CompleteExternalMaintenance,
+  type ExternalMaintenanceFailureCode,
   type CandidateAuthorityView,
   type CommitAcceptanceEvaluation,
   type CommitAcceptanceRepair,
@@ -202,9 +241,14 @@ import {
   type WorkflowDriverControlStore,
   type InstallPolicyBundle,
   type InstallExecutionProfile,
+  type InstallExternalBackendCapabilityRecord,
   type InstalledExecutionProfile,
   type InstalledPolicyBundle,
   type ExecutionProfileInstallResult,
+  type ExternalBackendCapabilityInstallResult,
+  type ExternalExecutionObservationStoreResult,
+  type ExternalMaintenanceStoreResult,
+  type ExternalWorkerDispatchClaimResult,
   type PolicyInstallResult,
   type RecordIgnoredWorkerEvent,
   RecoverableBlockerKind,
@@ -247,6 +291,10 @@ import {
   decodeContextManifestRow,
   decodeExecutionProfileBindingRow,
   decodeExecutionProfileRow,
+  decodeExternalBackendCapabilityRow,
+  decodeExternalExecutionObservationRow,
+  decodeExternalExecutionRow,
+  decodeExternalMaintenanceIntentRow,
   decodeWorkflowPolicyBindingRow,
   decodeRecoveryReconciliationRow,
   decodePolicyBundleRow,
@@ -276,6 +324,14 @@ export type TransactionStep = (typeof TransactionStep)[keyof typeof TransactionS
 export const WorkerTransactionStep = {
   AFTER_CONTEXT_MANIFEST_WRITE: 'AFTER_CONTEXT_MANIFEST_WRITE',
   AFTER_DISPATCH_CLAIM_WRITE: 'AFTER_DISPATCH_CLAIM_WRITE',
+  AFTER_EXTERNAL_CAPABILITY_AUDIT_WRITE: 'AFTER_EXTERNAL_CAPABILITY_AUDIT_WRITE',
+  AFTER_EXTERNAL_CAPABILITY_WRITE: 'AFTER_EXTERNAL_CAPABILITY_WRITE',
+  AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE: 'AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE',
+  AFTER_EXTERNAL_EXECUTION_WRITE: 'AFTER_EXTERNAL_EXECUTION_WRITE',
+  AFTER_EXTERNAL_OBSERVATION_AUDIT_WRITE: 'AFTER_EXTERNAL_OBSERVATION_AUDIT_WRITE',
+  AFTER_EXTERNAL_OBSERVATION_WRITE: 'AFTER_EXTERNAL_OBSERVATION_WRITE',
+  AFTER_EXTERNAL_MAINTENANCE_AUDIT_WRITE: 'AFTER_EXTERNAL_MAINTENANCE_AUDIT_WRITE',
+  AFTER_EXTERNAL_MAINTENANCE_WRITE: 'AFTER_EXTERNAL_MAINTENANCE_WRITE',
   AFTER_WORKER_RECEIPT_WRITE: 'AFTER_WORKER_RECEIPT_WRITE',
   AFTER_POLICY_AUDIT_WRITE: 'AFTER_POLICY_AUDIT_WRITE',
   AFTER_POLICY_WRITE: 'AFTER_POLICY_WRITE',
@@ -606,6 +662,10 @@ function decodeAuthorityIsolationLease(value: unknown): SqliteAuthorityIsolation
   });
 }
 
+function rawField(value: object, key: PropertyKey): unknown {
+  return Reflect.get(value, key) as unknown;
+}
+
 function validateBusyTimeout(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value > 60_000) {
     throw new TypeError('busyTimeoutMilliseconds must be an integer from 0 through 60000');
@@ -696,6 +756,21 @@ function validateCommitStartupRecovery(
   const event = base.event;
   const recovery = decodeRecoveryReconciliationRecord(rawInput.recovery);
   const recoveryAuditEventId = auditEventId(rawInput.recoveryAuditEventId);
+  const externalExecutionAuditEventId =
+    rawInput.externalExecutionAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.externalExecutionAuditEventId);
+  const externalMaintenanceAuditEventId =
+    rawInput.externalMaintenanceAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.externalMaintenanceAuditEventId);
+  const auditIdentifiers = [
+    base.auditEventId,
+    base.workflowAuditEventId,
+    recoveryAuditEventId,
+    ...(externalExecutionAuditEventId === undefined ? [] : [externalExecutionAuditEventId]),
+    ...(externalMaintenanceAuditEventId === undefined ? [] : [externalMaintenanceAuditEventId]),
+  ];
   validateRecoveryDigest(recovery);
   if (
     event.type !== 'ATTEMPT_FINISHED' ||
@@ -709,14 +784,20 @@ function validateCommitStartupRecovery(
     recovery.inspectedWorkflowVersion !== event.fromWorkflowVersion ||
     recovery.resultingWorkflowVersion !== event.toWorkflowVersion ||
     recovery.inspectedAt !== event.occurredAt ||
-    recoveryAuditEventId === base.auditEventId ||
-    recoveryAuditEventId === base.workflowAuditEventId
+    new Set(auditIdentifiers).size !== auditIdentifiers.length
   ) {
     throw new StoreInvariantError(
       'Startup recovery does not bind one exact interrupted Attempt transition',
     );
   }
-  return Object.freeze({ ...base, event, recovery, recoveryAuditEventId });
+  return Object.freeze({
+    ...base,
+    event,
+    recovery,
+    recoveryAuditEventId,
+    ...(externalExecutionAuditEventId === undefined ? {} : { externalExecutionAuditEventId }),
+    ...(externalMaintenanceAuditEventId === undefined ? {} : { externalMaintenanceAuditEventId }),
+  });
 }
 
 function validateCommitResumeRecovery(rawInput: CommitResumeRecovery): CommitResumeRecovery {
@@ -924,6 +1005,20 @@ function validateInstallExecutionProfile(
   });
 }
 
+function validateInstallExternalBackendCapabilityRecord(
+  rawInput: InstallExternalBackendCapabilityRecord,
+): InstallExternalBackendCapabilityRecord {
+  const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
+  const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
+  return Object.freeze({
+    record: decodeExternalBackendCapabilityRecord(rawInput.record),
+    auditEventId: auditEventId(rawInput.auditEventId),
+    payloadDigest: sha256Digest(rawInput.payloadDigest),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(causationId === undefined ? {} : { causationId }),
+  });
+}
+
 function validateClaimWorkerDispatch(rawInput: ClaimWorkerDispatch): ClaimWorkerDispatch {
   const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
   const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
@@ -933,6 +1028,112 @@ function validateClaimWorkerDispatch(rawInput: ClaimWorkerDispatch): ClaimWorker
     payloadDigest: sha256Digest(rawInput.payloadDigest),
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(causationId === undefined ? {} : { causationId }),
+  });
+}
+
+function validateClaimExternalWorkerDispatch(
+  rawInput: ClaimExternalWorkerDispatch,
+): ClaimExternalWorkerDispatch {
+  const base = validateClaimWorkerDispatch(rawInput);
+  const externalAuditEventId = auditEventId(rawInput.externalAuditEventId);
+  if (externalAuditEventId === base.auditEventId) {
+    throw new StoreInvariantError('External execution and dispatch claim require distinct audits');
+  }
+  return Object.freeze({
+    ...base,
+    intent: decodeExternalExecutionIntent(rawInput.intent),
+    externalAuditEventId,
+  });
+}
+
+function validateAdmitExternalExecutionObservation(
+  rawInput: AdmitExternalExecutionObservation,
+): AdmitExternalExecutionObservation {
+  const observation = decodeExternalExecutionObservation(rawInput.observation);
+  if (
+    observation.processIdentity !== undefined &&
+    observation.processIdentity.identityDigest !==
+      sha256Digest(
+        canonicalAuthorityDigests.digest(
+          externalProcessIdentityProjection(observation.processIdentity),
+        ),
+      )
+  ) {
+    throw new StoreInvariantError('External process observation has a false identity digest');
+  }
+  if (observation.failureCode !== undefined) {
+    externalWorkerFailureCode(observation.failureCode);
+  }
+  const observationAuditEventId = auditEventId(rawInput.observationAuditEventId);
+  const recordAuditEventId = auditEventId(rawInput.recordAuditEventId);
+  if (observationAuditEventId === recordAuditEventId) {
+    throw new StoreInvariantError('External observation and record update require distinct audits');
+  }
+  return Object.freeze({
+    observation,
+    observationAuditEventId,
+    recordAuditEventId,
+  });
+}
+
+function validateAbandonExternalExecution(
+  rawInput: AbandonExternalExecution,
+): AbandonExternalExecution {
+  if (!Number.isSafeInteger(rawInput.expectedRecordVersion) || rawInput.expectedRecordVersion < 1) {
+    throw new TypeError('External execution expected version must be a positive integer');
+  }
+  const reasonCode = externalExecutionAbandonReasonCode(rawInput.reasonCode);
+  return Object.freeze({
+    externalExecutionId: externalExecutionId(rawInput.externalExecutionId),
+    expectedRecordVersion: rawInput.expectedRecordVersion,
+    reasonCode,
+    abandonedAt: isoTimestamp(rawInput.abandonedAt),
+    auditEventId: auditEventId(rawInput.auditEventId),
+  });
+}
+
+function validateAuthorizeExternalMaintenance(
+  rawInput: AuthorizeExternalMaintenance,
+): AuthorizeExternalMaintenance {
+  const intent = decodeExternalMaintenanceIntent(rawInput.intent);
+  if (intent.state !== ExternalMaintenanceState.AUTHORIZED) {
+    throw new TypeError('External maintenance authorization must be in AUTHORIZED state');
+  }
+  return Object.freeze({
+    intent,
+    auditEventId: auditEventId(rawInput.auditEventId),
+  });
+}
+
+function validateCompleteExternalMaintenance(
+  rawInput: CompleteExternalMaintenance,
+): CompleteExternalMaintenance {
+  const state = rawInput.state;
+  const allowedStates: readonly unknown[] = [
+    ExternalMaintenanceState.OBSERVED,
+    ExternalMaintenanceState.FAILED,
+    ExternalMaintenanceState.ABANDONED,
+  ];
+  if (
+    rawField(rawInput, 'expectedState') !== ExternalMaintenanceState.AUTHORIZED ||
+    !allowedStates.includes(rawField(rawInput, 'state'))
+  ) {
+    throw new TypeError('External maintenance transition is unsupported');
+  }
+  const failureCode =
+    rawInput.failureCode === undefined
+      ? undefined
+      : externalMaintenanceFailureCode(rawInput.failureCode);
+  if ((state === ExternalMaintenanceState.OBSERVED) === (failureCode !== undefined)) {
+    throw new TypeError('External maintenance transition has invalid failure details');
+  }
+  return Object.freeze({
+    maintenanceIntentId: externalMaintenanceIntentId(rawInput.maintenanceIntentId),
+    expectedState: rawInput.expectedState,
+    state,
+    observedAt: isoTimestamp(rawInput.observedAt),
+    ...(failureCode === undefined ? {} : { failureCode }),
+    auditEventId: auditEventId(rawInput.auditEventId),
   });
 }
 
@@ -1976,9 +2177,22 @@ export class SqliteControlStore
   ): ContextManifest | undefined {
     this.assertOpen();
     const manifestIdentifier = contextManifestId(rawContextManifestIdentifier);
-    const row = this.#database
-      .prepare('SELECT * FROM context_manifests WHERE id = ?')
-      .get(manifestIdentifier);
+    const row = this.hasTable('repair_context_manifest_extensions')
+      ? this.#database
+          .prepare(
+            `SELECT context.*,
+                    extension.logical_schema_version,
+                    extension.repair_context_digest,
+                    extension.prior_attempt_feedback_digest
+               FROM context_manifests AS context
+               LEFT JOIN repair_context_manifest_extensions AS extension
+                 ON extension.context_manifest_id = context.id
+              WHERE context.id = ?`,
+          )
+          .get(manifestIdentifier)
+      : this.#database
+          .prepare('SELECT * FROM context_manifests WHERE id = ?')
+          .get(manifestIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedContextManifestRow(row);
   }
 
@@ -2167,6 +2381,24 @@ export class SqliteControlStore
     return row === undefined ? undefined : decodeEvidenceEligibilityRow(row);
   }
 
+  public getEvidenceEligibilityVersion(
+    rawEvidenceIdentifier: EvidenceId,
+    rawVersion: EvidenceEligibility['version'],
+  ): EvidenceEligibility | undefined {
+    this.assertOpen();
+    const evidenceIdentifier = evidenceId(rawEvidenceIdentifier);
+    if (!Number.isSafeInteger(rawVersion) || rawVersion < 1) {
+      throw new StoreInvariantError('Evidence eligibility version is invalid');
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM evidence_eligibility
+          WHERE evidence_id = ? AND version = ?`,
+      )
+      .get(evidenceIdentifier, rawVersion);
+    return row === undefined ? undefined : decodeEvidenceEligibilityRow(row);
+  }
+
   public listEvidenceForGeneration(
     rawGenerationIdentifier: CandidateGenerationId,
   ): readonly { readonly record: EvidenceRecord; readonly eligibility: EvidenceEligibility }[] {
@@ -2226,10 +2458,96 @@ export class SqliteControlStore
   ): InstalledExecutionProfile | undefined {
     this.assertOpen();
     const profileIdentifier = executionProfileId(rawProfileIdentifier);
-    const row = this.#database
-      .prepare('SELECT * FROM execution_profiles WHERE id = ?')
-      .get(profileIdentifier);
+    const row = this.hasTable('external_execution_profile_extensions')
+      ? this.#database
+          .prepare(
+            `SELECT profile.*,
+                    extension.logical_schema_version,
+                    extension.capability_record_digest,
+                    extension.external_execution_json
+               FROM execution_profiles AS profile
+               LEFT JOIN external_execution_profile_extensions AS extension
+                 ON extension.profile_id = profile.id
+              WHERE profile.id = ?`,
+          )
+          .get(profileIdentifier)
+      : this.#database
+          .prepare('SELECT * FROM execution_profiles WHERE id = ?')
+          .get(profileIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedExecutionProfileRow(row);
+  }
+
+  public getExternalBackendCapabilityRecord(
+    rawDigest: Sha256Digest,
+  ): ExternalBackendCapabilityRecord | undefined {
+    this.assertOpen();
+    const digest = sha256Digest(rawDigest);
+    const row = this.#database
+      .prepare('SELECT * FROM external_backend_capability_records WHERE record_digest = ?')
+      .get(digest);
+    return row === undefined ? undefined : this.decodeVerifiedExternalBackendCapabilityRow(row);
+  }
+
+  public getExternalExecution(
+    rawExternalExecutionId: ExternalExecutionId,
+  ): ExternalExecutionRecord | undefined {
+    this.assertOpen();
+    const identifier = externalExecutionId(rawExternalExecutionId);
+    const row = this.#database
+      .prepare('SELECT * FROM external_execution_records WHERE id = ?')
+      .get(identifier);
+    return row === undefined ? undefined : this.decodeVerifiedExternalExecutionRow(row);
+  }
+
+  public getExternalExecutionForAttempt(
+    rawAttemptId: AttemptId,
+  ): ExternalExecutionRecord | undefined {
+    this.assertOpen();
+    const identifier = attemptId(rawAttemptId);
+    const row = this.#database
+      .prepare('SELECT * FROM external_execution_records WHERE attempt_id = ?')
+      .get(identifier);
+    return row === undefined ? undefined : this.decodeVerifiedExternalExecutionRow(row);
+  }
+
+  public getExternalExecutionObservation(
+    rawObservationId: ExternalExecutionObservationId,
+  ): ExternalExecutionObservation | undefined {
+    this.assertOpen();
+    const identifier = externalExecutionObservationId(rawObservationId);
+    const row = this.#database
+      .prepare('SELECT * FROM external_execution_observations WHERE id = ?')
+      .get(identifier);
+    return row === undefined ? undefined : this.decodeVerifiedExternalExecutionObservationRow(row);
+  }
+
+  public getExternalMaintenanceIntent(
+    rawMaintenanceIntentId: ExternalMaintenanceIntentId,
+  ): ExternalMaintenanceIntent | undefined {
+    this.assertOpen();
+    const identifier = externalMaintenanceIntentId(rawMaintenanceIntentId);
+    const row = this.#database
+      .prepare('SELECT * FROM external_maintenance_intents WHERE id = ?')
+      .get(identifier);
+    return row === undefined ? undefined : this.decodeVerifiedExternalMaintenanceIntentRow(row);
+  }
+
+  public getExternalMaintenanceIntentForExecution(
+    rawExternalExecutionId: ExternalExecutionId,
+    sequence: number,
+  ): ExternalMaintenanceIntent | undefined {
+    this.assertOpen();
+    const identifier = externalExecutionId(rawExternalExecutionId);
+    if (!Number.isSafeInteger(sequence) || sequence < 1) {
+      throw new TypeError('External maintenance sequence must be a positive integer');
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM external_maintenance_intents
+          WHERE external_execution_id = ? AND sequence = ?`,
+      )
+      .get(identifier, sequence);
+    return row === undefined ? undefined : this.decodeVerifiedExternalMaintenanceIntentRow(row);
   }
 
   public getExecutionProfileBinding(
@@ -2412,6 +2730,13 @@ export class SqliteControlStore
         );
       }
       const dispatchClaim = this.getWorkerDispatchClaim(sourceAttempt.id);
+      const externalExecution = this.hasTable('external_execution_records')
+        ? this.getExternalExecutionForAttempt(sourceAttempt.id)
+        : undefined;
+      const externalMaintenance =
+        externalExecution === undefined
+          ? undefined
+          : this.getExternalMaintenanceIntentForExecution(externalExecution.id, 1);
       const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
       const watermark = auditSequenceWatermarkRowSchema.parse(
         this.#database
@@ -2432,6 +2757,8 @@ export class SqliteControlStore
         policyBinding,
         executionProfileBinding,
         ...(dispatchClaim === undefined ? {} : { dispatchClaim }),
+        ...(externalExecution === undefined ? {} : { externalExecution }),
+        ...(externalMaintenance === undefined ? {} : { externalMaintenance }),
         ...(candidateAuthority === undefined ? {} : { candidateAuthority }),
         lastAuditSequence: watermark,
         ...(latestReconciliation === undefined ? {} : { latestReconciliation }),
@@ -2643,6 +2970,17 @@ export class SqliteControlStore
     return row === undefined ? undefined : decodeAcceptanceRepairRow(row);
   }
 
+  public getAcceptanceRepairForRepairGeneration(
+    rawCandidateGenerationIdentifier: CandidateGenerationId,
+  ): AcceptanceRepairRecord | undefined {
+    this.assertOpen();
+    const generationIdentifier = candidateGenerationId(rawCandidateGenerationIdentifier);
+    const row = this.#database
+      .prepare('SELECT * FROM acceptance_repairs WHERE repair_candidate_generation_id = ?')
+      .get(generationIdentifier);
+    return row === undefined ? undefined : decodeAcceptanceRepairRow(row);
+  }
+
   public getWorkerDispatchClaim(rawAttemptIdentifier: AttemptId): WorkerDispatchClaim | undefined {
     this.assertOpen();
     const attemptIdentifier = attemptId(rawAttemptIdentifier);
@@ -2686,15 +3024,12 @@ export class SqliteControlStore
           `Worker Event ${receipt.eventId} has no replay dispatch authority`,
         );
       }
-      const manifestRow = this.#database
-        .prepare('SELECT * FROM context_manifests WHERE id = ?')
-        .get(receipt.contextManifestId);
-      if (manifestRow === undefined) {
+      const contextManifest = this.getContextManifest(receipt.contextManifestId);
+      if (contextManifest === undefined) {
         throw new StoreInvariantError(
           `Worker Event ${receipt.eventId} has no replay Context Manifest`,
         );
       }
-      const contextManifest = this.decodeVerifiedContextManifestRow(manifestRow);
       if (receipt.disposition === WorkerEventDisposition.IGNORED) {
         return Object.freeze({ receipt, dispatchClaim, contextManifest });
       }
@@ -2835,6 +3170,85 @@ export class SqliteControlStore
     });
   }
 
+  public installExternalBackendCapabilityRecord(
+    rawInput: InstallExternalBackendCapabilityRecord,
+  ): ExternalBackendCapabilityInstallResult {
+    this.assertOpen();
+    const input = validateInstallExternalBackendCapabilityRecord(rawInput);
+    const expectedDigest = this.externalBackendCapabilityDigest(input.record);
+    if (input.record.recordDigest !== expectedDigest || input.payloadDigest !== expectedDigest) {
+      throw new StoreInvariantError(
+        'External backend capability digest does not match its canonical projection',
+      );
+    }
+    const capabilityEntriesJson = canonicalizeJson(input.record.capabilityEntries);
+
+    return this.runImmediate(() => {
+      const existingRow = this.#database
+        .prepare(
+          `SELECT *
+             FROM external_backend_capability_records
+            WHERE record_digest = ? OR (
+              backend_kind = ? AND binary_identity_digest = ? AND
+              protocol_schema_digest = ? AND configuration_profile_digest = ?
+            )`,
+        )
+        .get(
+          input.record.recordDigest,
+          input.record.backendKind,
+          input.record.binaryIdentityDigest,
+          input.record.protocolSchemaDigest,
+          input.record.configurationProfileDigest,
+        );
+      if (existingRow !== undefined) {
+        const existing = this.decodeVerifiedExternalBackendCapabilityRow(existingRow);
+        return existing.recordDigest === input.record.recordDigest
+          ? { status: 'EXISTING', value: existing }
+          : {
+              status: 'CAPABILITY_CONFLICT',
+              message: `External backend capability identity ${input.record.backendKind} conflicts with installed authority`,
+            };
+      }
+
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'EXTERNAL_BACKEND_CAPABILITY',
+        aggregateId: input.record.recordDigest,
+        eventType: 'EXTERNAL_BACKEND_CAPABILITY_INSTALLED',
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.record.recordDigest,
+        occurredAt: input.record.observedAt,
+      });
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_CAPABILITY_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO external_backend_capability_records(
+             record_digest, schema_version, backend_kind, binary_identity_digest,
+             protocol_schema_digest, configuration_profile_digest,
+             capability_entries_json, observed_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.record.recordDigest,
+          input.record.schemaVersion,
+          input.record.backendKind,
+          input.record.binaryIdentityDigest,
+          input.record.protocolSchemaDigest,
+          input.record.configurationProfileDigest,
+          capabilityEntriesJson,
+          input.record.observedAt,
+        );
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_CAPABILITY_WRITE);
+      const installed = this.getExternalBackendCapabilityRecord(input.record.recordDigest);
+      if (installed === undefined) {
+        throw new StoreInvariantError('External backend capability was not persisted readably');
+      }
+      this.assertAuditEventsReadable([input.auditEventId]);
+      return { status: 'INSTALLED', value: installed };
+    });
+  }
+
   public installExecutionProfile(rawInput: InstallExecutionProfile): ExecutionProfileInstallResult {
     this.assertOpen();
     const input = validateInstallExecutionProfile(rawInput);
@@ -2845,11 +3259,36 @@ export class SqliteControlStore
       );
     }
     const canonicalContent = canonicalizeJson(executionProfileProjection(input.profile));
+    const baseCanonicalContent = canonicalizeJson({
+      id: input.profile.id,
+      schemaVersion: 1,
+      version: input.profile.version,
+      workerAdapter: input.profile.workerAdapter,
+      workerAdapterVersion: input.profile.workerAdapterVersion,
+      candidateSource: input.profile.candidateSource,
+      candidateSourceVersion: input.profile.candidateSourceVersion,
+      verificationRunner: input.profile.verificationRunner,
+      verificationRunnerVersion: input.profile.verificationRunnerVersion,
+      driverVersion: input.profile.driverVersion,
+    });
 
     return this.runImmediate(() => {
-      const existingRow = this.#database
-        .prepare('SELECT * FROM execution_profiles WHERE id = ? OR profile_digest = ?')
-        .get(input.profile.id, input.profile.digest);
+      const existingRow = this.hasTable('external_execution_profile_extensions')
+        ? this.#database
+            .prepare(
+              `SELECT profile.*,
+                      extension.logical_schema_version,
+                      extension.capability_record_digest,
+                      extension.external_execution_json
+                 FROM execution_profiles AS profile
+                 LEFT JOIN external_execution_profile_extensions AS extension
+                   ON extension.profile_id = profile.id
+                WHERE profile.id = ? OR profile.profile_digest = ?`,
+            )
+            .get(input.profile.id, input.profile.digest)
+        : this.#database
+            .prepare('SELECT * FROM execution_profiles WHERE id = ? OR profile_digest = ?')
+            .get(input.profile.id, input.profile.digest);
       if (existingRow !== undefined) {
         const existing = this.decodeVerifiedExecutionProfileRow(existingRow);
         const same =
@@ -2862,6 +3301,21 @@ export class SqliteControlStore
               status: 'PROFILE_CONFLICT',
               message: `Execution Profile ${input.profile.id} conflicts with installed authority`,
             };
+      }
+
+      if (input.profile.schemaVersion === 2) {
+        if (!this.hasTable('external_execution_profile_extensions')) {
+          return {
+            status: 'PROFILE_CONFLICT',
+            message: `Execution Profile ${input.profile.id} requires the Slice 6 authority schema`,
+          };
+        }
+        if (!this.hasExactExternalProfileCapabilityAuthority(input.profile)) {
+          return {
+            status: 'PROFILE_CONFLICT',
+            message: `Execution Profile ${input.profile.id} lacks exact supported backend capability authority`,
+          };
+        }
       }
 
       this.insertAuditEvent({
@@ -2884,12 +3338,26 @@ export class SqliteControlStore
         )
         .run(
           input.profile.id,
-          input.profile.schemaVersion,
+          1,
           input.profile.version,
-          canonicalContent,
+          baseCanonicalContent,
           input.profile.digest,
           input.installedAt,
         );
+      if (input.profile.schemaVersion === 2) {
+        this.#database
+          .prepare(
+            `INSERT INTO external_execution_profile_extensions(
+               profile_id, logical_schema_version, capability_record_digest,
+               external_execution_json
+             ) VALUES (?, 2, ?, ?)`,
+          )
+          .run(
+            input.profile.id,
+            input.profile.externalExecution.capabilityRecordDigest,
+            canonicalizeJson(input.profile.externalExecution),
+          );
+      }
       this.probe(WorkerTransactionStep.AFTER_EXECUTION_PROFILE_WRITE);
       const installed = this.getExecutionProfile(input.profile.id);
       if (installed === undefined) {
@@ -2905,107 +3373,680 @@ export class SqliteControlStore
   public claimWorkerDispatch(rawInput: ClaimWorkerDispatch): WorkerDispatchClaimResult {
     this.assertOpen();
     const input = validateClaimWorkerDispatch(rawInput);
-    const { claim } = input;
-    return this.runImmediate(() => {
-      const existingRow = this.#database
-        .prepare(
-          'SELECT * FROM worker_dispatch_claims WHERE attempt_id = ? OR context_manifest_id = ?',
-        )
-        .get(claim.attemptId, claim.contextManifestId);
-      if (existingRow !== undefined) {
-        const existing = decodeWorkerDispatchClaimRow(existingRow);
-        const same =
-          existing.attemptId === claim.attemptId &&
-          existing.workflowId === claim.workflowId &&
-          existing.workflowVersion === claim.workflowVersion &&
-          existing.workerSessionId === claim.workerSessionId &&
-          existing.contextManifestId === claim.contextManifestId &&
-          existing.contextManifestDigest === claim.contextManifestDigest &&
-          existing.packageDigest === claim.packageDigest &&
-          existing.executionProfileId === claim.executionProfileId &&
-          existing.executionProfileDigest === claim.executionProfileDigest;
-        return same
-          ? { status: 'EXISTING', value: existing }
-          : {
-              status: 'DISPATCH_CONFLICT',
-              message: `Attempt ${claim.attemptId} already has another dispatch claim`,
-            };
-      }
+    return this.runImmediate(() => this.claimWorkerDispatchInsideTransaction(input));
+  }
 
-      const workflow = this.getWorkflowInsideTransaction(claim.workflowId);
-      if (workflow.version !== claim.workflowVersion) {
+  private claimWorkerDispatchInsideTransaction(
+    input: ClaimWorkerDispatch,
+  ): WorkerDispatchClaimResult {
+    const { claim } = input;
+    const existingRow = this.#database
+      .prepare(
+        'SELECT * FROM worker_dispatch_claims WHERE attempt_id = ? OR context_manifest_id = ?',
+      )
+      .get(claim.attemptId, claim.contextManifestId);
+    if (existingRow !== undefined) {
+      const existing = decodeWorkerDispatchClaimRow(existingRow);
+      const same =
+        existing.attemptId === claim.attemptId &&
+        existing.workflowId === claim.workflowId &&
+        existing.workflowVersion === claim.workflowVersion &&
+        existing.workerSessionId === claim.workerSessionId &&
+        existing.contextManifestId === claim.contextManifestId &&
+        existing.contextManifestDigest === claim.contextManifestDigest &&
+        existing.packageDigest === claim.packageDigest &&
+        existing.executionProfileId === claim.executionProfileId &&
+        existing.executionProfileDigest === claim.executionProfileDigest;
+      return same
+        ? { status: 'EXISTING', value: existing }
+        : {
+            status: 'DISPATCH_CONFLICT',
+            message: `Attempt ${claim.attemptId} already has another dispatch claim`,
+          };
+    }
+
+    const workflow = this.getWorkflowInsideTransaction(claim.workflowId);
+    if (workflow.version !== claim.workflowVersion) {
+      return {
+        status: 'VERSION_CONFLICT',
+        message: `Workflow ${claim.workflowId} changed before Worker dispatch`,
+      };
+    }
+    const attempt = this.getAttemptInsideTransaction(claim.attemptId);
+    const manifest = this.getContextManifest(claim.contextManifestId);
+    const profileBinding = this.getExecutionProfileBinding(claim.workflowId);
+    if (
+      workflow.runStatus !== RunStatus.RUNNING ||
+      workflow.activeAttemptId !== attempt.id ||
+      attempt.status !== AttemptStatus.RUNNING ||
+      attempt.workflowId !== workflow.id ||
+      attempt.contextManifestId !== claim.contextManifestId ||
+      attempt.workerSessionRef !== claim.workerSessionId ||
+      manifest?.workflowId !== workflow.id ||
+      manifest.workflowVersion !== workflow.version ||
+      manifest.attemptId !== attempt.id ||
+      manifest.manifestDigest !== claim.contextManifestDigest ||
+      manifest.packageDigest !== claim.packageDigest ||
+      manifest.executionProfileId !== claim.executionProfileId ||
+      manifest.executionProfileDigest !== claim.executionProfileDigest ||
+      profileBinding?.profileId !== claim.executionProfileId ||
+      profileBinding.profileDigest !== claim.executionProfileDigest ||
+      claim.claimedAt < workflow.updatedAt
+    ) {
+      return {
+        status: 'NOT_ELIGIBLE',
+        message: `Attempt ${claim.attemptId} is not eligible for Worker dispatch`,
+      };
+    }
+
+    this.#database
+      .prepare(
+        `INSERT INTO worker_dispatch_claims(
+           attempt_id, schema_version, workflow_id, workflow_version, worker_session_id,
+           context_manifest_id, context_manifest_digest, package_digest,
+           execution_profile_id, execution_profile_digest, claimed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        claim.attemptId,
+        claim.schemaVersion,
+        claim.workflowId,
+        claim.workflowVersion,
+        claim.workerSessionId,
+        claim.contextManifestId,
+        claim.contextManifestDigest,
+        claim.packageDigest,
+        claim.executionProfileId,
+        claim.executionProfileDigest,
+        claim.claimedAt,
+      );
+    this.insertAuditEvent({
+      id: input.auditEventId,
+      aggregateType: 'ATTEMPT',
+      aggregateId: claim.attemptId,
+      eventType: 'WORKER_DISPATCH_CLAIMED',
+      beforeVersion: claim.workflowVersion,
+      afterVersion: claim.workflowVersion,
+      ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+      ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+      payloadDigest: input.payloadDigest,
+      occurredAt: claim.claimedAt,
+    });
+    this.probe(WorkerTransactionStep.AFTER_DISPATCH_CLAIM_WRITE);
+    const persisted = this.getWorkerDispatchClaim(claim.attemptId);
+    if (persisted === undefined) {
+      throw new StoreInvariantError(`Dispatch claim for ${claim.attemptId} was not readable`);
+    }
+    this.assertAuditEventsReadable([input.auditEventId]);
+    return { status: 'CLAIMED', value: persisted };
+  }
+
+  public claimExternalWorkerDispatch(
+    rawInput: ClaimExternalWorkerDispatch,
+  ): ExternalWorkerDispatchClaimResult {
+    this.assertOpen();
+    const input = validateClaimExternalWorkerDispatch(rawInput);
+    const { claim, intent } = input;
+    const claimDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(workerDispatchClaimProjection(claim)),
+    );
+    const expectedIntentDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(externalExecutionIntentProjection(intent)),
+    );
+    if (
+      input.payloadDigest !== claimDigest ||
+      intent.dispatchClaimDigest !== claimDigest ||
+      intent.intentDigest !== expectedIntentDigest
+    ) {
+      throw new StoreInvariantError('External dispatch authority has false canonical digests');
+    }
+
+    return this.runImmediate(() => {
+      const existingExecution = this.getExternalExecutionForAttempt(intent.attemptId);
+      const existingClaim = this.getWorkerDispatchClaim(intent.attemptId);
+      if (existingExecution !== undefined || existingClaim !== undefined) {
+        if (
+          existingExecution !== undefined &&
+          existingClaim !== undefined &&
+          existingExecution.intentDigest === intent.intentDigest &&
+          existingExecution.dispatchClaimDigest === claimDigest &&
+          existingClaim.contextManifestDigest === claim.contextManifestDigest &&
+          existingClaim.packageDigest === claim.packageDigest
+        ) {
+          return { status: 'EXISTING', claim: existingClaim, execution: existingExecution };
+        }
         return {
-          status: 'VERSION_CONFLICT',
-          message: `Workflow ${claim.workflowId} changed before Worker dispatch`,
+          status: 'DISPATCH_CONFLICT',
+          message: `Attempt ${intent.attemptId} has incomplete or conflicting external dispatch authority`,
         };
       }
-      const attempt = this.getAttemptInsideTransaction(claim.attemptId);
+
       const manifest = this.getContextManifest(claim.contextManifestId);
-      const profileBinding = this.getExecutionProfileBinding(claim.workflowId);
+      const installedProfile = this.getExecutionProfile(claim.executionProfileId);
+      const policyBinding = this.getWorkflowPolicyBinding(claim.workflowId);
+      const installedPolicy =
+        policyBinding === undefined
+          ? undefined
+          : this.getPolicyBundle(policyBinding.policyBundleId);
+      const profile = installedProfile?.profile;
+      const external = profile?.schemaVersion === 2 ? profile.externalExecution : undefined;
       if (
-        workflow.runStatus !== RunStatus.RUNNING ||
-        workflow.activeAttemptId !== attempt.id ||
-        attempt.status !== AttemptStatus.RUNNING ||
-        attempt.workflowId !== workflow.id ||
-        attempt.contextManifestId !== claim.contextManifestId ||
-        attempt.workerSessionRef !== claim.workerSessionId ||
-        manifest?.workflowId !== workflow.id ||
-        manifest.workflowVersion !== workflow.version ||
-        manifest.attemptId !== attempt.id ||
-        manifest.manifestDigest !== claim.contextManifestDigest ||
-        manifest.packageDigest !== claim.packageDigest ||
-        manifest.executionProfileId !== claim.executionProfileId ||
-        manifest.executionProfileDigest !== claim.executionProfileDigest ||
-        profileBinding?.profileId !== claim.executionProfileId ||
-        profileBinding.profileDigest !== claim.executionProfileDigest ||
-        claim.claimedAt < workflow.updatedAt
+        manifest === undefined ||
+        profile === undefined ||
+        external === undefined ||
+        installedPolicy === undefined ||
+        intent.id !== externalExecutionId(intent.id) ||
+        intent.goalId !== manifest.goalId ||
+        intent.goalRevision !== manifest.goalRevision ||
+        intent.workflowId !== claim.workflowId ||
+        intent.workflowVersionAtAuthorization !== claim.workflowVersion ||
+        intent.phaseVersion !== claim.workflowVersion ||
+        intent.phase !== manifest.phase ||
+        intent.attemptId !== claim.attemptId ||
+        intent.workerSessionId !== claim.workerSessionId ||
+        intent.contextManifestId !== claim.contextManifestId ||
+        intent.contextManifestDigest !== claim.contextManifestDigest ||
+        intent.contextPackageDigest !== claim.packageDigest ||
+        intent.executionProfileId !== profile.id ||
+        intent.executionProfileDigest !== profile.digest ||
+        intent.policyBundleId !== installedPolicy.bundle.id ||
+        intent.policyBundleDigest !== installedPolicy.bundle.digest ||
+        intent.policyBundleId !== manifest.policyBundleId ||
+        intent.policyBundleDigest !== manifest.policyBundleDigest ||
+        intent.backendKind !== external.backendKind ||
+        intent.binaryIdentityDigest !== external.binaryIdentityDigest ||
+        intent.binaryProtocolSchemaDigest !== external.protocolSchemaDigest ||
+        intent.executionConfigDigest !== external.executionConfigDigest ||
+        intent.managedRequirementsDigest !== external.managedRequirementsDigest ||
+        intent.instructionSourceManifestDigest !== external.instructionSourceManifestDigest ||
+        intent.controlledStateRootIdentity !== external.controlledStateRootIdentity ||
+        intent.thread.kind !== external.defaultThreadPolicy ||
+        rawField(intent, 'continuityPolicy') !== rawField(external, 'continuityPolicy') ||
+        intent.compactionPolicy !== external.compactionPolicy ||
+        rawField(intent, 'retentionPolicy') !== rawField(external, 'retentionPolicy') ||
+        rawField(intent, 'fallbackPolicy') !== rawField(external, 'fallbackPolicy') ||
+        rawField(intent, 'interruptionPolicy') !== rawField(external, 'interruptionPolicy') ||
+        intent.authorizedAt !== claim.claimedAt
       ) {
         return {
           status: 'NOT_ELIGIBLE',
-          message: `Attempt ${claim.attemptId} is not eligible for Worker dispatch`,
+          message: `Attempt ${intent.attemptId} lacks exact Profile, Context, Policy, or Intent authority`,
         };
       }
 
-      this.#database
-        .prepare(
-          `INSERT INTO worker_dispatch_claims(
-             attempt_id, schema_version, workflow_id, workflow_version, worker_session_id,
-             context_manifest_id, context_manifest_digest, package_digest,
-             execution_profile_id, execution_profile_digest, claimed_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          claim.attemptId,
-          claim.schemaVersion,
-          claim.workflowId,
-          claim.workflowVersion,
-          claim.workerSessionId,
-          claim.contextManifestId,
-          claim.contextManifestDigest,
-          claim.packageDigest,
-          claim.executionProfileId,
-          claim.executionProfileDigest,
-          claim.claimedAt,
+      const dispatch = this.claimWorkerDispatchInsideTransaction(input);
+      if (dispatch.status !== 'CLAIMED') {
+        if (dispatch.status === 'EXISTING') {
+          return {
+            status: 'DISPATCH_CONFLICT',
+            message: `Attempt ${intent.attemptId} was claimed without external authorization`,
+          };
+        }
+        return dispatch;
+      }
+
+      const nextAuditSequenceRow = z
+        .object({ next_sequence: z.number().int().positive() })
+        .parse(
+          this.#database
+            .prepare('SELECT coalesce(max(sequence), 0) + 1 AS next_sequence FROM audit_events')
+            .get(),
         );
+      const recordWithoutDigest = Object.freeze({
+        ...intent,
+        version: 1,
+        state: ExternalExecutionState.AUTHORIZED,
+        compactionCount: 0,
+        turnInterruptCount: 0,
+        updatedAt: intent.authorizedAt,
+        auditSequence: nextAuditSequenceRow.next_sequence,
+      });
+      const record = decodeExternalExecutionRecord({
+        ...recordWithoutDigest,
+        recordDigest: sha256Digest(
+          canonicalAuthorityDigests.digest(externalExecutionRecordProjection(recordWithoutDigest)),
+        ),
+      });
       this.insertAuditEvent({
-        id: input.auditEventId,
-        aggregateType: 'ATTEMPT',
-        aggregateId: claim.attemptId,
-        eventType: 'WORKER_DISPATCH_CLAIMED',
-        beforeVersion: claim.workflowVersion,
-        afterVersion: claim.workflowVersion,
+        id: input.externalAuditEventId,
+        aggregateType: 'EXTERNAL_EXECUTION',
+        aggregateId: record.id,
+        eventType: 'EXTERNAL_EXECUTION_AUTHORIZED',
+        afterVersion: record.version,
         ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
         ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
-        payloadDigest: input.payloadDigest,
-        occurredAt: claim.claimedAt,
+        payloadDigest: record.recordDigest,
+        occurredAt: record.authorizedAt,
       });
-      this.probe(WorkerTransactionStep.AFTER_DISPATCH_CLAIM_WRITE);
-      const persisted = this.getWorkerDispatchClaim(claim.attemptId);
+      if (this.auditSequence(input.externalAuditEventId) !== record.auditSequence) {
+        throw new StoreInvariantError('External execution audit sequence changed before insert');
+      }
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE);
+      this.insertExternalExecutionRecord(record);
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_WRITE);
+      const persisted = this.getExternalExecution(record.id);
       if (persisted === undefined) {
-        throw new StoreInvariantError(`Dispatch claim for ${claim.attemptId} was not readable`);
+        throw new StoreInvariantError(`External execution ${record.id} was not readable`);
+      }
+      this.assertAuditEventsReadable([input.auditEventId, input.externalAuditEventId]);
+      return { status: 'CLAIMED', claim: dispatch.value, execution: persisted };
+    });
+  }
+
+  public admitExternalExecutionObservation(
+    rawInput: AdmitExternalExecutionObservation,
+  ): ExternalExecutionObservationStoreResult {
+    this.assertOpen();
+    const input = validateAdmitExternalExecutionObservation(rawInput);
+    const { observation } = input;
+    const expectedObservationDigest = this.externalExecutionObservationDigest(observation);
+    if (observation.observationDigest !== expectedObservationDigest) {
+      throw new StoreInvariantError('External execution observation has a false digest');
+    }
+
+    return this.runImmediate(() => {
+      const duplicateRow = this.#database
+        .prepare(
+          `SELECT * FROM external_execution_observations
+            WHERE id = ? OR observation_digest = ?`,
+        )
+        .get(observation.id, observation.observationDigest);
+      if (duplicateRow !== undefined) {
+        const duplicate = this.decodeVerifiedExternalExecutionObservationRow(duplicateRow);
+        const current = this.getExternalExecution(duplicate.externalExecutionId);
+        if (
+          duplicate.id === observation.id &&
+          duplicate.observationDigest === observation.observationDigest &&
+          current !== undefined &&
+          current.version >= duplicate.expectedRecordVersion + 1
+        ) {
+          return { status: 'REPLAYED', value: current };
+        }
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `External observation ${observation.id} conflicts with retained authority`,
+        };
+      }
+
+      const current = this.getExternalExecution(observation.externalExecutionId);
+      if (current?.intentDigest !== observation.intentDigest) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `External observation ${observation.id} has no exact execution intent`,
+        };
+      }
+      if (
+        current.state === ExternalExecutionState.COMPLETED ||
+        current.state === ExternalExecutionState.INTERRUPTED ||
+        current.state === ExternalExecutionState.FAILED ||
+        current.state === ExternalExecutionState.ABANDONED
+      ) {
+        return {
+          status: 'TERMINAL',
+          message: `External execution ${current.id} is already terminal`,
+        };
+      }
+      if (current.version !== observation.expectedRecordVersion) {
+        return {
+          status: 'VERSION_CONFLICT',
+          message: `External execution ${current.id} changed before observation`,
+        };
+      }
+      const allowedNextStates: ReadonlySet<string> = new Set(
+        current.state === ExternalExecutionState.AUTHORIZED
+          ? [
+              ExternalExecutionState.PROCESS_OBSERVED,
+              ExternalExecutionState.FAILED,
+              ExternalExecutionState.INTERRUPTED,
+            ]
+          : current.state === ExternalExecutionState.PROCESS_OBSERVED
+            ? [
+                ExternalExecutionState.SESSION_OBSERVED,
+                ExternalExecutionState.FAILED,
+                ExternalExecutionState.INTERRUPTED,
+              ]
+            : current.state === ExternalExecutionState.SESSION_OBSERVED
+              ? [
+                  ExternalExecutionState.OPERATION_RUNNING,
+                  ExternalExecutionState.FAILED,
+                  ExternalExecutionState.INTERRUPTED,
+                ]
+              : [
+                  ExternalExecutionState.COMPLETED,
+                  ExternalExecutionState.FAILED,
+                  ExternalExecutionState.INTERRUPTED,
+                ],
+      );
+      const terminalObservation =
+        observation.state === ExternalExecutionState.COMPLETED ||
+        observation.state === ExternalExecutionState.FAILED ||
+        observation.state === ExternalExecutionState.INTERRUPTED;
+      const maintenance =
+        current.compactionPolicy === 'MANUAL_BEFORE_OPERATION'
+          ? this.getExternalMaintenanceIntentForExecution(current.id, 1)
+          : undefined;
+      if (
+        !allowedNextStates.has(observation.state) ||
+        (observation.state === ExternalExecutionState.PROCESS_OBSERVED &&
+          (observation.processIdentity?.launchNonce !== current.processLaunchNonce ||
+            observation.processIdentity.executableIdentityDigest !== current.binaryIdentityDigest ||
+            observation.processIdentity.controlledStateRootIdentity !==
+              current.controlledStateRootIdentity)) ||
+        observation.observedAt < current.updatedAt ||
+        observation.compactionCount < current.compactionCount ||
+        observation.turnInterruptCount < current.turnInterruptCount ||
+        (current.compactionPolicy === 'FAIL_ON_OBSERVATION' && observation.compactionCount !== 0) ||
+        (current.compactionPolicy === 'MANUAL_BEFORE_OPERATION' &&
+          (observation.compactionCount > 1 ||
+            (observation.compactionCount === 1 &&
+              maintenance?.state !== ExternalMaintenanceState.OBSERVED) ||
+            (terminalObservation && maintenance?.state === ExternalMaintenanceState.AUTHORIZED))) ||
+        (current.backendSessionRef !== undefined &&
+          observation.backendSessionRef !== undefined &&
+          observation.backendSessionRef !== current.backendSessionRef) ||
+        (current.backendOperationRef !== undefined &&
+          observation.backendOperationRef !== undefined &&
+          observation.backendOperationRef !== current.backendOperationRef) ||
+        (observation.state === ExternalExecutionState.COMPLETED &&
+          observation.resultEventId === undefined) ||
+        (observation.state === ExternalExecutionState.FAILED &&
+          (observation.failureCode === 'BACKEND_TURN_FAILED') !==
+            (observation.resultEventId !== undefined)) ||
+        (!terminalObservation && observation.resultEventId !== undefined) ||
+        (observation.state === ExternalExecutionState.INTERRUPTED &&
+          observation.resultEventId !== undefined) ||
+        (!terminalObservation && observation.failureCode !== undefined)
+      ) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `External observation ${observation.id} violates lifecycle continuity`,
+        };
+      }
+
+      this.insertAuditEvent({
+        id: input.observationAuditEventId,
+        aggregateType: 'EXTERNAL_EXECUTION_OBSERVATION',
+        aggregateId: observation.id,
+        eventType: 'EXTERNAL_EXECUTION_OBSERVED',
+        beforeVersion: current.version,
+        afterVersion: current.version + 1,
+        payloadDigest: observation.observationDigest,
+        occurredAt: observation.observedAt,
+      });
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_OBSERVATION_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO external_execution_observations(
+             id, schema_version, external_execution_id, intent_digest,
+             expected_record_version, state, process_identity_json, backend_session_ref,
+             backend_operation_ref,
+             compaction_count, turn_interrupt_count, failure_code, result_event_id,
+             observed_at, observation_digest
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          observation.id,
+          observation.schemaVersion,
+          observation.externalExecutionId,
+          observation.intentDigest,
+          observation.expectedRecordVersion,
+          observation.state,
+          observation.processIdentity === undefined
+            ? null
+            : serializeJson(decodeJsonValue(observation.processIdentity)),
+          observation.backendSessionRef ?? null,
+          observation.backendOperationRef ?? null,
+          observation.compactionCount,
+          observation.turnInterruptCount,
+          observation.failureCode ?? null,
+          observation.resultEventId ?? null,
+          observation.observedAt,
+          observation.observationDigest,
+        );
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_OBSERVATION_WRITE);
+
+      const nextAuditSequence = z
+        .object({ next_sequence: z.number().int().positive() })
+        .parse(
+          this.#database
+            .prepare('SELECT coalesce(max(sequence), 0) + 1 AS next_sequence FROM audit_events')
+            .get(),
+        ).next_sequence;
+      const nextWithoutDigest = Object.freeze({
+        ...current,
+        version: current.version + 1,
+        state: observation.state,
+        ...(observation.processIdentity === undefined
+          ? {}
+          : { processIdentity: observation.processIdentity }),
+        ...(observation.backendSessionRef === undefined
+          ? {}
+          : { backendSessionRef: observation.backendSessionRef }),
+        ...(observation.backendOperationRef === undefined
+          ? {}
+          : { backendOperationRef: observation.backendOperationRef }),
+        compactionCount: observation.compactionCount,
+        turnInterruptCount: observation.turnInterruptCount,
+        ...(observation.failureCode === undefined ? {} : { failureCode: observation.failureCode }),
+        ...(observation.resultEventId === undefined
+          ? {}
+          : { resultEventId: observation.resultEventId }),
+        updatedAt: observation.observedAt,
+        ...(terminalObservation ? { terminalAt: observation.observedAt } : {}),
+        lastObservationId: observation.id,
+        auditSequence: nextAuditSequence,
+      });
+      const next = decodeExternalExecutionRecord({
+        ...nextWithoutDigest,
+        recordDigest: sha256Digest(
+          canonicalAuthorityDigests.digest(externalExecutionRecordProjection(nextWithoutDigest)),
+        ),
+      });
+      this.insertAuditEvent({
+        id: input.recordAuditEventId,
+        aggregateType: 'EXTERNAL_EXECUTION',
+        aggregateId: next.id,
+        eventType: 'EXTERNAL_EXECUTION_STATE_CHANGED',
+        beforeVersion: current.version,
+        afterVersion: next.version,
+        payloadDigest: next.recordDigest,
+        occurredAt: next.updatedAt,
+      });
+      if (this.auditSequence(input.recordAuditEventId) !== next.auditSequence) {
+        throw new StoreInvariantError('External execution update audit sequence changed');
+      }
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE);
+      this.updateExternalExecutionRecord(next);
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_WRITE);
+      const persisted = this.getExternalExecution(next.id);
+      if (persisted === undefined) {
+        throw new StoreInvariantError(`External execution ${next.id} update was not readable`);
+      }
+      this.assertAuditEventsReadable([input.observationAuditEventId, input.recordAuditEventId]);
+      return { status: 'APPLIED', value: persisted };
+    });
+  }
+
+  public abandonExternalExecution(
+    rawInput: AbandonExternalExecution,
+  ): ExternalExecutionObservationStoreResult {
+    this.assertOpen();
+    const input = validateAbandonExternalExecution(rawInput);
+    return this.runImmediate(() => {
+      const current = this.getExternalExecution(input.externalExecutionId);
+      if (current === undefined) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `External execution ${input.externalExecutionId} does not exist`,
+        };
+      }
+      if (
+        current.state === ExternalExecutionState.COMPLETED ||
+        current.state === ExternalExecutionState.INTERRUPTED ||
+        current.state === ExternalExecutionState.FAILED ||
+        current.state === ExternalExecutionState.ABANDONED
+      ) {
+        return current.state === ExternalExecutionState.ABANDONED &&
+          current.failureCode === input.reasonCode
+          ? { status: 'REPLAYED', value: current }
+          : {
+              status: 'TERMINAL',
+              message: `External execution ${current.id} is already terminal`,
+            };
+      }
+      if (current.version !== input.expectedRecordVersion) {
+        return {
+          status: 'VERSION_CONFLICT',
+          message: `External execution ${current.id} changed before abandonment`,
+        };
+      }
+      if (input.abandonedAt < current.updatedAt) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `External execution ${current.id} abandonment predates current authority`,
+        };
+      }
+      const maintenance = this.getExternalMaintenanceIntentForExecution(current.id, 1);
+      if (maintenance?.state === ExternalMaintenanceState.AUTHORIZED) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `External execution ${current.id} has active maintenance`,
+        };
+      }
+      return {
+        status: 'APPLIED',
+        value: this.abandonExternalExecutionInsideTransaction(
+          current,
+          input.reasonCode,
+          input.abandonedAt,
+          input.auditEventId,
+        ),
+      };
+    });
+  }
+
+  public authorizeExternalMaintenance(
+    rawInput: AuthorizeExternalMaintenance,
+  ): ExternalMaintenanceStoreResult {
+    this.assertOpen();
+    const input = validateAuthorizeExternalMaintenance(rawInput);
+    const { intent } = input;
+    if (
+      intent.intentDigest !== this.externalMaintenanceIntentDigest(intent) ||
+      intent.recordDigest !== this.externalMaintenanceRecordDigest(intent)
+    ) {
+      throw new StoreInvariantError('External maintenance authorization has false digests');
+    }
+    return this.runImmediate(() => {
+      const byId = this.getExternalMaintenanceIntent(intent.id);
+      const bySequence = this.getExternalMaintenanceIntentForExecution(
+        intent.externalExecutionId,
+        intent.sequence,
+      );
+      const existing = byId ?? bySequence;
+      if (existing !== undefined) {
+        return existing.id === intent.id && existing.intentDigest === intent.intentDigest
+          ? { status: 'REPLAYED', value: existing }
+          : {
+              status: 'MAINTENANCE_CONFLICT',
+              message: `External maintenance ${intent.id} conflicts with retained authority`,
+            };
+      }
+      const execution = this.getExternalExecution(intent.externalExecutionId);
+      if (
+        execution?.compactionPolicy !== 'MANUAL_BEFORE_OPERATION' ||
+        execution.state === ExternalExecutionState.COMPLETED ||
+        execution.state === ExternalExecutionState.INTERRUPTED ||
+        execution.state === ExternalExecutionState.FAILED ||
+        execution.state === ExternalExecutionState.ABANDONED ||
+        intent.sequence !== 1 ||
+        intent.authorizedAt < execution.updatedAt
+      ) {
+        return {
+          status: 'STATE_CONFLICT',
+          message: `External execution ${intent.externalExecutionId} cannot authorize maintenance`,
+        };
+      }
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'EXTERNAL_MAINTENANCE',
+        aggregateId: intent.id,
+        eventType: 'EXTERNAL_MAINTENANCE_AUTHORIZED',
+        afterVersion: 1,
+        payloadDigest: intent.recordDigest,
+        occurredAt: intent.authorizedAt,
+      });
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_AUDIT_WRITE);
+      const auditSequence = this.auditSequence(input.auditEventId);
+      this.#database
+        .prepare(
+          `INSERT INTO external_maintenance_intents(
+             id, schema_version, external_execution_id, sequence, kind, state,
+             authorized_at, observed_at, failure_code, intent_digest, record_digest,
+             audit_sequence
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
+        )
+        .run(
+          intent.id,
+          intent.schemaVersion,
+          intent.externalExecutionId,
+          intent.sequence,
+          intent.kind,
+          intent.state,
+          intent.authorizedAt,
+          intent.intentDigest,
+          intent.recordDigest,
+          auditSequence,
+        );
+      this.probe(WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_WRITE);
+      const persisted = this.getExternalMaintenanceIntent(intent.id);
+      if (persisted === undefined) {
+        throw new StoreInvariantError(`External maintenance ${intent.id} was not readable`);
       }
       this.assertAuditEventsReadable([input.auditEventId]);
-      return { status: 'CLAIMED', value: persisted };
+      return { status: 'APPLIED', value: persisted };
+    });
+  }
+
+  public completeExternalMaintenance(
+    rawInput: CompleteExternalMaintenance,
+  ): ExternalMaintenanceStoreResult {
+    this.assertOpen();
+    const input = validateCompleteExternalMaintenance(rawInput);
+    return this.runImmediate(() => {
+      const current = this.getExternalMaintenanceIntent(input.maintenanceIntentId);
+      if (current === undefined) {
+        return {
+          status: 'MAINTENANCE_CONFLICT',
+          message: `External maintenance ${input.maintenanceIntentId} does not exist`,
+        };
+      }
+      if (current.state !== ExternalMaintenanceState.AUTHORIZED) {
+        return current.state === input.state &&
+          current.observedAt === input.observedAt &&
+          current.failureCode === input.failureCode
+          ? { status: 'REPLAYED', value: current }
+          : {
+              status: 'STATE_CONFLICT',
+              message: `External maintenance ${current.id} is already terminal`,
+            };
+      }
+      if (input.observedAt < current.authorizedAt) {
+        return {
+          status: 'STATE_CONFLICT',
+          message: `External maintenance ${current.id} observation predates authorization`,
+        };
+      }
+      return {
+        status: 'APPLIED',
+        value: this.completeExternalMaintenanceInsideTransaction(
+          current,
+          input.state,
+          input.observedAt,
+          input.failureCode,
+          input.auditEventId,
+        ),
+      };
     });
   }
 
@@ -3310,6 +4351,47 @@ export class SqliteControlStore
       this.insertRecoveryReconciliation(input.recovery);
       this.probe(RecoveryTransactionStep.AFTER_RECOVERY_RECORD_WRITE);
 
+      const externalRecoveryAuditIds: AuditEventId[] = [];
+      const externalExecution = this.hasTable('external_execution_records')
+        ? this.getExternalExecutionForAttempt(currentAttempt.id)
+        : undefined;
+      if (
+        externalExecution !== undefined &&
+        externalExecution.state !== ExternalExecutionState.COMPLETED &&
+        externalExecution.state !== ExternalExecutionState.INTERRUPTED &&
+        externalExecution.state !== ExternalExecutionState.FAILED &&
+        externalExecution.state !== ExternalExecutionState.ABANDONED
+      ) {
+        if (input.externalExecutionAuditEventId === undefined) {
+          throw new StoreInvariantError(
+            'Startup recovery lacks external-execution abandonment audit authority',
+          );
+        }
+        const maintenance = this.getExternalMaintenanceIntentForExecution(externalExecution.id, 1);
+        if (maintenance?.state === ExternalMaintenanceState.AUTHORIZED) {
+          if (input.externalMaintenanceAuditEventId === undefined) {
+            throw new StoreInvariantError(
+              'Startup recovery lacks external-maintenance abandonment audit authority',
+            );
+          }
+          this.completeExternalMaintenanceInsideTransaction(
+            maintenance,
+            ExternalMaintenanceState.ABANDONED,
+            input.event.occurredAt,
+            ExternalMaintenanceFailureReasonCode.RECOVERY_ABANDONED_ACTIVE_DISPATCH,
+            input.externalMaintenanceAuditEventId,
+          );
+          externalRecoveryAuditIds.push(input.externalMaintenanceAuditEventId);
+        }
+        this.abandonExternalExecutionInsideTransaction(
+          externalExecution,
+          ExternalExecutionAbandonReasonCode.RECOVERY_ABANDONED_ACTIVE_DISPATCH,
+          input.event.occurredAt,
+          input.externalExecutionAuditEventId,
+        );
+        externalRecoveryAuditIds.push(input.externalExecutionAuditEventId);
+      }
+
       this.updateTerminalAttempt(currentAttempt, applied.attempt);
       this.updateWorkflow(currentWorkflow, applied.workflow);
       this.probe(RecoveryTransactionStep.AFTER_RECOVERY_STATE_WRITE);
@@ -3361,6 +4443,7 @@ export class SqliteControlStore
         input.auditEventId,
         input.workflowAuditEventId,
         input.recoveryAuditEventId,
+        ...externalRecoveryAuditIds,
       ]);
       return {
         status: 'APPLIED',
@@ -7085,6 +8168,260 @@ export class SqliteControlStore
       );
   }
 
+  private insertExternalExecutionRecord(record: ExternalExecutionRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO external_execution_records(
+           id, schema_version, version, state, goal_id, goal_revision, workflow_id,
+           workflow_version_at_authorization, phase, phase_version, attempt_id,
+           worker_session_id, dispatch_claim_digest, context_manifest_id,
+           context_manifest_digest, context_package_digest, execution_profile_id,
+           execution_profile_digest, policy_bundle_id, policy_bundle_digest, backend_kind,
+           binary_identity_digest, binary_protocol_schema_digest, execution_config_digest,
+           managed_requirements_digest,
+           instruction_source_manifest_digest, controlled_state_root_identity, thread_json,
+           continuity_policy, compaction_policy, retention_policy, fallback_policy,
+           interruption_policy, candidate_workspace_lease_id, candidate_workspace_lease_digest,
+           candidate_workspace_cwd_identity, authorized_at, intent_digest, process_launch_nonce,
+           process_identity_json, backend_session_ref, backend_operation_ref, compaction_count,
+           turn_interrupt_count, failure_code,
+           result_event_id, updated_at, terminal_at, last_observation_id, audit_sequence,
+           record_digest
+         ) VALUES (
+           @id, @schemaVersion, @version, @state, @goalId, @goalRevision, @workflowId,
+           @workflowVersionAtAuthorization, @phase, @phaseVersion, @attemptId,
+           @workerSessionId, @dispatchClaimDigest, @contextManifestId,
+           @contextManifestDigest, @contextPackageDigest, @executionProfileId,
+           @executionProfileDigest, @policyBundleId, @policyBundleDigest, @backendKind,
+           @binaryIdentityDigest, @binaryProtocolSchemaDigest, @executionConfigDigest,
+           @managedRequirementsDigest,
+           @instructionSourceManifestDigest, @controlledStateRootIdentity, @threadJson,
+           @continuityPolicy, @compactionPolicy, @retentionPolicy, @fallbackPolicy,
+           @interruptionPolicy, @candidateWorkspaceLeaseId, @candidateWorkspaceLeaseDigest,
+           @candidateWorkspaceCwdIdentity, @authorizedAt, @intentDigest, @processLaunchNonce,
+           @processIdentityJson, @backendSessionRef, @backendOperationRef, @compactionCount,
+           @turnInterruptCount, @failureCode,
+           @resultEventId, @updatedAt, @terminalAt, @lastObservationId, @auditSequence,
+           @recordDigest
+         )`,
+      )
+      .run({
+        id: record.id,
+        schemaVersion: record.schemaVersion,
+        version: record.version,
+        state: record.state,
+        goalId: record.goalId,
+        goalRevision: record.goalRevision,
+        workflowId: record.workflowId,
+        workflowVersionAtAuthorization: record.workflowVersionAtAuthorization,
+        phase: record.phase,
+        phaseVersion: record.phaseVersion,
+        attemptId: record.attemptId,
+        workerSessionId: record.workerSessionId,
+        dispatchClaimDigest: record.dispatchClaimDigest,
+        contextManifestId: record.contextManifestId,
+        contextManifestDigest: record.contextManifestDigest,
+        contextPackageDigest: record.contextPackageDigest,
+        executionProfileId: record.executionProfileId,
+        executionProfileDigest: record.executionProfileDigest,
+        policyBundleId: record.policyBundleId,
+        policyBundleDigest: record.policyBundleDigest,
+        backendKind: record.backendKind,
+        binaryIdentityDigest: record.binaryIdentityDigest,
+        binaryProtocolSchemaDigest: record.binaryProtocolSchemaDigest,
+        executionConfigDigest: record.executionConfigDigest,
+        managedRequirementsDigest: record.managedRequirementsDigest,
+        instructionSourceManifestDigest: record.instructionSourceManifestDigest,
+        controlledStateRootIdentity: record.controlledStateRootIdentity,
+        processLaunchNonce: record.processLaunchNonce,
+        threadJson: serializeJson(record.thread),
+        continuityPolicy: record.continuityPolicy,
+        compactionPolicy: record.compactionPolicy,
+        retentionPolicy: record.retentionPolicy,
+        fallbackPolicy: record.fallbackPolicy,
+        interruptionPolicy: record.interruptionPolicy,
+        candidateWorkspaceLeaseId: record.candidateWorkspaceLeaseId ?? null,
+        candidateWorkspaceLeaseDigest: record.candidateWorkspaceLeaseDigest ?? null,
+        candidateWorkspaceCwdIdentity: record.candidateWorkspaceCwdIdentity ?? null,
+        authorizedAt: record.authorizedAt,
+        intentDigest: record.intentDigest,
+        processIdentityJson:
+          record.processIdentity === undefined
+            ? null
+            : serializeJson(decodeJsonValue(record.processIdentity)),
+        backendSessionRef: record.backendSessionRef ?? null,
+        backendOperationRef: record.backendOperationRef ?? null,
+        compactionCount: record.compactionCount,
+        turnInterruptCount: record.turnInterruptCount,
+        failureCode: record.failureCode ?? null,
+        resultEventId: record.resultEventId ?? null,
+        updatedAt: record.updatedAt,
+        terminalAt: record.terminalAt ?? null,
+        lastObservationId: record.lastObservationId ?? null,
+        auditSequence: record.auditSequence,
+        recordDigest: record.recordDigest,
+      });
+  }
+
+  private updateExternalExecutionRecord(record: ExternalExecutionRecord): void {
+    const result = this.#database
+      .prepare(
+        `UPDATE external_execution_records
+            SET version = @version,
+                state = @state,
+                process_identity_json = @processIdentityJson,
+                backend_session_ref = @backendSessionRef,
+                backend_operation_ref = @backendOperationRef,
+                compaction_count = @compactionCount,
+                turn_interrupt_count = @turnInterruptCount,
+                failure_code = @failureCode,
+                result_event_id = @resultEventId,
+                updated_at = @updatedAt,
+                terminal_at = @terminalAt,
+                last_observation_id = @lastObservationId,
+                audit_sequence = @auditSequence,
+                record_digest = @recordDigest
+          WHERE id = @id AND version = @expectedVersion`,
+      )
+      .run({
+        id: record.id,
+        expectedVersion: record.version - 1,
+        version: record.version,
+        state: record.state,
+        processIdentityJson:
+          record.processIdentity === undefined
+            ? null
+            : serializeJson(decodeJsonValue(record.processIdentity)),
+        backendSessionRef: record.backendSessionRef ?? null,
+        backendOperationRef: record.backendOperationRef ?? null,
+        compactionCount: record.compactionCount,
+        turnInterruptCount: record.turnInterruptCount,
+        failureCode: record.failureCode ?? null,
+        resultEventId: record.resultEventId ?? null,
+        updatedAt: record.updatedAt,
+        terminalAt: record.terminalAt ?? null,
+        lastObservationId: record.lastObservationId ?? null,
+        auditSequence: record.auditSequence,
+        recordDigest: record.recordDigest,
+      });
+    if (result.changes !== 1) {
+      throw new OptimisticConcurrencyError('External execution', record.id);
+    }
+  }
+
+  private abandonExternalExecutionInsideTransaction(
+    current: ExternalExecutionRecord,
+    reasonCode: ExternalExecutionAbandonReasonCode,
+    abandonedAt: IsoTimestamp,
+    auditIdentifier: AuditEventId,
+  ): ExternalExecutionRecord {
+    const nextAuditSequence = z
+      .object({ next_sequence: z.number().int().positive() })
+      .parse(
+        this.#database
+          .prepare('SELECT coalesce(max(sequence), 0) + 1 AS next_sequence FROM audit_events')
+          .get(),
+      ).next_sequence;
+    const nextWithoutDigest = Object.freeze({
+      ...current,
+      version: current.version + 1,
+      state: ExternalExecutionState.ABANDONED,
+      failureCode: reasonCode,
+      updatedAt: abandonedAt,
+      terminalAt: abandonedAt,
+      auditSequence: nextAuditSequence,
+    });
+    const next = decodeExternalExecutionRecord({
+      ...nextWithoutDigest,
+      recordDigest: sha256Digest(
+        canonicalAuthorityDigests.digest(externalExecutionRecordProjection(nextWithoutDigest)),
+      ),
+    });
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'EXTERNAL_EXECUTION',
+      aggregateId: next.id,
+      eventType: 'EXTERNAL_EXECUTION_ABANDONED',
+      beforeVersion: current.version,
+      afterVersion: next.version,
+      payloadDigest: next.recordDigest,
+      occurredAt: next.updatedAt,
+    });
+    if (this.auditSequence(auditIdentifier) !== next.auditSequence) {
+      throw new StoreInvariantError('External execution abandonment audit sequence changed');
+    }
+    this.probe(WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE);
+    this.updateExternalExecutionRecord(next);
+    this.probe(WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_WRITE);
+    const persisted = this.getExternalExecution(next.id);
+    if (persisted === undefined) {
+      throw new StoreInvariantError(`Abandoned external execution ${next.id} was not readable`);
+    }
+    this.assertAuditEventsReadable([auditIdentifier]);
+    return persisted;
+  }
+
+  private completeExternalMaintenanceInsideTransaction(
+    current: ExternalMaintenanceIntent,
+    state:
+      | typeof ExternalMaintenanceState.OBSERVED
+      | typeof ExternalMaintenanceState.FAILED
+      | typeof ExternalMaintenanceState.ABANDONED,
+    observedAt: IsoTimestamp,
+    failureCode: ExternalMaintenanceFailureCode | undefined,
+    auditIdentifier: AuditEventId,
+  ): ExternalMaintenanceIntent {
+    const withoutRecordDigest: Omit<ExternalMaintenanceIntent, 'recordDigest'> = Object.freeze({
+      ...current,
+      state,
+      observedAt,
+      ...(failureCode === undefined ? {} : { failureCode }),
+    });
+    const next = decodeExternalMaintenanceIntent({
+      ...withoutRecordDigest,
+      recordDigest: sha256Digest(
+        canonicalAuthorityDigests.digest(externalMaintenanceRecordProjection(withoutRecordDigest)),
+      ),
+    });
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'EXTERNAL_MAINTENANCE',
+      aggregateId: next.id,
+      eventType: 'EXTERNAL_MAINTENANCE_COMPLETED',
+      beforeVersion: 1,
+      afterVersion: 2,
+      payloadDigest: next.recordDigest,
+      occurredAt: observedAt,
+    });
+    this.probe(WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_AUDIT_WRITE);
+    const auditSequence = this.auditSequence(auditIdentifier);
+    const result = this.#database
+      .prepare(
+        `UPDATE external_maintenance_intents
+            SET state = ?, observed_at = ?, failure_code = ?, record_digest = ?,
+                audit_sequence = ?
+          WHERE id = ? AND state = 'AUTHORIZED'`,
+      )
+      .run(
+        next.state,
+        next.observedAt ?? null,
+        next.failureCode ?? null,
+        next.recordDigest,
+        auditSequence,
+        next.id,
+      );
+    if (result.changes !== 1) {
+      throw new OptimisticConcurrencyError('External maintenance', next.id);
+    }
+    this.probe(WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_WRITE);
+    const persisted = this.getExternalMaintenanceIntent(next.id);
+    if (persisted === undefined) {
+      throw new StoreInvariantError(`External maintenance ${next.id} was not readable`);
+    }
+    this.assertAuditEventsReadable([auditIdentifier]);
+    return persisted;
+  }
+
   private insertContextManifest(manifest: ContextManifest): void {
     this.#database
       .prepare(
@@ -7099,7 +8436,7 @@ export class SqliteControlStore
       )
       .run(
         manifest.id,
-        manifest.schemaVersion,
+        2,
         manifest.compilerVersion,
         manifest.createdAt,
         manifest.goalId,
@@ -7121,6 +8458,25 @@ export class SqliteControlStore
         manifest.packageDigest,
         manifest.manifestDigest,
       );
+    if (manifest.schemaVersion === 3) {
+      if (
+        manifest.repairContextDigest === undefined ||
+        manifest.priorAttemptFeedbackDigest === undefined ||
+        !this.hasTable('repair_context_manifest_extensions')
+      ) {
+        throw new StoreInvariantError(
+          `Repair Context Manifest ${manifest.id} lacks its compatibility authority`,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO repair_context_manifest_extensions(
+             context_manifest_id, logical_schema_version, repair_context_digest,
+             prior_attempt_feedback_digest
+           ) VALUES (?, 3, ?, ?)`,
+        )
+        .run(manifest.id, manifest.repairContextDigest, manifest.priorAttemptFeedbackDigest);
+    }
   }
 
   private assertRecoveryMatchesCurrentAuthority(
@@ -7131,6 +8487,13 @@ export class SqliteControlStore
     const owner = this.getGoalWithWorkflow(workflow.goalId);
     const binding = this.getExecutionProfileBinding(workflow.id);
     const claim = this.getWorkerDispatchClaim(sourceAttempt.id);
+    const externalExecution = this.hasTable('external_execution_records')
+      ? this.getExternalExecutionForAttempt(sourceAttempt.id)
+      : undefined;
+    const externalMaintenance =
+      externalExecution === undefined
+        ? undefined
+        : this.getExternalMaintenanceIntentForExecution(externalExecution.id, 1);
     const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
     const watermark = auditSequenceWatermarkRowSchema.parse(
       this.#database
@@ -7167,7 +8530,12 @@ export class SqliteControlStore
       recovery.executionProfileDigest !== binding.profileDigest ||
       recovery.dispatchClaimDigest !== expectedClaimDigest ||
       recovery.inspectedAt < workflow.updatedAt ||
-      recovery.inspectedAt < sourceAttempt.startedAt
+      recovery.inspectedAt < sourceAttempt.startedAt ||
+      (externalExecution !== undefined && recovery.inspectedAt < externalExecution.updatedAt) ||
+      (externalMaintenance !== undefined &&
+        (recovery.inspectedAt < externalMaintenance.authorizedAt ||
+          (externalMaintenance.observedAt !== undefined &&
+            recovery.inspectedAt < externalMaintenance.observedAt)))
     ) {
       throw new StoreInvariantError(
         `Recovery reconciliation ${recovery.id} does not match current control authority`,
@@ -7303,6 +8671,152 @@ export class SqliteControlStore
     return sha256Digest(canonicalAuthorityDigests.digest(executionProfileProjection(profile)));
   }
 
+  private externalBackendCapabilityDigest(record: ExternalBackendCapabilityRecord): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(externalBackendCapabilityRecordProjection(record)),
+    );
+  }
+
+  private externalExecutionIntentDigest(record: ExternalExecutionRecord): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(externalExecutionIntentProjection(record)),
+    );
+  }
+
+  private externalExecutionRecordDigest(record: ExternalExecutionRecord): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(externalExecutionRecordProjection(record)),
+    );
+  }
+
+  private externalExecutionObservationDigest(
+    observation: ExternalExecutionObservation,
+  ): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(externalExecutionObservationProjection(observation)),
+    );
+  }
+
+  private externalProcessIdentityDigest(identity: ExternalProcessIdentity): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(externalProcessIdentityProjection(identity)),
+    );
+  }
+
+  private externalMaintenanceIntentDigest(intent: ExternalMaintenanceIntent): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(
+        externalMaintenanceAuthorizationProjection({
+          schemaVersion: intent.schemaVersion,
+          id: intent.id,
+          externalExecutionId: intent.externalExecutionId,
+          sequence: intent.sequence,
+          kind: intent.kind,
+          authorizedAt: intent.authorizedAt,
+        }),
+      ),
+    );
+  }
+
+  private externalMaintenanceRecordDigest(intent: ExternalMaintenanceIntent): Sha256Digest {
+    return sha256Digest(
+      canonicalAuthorityDigests.digest(externalMaintenanceRecordProjection(intent)),
+    );
+  }
+
+  private decodeVerifiedExternalBackendCapabilityRow(
+    row: unknown,
+  ): ExternalBackendCapabilityRecord {
+    const record = decodeExternalBackendCapabilityRow(row);
+    if (record.recordDigest !== this.externalBackendCapabilityDigest(record)) {
+      throw new StoreInvariantError(
+        `External backend capability ${record.recordDigest} has a false digest`,
+      );
+    }
+    return record;
+  }
+
+  private decodeVerifiedExternalExecutionRow(row: unknown): ExternalExecutionRecord {
+    const record = decodeExternalExecutionRow(row);
+    if (record.failureCode !== undefined) {
+      if (record.state === ExternalExecutionState.ABANDONED) {
+        externalExecutionAbandonReasonCode(record.failureCode);
+      } else if (
+        record.state === ExternalExecutionState.FAILED ||
+        record.state === ExternalExecutionState.INTERRUPTED
+      ) {
+        externalWorkerFailureCode(record.failureCode);
+      } else {
+        throw new StoreInvariantError(
+          `External execution ${record.id} has failure details before failure`,
+        );
+      }
+    }
+    if (
+      record.intentDigest !== this.externalExecutionIntentDigest(record) ||
+      record.recordDigest !== this.externalExecutionRecordDigest(record) ||
+      (record.processIdentity !== undefined &&
+        record.processIdentity.identityDigest !==
+          this.externalProcessIdentityDigest(record.processIdentity))
+    ) {
+      throw new StoreInvariantError(`External execution ${record.id} has false authority digests`);
+    }
+    return record;
+  }
+
+  private decodeVerifiedExternalExecutionObservationRow(
+    row: unknown,
+  ): ExternalExecutionObservation {
+    const observation = decodeExternalExecutionObservationRow(row);
+    if (observation.failureCode !== undefined) {
+      externalWorkerFailureCode(observation.failureCode);
+    }
+    if (
+      observation.observationDigest !== this.externalExecutionObservationDigest(observation) ||
+      (observation.processIdentity !== undefined &&
+        observation.processIdentity.identityDigest !==
+          this.externalProcessIdentityDigest(observation.processIdentity))
+    ) {
+      throw new StoreInvariantError(
+        `External execution observation ${observation.id} has a false digest`,
+      );
+    }
+    return observation;
+  }
+
+  private decodeVerifiedExternalMaintenanceIntentRow(row: unknown): ExternalMaintenanceIntent {
+    const intent = decodeExternalMaintenanceIntentRow(row);
+    if (intent.failureCode !== undefined) {
+      externalMaintenanceFailureCode(intent.failureCode);
+    }
+    if (
+      intent.intentDigest !== this.externalMaintenanceIntentDigest(intent) ||
+      intent.recordDigest !== this.externalMaintenanceRecordDigest(intent)
+    ) {
+      throw new StoreInvariantError(
+        `External maintenance ${intent.id} has false authority digests`,
+      );
+    }
+    return intent;
+  }
+
+  private auditSequence(rawAuditEventId: AuditEventId): number {
+    const identifier = auditEventId(rawAuditEventId);
+    const row = this.#database
+      .prepare(
+        `SELECT id, sequence, aggregate_type, aggregate_id, event_type, actor_type,
+                command_id, before_version, after_version, correlation_id, causation_id,
+                payload_digest, occurred_at
+           FROM audit_events
+          WHERE id = ?`,
+      )
+      .get(identifier);
+    if (row === undefined) {
+      throw new StoreInvariantError(`Audit event ${identifier} is not readable`);
+    }
+    return decodeAuditEvent(row).sequence;
+  }
+
   private decodeVerifiedExecutionProfileRow(row: unknown): InstalledExecutionProfile {
     const installed = decodeExecutionProfileRow(row);
     if (installed.profile.digest !== this.executionProfileDigest(installed.profile)) {
@@ -7311,6 +8825,33 @@ export class SqliteControlStore
       );
     }
     return installed;
+  }
+
+  private hasExactExternalProfileCapabilityAuthority(profile: ExecutionProfile): boolean {
+    if (profile.schemaVersion === 1) {
+      return true;
+    }
+    if (!this.hasTable('external_backend_capability_records')) {
+      return false;
+    }
+    const external = profile.externalExecution;
+    const capability = this.getExternalBackendCapabilityRecord(external.capabilityRecordDigest);
+    if (
+      capability?.backendKind !== external.backendKind ||
+      capability.binaryIdentityDigest !== external.binaryIdentityDigest ||
+      capability.protocolSchemaDigest !== external.protocolSchemaDigest ||
+      capability.configurationProfileDigest !== external.configurationProfileDigest
+    ) {
+      return false;
+    }
+    const supported = new Set(
+      capability.capabilityEntries
+        .filter(
+          (entry) => entry.classification === ExternalBackendCapabilityClassification.SUPPORTED,
+        )
+        .map((entry) => entry.capability),
+    );
+    return external.selectedCapabilities.every((capabilityName) => supported.has(capabilityName));
   }
 
   private decodeVerifiedRecoveryReconciliationRow(row: unknown): RecoveryReconciliationRecord {
@@ -8068,12 +9609,13 @@ export class SqliteControlStore
     const manifest = decodeContextManifestRow(row);
     if (
       manifest.omissionDecisions.length !== 0 ||
-      manifest.entries.some(
-        (entry) =>
-          entry.kind !== ContextEntryKind.GOAL &&
-          entry.kind !== ContextEntryKind.SUCCESS_CRITERION &&
-          entry.kind !== ContextEntryKind.CANDIDATE,
-      )
+      (manifest.schemaVersion === 2 &&
+        manifest.entries.some(
+          (entry) =>
+            entry.kind !== ContextEntryKind.GOAL &&
+            entry.kind !== ContextEntryKind.SUCCESS_CRITERION &&
+            entry.kind !== ContextEntryKind.CANDIDATE,
+        ))
     ) {
       throw new StoreInvariantError(
         `Context Manifest ${manifest.id} contains authority without an M1 owner`,
@@ -8180,8 +9722,113 @@ export class SqliteControlStore
       );
     }
 
+    let repairCompilation: ReturnType<typeof compileBoundedM2RepairContext> | undefined;
+    if (manifest.schemaVersion === 3) {
+      if (candidateBinding === undefined) {
+        throw new StoreInvariantError(
+          `Repair Context Manifest ${manifest.id} has no child Candidate binding`,
+        );
+      }
+      const repair = this.getAcceptanceRepairForRepairGeneration(candidateBinding.generationId);
+      const decision =
+        repair === undefined ? undefined : this.getAcceptanceDecision(repair.acceptanceDecisionId);
+      const acceptanceManifest =
+        repair === undefined
+          ? undefined
+          : this.getAcceptanceInputManifest(repair.inputManifestDigest);
+      const evidenceSet =
+        repair === undefined ? undefined : this.getEvidenceSet(repair.evidenceSetDigest);
+      const parent =
+        repair === undefined
+          ? undefined
+          : this.getCandidateGeneration(repair.rejectedCandidateGenerationId);
+      const child = this.getCandidateGeneration(candidateBinding.generationId);
+      if (
+        repair === undefined ||
+        decision === undefined ||
+        acceptanceManifest === undefined ||
+        evidenceSet === undefined ||
+        parent === undefined ||
+        child === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Repair Context Manifest ${manifest.id} cannot resolve its closed repair sources`,
+        );
+      }
+      const evidence = evidenceSet.evidenceRefs.map((reference) => {
+        const record = this.getEvidence(reference.evidenceId);
+        const eligibility = this.getEvidenceEligibilityVersion(
+          reference.evidenceId,
+          reference.eligibilityVersion,
+        );
+        if (record === undefined || eligibility === undefined) {
+          throw new StoreInvariantError(
+            `Repair Context Manifest ${manifest.id} cannot resolve Evidence ${reference.evidenceId}`,
+          );
+        }
+        return Object.freeze({ record, eligibility });
+      });
+      const freezeEvidenceRecords = this.listEvidenceForGeneration(parent.id).filter(
+        ({ record }) => record.kind === EvidenceKind.CANDIDATE_FREEZE,
+      );
+      const freezeRecord = freezeEvidenceRecords[0]?.record;
+      const freezeEligibility =
+        freezeRecord === undefined
+          ? undefined
+          : this.getEvidenceEligibilityVersion(freezeRecord.id, aggregateVersion(1));
+      const freezeEvidence =
+        freezeRecord === undefined || freezeEligibility === undefined
+          ? undefined
+          : Object.freeze({ record: freezeRecord, eligibility: freezeEligibility });
+      if (freezeEvidenceRecords.length !== 1 || freezeEvidence === undefined) {
+        throw new StoreInvariantError(
+          `Repair Context Manifest ${manifest.id} cannot resolve one parent freeze Evidence`,
+        );
+      }
+      try {
+        repairCompilation = compileBoundedM2RepairContext(
+          {
+            goal,
+            workflowId: workflow.id,
+            contextWorkflowVersion: manifest.workflowVersion,
+            policyBundleId: installedPolicy.bundle.id,
+            policyBundleDigest: installedPolicy.bundle.digest,
+            repair,
+            decision,
+            manifest: acceptanceManifest,
+            evidenceSet,
+            parent,
+            child,
+            freezeEvidence,
+            evidence,
+          },
+          canonicalAuthorityDigests,
+        );
+      } catch (error) {
+        if (error instanceof TypeError) {
+          throw new StoreInvariantError(
+            `Repair Context Manifest ${manifest.id} has stale or mismatched source authority: ${error.message}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      const expectedRepairDigest = sha256Digest(
+        canonicalAuthorityDigests.digest(repairCompilation.repairContext),
+      );
+      if (
+        manifest.repairContextDigest !== expectedRepairDigest ||
+        manifest.priorAttemptFeedbackDigest !==
+          repairCompilation.priorAttemptFeedback.feedbackDigest
+      ) {
+        throw new StoreInvariantError(
+          `Repair Context Manifest ${manifest.id} has false repair projection digests`,
+        );
+      }
+    }
+
     const expectedPackage = decodeContextPackage({
-      schemaVersion: 2,
+      schemaVersion: manifest.schemaVersion,
       goalId: goal.id,
       goalRevision: goal.revision,
       workflowId: workflow.id,
@@ -8197,6 +9844,12 @@ export class SqliteControlStore
         nonGoals: goal.nonGoals,
       },
       selectedEntries: [],
+      ...(repairCompilation === undefined
+        ? {}
+        : {
+            repairContext: repairCompilation.repairContext,
+            priorAttemptFeedback: repairCompilation.priorAttemptFeedback,
+          }),
       ...(candidateBinding === undefined
         ? {}
         : {
@@ -8248,7 +9901,7 @@ export class SqliteControlStore
       canonicalizeJson(manifest.entries) !== canonicalizeJson(expectedEntries)
     ) {
       throw new StoreInvariantError(
-        `Context Manifest ${manifest.id} does not match its authoritative M1 sources`,
+        `Context Manifest ${manifest.id} does not match its authoritative sources`,
       );
     }
     return manifest;
@@ -8367,6 +10020,99 @@ export class SqliteControlStore
     }
   }
 
+  private assertRetainedExternalExecutionClosure(record: ExternalExecutionRecord): void {
+    const claim = this.getWorkerDispatchClaim(record.attemptId);
+    const manifest = this.getContextManifest(record.contextManifestId);
+    const profile = this.getExecutionProfile(record.executionProfileId)?.profile;
+    const policy = this.getPolicyBundle(record.policyBundleId)?.bundle;
+    const expectedClaimDigest =
+      claim === undefined
+        ? undefined
+        : sha256Digest(canonicalAuthorityDigests.digest(workerDispatchClaimProjection(claim)));
+    const external = profile?.schemaVersion === 2 ? profile.externalExecution : undefined;
+    const latestAudit = this.listAuditEvents('EXTERNAL_EXECUTION', record.id).find(
+      (audit) => audit.sequence === record.auditSequence,
+    );
+    if (
+      claim === undefined ||
+      manifest === undefined ||
+      profile === undefined ||
+      external === undefined ||
+      policy === undefined ||
+      record.dispatchClaimDigest !== expectedClaimDigest ||
+      record.workflowId !== claim.workflowId ||
+      record.workflowVersionAtAuthorization !== claim.workflowVersion ||
+      record.phaseVersion !== claim.workflowVersion ||
+      record.attemptId !== claim.attemptId ||
+      record.workerSessionId !== claim.workerSessionId ||
+      record.contextManifestId !== claim.contextManifestId ||
+      record.contextManifestDigest !== claim.contextManifestDigest ||
+      record.contextPackageDigest !== claim.packageDigest ||
+      record.executionProfileId !== claim.executionProfileId ||
+      record.executionProfileDigest !== claim.executionProfileDigest ||
+      record.goalId !== manifest.goalId ||
+      record.goalRevision !== manifest.goalRevision ||
+      record.phase !== manifest.phase ||
+      record.executionProfileDigest !== profile.digest ||
+      record.policyBundleId !== manifest.policyBundleId ||
+      record.policyBundleDigest !== manifest.policyBundleDigest ||
+      record.policyBundleDigest !== policy.digest ||
+      record.backendKind !== external.backendKind ||
+      record.binaryProtocolSchemaDigest !== external.protocolSchemaDigest ||
+      record.executionConfigDigest !== external.executionConfigDigest ||
+      record.managedRequirementsDigest !== external.managedRequirementsDigest ||
+      record.instructionSourceManifestDigest !== external.instructionSourceManifestDigest ||
+      record.controlledStateRootIdentity !== external.controlledStateRootIdentity ||
+      record.thread.kind !== external.defaultThreadPolicy ||
+      rawField(record, 'continuityPolicy') !== rawField(external, 'continuityPolicy') ||
+      record.compactionPolicy !== external.compactionPolicy ||
+      rawField(record, 'retentionPolicy') !== rawField(external, 'retentionPolicy') ||
+      rawField(record, 'fallbackPolicy') !== rawField(external, 'fallbackPolicy') ||
+      rawField(record, 'interruptionPolicy') !== rawField(external, 'interruptionPolicy') ||
+      record.authorizedAt !== claim.claimedAt ||
+      latestAudit?.actorType !== 'RUNTIME' ||
+      latestAudit.commandId !== undefined ||
+      latestAudit.afterVersion !== record.version ||
+      latestAudit.payloadDigest !== record.recordDigest ||
+      latestAudit.occurredAt !== record.updatedAt ||
+      (record.version === 1
+        ? latestAudit.eventType !== 'EXTERNAL_EXECUTION_AUTHORIZED' ||
+          latestAudit.beforeVersion !== undefined ||
+          record.state !== ExternalExecutionState.AUTHORIZED ||
+          record.lastObservationId !== undefined
+        : latestAudit.beforeVersion !== record.version - 1)
+    ) {
+      throw new StoreInvariantError(
+        `External execution ${record.id} has incomplete durable authority`,
+      );
+    }
+
+    if (record.lastObservationId !== undefined) {
+      const observation = this.getExternalExecutionObservation(record.lastObservationId);
+      if (
+        observation?.externalExecutionId !== record.id ||
+        observation.intentDigest !== record.intentDigest ||
+        observation.expectedRecordVersion >= record.version ||
+        (record.state !== ExternalExecutionState.ABANDONED &&
+          (observation.expectedRecordVersion !== record.version - 1 ||
+            observation.state !== record.state ||
+            observation.compactionCount !== record.compactionCount ||
+            observation.turnInterruptCount !== record.turnInterruptCount ||
+            observation.failureCode !== record.failureCode ||
+            observation.resultEventId !== record.resultEventId ||
+            observation.observedAt !== record.updatedAt))
+      ) {
+        throw new StoreInvariantError(
+          `External execution ${record.id} has a stale last observation`,
+        );
+      }
+    } else if (record.version > 1 && record.state !== ExternalExecutionState.ABANDONED) {
+      throw new StoreInvariantError(
+        `External execution ${record.id} lost its lifecycle observation`,
+      );
+    }
+  }
+
   private assertRetainedWorkerAuthorityClosure(): void {
     if (this.hasTable('attempts')) {
       const attemptRows = this.#database.prepare('SELECT * FROM attempts ORDER BY id').all();
@@ -8402,10 +10148,42 @@ export class SqliteControlStore
       }
     }
 
-    if (this.hasTable('execution_profiles')) {
-      const rows = this.#database.prepare('SELECT * FROM execution_profiles ORDER BY id').all();
+    if (this.hasTable('external_backend_capability_records')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM external_backend_capability_records ORDER BY record_digest')
+        .all();
       for (const row of rows) {
-        const installed = this.decodeVerifiedExecutionProfileRow(row);
+        const record = this.decodeVerifiedExternalBackendCapabilityRow(row);
+        const matchingAudit = this.listAuditEvents(
+          'EXTERNAL_BACKEND_CAPABILITY',
+          record.recordDigest,
+        ).some(
+          (audit) =>
+            audit.eventType === 'EXTERNAL_BACKEND_CAPABILITY_INSTALLED' &&
+            audit.actorType === 'RUNTIME' &&
+            audit.commandId === undefined &&
+            audit.beforeVersion === undefined &&
+            audit.afterVersion === undefined &&
+            audit.payloadDigest === record.recordDigest &&
+            audit.occurredAt === record.observedAt,
+        );
+        if (!matchingAudit) {
+          throw new StoreInvariantError(
+            `External backend capability ${record.recordDigest} has no installation audit`,
+          );
+        }
+      }
+    }
+
+    if (this.hasTable('execution_profiles')) {
+      const identifiers = z
+        .array(z.object({ id: z.string() }))
+        .parse(this.#database.prepare('SELECT id FROM execution_profiles ORDER BY id').all());
+      for (const { id: rawIdentifier } of identifiers) {
+        const installed = this.getExecutionProfile(executionProfileId(rawIdentifier));
+        if (installed === undefined) {
+          throw new StoreInvariantError('Execution Profile disappeared during retained scan');
+        }
         const matchingAudit = this.listAuditEvents('EXECUTION_PROFILE', installed.profile.id).some(
           (audit) =>
             audit.eventType === 'EXECUTION_PROFILE_INSTALLED' &&
@@ -8419,6 +10197,11 @@ export class SqliteControlStore
         if (!matchingAudit) {
           throw new StoreInvariantError(
             `Execution Profile ${installed.profile.id} has no matching installation audit authority`,
+          );
+        }
+        if (!this.hasExactExternalProfileCapabilityAuthority(installed.profile)) {
+          throw new StoreInvariantError(
+            `Execution Profile ${installed.profile.id} has no exact supported backend capability authority`,
           );
         }
       }
@@ -8443,9 +10226,13 @@ export class SqliteControlStore
     }
 
     if (this.hasTable('context_manifests')) {
-      const rows = this.#database.prepare('SELECT * FROM context_manifests ORDER BY id').all();
-      for (const row of rows) {
-        this.decodeVerifiedContextManifestRow(row);
+      const identifiers = z
+        .array(z.object({ id: z.string() }))
+        .parse(this.#database.prepare('SELECT id FROM context_manifests ORDER BY id').all());
+      for (const { id: rawIdentifier } of identifiers) {
+        if (this.getContextManifest(contextManifestId(rawIdentifier)) === undefined) {
+          throw new StoreInvariantError('Context Manifest disappeared during retained scan');
+        }
       }
     }
 
@@ -8455,6 +10242,82 @@ export class SqliteControlStore
         .all();
       for (const row of rows) {
         this.assertRetainedDispatchClaimClosure(decodeWorkerDispatchClaimRow(row));
+      }
+    }
+
+    if (this.hasTable('external_execution_records')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM external_execution_records ORDER BY id')
+        .all();
+      for (const row of rows) {
+        this.assertRetainedExternalExecutionClosure(this.decodeVerifiedExternalExecutionRow(row));
+      }
+    }
+
+    if (this.hasTable('external_execution_observations')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM external_execution_observations ORDER BY id')
+        .all();
+      for (const row of rows) {
+        const observation = this.decodeVerifiedExternalExecutionObservationRow(row);
+        const execution = this.getExternalExecution(observation.externalExecutionId);
+        const audit = this.listAuditEvents('EXTERNAL_EXECUTION_OBSERVATION', observation.id);
+        const auditEntry = audit.length === 1 ? audit[0] : undefined;
+        if (
+          execution?.intentDigest !== observation.intentDigest ||
+          execution.version <= observation.expectedRecordVersion ||
+          auditEntry?.eventType !== 'EXTERNAL_EXECUTION_OBSERVED' ||
+          auditEntry.actorType !== 'RUNTIME' ||
+          auditEntry.beforeVersion !== observation.expectedRecordVersion ||
+          auditEntry.afterVersion !== observation.expectedRecordVersion + 1 ||
+          auditEntry.payloadDigest !== observation.observationDigest ||
+          auditEntry.occurredAt !== observation.observedAt
+        ) {
+          throw new StoreInvariantError(
+            `External execution observation ${observation.id} has incomplete authority`,
+          );
+        }
+      }
+    }
+
+    if (this.hasTable('external_maintenance_intents')) {
+      const rows = this.#database
+        .prepare('SELECT * FROM external_maintenance_intents ORDER BY id')
+        .all();
+      for (const row of rows) {
+        const maintenance = this.decodeVerifiedExternalMaintenanceIntentRow(row);
+        const execution = this.getExternalExecution(maintenance.externalExecutionId);
+        const audits = this.listAuditEvents('EXTERNAL_MAINTENANCE', maintenance.id);
+        const matchingAudit = audits.some(
+          (audit) =>
+            audit.actorType === 'RUNTIME' &&
+            audit.commandId === undefined &&
+            (maintenance.state === ExternalMaintenanceState.AUTHORIZED
+              ? audit.eventType === 'EXTERNAL_MAINTENANCE_AUTHORIZED' &&
+                audit.beforeVersion === undefined &&
+                audit.afterVersion === 1 &&
+                audit.occurredAt === maintenance.authorizedAt &&
+                audit.payloadDigest === maintenance.recordDigest
+              : audit.eventType === 'EXTERNAL_MAINTENANCE_COMPLETED' &&
+                audit.beforeVersion === 1 &&
+                audit.afterVersion === 2 &&
+                audit.occurredAt === maintenance.observedAt &&
+                audit.payloadDigest === maintenance.recordDigest),
+        );
+        if (
+          execution?.compactionPolicy !== 'MANUAL_BEFORE_OPERATION' ||
+          maintenance.sequence !== 1 ||
+          (maintenance.state === ExternalMaintenanceState.AUTHORIZED &&
+            (execution.state === ExternalExecutionState.COMPLETED ||
+              execution.state === ExternalExecutionState.INTERRUPTED ||
+              execution.state === ExternalExecutionState.FAILED ||
+              execution.state === ExternalExecutionState.ABANDONED)) ||
+          !matchingAudit
+        ) {
+          throw new StoreInvariantError(
+            `External maintenance ${maintenance.id} has incomplete durable authority`,
+          );
+        }
       }
     }
 
@@ -9621,11 +11484,19 @@ export class SqliteControlStore
 
   private assertAdmittedWorkerEventHasDispatchClaim(receipt: AdmittedWorkerEventReceipt): void {
     const claim = this.assertWorkerEventHasDispatchCausality(receipt);
+    const externalExecution = this.hasTable('external_execution_records')
+      ? this.getExternalExecutionForAttempt(receipt.attemptId)
+      : undefined;
     if (
       claim.workflowVersion !== receipt.observedWorkflowVersion ||
       claim.workerSessionId !== receipt.workerSessionId ||
       claim.contextManifestDigest !== receipt.contextManifestDigest ||
-      claim.packageDigest !== receipt.packageDigest
+      claim.packageDigest !== receipt.packageDigest ||
+      (externalExecution !== undefined &&
+        (externalExecution.resultEventId !== receipt.eventId ||
+          (externalExecution.state !== ExternalExecutionState.COMPLETED &&
+            externalExecution.state !== ExternalExecutionState.FAILED &&
+            externalExecution.state !== ExternalExecutionState.INTERRUPTED)))
     ) {
       throw new StoreInvariantError(
         `Admitted Worker Event ${receipt.eventId} has no exact dispatch authority`,

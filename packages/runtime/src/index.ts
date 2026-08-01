@@ -16,6 +16,7 @@ export * from './context-compiler.js';
 export * from './ports.js';
 export * from './policy-installer.js';
 export * from './recovery-contracts.js';
+export * from './repair-context.js';
 export * from './worker-contracts.js';
 export type {
   RecoveryCommandCapability,

@@ -7,26 +7,50 @@ import {
   CandidateGenerationState,
   EvidenceEligibilityState,
   EvidenceKind,
+  ExternalExecutionState,
+  ExternalMaintenanceKind,
+  ExternalMaintenanceState,
+  ExternalThreadPolicy,
   RunStatus,
   WorkflowPhase,
+  attemptId,
   commandId,
   decodeAttemptSnapshot,
   decodeContextManifest,
   decodeEvidenceEligibility,
+  decodeExternalExecutionIntent,
+  decodeExternalExecutionObservation,
+  decodeExternalExecutionRecord,
+  decodeExternalMaintenanceIntent,
+  decodeExternalProcessIdentity,
   decodeExecutionProfile,
   decodePolicyBundle,
   decodeVerificationObligation,
   executionProfileId,
   executionProfileProjection,
+  externalExecutionIntentProjection,
+  externalExecutionObservationProjection,
+  externalMaintenanceAuthorizationProjection,
+  externalMaintenanceRecordProjection,
+  externalProcessIdentityProjection,
   isoTimestamp,
+  latestIsoTimestamp,
   policyBundleId,
   policyBundleProjection,
   sha256Digest,
+  workerEventId,
+  workerSessionId,
   goalId,
   type AttemptId,
   type CommandId,
   type ExecutionProfile,
   type ExecutionProfileId,
+  type ExternalExecutionIntent,
+  type ExternalExecutionObservation,
+  type ExternalExecutionProfileDefinition,
+  type ExternalExecutionRecord,
+  type ExternalMaintenanceIntent,
+  type ExternalProcessIdentity,
   type GoalId,
   type PolicyBundleId,
   type Sha256Digest,
@@ -46,6 +70,12 @@ import type {
   AcceptanceIdentityGenerator,
   Clock,
   DigestProvider,
+  ExternalExecutionIdentityGenerator,
+  ExternalObservedWorkerPort,
+  ExternalWorkerLifecycleEvent,
+  ExternalWorkerInvocationPort,
+  ExternalWorkerObservation,
+  PreparedExternalWorkerInvocation,
   IdGenerator,
   WorkerIdentityGenerator,
   WorkerPort,
@@ -64,9 +94,19 @@ import {
   type StartGoalRequest,
 } from './workflow-runtime.js';
 import {
+  ExternalDispatchFailureReasonCode,
+  ExternalExecutionAbandonReasonCode,
+  ExternalMaintenanceFailureReasonCode,
+  ExternalWorkerFailureCode,
   WorkerEventNonAdmissionClass,
   WorkerPortFailureReasonCode,
+  decodeWorkerEvent,
+  decodeWorkerDispatchClaim,
+  workerDispatchClaimProjection,
+  type WorkerDispatchClaim,
   type WorkerEventAdmissionResult,
+  type ExternalMaintenanceFailureCode,
+  type WorkerRequest,
 } from './worker-contracts.js';
 
 const installedExecutionProfileSchema = z
@@ -86,6 +126,75 @@ const boundedNonBlankStringSchema = z
   .refine((value) => value.trim().length > 0 && !value.includes('\u0000'));
 
 const positiveSafeIntegerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const nonNegativeSafeIntegerSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+const externalWorkerObservationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    externalExecutionIntentDigest: z.string(),
+    requestAttemptId: z.string(),
+    requestWorkerSessionId: z.string(),
+    state: z.enum(['READY', 'RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED']),
+    processLaunchCount: nonNegativeSafeIntegerSchema,
+    backendSessionRef: boundedNonBlankStringSchema.optional(),
+    backendOperationRef: boundedNonBlankStringSchema.optional(),
+    compactionCount: nonNegativeSafeIntegerSchema,
+    turnInterruptCount: nonNegativeSafeIntegerSchema,
+    failureCode: z.enum(ExternalWorkerFailureCode).optional(),
+    resultEventId: z.string().optional(),
+  })
+  .strict();
+
+const externalProcessIdentitySchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    launchNonce: z.string(),
+    processId: positiveSafeIntegerSchema,
+    processGroupId: positiveSafeIntegerSchema,
+    processGroupKind: z.enum(['POSIX_PROCESS_GROUP', 'WINDOWS_PROCESS']),
+    processStartIdentity: boundedNonBlankStringSchema,
+    executableIdentityDigest: z.string(),
+    controlledStateRootIdentity: boundedNonBlankStringSchema,
+    identityDigest: z.string(),
+  })
+  .strict();
+
+const externalWorkerLifecycleBindingSchema = z.object({
+  schemaVersion: z.literal(1),
+  externalExecutionIntentDigest: z.string(),
+  requestAttemptId: z.string(),
+  requestWorkerSessionId: z.string(),
+});
+
+const externalWorkerLifecycleEventSchema = z.discriminatedUnion('kind', [
+  externalWorkerLifecycleBindingSchema
+    .extend({ kind: z.literal('PROCESS_STARTED'), processIdentity: externalProcessIdentitySchema })
+    .strict(),
+  externalWorkerLifecycleBindingSchema
+    .extend({ kind: z.literal('SESSION_STARTED'), backendSessionRef: boundedNonBlankStringSchema })
+    .strict(),
+  externalWorkerLifecycleBindingSchema
+    .extend({
+      kind: z.literal('OPERATION_STARTED'),
+      backendSessionRef: boundedNonBlankStringSchema,
+      backendOperationRef: boundedNonBlankStringSchema,
+      compactionCount: nonNegativeSafeIntegerSchema,
+    })
+    .strict(),
+  externalWorkerLifecycleBindingSchema
+    .extend({
+      kind: z.literal('TERMINAL'),
+      state: z.enum(['COMPLETED', 'FAILED', 'INTERRUPTED']),
+      processLaunchCount: nonNegativeSafeIntegerSchema,
+      backendSessionRef: boundedNonBlankStringSchema.optional(),
+      backendOperationRef: boundedNonBlankStringSchema.optional(),
+      compactionCount: nonNegativeSafeIntegerSchema,
+      turnInterruptCount: nonNegativeSafeIntegerSchema,
+      failureCode: z.enum(ExternalWorkerFailureCode).optional(),
+      resultEventId: z.string().optional(),
+    })
+    .strict(),
+]);
 
 const localCommandEnvironmentVariableSchema = z
   .object({
@@ -209,8 +318,7 @@ export interface WorkflowDriverCapability extends GoalExecutionCapability {
   repairGoal(input: BeginAcceptanceRepairRequest): Promise<DrivenGoalCommandResult>;
 }
 
-export interface RuntimeExecutionProfile {
-  readonly schemaVersion: 1;
+interface RuntimeExecutionProfileBase {
   readonly profileId: ExecutionProfileId;
   readonly profileDigest: Sha256Digest;
   readonly driverVersion: string;
@@ -220,6 +328,27 @@ export interface RuntimeExecutionProfile {
   readonly localCommandVerification?: LocalCommandVerificationRuntimeDependencies;
 }
 
+interface ExternalExecutionLifecycleSnapshot {
+  readonly processIdentity?: ExternalProcessIdentity;
+  readonly backendSessionRef?: string;
+  readonly backendOperationRef?: string;
+  readonly compactionCount: number;
+  readonly turnInterruptCount: number;
+  readonly failureCode?: ExternalWorkerFailureCode;
+  readonly resultEventId?: ReturnType<typeof workerEventId>;
+}
+
+export interface RuntimeExecutionProfileV1 extends RuntimeExecutionProfileBase {
+  readonly schemaVersion: 1;
+}
+
+export interface RuntimeExecutionProfileV2 extends RuntimeExecutionProfileBase {
+  readonly schemaVersion: 2;
+  readonly externalWorker: ExternalWorkerInvocationPort;
+}
+
+export type RuntimeExecutionProfile = RuntimeExecutionProfileV1 | RuntimeExecutionProfileV2;
+
 export interface RuntimeExecutionProfileResolver {
   resolve(profile: ExecutionProfile): unknown;
 }
@@ -228,6 +357,7 @@ export interface WorkflowDriverIdentityGenerator
   extends
     IdGenerator,
     WorkerIdentityGenerator,
+    ExternalExecutionIdentityGenerator,
     CandidateEvidenceIdentityGenerator,
     AcceptanceIdentityGenerator {}
 
@@ -307,6 +437,171 @@ function hasMethod(value: unknown, method: string): boolean {
   );
 }
 
+function abortRequested(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+function decodeExternalObservedWorkerPort(value: unknown): ExternalObservedWorkerPort {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    throw new TypeError('Prepared external Worker is missing run or observation');
+  }
+  const target = value;
+  const run: unknown = Reflect.get(target, 'run');
+  const observation: unknown = Reflect.get(target, 'observation');
+  if (typeof run !== 'function' || typeof observation !== 'function') {
+    throw new TypeError('Prepared external Worker is missing run or observation');
+  }
+  return Object.freeze({
+    run: (request: WorkerRequest, signal: AbortSignal) => {
+      const stream: unknown = Reflect.apply(run, target, [request, signal]);
+      if (!isAsyncIterable(stream)) {
+        throw new TypeError('Prepared external Worker did not return an async event stream');
+      }
+      return stream;
+    },
+    observation: (): unknown => Reflect.apply(observation, target, []),
+  });
+}
+
+function decodePreparedExternalWorkerInvocation(value: unknown): PreparedExternalWorkerInvocation {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('External Worker preparation must be one closed capability record');
+  }
+  const hasLeaseId = Reflect.has(value, 'candidateWorkspaceLeaseId');
+  const hasLeaseDigest = Reflect.has(value, 'candidateWorkspaceLeaseDigest');
+  const hasCwd = Reflect.has(value, 'candidateWorkspaceCwdIdentity');
+  const expectedKeys = [
+    ...(hasLeaseId ? ['candidateWorkspaceLeaseId'] : []),
+    ...(hasLeaseDigest ? ['candidateWorkspaceLeaseDigest'] : []),
+    ...(hasCwd ? ['candidateWorkspaceCwdIdentity'] : []),
+    'createWorker',
+    'release',
+  ];
+  const rawLeaseId: unknown = Reflect.get(value, 'candidateWorkspaceLeaseId');
+  const rawLeaseDigest: unknown = Reflect.get(value, 'candidateWorkspaceLeaseDigest');
+  const rawCwd: unknown = Reflect.get(value, 'candidateWorkspaceCwdIdentity');
+  const createWorker: unknown = Reflect.get(value, 'createWorker');
+  const release: unknown = Reflect.get(value, 'release');
+  if (
+    !exactOwnKeys(value, expectedKeys) ||
+    typeof createWorker !== 'function' ||
+    typeof release !== 'function' ||
+    hasLeaseId !== hasLeaseDigest ||
+    hasLeaseId !== hasCwd ||
+    (hasLeaseId &&
+      (typeof rawLeaseId !== 'string' ||
+        rawLeaseId.trim().length === 0 ||
+        typeof rawLeaseDigest !== 'string' ||
+        typeof rawCwd !== 'string' ||
+        rawCwd.trim().length === 0))
+  ) {
+    throw new TypeError('External Worker preparation has malformed lease or capabilities');
+  }
+  const leaseDigest = typeof rawLeaseDigest === 'string' ? sha256Digest(rawLeaseDigest) : undefined;
+  return Object.freeze({
+    ...(typeof rawLeaseId === 'string' ? { candidateWorkspaceLeaseId: rawLeaseId } : {}),
+    ...(leaseDigest === undefined ? {} : { candidateWorkspaceLeaseDigest: leaseDigest }),
+    ...(typeof rawCwd === 'string' ? { candidateWorkspaceCwdIdentity: rawCwd } : {}),
+    createWorker: (input: Parameters<PreparedExternalWorkerInvocation['createWorker']>[0]) =>
+      decodeExternalObservedWorkerPort(Reflect.apply(createWorker, value, [input])),
+    release: async (): Promise<void> => {
+      await Reflect.apply(release, value, []);
+    },
+  });
+}
+
+function decodeExternalWorkerInvocationPort(value: unknown): ExternalWorkerInvocationPort {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    throw new TypeError('Runtime External Worker capability has no prepare operation');
+  }
+  const target = value;
+  const prepare: unknown = Reflect.get(target, 'prepare');
+  if (typeof prepare !== 'function') {
+    throw new TypeError('Runtime External Worker capability has no prepare operation');
+  }
+  return Object.freeze({
+    prepare: async (
+      input: Parameters<ExternalWorkerInvocationPort['prepare']>[0],
+    ): Promise<PreparedExternalWorkerInvocation> =>
+      decodePreparedExternalWorkerInvocation(await Reflect.apply(prepare, target, [input])),
+  });
+}
+
+function decodeExternalWorkerObservation(value: unknown): ExternalWorkerObservation {
+  const parsed = externalWorkerObservationSchema.parse(value);
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    externalExecutionIntentDigest: sha256Digest(parsed.externalExecutionIntentDigest),
+    requestAttemptId: attemptId(parsed.requestAttemptId),
+    requestWorkerSessionId: workerSessionId(parsed.requestWorkerSessionId),
+    state: parsed.state,
+    processLaunchCount: parsed.processLaunchCount,
+    ...(parsed.backendSessionRef === undefined
+      ? {}
+      : { backendSessionRef: parsed.backendSessionRef }),
+    ...(parsed.backendOperationRef === undefined
+      ? {}
+      : { backendOperationRef: parsed.backendOperationRef }),
+    compactionCount: parsed.compactionCount,
+    turnInterruptCount: parsed.turnInterruptCount,
+    ...(parsed.failureCode === undefined ? {} : { failureCode: parsed.failureCode }),
+    ...(parsed.resultEventId === undefined
+      ? {}
+      : { resultEventId: workerEventId(parsed.resultEventId) }),
+  });
+}
+
+function decodeExternalWorkerLifecycleEvent(value: unknown): ExternalWorkerLifecycleEvent {
+  const parsed = externalWorkerLifecycleEventSchema.parse(value);
+  const binding = {
+    schemaVersion: parsed.schemaVersion,
+    externalExecutionIntentDigest: sha256Digest(parsed.externalExecutionIntentDigest),
+    requestAttemptId: attemptId(parsed.requestAttemptId),
+    requestWorkerSessionId: workerSessionId(parsed.requestWorkerSessionId),
+  } as const;
+  switch (parsed.kind) {
+    case 'PROCESS_STARTED':
+      return Object.freeze({
+        ...binding,
+        kind: parsed.kind,
+        processIdentity: decodeExternalProcessIdentity(parsed.processIdentity),
+      });
+    case 'SESSION_STARTED':
+      return Object.freeze({
+        ...binding,
+        kind: parsed.kind,
+        backendSessionRef: parsed.backendSessionRef,
+      });
+    case 'OPERATION_STARTED':
+      return Object.freeze({
+        ...binding,
+        kind: parsed.kind,
+        backendSessionRef: parsed.backendSessionRef,
+        backendOperationRef: parsed.backendOperationRef,
+        compactionCount: parsed.compactionCount,
+      });
+    case 'TERMINAL':
+      return Object.freeze({
+        ...binding,
+        kind: parsed.kind,
+        state: parsed.state,
+        processLaunchCount: parsed.processLaunchCount,
+        ...(parsed.backendSessionRef === undefined
+          ? {}
+          : { backendSessionRef: parsed.backendSessionRef }),
+        ...(parsed.backendOperationRef === undefined
+          ? {}
+          : { backendOperationRef: parsed.backendOperationRef }),
+        compactionCount: parsed.compactionCount,
+        turnInterruptCount: parsed.turnInterruptCount,
+        ...(parsed.failureCode === undefined ? {} : { failureCode: parsed.failureCode }),
+        ...(parsed.resultEventId === undefined
+          ? {}
+          : { resultEventId: workerEventId(parsed.resultEventId) }),
+      });
+  }
+}
+
 function decodeLocalCommandVerificationRuntimeDependencies(
   value: unknown,
 ): LocalCommandVerificationRuntimeDependencies {
@@ -365,34 +660,24 @@ function decodeRuntimeExecutionProfile(
   expected?: ExecutionProfile,
   requireLocalCommandVerification = false,
 ): RuntimeExecutionProfile {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    ![
-      [
-        'schemaVersion',
-        'profileId',
-        'profileDigest',
-        'driverVersion',
-        'worker',
-        'candidateSource',
-        'verification',
-      ],
-      [
-        'schemaVersion',
-        'profileId',
-        'profileDigest',
-        'driverVersion',
-        'worker',
-        'candidateSource',
-        'verification',
-        'localCommandVerification',
-      ],
-    ].some((keys) => exactOwnKeys(value, keys))
-  ) {
+  if (typeof value !== 'object' || value === null) {
     throw new TypeError('Runtime Execution Profile must be one closed capability record');
   }
   const schemaVersion: unknown = Reflect.get(value, 'schemaVersion');
+  const expectedKeys = [
+    'schemaVersion',
+    'profileId',
+    'profileDigest',
+    'driverVersion',
+    'worker',
+    'candidateSource',
+    'verification',
+    ...(Reflect.has(value, 'localCommandVerification') ? ['localCommandVerification'] : []),
+    ...(schemaVersion === 2 ? ['externalWorker'] : []),
+  ];
+  if ((schemaVersion !== 1 && schemaVersion !== 2) || !exactOwnKeys(value, expectedKeys)) {
+    throw new TypeError('Runtime Execution Profile must be one closed capability record');
+  }
   const rawProfileId: unknown = Reflect.get(value, 'profileId');
   const rawProfileDigest: unknown = Reflect.get(value, 'profileDigest');
   const driverVersion: unknown = Reflect.get(value, 'driverVersion');
@@ -400,8 +685,8 @@ function decodeRuntimeExecutionProfile(
   const candidateSource: unknown = Reflect.get(value, 'candidateSource');
   const verification: unknown = Reflect.get(value, 'verification');
   const localCommandVerification: unknown = Reflect.get(value, 'localCommandVerification');
+  const externalWorker: unknown = Reflect.get(value, 'externalWorker');
   if (
-    schemaVersion !== 1 ||
     typeof rawProfileId !== 'string' ||
     typeof rawProfileDigest !== 'string' ||
     typeof driverVersion !== 'string' ||
@@ -411,7 +696,9 @@ function decodeRuntimeExecutionProfile(
     !hasMethod(candidateSource, 'prepareRepair') ||
     !hasMethod(candidateSource, 'observeFreeze') ||
     !hasMethod(candidateSource, 'observeFrozen') ||
-    !hasMethod(verification, 'run')
+    !hasMethod(verification, 'run') ||
+    (schemaVersion === 2 && !hasMethod(externalWorker, 'prepare')) ||
+    (schemaVersion === 1 && externalWorker !== undefined)
   ) {
     throw new TypeError('Runtime Execution Profile contains malformed capabilities');
   }
@@ -426,7 +713,8 @@ function decodeRuntimeExecutionProfile(
   }
   if (
     expected !== undefined &&
-    (profileId !== expected.id ||
+    (schemaVersion !== expected.schemaVersion ||
+      profileId !== expected.id ||
       profileDigest !== expected.digest ||
       driverVersion !== expected.driverVersion ||
       (decodedLocalCommandVerification !== undefined &&
@@ -437,8 +725,7 @@ function decodeRuntimeExecutionProfile(
   ) {
     throw new TypeError('Resolved Runtime Execution Profile does not bind installed authority');
   }
-  return Object.freeze({
-    schemaVersion: 1,
+  const common = {
     profileId,
     profileDigest,
     driverVersion,
@@ -448,7 +735,14 @@ function decodeRuntimeExecutionProfile(
     ...(decodedLocalCommandVerification === undefined
       ? {}
       : { localCommandVerification: decodedLocalCommandVerification }),
-  });
+  };
+  return schemaVersion === 1
+    ? Object.freeze({ schemaVersion, ...common })
+    : Object.freeze({
+        schemaVersion,
+        ...common,
+        externalWorker: decodeExternalWorkerInvocationPort(externalWorker),
+      });
 }
 
 function statusAuthorityInput(parsed: z.infer<typeof driverAuthoritySchema>): unknown {
@@ -1357,6 +1651,15 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         'DRIVER_WORKER_REQUEST_MISSING',
       );
     }
+    const installedProfile = authority.installedExecutionProfile?.profile;
+    const externalProfile =
+      binding.profile.schemaVersion === 2 && installedProfile?.schemaVersion === 2
+        ? installedProfile.externalExecution
+        : undefined;
+    if (externalProfile?.workerPhases.includes(request.contextPackage.phase)) {
+      await this.dispatchExternalOwnedAttempt(authority, binding, request, externalProfile);
+      return;
+    }
     const dispatch = binding.kernel.claimWorkerDispatch(request);
     if (dispatch.status !== 'CLAIMED') {
       throw new DriverFailure(
@@ -1426,6 +1729,948 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       throw new DriverFailure(
         WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
         workerFailure.output.error.detailCode,
+      );
+    }
+  }
+
+  private async dispatchExternalOwnedAttempt(
+    authority: DecodedDriverAuthority,
+    binding: DriverKernelBinding,
+    request: WorkerRequest,
+    externalProfile: ExternalExecutionProfileDefinition,
+  ): Promise<void> {
+    if (binding.profile.schemaVersion !== 2) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
+        'DRIVER_EXTERNAL_RUNTIME_PROFILE_MISSING',
+      );
+    }
+    const runtimeProfile = binding.profile;
+    const controller = new AbortController();
+    this.#activeControllers.set(authority.goal.id, controller);
+    let prepared: PreparedExternalWorkerInvocation | undefined;
+    let execution: ExternalExecutionRecord | undefined;
+    let maintenance: ExternalMaintenanceIntent | undefined;
+    let lifecycleFailure: unknown;
+    let lifecycleFailureWasAdmission = false;
+    let lifecycleTerminalSeen = false;
+    const execute = async (): Promise<void> => {
+      try {
+        prepared = await runtimeProfile.externalWorker.prepare({
+          request,
+          profile: externalProfile,
+          thread: Object.freeze({ kind: ExternalThreadPolicy.FRESH }),
+        });
+      } catch (error) {
+        if (!abortRequested(controller.signal)) {
+          this.recordUndispatchedExternalFailure(
+            authority,
+            binding,
+            request,
+            ExternalDispatchFailureReasonCode.PREPARATION_FAILED,
+          );
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            'DRIVER_EXTERNAL_WORKER_PREPARATION_FAILED',
+            { cause: error },
+          );
+        }
+        return;
+      }
+      if (abortRequested(controller.signal)) {
+        return;
+      }
+
+      const authorization = this.createExternalDispatchAuthorization(
+        authority,
+        request,
+        externalProfile,
+        prepared,
+      );
+      let rawClaimResult;
+      try {
+        rawClaimResult = this.#store.claimExternalWorkerDispatch({
+          claim: authorization.claim,
+          intent: authorization.intent,
+          auditEventId: this.#ids.nextAuditEventId(),
+          externalAuditEventId: this.#ids.nextAuditEventId(),
+          payloadDigest: authorization.claimDigest,
+        });
+      } catch (error) {
+        this.recordUndispatchedExternalFailure(
+          authority,
+          binding,
+          request,
+          ExternalDispatchFailureReasonCode.AUTHORIZATION_FAILED,
+        );
+        throw new DriverFailure(
+          WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+          'DRIVER_EXTERNAL_DISPATCH_AUTHORIZATION_FAILED',
+          { cause: error },
+        );
+      }
+      switch (rawClaimResult.status) {
+        case 'CLAIMED':
+          decodeWorkerDispatchClaim(rawClaimResult.claim);
+          execution = decodeExternalExecutionRecord(rawClaimResult.execution);
+          break;
+        case 'EXISTING':
+          throw new DriverFailure(
+            WorkflowDriveStopReason.ACTIVE_ATTEMPT,
+            'DRIVER_EXTERNAL_DISPATCH_ALREADY_CONSUMED',
+          );
+        case 'VERSION_CONFLICT':
+        case 'NOT_ELIGIBLE':
+        case 'DISPATCH_CONFLICT':
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            `DRIVER_EXTERNAL_DISPATCH_${rawClaimResult.status}`,
+          );
+      }
+      if (execution.intentDigest !== authorization.intent.intentDigest) {
+        throw new DriverFailure(
+          WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+          'DRIVER_EXTERNAL_DISPATCH_RESULT_MISMATCH',
+        );
+      }
+      if (externalProfile.compactionPolicy === 'MANUAL_BEFORE_OPERATION') {
+        try {
+          maintenance = this.authorizeExternalMaintenance(execution);
+        } catch (error) {
+          execution = this.abandonExternalExecution(
+            execution,
+            ExternalExecutionAbandonReasonCode.MAINTENANCE_AUTHORIZATION_FAILED,
+          );
+          const failure = binding.kernel.recordWorkerPortFailure(
+            request,
+            WorkerPortFailureReasonCode.INVOCATION_FAILED,
+          );
+          if (failure !== undefined && !failure.output.ok) {
+            throw new DriverFailure(
+              WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+              failure.output.error.detailCode,
+              { cause: error },
+            );
+          }
+          return;
+        }
+      }
+      if (abortRequested(controller.signal)) {
+        if (maintenance !== undefined) {
+          maintenance = this.completeExternalMaintenance(
+            maintenance,
+            ExternalMaintenanceState.ABANDONED,
+            ExternalMaintenanceFailureReasonCode.CANCELLED_BEFORE_INVOCATION,
+          );
+        }
+        this.abandonExternalExecution(
+          execution,
+          ExternalExecutionAbandonReasonCode.CANCELLED_BEFORE_INVOCATION,
+        );
+        return;
+      }
+
+      const rawEvents: unknown[] = [];
+      const onLifecycleEvent = (rawEvent: unknown): void => {
+        if (lifecycleFailure !== undefined) {
+          throw lifecycleFailure instanceof Error
+            ? lifecycleFailure
+            : new TypeError('External Worker lifecycle previously failed', {
+                cause: lifecycleFailure,
+              });
+        }
+        let admissionStarted = false;
+        try {
+          const event = decodeExternalWorkerLifecycleEvent(rawEvent);
+          this.assertExternalWorkerLifecycleBinding(event, authorization.intent);
+          if (execution === undefined || lifecycleTerminalSeen) {
+            throw new TypeError('External Worker lifecycle event has no active execution');
+          }
+          switch (event.kind) {
+            case 'PROCESS_STARTED':
+              if (execution.state !== ExternalExecutionState.AUTHORIZED) {
+                throw new TypeError('External process event is out of lifecycle order');
+              }
+              this.assertExternalProcessIdentity(event.processIdentity, authorization.intent);
+              admissionStarted = true;
+              execution = this.admitExternalExecutionState(
+                execution,
+                ExternalExecutionState.PROCESS_OBSERVED,
+                Object.freeze({
+                  processIdentity: event.processIdentity,
+                  compactionCount: 0,
+                  turnInterruptCount: 0,
+                }),
+                false,
+              );
+              break;
+            case 'SESSION_STARTED':
+              if (execution.state !== ExternalExecutionState.PROCESS_OBSERVED) {
+                throw new TypeError('External session event is out of lifecycle order');
+              }
+              admissionStarted = true;
+              execution = this.admitExternalExecutionState(
+                execution,
+                ExternalExecutionState.SESSION_OBSERVED,
+                Object.freeze({
+                  backendSessionRef: event.backendSessionRef,
+                  compactionCount: 0,
+                  turnInterruptCount: 0,
+                }),
+                false,
+              );
+              break;
+            case 'OPERATION_STARTED':
+              if (
+                execution.state !== ExternalExecutionState.SESSION_OBSERVED ||
+                execution.backendSessionRef !== event.backendSessionRef
+              ) {
+                throw new TypeError('External operation event is out of lifecycle order');
+              }
+              if (maintenance?.state === ExternalMaintenanceState.AUTHORIZED) {
+                if (event.compactionCount !== 1) {
+                  throw new TypeError('External operation began before authorized maintenance');
+                }
+                admissionStarted = true;
+                maintenance = this.completeExternalMaintenance(
+                  maintenance,
+                  ExternalMaintenanceState.OBSERVED,
+                );
+              }
+              admissionStarted = true;
+              execution = this.admitExternalExecutionState(
+                execution,
+                ExternalExecutionState.OPERATION_RUNNING,
+                Object.freeze({
+                  backendSessionRef: event.backendSessionRef,
+                  backendOperationRef: event.backendOperationRef,
+                  compactionCount: event.compactionCount,
+                  turnInterruptCount: 0,
+                }),
+                false,
+              );
+              break;
+            case 'TERMINAL': {
+              const expectedProcessLaunchCount = execution.processIdentity === undefined ? 0 : 1;
+              if (
+                event.processLaunchCount !== expectedProcessLaunchCount ||
+                event.backendSessionRef !== execution.backendSessionRef ||
+                event.backendOperationRef !== execution.backendOperationRef ||
+                (event.resultEventId === undefined
+                  ? rawEvents.length !== 0
+                  : rawEvents.length !== 1 ||
+                    decodeWorkerEvent(rawEvents[0]).id !== event.resultEventId)
+              ) {
+                throw new TypeError('External terminal event does not bind current lifecycle');
+              }
+              if (maintenance?.state === ExternalMaintenanceState.AUTHORIZED) {
+                const observedMaintenance = event.compactionCount === 1;
+                admissionStarted = true;
+                maintenance = this.completeExternalMaintenance(
+                  maintenance,
+                  observedMaintenance
+                    ? ExternalMaintenanceState.OBSERVED
+                    : event.state === 'INTERRUPTED'
+                      ? ExternalMaintenanceState.ABANDONED
+                      : ExternalMaintenanceState.FAILED,
+                  observedMaintenance
+                    ? undefined
+                    : (event.failureCode ?? ExternalMaintenanceFailureReasonCode.NOT_OBSERVED),
+                );
+              }
+              const state =
+                event.state === 'COMPLETED'
+                  ? ExternalExecutionState.COMPLETED
+                  : event.state === 'INTERRUPTED'
+                    ? ExternalExecutionState.INTERRUPTED
+                    : ExternalExecutionState.FAILED;
+              admissionStarted = true;
+              execution = this.admitExternalExecutionState(
+                execution,
+                state,
+                Object.freeze({
+                  ...(event.backendSessionRef === undefined
+                    ? {}
+                    : { backendSessionRef: event.backendSessionRef }),
+                  ...(event.backendOperationRef === undefined
+                    ? {}
+                    : { backendOperationRef: event.backendOperationRef }),
+                  compactionCount: event.compactionCount,
+                  turnInterruptCount: event.turnInterruptCount,
+                  ...(event.failureCode === undefined ? {} : { failureCode: event.failureCode }),
+                  ...(event.resultEventId === undefined
+                    ? {}
+                    : { resultEventId: event.resultEventId }),
+                }),
+                true,
+              );
+              lifecycleTerminalSeen = true;
+              break;
+            }
+          }
+        } catch (error) {
+          lifecycleFailure = error;
+          lifecycleFailureWasAdmission = admissionStarted;
+          throw error;
+        }
+      };
+
+      let worker: ExternalObservedWorkerPort;
+      try {
+        worker = prepared.createWorker({ intent: authorization.intent, onLifecycleEvent });
+      } catch (error) {
+        if (maintenance !== undefined) {
+          maintenance = this.completeExternalMaintenance(
+            maintenance,
+            ExternalMaintenanceState.FAILED,
+            ExternalMaintenanceFailureReasonCode.WORKER_CREATION_FAILED,
+          );
+        }
+        execution = this.abandonExternalExecution(
+          execution,
+          ExternalExecutionAbandonReasonCode.WORKER_CREATION_FAILED,
+        );
+        const failure = binding.kernel.recordWorkerPortFailure(
+          request,
+          WorkerPortFailureReasonCode.INVOCATION_FAILED,
+        );
+        if (failure !== undefined && !failure.output.ok) {
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+            failure.output.error.detailCode,
+            { cause: error },
+          );
+        }
+        return;
+      }
+
+      let streamFailureCode: WorkerPortFailureReasonCode | undefined;
+      try {
+        const stream: unknown = worker.run(request, controller.signal);
+        if (!isAsyncIterable(stream)) {
+          streamFailureCode = WorkerPortFailureReasonCode.NON_ASYNC_STREAM;
+        } else {
+          for await (const event of stream) {
+            rawEvents.push(event);
+          }
+        }
+      } catch (error) {
+        if (!isAbortError(error, controller.signal)) {
+          streamFailureCode = WorkerPortFailureReasonCode.INVOCATION_FAILED;
+        }
+      }
+
+      if (lifecycleFailure !== undefined) {
+        const failureReason = lifecycleFailureWasAdmission
+          ? ExternalMaintenanceFailureReasonCode.OBSERVATION_ADMISSION_FAILED
+          : ExternalMaintenanceFailureReasonCode.INVALID_WORKER_OBSERVATION;
+        const abandonReason = lifecycleFailureWasAdmission
+          ? ExternalExecutionAbandonReasonCode.OBSERVATION_ADMISSION_FAILED
+          : ExternalExecutionAbandonReasonCode.INVALID_WORKER_OBSERVATION;
+        if (maintenance?.state === ExternalMaintenanceState.AUTHORIZED) {
+          maintenance = this.completeExternalMaintenance(
+            maintenance,
+            ExternalMaintenanceState.FAILED,
+            failureReason,
+          );
+        }
+        execution = this.abandonExternalExecution(execution, abandonReason);
+        const failure = binding.kernel.recordWorkerPortFailure(
+          request,
+          WorkerPortFailureReasonCode.INVOCATION_FAILED,
+        );
+        if (failure !== undefined && !failure.output.ok) {
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+            failure.output.error.detailCode,
+            { cause: lifecycleFailure },
+          );
+        }
+        return;
+      }
+
+      let observed: ExternalWorkerObservation;
+      try {
+        observed = decodeExternalWorkerObservation(worker.observation());
+        this.assertExternalWorkerObservation(observed, authorization.intent, externalProfile);
+        if (!lifecycleTerminalSeen) {
+          throw new TypeError('External Worker omitted its terminal lifecycle event');
+        }
+        this.assertExternalWorkerObservationMatchesExecution(observed, execution);
+        this.assertExternalWorkerResultBinding(observed, rawEvents);
+      } catch (error) {
+        if (maintenance?.state === ExternalMaintenanceState.AUTHORIZED) {
+          maintenance = this.completeExternalMaintenance(
+            maintenance,
+            abortRequested(controller.signal)
+              ? ExternalMaintenanceState.ABANDONED
+              : ExternalMaintenanceState.FAILED,
+            abortRequested(controller.signal)
+              ? ExternalMaintenanceFailureReasonCode.WORKER_CANCELLED
+              : ExternalMaintenanceFailureReasonCode.INVALID_WORKER_OBSERVATION,
+          );
+        }
+        execution = this.abandonExternalExecution(
+          execution,
+          ExternalExecutionAbandonReasonCode.INVALID_WORKER_OBSERVATION,
+        );
+        if (!abortRequested(controller.signal)) {
+          const failure = binding.kernel.recordWorkerPortFailure(
+            request,
+            streamFailureCode ?? WorkerPortFailureReasonCode.INVOCATION_FAILED,
+          );
+          if (failure !== undefined && !failure.output.ok) {
+            throw new DriverFailure(
+              WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+              failure.output.error.detailCode,
+              { cause: error },
+            );
+          }
+        }
+        return;
+      }
+
+      if (abortRequested(controller.signal) || observed.state === 'INTERRUPTED') {
+        return;
+      }
+
+      const admissions = rawEvents.map((event) => binding.kernel.admitWorkerEvent(event, request));
+      const admitted = admissions.some(
+        (admission) =>
+          admission.status === 'ADMITTED' ||
+          (admission.status === 'DUPLICATE' && admission.terminalForCurrentDispatch),
+      );
+      const controlPlaneFailure = admissions.some(
+        (admission) =>
+          (admission.status === 'REJECTED' || admission.status === 'IGNORED') &&
+          admission.nonAdmissionClass === WorkerEventNonAdmissionClass.CONTROL_PLANE_FAILURE,
+      );
+      let workerFailure: RuntimeCommandResult | undefined;
+      if (streamFailureCode !== undefined || !admitted) {
+        if (controlPlaneFailure) {
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            'DRIVER_EXTERNAL_WORKER_EVENT_CONTROL_PLANE_FAILURE',
+          );
+        }
+        workerFailure = binding.kernel.recordWorkerPortFailure(
+          request,
+          streamFailureCode ??
+            (admissions.length === 0
+              ? WorkerPortFailureReasonCode.NO_TERMINAL_EVENT
+              : WorkerPortFailureReasonCode.NO_ADMITTED_TERMINAL_EVENT),
+        );
+      }
+      if (workerFailure !== undefined && !workerFailure.output.ok) {
+        throw new DriverFailure(
+          WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+          workerFailure.output.error.detailCode,
+        );
+      }
+    };
+
+    let executionFailed = false;
+    let executionFailure: unknown;
+    try {
+      await execute();
+    } catch (error) {
+      executionFailed = true;
+      executionFailure = error;
+    }
+    let releaseFailure: DriverFailure | undefined;
+    if (prepared !== undefined) {
+      try {
+        await prepared.release();
+      } catch (error) {
+        if (!abortRequested(controller.signal)) {
+          releaseFailure = new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            'DRIVER_EXTERNAL_WORKSPACE_RELEASE_FAILED',
+            { cause: error },
+          );
+        }
+      }
+    }
+    if (this.#activeControllers.get(authority.goal.id) === controller) {
+      this.#activeControllers.delete(authority.goal.id);
+    }
+    if (executionFailed) {
+      throw executionFailure;
+    }
+    if (releaseFailure !== undefined) {
+      throw releaseFailure;
+    }
+  }
+
+  private createExternalDispatchAuthorization(
+    authority: DecodedDriverAuthority,
+    request: WorkerRequest,
+    profile: ExternalExecutionProfileDefinition,
+    prepared: PreparedExternalWorkerInvocation,
+  ): Readonly<{
+    claim: WorkerDispatchClaim;
+    claimDigest: Sha256Digest;
+    intent: ExternalExecutionIntent;
+  }> {
+    const attempt = authority.activeAttempt;
+    const manifest = authority.latestPhaseContextManifest;
+    const policy = authority.installedPolicyBundle;
+    const policyBinding = authority.policyBinding;
+    const installedProfile = authority.installedExecutionProfile;
+    const profileBinding = authority.executionProfileBinding;
+    if (
+      attempt?.status !== AttemptStatus.RUNNING ||
+      manifest === undefined ||
+      policy === undefined ||
+      policyBinding === undefined ||
+      installedProfile?.profile.schemaVersion !== 2 ||
+      profileBinding === undefined ||
+      attempt.id !== request.attemptId ||
+      manifest.id !== request.contextManifestId ||
+      manifest.manifestDigest !== request.contextManifestDigest ||
+      manifest.packageDigest !== request.packageDigest ||
+      authority.workflow.id !== request.contextPackage.workflowId ||
+      authority.workflow.version !== request.contextPackage.workflowVersion ||
+      authority.goal.id !== request.contextPackage.goalId ||
+      authority.goal.revision !== request.contextPackage.goalRevision ||
+      installedProfile.profile.id !== request.executionProfileId ||
+      installedProfile.profile.digest !== request.executionProfileDigest ||
+      profileBinding.profileId !== request.executionProfileId ||
+      profileBinding.profileDigest !== request.executionProfileDigest ||
+      policy.bundle.id !== request.contextPackage.policyBundleId ||
+      policy.bundle.digest !== request.contextPackage.policyBundleDigest ||
+      policyBinding.policyBundleId !== policy.bundle.id ||
+      policyBinding.policyBundleDigest !== policy.bundle.digest ||
+      canonicalizeJson(installedProfile.profile.externalExecution) !== canonicalizeJson(profile)
+    ) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+        'DRIVER_EXTERNAL_DISPATCH_AUTHORITY_MISMATCH',
+      );
+    }
+    const hasLease = prepared.candidateWorkspaceLeaseId !== undefined;
+    if (
+      (request.contextPackage.phase === WorkflowPhase.IMPLEMENT) !== hasLease ||
+      hasLease !== (prepared.candidateWorkspaceLeaseDigest !== undefined) ||
+      hasLease !== (prepared.candidateWorkspaceCwdIdentity !== undefined)
+    ) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+        'DRIVER_EXTERNAL_CANDIDATE_LEASE_MISMATCH',
+      );
+    }
+
+    let observedAt: ReturnType<typeof isoTimestamp>;
+    try {
+      observedAt = isoTimestamp(this.#clock.now());
+    } catch (error) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+        'DRIVER_EXTERNAL_AUTHORIZATION_CLOCK_FAILURE',
+        { cause: error },
+      );
+    }
+    const claimedAt = latestIsoTimestamp(
+      observedAt,
+      authority.workflow.updatedAt,
+      attempt.startedAt,
+      manifest.createdAt,
+      policy.installedAt,
+      policyBinding.boundAt,
+      installedProfile.installedAt,
+      profileBinding.boundAt,
+    );
+    const claim = decodeWorkerDispatchClaim({
+      schemaVersion: 2,
+      workflowId: authority.workflow.id,
+      workflowVersion: authority.workflow.version,
+      attemptId: attempt.id,
+      workerSessionId: request.workerSessionId,
+      contextManifestId: manifest.id,
+      contextManifestDigest: manifest.manifestDigest,
+      packageDigest: manifest.packageDigest,
+      executionProfileId: installedProfile.profile.id,
+      executionProfileDigest: installedProfile.profile.digest,
+      claimedAt,
+    });
+    const claimDigest = sha256Digest(this.#digests.digest(workerDispatchClaimProjection(claim)));
+    const executionIdentifier = this.#ids.nextExternalExecutionId();
+    const processLaunchNonce = sha256Digest(
+      this.#digests.digest({
+        schemaVersion: 1,
+        profile: 'external-process-launch-nonce-v1',
+        externalExecutionId: executionIdentifier,
+        attemptId: attempt.id,
+        workerSessionId: request.workerSessionId,
+      }),
+    );
+    const intentWithoutDigest: Omit<ExternalExecutionIntent, 'intentDigest'> = Object.freeze({
+      schemaVersion: 1,
+      id: executionIdentifier,
+      goalId: authority.goal.id,
+      goalRevision: authority.goal.revision,
+      workflowId: authority.workflow.id,
+      workflowVersionAtAuthorization: authority.workflow.version,
+      phase: request.contextPackage.phase,
+      phaseVersion: authority.workflow.version,
+      attemptId: attempt.id,
+      workerSessionId: request.workerSessionId,
+      dispatchClaimDigest: claimDigest,
+      contextManifestId: manifest.id,
+      contextManifestDigest: manifest.manifestDigest,
+      contextPackageDigest: manifest.packageDigest,
+      executionProfileId: installedProfile.profile.id,
+      executionProfileDigest: installedProfile.profile.digest,
+      policyBundleId: policy.bundle.id,
+      policyBundleDigest: policy.bundle.digest,
+      backendKind: profile.backendKind,
+      binaryIdentityDigest: profile.binaryIdentityDigest,
+      binaryProtocolSchemaDigest: profile.protocolSchemaDigest,
+      executionConfigDigest: profile.executionConfigDigest,
+      managedRequirementsDigest: profile.managedRequirementsDigest,
+      instructionSourceManifestDigest: profile.instructionSourceManifestDigest,
+      controlledStateRootIdentity: profile.controlledStateRootIdentity,
+      processLaunchNonce,
+      thread: Object.freeze({ kind: ExternalThreadPolicy.FRESH }),
+      continuityPolicy: profile.continuityPolicy,
+      compactionPolicy: profile.compactionPolicy,
+      retentionPolicy: profile.retentionPolicy,
+      fallbackPolicy: profile.fallbackPolicy,
+      interruptionPolicy: profile.interruptionPolicy,
+      ...(prepared.candidateWorkspaceLeaseId === undefined
+        ? {}
+        : { candidateWorkspaceLeaseId: prepared.candidateWorkspaceLeaseId }),
+      ...(prepared.candidateWorkspaceLeaseDigest === undefined
+        ? {}
+        : { candidateWorkspaceLeaseDigest: prepared.candidateWorkspaceLeaseDigest }),
+      ...(prepared.candidateWorkspaceCwdIdentity === undefined
+        ? {}
+        : { candidateWorkspaceCwdIdentity: prepared.candidateWorkspaceCwdIdentity }),
+      authorizedAt: claimedAt,
+    });
+    const intent = decodeExternalExecutionIntent({
+      ...intentWithoutDigest,
+      intentDigest: sha256Digest(
+        this.#digests.digest(externalExecutionIntentProjection(intentWithoutDigest)),
+      ),
+    });
+    return Object.freeze({ claim, claimDigest, intent });
+  }
+
+  private assertExternalWorkerObservation(
+    observation: ExternalWorkerObservation,
+    intent: ExternalExecutionIntent,
+    profile: ExternalExecutionProfileDefinition,
+  ): void {
+    const terminal =
+      observation.state === 'COMPLETED' ||
+      observation.state === 'FAILED' ||
+      observation.state === 'INTERRUPTED';
+    if (
+      observation.externalExecutionIntentDigest !== intent.intentDigest ||
+      observation.requestAttemptId !== intent.attemptId ||
+      observation.requestWorkerSessionId !== intent.workerSessionId ||
+      !terminal ||
+      observation.processLaunchCount > 1 ||
+      (observation.processLaunchCount === 0 &&
+        (observation.backendSessionRef !== undefined ||
+          observation.backendOperationRef !== undefined)) ||
+      (observation.backendOperationRef !== undefined &&
+        observation.backendSessionRef === undefined) ||
+      (observation.state === 'COMPLETED' &&
+        (observation.processLaunchCount !== 1 ||
+          observation.backendSessionRef === undefined ||
+          observation.backendOperationRef === undefined ||
+          observation.resultEventId === undefined ||
+          observation.failureCode !== undefined)) ||
+      ((observation.state === 'FAILED' || observation.state === 'INTERRUPTED') &&
+        observation.failureCode === undefined) ||
+      (observation.state === 'INTERRUPTED' && observation.resultEventId !== undefined) ||
+      (observation.state === 'FAILED' &&
+        (observation.failureCode === ExternalWorkerFailureCode.BACKEND_TURN_FAILED) !==
+          (observation.resultEventId !== undefined)) ||
+      (observation.resultEventId !== undefined && observation.backendOperationRef === undefined) ||
+      (observation.state !== 'INTERRUPTED' && observation.turnInterruptCount !== 0) ||
+      observation.turnInterruptCount > 1 ||
+      (profile.compactionPolicy === 'FAIL_ON_OBSERVATION' && observation.compactionCount !== 0) ||
+      (profile.compactionPolicy === 'MANUAL_BEFORE_OPERATION' &&
+        (observation.compactionCount > 1 ||
+          (observation.state === 'COMPLETED' && observation.compactionCount !== 1)))
+    ) {
+      throw new TypeError('External Worker observation violates the selected execution policy');
+    }
+  }
+
+  private assertExternalWorkerResultBinding(
+    observation: ExternalWorkerObservation,
+    rawEvents: readonly unknown[],
+  ): void {
+    if (observation.resultEventId === undefined) {
+      if (rawEvents.length !== 0) {
+        throw new TypeError(
+          'External Worker emitted an event without binding it to its observation',
+        );
+      }
+      return;
+    }
+    if (
+      rawEvents.length !== 1 ||
+      decodeWorkerEvent(rawEvents[0]).id !== observation.resultEventId
+    ) {
+      throw new TypeError('External Worker observation does not bind its exact terminal event');
+    }
+  }
+
+  private assertExternalWorkerLifecycleBinding(
+    event: ExternalWorkerLifecycleEvent,
+    intent: ExternalExecutionIntent,
+  ): void {
+    if (
+      event.externalExecutionIntentDigest !== intent.intentDigest ||
+      event.requestAttemptId !== intent.attemptId ||
+      event.requestWorkerSessionId !== intent.workerSessionId
+    ) {
+      throw new TypeError('External Worker lifecycle event does not bind its execution intent');
+    }
+  }
+
+  private assertExternalProcessIdentity(
+    identity: ExternalProcessIdentity,
+    intent: ExternalExecutionIntent,
+  ): void {
+    const expectedIdentityDigest = sha256Digest(
+      this.#digests.digest(externalProcessIdentityProjection(identity)),
+    );
+    if (
+      identity.identityDigest !== expectedIdentityDigest ||
+      identity.launchNonce !== intent.processLaunchNonce ||
+      identity.executableIdentityDigest !== intent.binaryIdentityDigest ||
+      identity.controlledStateRootIdentity !== intent.controlledStateRootIdentity
+    ) {
+      throw new TypeError('External process identity does not bind its authorized launch');
+    }
+  }
+
+  private assertExternalWorkerObservationMatchesExecution(
+    observation: ExternalWorkerObservation,
+    execution: ExternalExecutionRecord,
+  ): void {
+    const expectedState =
+      observation.state === 'COMPLETED'
+        ? ExternalExecutionState.COMPLETED
+        : observation.state === 'INTERRUPTED'
+          ? ExternalExecutionState.INTERRUPTED
+          : ExternalExecutionState.FAILED;
+    if (
+      execution.state !== expectedState ||
+      observation.processLaunchCount !== (execution.processIdentity === undefined ? 0 : 1) ||
+      observation.backendSessionRef !== execution.backendSessionRef ||
+      observation.backendOperationRef !== execution.backendOperationRef ||
+      observation.compactionCount !== execution.compactionCount ||
+      observation.turnInterruptCount !== execution.turnInterruptCount ||
+      observation.failureCode !== execution.failureCode ||
+      observation.resultEventId !== execution.resultEventId
+    ) {
+      throw new TypeError('External Worker summary does not match persisted lifecycle authority');
+    }
+  }
+
+  private admitExternalExecutionState(
+    current: ExternalExecutionRecord,
+    state: ExternalExecutionObservation['state'],
+    worker: ExternalExecutionLifecycleSnapshot,
+    terminal: boolean,
+  ): ExternalExecutionRecord {
+    const observedAt = latestIsoTimestamp(isoTimestamp(this.#clock.now()), current.updatedAt);
+    const withoutDigest: Omit<ExternalExecutionObservation, 'observationDigest'> = Object.freeze({
+      schemaVersion: 1,
+      id: this.#ids.nextExternalExecutionObservationId(),
+      externalExecutionId: current.id,
+      intentDigest: current.intentDigest,
+      expectedRecordVersion: current.version,
+      state,
+      ...(state === ExternalExecutionState.PROCESS_OBSERVED
+        ? worker.processIdentity === undefined
+          ? {}
+          : { processIdentity: worker.processIdentity }
+        : {}),
+      ...(state === ExternalExecutionState.SESSION_OBSERVED ||
+      state === ExternalExecutionState.OPERATION_RUNNING ||
+      terminal
+        ? worker.backendSessionRef === undefined
+          ? {}
+          : { backendSessionRef: worker.backendSessionRef }
+        : {}),
+      ...(state === ExternalExecutionState.OPERATION_RUNNING || terminal
+        ? worker.backendOperationRef === undefined
+          ? {}
+          : { backendOperationRef: worker.backendOperationRef }
+        : {}),
+      compactionCount: worker.compactionCount,
+      turnInterruptCount: worker.turnInterruptCount,
+      ...(terminal && worker.failureCode !== undefined ? { failureCode: worker.failureCode } : {}),
+      ...(terminal && worker.resultEventId !== undefined
+        ? { resultEventId: worker.resultEventId }
+        : {}),
+      observedAt,
+    });
+    const observation = decodeExternalExecutionObservation({
+      ...withoutDigest,
+      observationDigest: sha256Digest(
+        this.#digests.digest(externalExecutionObservationProjection(withoutDigest)),
+      ),
+    });
+    const result = this.#store.admitExternalExecutionObservation({
+      observation,
+      observationAuditEventId: this.#ids.nextAuditEventId(),
+      recordAuditEventId: this.#ids.nextAuditEventId(),
+    });
+    if (result.status !== 'APPLIED' && result.status !== 'REPLAYED') {
+      throw new TypeError(`External observation admission failed: ${result.status}`);
+    }
+    const persisted = decodeExternalExecutionRecord(result.value);
+    if (
+      persisted.id !== current.id ||
+      persisted.intentDigest !== current.intentDigest ||
+      persisted.version !== current.version + 1 ||
+      persisted.state !== state ||
+      persisted.lastObservationId !== observation.id
+    ) {
+      throw new TypeError('External observation result does not bind admitted authority');
+    }
+    return persisted;
+  }
+
+  private abandonExternalExecution(
+    retained: ExternalExecutionRecord,
+    reasonCode: ExternalExecutionAbandonReasonCode,
+  ): ExternalExecutionRecord {
+    const current = decodeExternalExecutionRecord(
+      this.#store.getExternalExecution(retained.id) ?? retained,
+    );
+    if (
+      current.state === ExternalExecutionState.COMPLETED ||
+      current.state === ExternalExecutionState.INTERRUPTED ||
+      current.state === ExternalExecutionState.FAILED ||
+      current.state === ExternalExecutionState.ABANDONED
+    ) {
+      return current;
+    }
+    const result = this.#store.abandonExternalExecution({
+      externalExecutionId: current.id,
+      expectedRecordVersion: current.version,
+      reasonCode,
+      abandonedAt: latestIsoTimestamp(isoTimestamp(this.#clock.now()), current.updatedAt),
+      auditEventId: this.#ids.nextAuditEventId(),
+    });
+    if (result.status !== 'APPLIED' && result.status !== 'REPLAYED') {
+      throw new TypeError(`External execution abandonment failed: ${result.status}`);
+    }
+    return decodeExternalExecutionRecord(result.value);
+  }
+
+  private authorizeExternalMaintenance(
+    execution: ExternalExecutionRecord,
+  ): ExternalMaintenanceIntent {
+    const authorizedAt = latestIsoTimestamp(isoTimestamp(this.#clock.now()), execution.updatedAt);
+    const authorization = Object.freeze({
+      schemaVersion: 1 as const,
+      id: this.#ids.nextExternalMaintenanceIntentId(),
+      externalExecutionId: execution.id,
+      sequence: 1,
+      kind: ExternalMaintenanceKind.WORKING_CONTEXT_COMPACTION,
+      authorizedAt,
+    });
+    const intentDigest = sha256Digest(
+      this.#digests.digest(externalMaintenanceAuthorizationProjection(authorization)),
+    );
+    const withoutRecordDigest: Omit<ExternalMaintenanceIntent, 'recordDigest'> = Object.freeze({
+      ...authorization,
+      state: ExternalMaintenanceState.AUTHORIZED,
+      intentDigest,
+    });
+    const intent = decodeExternalMaintenanceIntent({
+      ...withoutRecordDigest,
+      recordDigest: sha256Digest(
+        this.#digests.digest(externalMaintenanceRecordProjection(withoutRecordDigest)),
+      ),
+    });
+    const result = this.#store.authorizeExternalMaintenance({
+      intent,
+      auditEventId: this.#ids.nextAuditEventId(),
+    });
+    if (result.status !== 'APPLIED' && result.status !== 'REPLAYED') {
+      throw new TypeError(`External maintenance authorization failed: ${result.status}`);
+    }
+    const persisted = decodeExternalMaintenanceIntent(result.value);
+    if (
+      persisted.id !== intent.id ||
+      persisted.intentDigest !== intent.intentDigest ||
+      persisted.state !== ExternalMaintenanceState.AUTHORIZED
+    ) {
+      throw new TypeError('External maintenance authorization result is mismatched');
+    }
+    return persisted;
+  }
+
+  private completeExternalMaintenance(
+    maintenance: ExternalMaintenanceIntent,
+    state:
+      | typeof ExternalMaintenanceState.OBSERVED
+      | typeof ExternalMaintenanceState.FAILED
+      | typeof ExternalMaintenanceState.ABANDONED,
+    failureCode?: ExternalMaintenanceFailureCode,
+  ): ExternalMaintenanceIntent {
+    const observedAt = latestIsoTimestamp(
+      isoTimestamp(this.#clock.now()),
+      maintenance.authorizedAt,
+    );
+    const result = this.#store.completeExternalMaintenance({
+      maintenanceIntentId: maintenance.id,
+      expectedState: ExternalMaintenanceState.AUTHORIZED,
+      state,
+      observedAt,
+      ...(failureCode === undefined ? {} : { failureCode }),
+      auditEventId: this.#ids.nextAuditEventId(),
+    });
+    const persisted =
+      result.status === 'APPLIED' || result.status === 'REPLAYED'
+        ? decodeExternalMaintenanceIntent(result.value)
+        : result.status === 'STATE_CONFLICT'
+          ? decodeExternalMaintenanceIntent(
+              this.#store.getExternalMaintenanceIntent(maintenance.id),
+            )
+          : undefined;
+    if (
+      persisted?.id !== maintenance.id ||
+      persisted.intentDigest !== maintenance.intentDigest ||
+      (result.status === 'STATE_CONFLICT'
+        ? persisted.state === ExternalMaintenanceState.AUTHORIZED
+        : persisted.state !== state)
+    ) {
+      throw new TypeError(`External maintenance completion failed: ${result.status}`);
+    }
+    return persisted;
+  }
+
+  private recordUndispatchedExternalFailure(
+    authority: DecodedDriverAuthority,
+    binding: DriverKernelBinding,
+    request: WorkerRequest,
+    reason: ExternalDispatchFailureReasonCode,
+  ): void {
+    const result = binding.kernel.recordAttemptFailure({
+      commandId: commandId(this.#ids.nextCommandId()),
+      workflowId: authority.workflow.id,
+      expectedWorkflowVersion: authority.workflow.version,
+      attemptId: request.attemptId,
+      failureClass: AttemptFailureClass.ABRUPT_TERMINATION,
+      reason,
+    });
+    if (!result.output.ok) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+        result.output.error.detailCode,
       );
     }
   }

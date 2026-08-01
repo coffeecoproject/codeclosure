@@ -15,10 +15,10 @@ Worker Context mapping. Slice 2 now implements the bounded adapter projection:
 one current `IMPLEMENT` Context Package is rendered into the exact App Server
 Turn prompt and closed output schema, while configured size, lease, profile,
 policy, and response bindings are revalidated. Slice 5 composes the smaller M1
-Context shape through the deterministic reject/repair/accept path, but it does
-not yet compile exact rejection Evidence or structured `priorAttemptFeedback`
-for a fresh repair Thread. Slice 6 owns that M2 extension using the closed
-bounded-M2 failure-source set defined below. Slice 7 will add the protected
+Context shape through the deterministic reject/repair/accept path. Slice 6 now
+implements Context Package/Manifest version 3 for a fresh repair Thread using
+the closed bounded-M2 failure-source set defined below, with strict Store
+reconstruction on reopen. Slice 7 will add the protected
 Plan identity pair required by
 [ADR 0033](adr/0033-align-protected-verification-with-start-and-check-lifecycle.md)
 to each protected Package/Manifest and dispatch claim. The existing M1 Compiler
@@ -436,7 +436,7 @@ for safe recovery. If the selected Thread is unavailable or untrusted, Runtime
 must follow its exact fail-closed or fresh-Thread fallback policy and compile
 current Context again.
 
-### Repair Context continuity — planned Slice 6
+### Repair Context continuity — implemented Slice 6
 
 File continuity and task-information continuity are different. A repair child
 Candidate starts from the exact frozen parent bytes. A fresh repair Worker
@@ -465,7 +465,7 @@ A stale decision, missing Evidence, wrong Candidate, mismatched repair child,
 or feedback without exact source bindings stops before Worker dispatch. Runtime
 MUST NOT ask the Worker to infer the previous failure from inherited files.
 
-### History retention and Context injection — planned Slice 6
+### History retention and Context injection — implemented Slice 6
 
 Retaining an old Thread or transcript for bounded diagnostics is a separate
 policy from injecting content into a new Context Package. M2 defaults are:
@@ -637,9 +637,9 @@ Worker Context. See
 [ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 Code relevance retrieval, full Fact Graph traversal, and token-aware packing
-belong to later milestones. The M2 repair Context and Thread policy described
-above remain planned until Slice 6 lands their schema, persistence, Runtime,
-Store, and restart proof.
+belong to later milestones. Slice 6 implements the repair Context and Thread
+policy described above, including schema, persistence, Runtime, Store, strict
+reopen, and restart proof; it does not implement the later relevance features.
 
 ## Required Tests
 

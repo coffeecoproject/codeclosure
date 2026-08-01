@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -9,10 +10,12 @@ import test, { type TestContext } from 'node:test';
 import {
   AppServerClientError,
   AppServerClientErrorCode,
+  captureAppServerProcessIdentity,
   decodeEmptyObject,
   isJsonObject,
   serverRequestHandler,
   startAppServerClient,
+  reconcileAppServerProcess,
   toProtocolJsonValue,
   type AppServerClient,
   type AppServerClientLimits,
@@ -27,6 +30,7 @@ import {
 import { parseBoundedJson } from '../src/strict-json.ts';
 
 const fixtureScript = resolve(import.meta.dirname, 'fixtures', 'fake-app-server.mjs');
+const fixtureLaunchNonce = `sha256:${'1'.repeat(64)}`;
 
 interface FixtureHarness {
   readonly client: AppServerClient;
@@ -107,6 +111,7 @@ async function startFixture(
       clientInfo: { name: 'codeclosure_test', title: 'CodeClosure test', version: '1' },
     },
     launch,
+    launchNonce: fixtureLaunchNonce,
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.onCompactionEvent === undefined
       ? {}
@@ -264,7 +269,7 @@ for (const [scenario, code] of [
 ] as const) {
   void test(`initialization fails closed for ${scenario}`, async (t) => {
     const limits = {
-      initializationTimeoutMilliseconds: 100,
+      initializationTimeoutMilliseconds: 500,
       maximumBufferedStdoutBytes: 1_024,
       maximumCollectionEntries: 8,
       maximumProtocolLineBytes: 1_024,
@@ -304,6 +309,7 @@ void test('spawn failure is distinct from a protocol or backend response', async
           clientInfo: { name: 'codeclosure_test', title: null, version: '1' },
         },
         launch,
+        launchNonce: fixtureLaunchNonce,
         limits: { shutdownGraceMilliseconds: 50, shutdownKillMilliseconds: 50 },
       }),
     isClientError(AppServerClientErrorCode.SPAWN_FAILED),
@@ -334,6 +340,7 @@ void test('a verified executable that changes before spawn fails closed', async 
           clientInfo: { name: 'codeclosure_test', title: null, version: '1' },
         },
         launch,
+        launchNonce: fixtureLaunchNonce,
       }),
     isClientError(AppServerClientErrorCode.VERSION_MISMATCH),
   );
@@ -363,6 +370,7 @@ void test('an unavailable verified executable retains the version-mismatch class
           clientInfo: { name: 'codeclosure_test', title: null, version: '1' },
         },
         launch,
+        launchNonce: fixtureLaunchNonce,
       }),
     isClientError(AppServerClientErrorCode.VERSION_MISMATCH),
   );
@@ -617,6 +625,55 @@ void test('bounded shutdown escalates only against the owned child process', asy
   const close = await client.shutdown();
   assert.equal(close.requestedShutdown, true);
   assert.equal(close.signal, 'SIGKILL');
+});
+
+void test('restart reconciliation terminates only the exact persisted process group', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('The bounded M2 process-group profile is POSIX-only');
+    return;
+  }
+  const helper = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      [
+        "const { spawn } = require('node:child_process');",
+        "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });",
+        'child.unref();',
+        'process.stdout.write(String(child.pid));',
+      ].join(' '),
+    ],
+    { encoding: 'utf8', timeout: 5_000 },
+  );
+  assert.equal(helper.status, 0, helper.stderr);
+  const processId = Number.parseInt(helper.stdout.trim(), 10);
+  assert.equal(Number.isSafeInteger(processId) && processId > 0, true);
+  const identity = captureAppServerProcessIdentity({
+    processId,
+    launchNonce: fixtureLaunchNonce,
+    executableIdentityDigest: `sha256:${'2'.repeat(64)}`,
+    controlledStateRootIdentity: '/fixture/restart-controlled-state',
+  });
+  t.after(() => {
+    try {
+      process.kill(-processId, 'SIGKILL');
+    } catch {
+      // Exact reconciliation normally removes the group before cleanup.
+    }
+  });
+
+  assert.deepEqual(
+    reconcileAppServerProcess({ ...identity, processStartIdentity: 'forged-start-identity' }),
+    { schemaVersion: 1, disposition: 'IDENTITY_MISMATCH' },
+  );
+  assert.doesNotThrow(() => process.kill(processId, 0));
+  assert.deepEqual(
+    reconcileAppServerProcess(identity, {
+      gracefulMilliseconds: 1_500,
+      killMilliseconds: 1_500,
+    }),
+    { schemaVersion: 1, disposition: 'TERMINATED' },
+  );
 });
 
 void test('empty-object response decoder rejects widened results', () => {

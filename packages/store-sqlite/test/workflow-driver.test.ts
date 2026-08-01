@@ -8,15 +8,34 @@ import {
   AcceptanceOutcome,
   AttemptFailureClass,
   AttemptStatus,
+  EvidenceEligibilityState,
+  ExternalBackendCapability,
+  ExternalBackendCapabilityClassification,
+  ExternalCompactionPolicy,
+  ExternalContinuityPolicy,
+  ExternalExecutionState,
+  ExternalFallbackPolicy,
+  ExternalInterruptionPolicy,
+  ExternalMaintenanceState,
+  ExternalRetentionPolicy,
+  ExternalThreadPolicy,
   GoalStatus,
   GuardOutcome,
+  RecoveryReasonCode,
+  RecoveryReconciliationDisposition,
+  RecoveryReconciliationPurpose,
   RunStatus,
   WorkflowPhase,
+  aggregateVersion,
   candidateGenerationId,
   commandId,
   createGoal,
   createWorkflow,
   decodeContextPackage,
+  decodeExternalExecutionObservation,
+  externalBackendCapabilityRecordProjection,
+  externalProcessIdentityProjection,
+  executionProfileId,
   deriveCapabilityGrant,
   goalId,
   goalRevision,
@@ -24,9 +43,14 @@ import {
   policyBundleId,
   requiredGuardsForTransition,
   successCriterionId,
+  workerEventId,
   workflowId,
   workflowVersion,
   type ExecutionProfile,
+  type ExecutionProfileDefinition,
+  type ExternalBackendCapabilityRecord,
+  type ExternalExecutionProfileDefinition,
+  type ExternalExecutionIntent,
   type Goal,
   type PolicyBundle,
   type PolicyBundleDefinition,
@@ -34,6 +58,11 @@ import {
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
+  CandidateWorkspaceAccessMode,
+  ExternalExecutionAbandonReasonCode,
+  ExternalMaintenanceFailureReasonCode,
+  ExternalProcessReconciliationDisposition,
+  ExternalWorkerFailureCode,
   GoalDominantBlockerCode,
   GoalNextSafeAction,
   M1_ACCEPTANCE_RULES,
@@ -42,18 +71,34 @@ import {
   RuntimeErrorCode,
   WorkflowDriveStopReason,
   contextManifestDigestProjection,
+  compileBoundedM2RepairContext,
   createCodeClosureApplication,
   createExecutionProfileInstaller,
   createM1AcceptanceCheckerIdentity,
   createPolicyInstaller,
+  decodeCandidateWorkspaceLease,
+  decodeWorkerEvent,
   decodeStatusAuthority,
+  digestCandidateWorkspaceValue,
+  candidateWorkspaceAllowedPathProjection,
+  candidateWorkspaceLeaseProjection,
   deriveContextManifestEntries,
+  validateCandidateWorkspaceLeaseRequest,
+  type CandidateWorkspaceLease,
+  type CandidateWorkspaceLeaseAuthorityPort,
+  type CandidateWorkspaceLeasePort,
+  type CandidateWorkspaceLeaseRequest,
   type Clock,
+  type ExternalObservedWorkerPort,
+  type ExternalWorkerInvocationPort,
+  type LocalCommandVerificationPort,
   type ResumeGoalRequest,
+  type WorkerRequest,
   type WorkerPort,
 } from '@codeclosure/runtime';
 import {
   createRecoveryCoordinator,
+  createM2WorkflowDriver,
   createWorkflowDriver,
   type RuntimeExecutionProfile,
 } from '@codeclosure/runtime/composition';
@@ -64,7 +109,11 @@ import {
   type PhaseGuardEvaluator,
   type StartGoalRequest,
 } from '@codeclosure/runtime/testing/workflow-runtime';
-import { openSqliteControlStore, type SqliteControlStore } from '@codeclosure/store-sqlite';
+import {
+  WorkerTransactionStep,
+  openSqliteControlStore,
+  type SqliteControlStore,
+} from '@codeclosure/store-sqlite';
 import {
   DeterministicIds,
   FakeCandidateSource,
@@ -97,6 +146,7 @@ const genericGuards: PhaseGuardEvaluator = Object.freeze({
 });
 
 interface DriverHarness {
+  readonly filename: string;
   readonly store: SqliteControlStore;
   readonly ids: DeterministicIds;
   readonly clock: Clock;
@@ -108,6 +158,8 @@ interface DriverHarness {
     compile(input: AttemptContextCompilationRequest): ReturnType<MinimalContextCompiler['compile']>;
   };
 }
+
+type ExternalFixtureMode = 'NONE' | 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION';
 
 class CountingWorker implements WorkerPort {
   readonly #delegate: FakeWorker;
@@ -155,6 +207,388 @@ class CrossDispatchReplayWorker implements WorkerPort {
   }
 }
 
+class SequencedLocalCommandRunner implements LocalCommandVerificationPort {
+  readonly #exitCodes: readonly number[];
+  #runCount = 0;
+
+  public constructor(exitCodes: readonly number[]) {
+    if (exitCodes.length === 0) {
+      throw new TypeError('Local command sequence is empty');
+    }
+    this.#exitCodes = Object.freeze([...exitCodes]);
+  }
+
+  public get runCount(): number {
+    return this.#runCount;
+  }
+
+  public run(): Promise<unknown> {
+    const exitCode = this.#exitCodes[this.#runCount] ?? this.#exitCodes.at(-1);
+    this.#runCount += 1;
+    if (exitCode === undefined) {
+      throw new Error('Local command sequence is empty');
+    }
+    return Promise.resolve({
+      schemaVersion: 1,
+      kind: 'LOCAL_COMMAND_OBSERVATION_V1',
+      terminationKind: 'EXITED',
+      exitCode,
+      stdoutBytes: new Uint8Array(),
+      stdoutObservedByteCount: 0,
+      stdoutTruncated: false,
+      stderrBytes: new Uint8Array(),
+      stderrObservedByteCount: 0,
+      stderrTruncated: false,
+      diagnosticCode: 'NONE',
+    });
+  }
+}
+
+class LogicalCandidateWorkspace
+  implements CandidateWorkspaceLeasePort, CandidateWorkspaceLeaseAuthorityPort
+{
+  readonly #active = new Map<string, CandidateWorkspaceLease>();
+  readonly #namespace: string;
+
+  public constructor(namespace: string) {
+    this.#namespace = namespace;
+  }
+
+  public issueLease(rawRequest: CandidateWorkspaceLeaseRequest): unknown {
+    const request = validateCandidateWorkspaceLeaseRequest(rawRequest);
+    const workspaceRootIdentity = `/fixture/${this.#namespace}-workspace`;
+    const sourceProjectRoot = `/fixture/${this.#namespace}-source`;
+    const forbiddenRoots = Object.freeze(
+      [...new Set([...request.forbiddenRoots, sourceProjectRoot])].sort(),
+    );
+    const withoutDigest = Object.freeze({
+      accessMode: request.accessMode,
+      allowedPathPolicyDigest: digestCandidateWorkspaceValue(
+        candidateWorkspaceAllowedPathProjection(request.allowedPaths),
+      ),
+      allowedPaths: request.allowedPaths,
+      candidateId: request.generation.candidateId,
+      candidateDigest: request.generation.frozenDigest ?? request.generation.baseDigest,
+      candidateGenerationId: request.generation.id,
+      candidateGenerationVersion: request.generation.version,
+      forbiddenRoots,
+      generationSequence: request.generation.sequence,
+      goalId: request.goalId,
+      goalRevision: request.goalRevision,
+      id: request.id,
+      issuedAt: request.issuedAt,
+      lifecyclePolicy:
+        request.accessMode === CandidateWorkspaceAccessMode.READ_ONLY
+          ? ('RELEASE_EXPLICITLY' as const)
+          : ('REVOKE_ON_FREEZE' as const),
+      parentGenerationId: request.generation.parentGenerationId ?? null,
+      reservedPathPolicy: 'M2_CONTROLLED_COPY_V1' as const,
+      retentionPolicy: 'RUNTIME_OWNED' as const,
+      root: `${workspaceRootIdentity}/candidates/${request.generation.id}`,
+      schemaVersion: 1 as const,
+      sourceGitMetadataDigest: digests.digest({
+        schemaVersion: 1,
+        type: 'SLICE6_LOGICAL_SOURCE_GIT_METADATA',
+        generationId: request.generation.id,
+      }),
+      sourceProjectRoot,
+      sourceTreeDigest: request.generation.baseDigest,
+      state: 'ACTIVE' as const,
+      version: request.version,
+      workspaceRootIdentity,
+      workflowId: request.workflowId,
+      workflowVersion: request.workflowVersion,
+    });
+    const lease = decodeCandidateWorkspaceLease({
+      ...withoutDigest,
+      leaseDigest: digestCandidateWorkspaceValue(candidateWorkspaceLeaseProjection(withoutDigest)),
+    });
+    this.#active.set(lease.id, lease);
+    return lease;
+  }
+
+  public assertLeaseCurrent(rawLease: CandidateWorkspaceLease): CandidateWorkspaceLease {
+    const lease = decodeCandidateWorkspaceLease(rawLease);
+    const current = this.#active.get(lease.id);
+    if (current?.leaseDigest !== lease.leaseDigest) {
+      throw new TypeError('Candidate workspace lease is not current');
+    }
+    return current;
+  }
+
+  public releaseLease(rawLease: CandidateWorkspaceLease): void {
+    const lease = this.assertLeaseCurrent(rawLease);
+    this.#active.delete(lease.id);
+  }
+}
+
+class ExternalWorkerFixture implements ExternalWorkerInvocationPort {
+  readonly #blocking: boolean;
+  readonly #backendFailureCode: unknown;
+  readonly #mode: Exclude<ExternalFixtureMode, 'NONE'>;
+  readonly #resultBinding: 'MATCH' | 'MISMATCH';
+  readonly #store: SqliteControlStore;
+  #createCount = 0;
+  readonly #intents: ExternalExecutionIntent[] = [];
+  readonly #events: ReturnType<typeof decodeWorkerEvent>[] = [];
+  #prepareCount = 0;
+  readonly #requests: WorkerRequest[] = [];
+  #releaseCount = 0;
+  #releaseBlockedRun!: () => void;
+  readonly #blockedRunReleased: Promise<void>;
+  #resolveRunStarted!: () => void;
+  readonly #runStarted: Promise<void>;
+  #runCount = 0;
+
+  public constructor(
+    store: SqliteControlStore,
+    mode: Exclude<ExternalFixtureMode, 'NONE'>,
+    blocking = false,
+    backendFailureCode?: unknown,
+    resultBinding: 'MATCH' | 'MISMATCH' = 'MATCH',
+  ) {
+    this.#store = store;
+    this.#mode = mode;
+    this.#blocking = blocking;
+    this.#backendFailureCode = backendFailureCode;
+    this.#resultBinding = resultBinding;
+    this.#runStarted = new Promise((resolve) => {
+      this.#resolveRunStarted = resolve;
+    });
+    this.#blockedRunReleased = new Promise((resolve) => {
+      this.#releaseBlockedRun = resolve;
+    });
+  }
+
+  public get createCount(): number {
+    return this.#createCount;
+  }
+
+  public get intents(): readonly ExternalExecutionIntent[] {
+    return Object.freeze([...this.#intents]);
+  }
+
+  public get events(): readonly ReturnType<typeof decodeWorkerEvent>[] {
+    return Object.freeze([...this.#events]);
+  }
+
+  public get prepareCount(): number {
+    return this.#prepareCount;
+  }
+
+  public get releaseCount(): number {
+    return this.#releaseCount;
+  }
+
+  public get requests(): readonly WorkerRequest[] {
+    return Object.freeze([...this.#requests]);
+  }
+
+  public get runCount(): number {
+    return this.#runCount;
+  }
+
+  public get runStarted(): Promise<void> {
+    return this.#runStarted;
+  }
+
+  public releaseBlockedRun(): void {
+    this.#releaseBlockedRun();
+  }
+
+  public prepare(
+    input: Parameters<ExternalWorkerInvocationPort['prepare']>[0],
+  ): ReturnType<ExternalWorkerInvocationPort['prepare']> {
+    this.#prepareCount += 1;
+    assert.equal(input.thread.kind, ExternalThreadPolicy.FRESH);
+    assert.equal(input.request.contextPackage.phase, WorkflowPhase.IMPLEMENT);
+    assert.equal(this.#store.getWorkerDispatchClaim(input.request.attemptId), undefined);
+    assert.equal(this.#store.getExternalExecutionForAttempt(input.request.attemptId), undefined);
+    const request = input.request;
+    const leaseDigest = digests.digest({
+      attemptId: request.attemptId,
+      kind: 'slice6-external-candidate-lease',
+    });
+    return Object.freeze({
+      candidateWorkspaceLeaseId: `lease_${request.attemptId}`,
+      candidateWorkspaceLeaseDigest: leaseDigest,
+      candidateWorkspaceCwdIdentity: `/fixture/external/${request.attemptId}`,
+      createWorker: ({
+        intent,
+        onLifecycleEvent,
+      }: {
+        readonly intent: ExternalExecutionIntent;
+        readonly onLifecycleEvent: (event: unknown) => void;
+      }) => {
+        this.#createCount += 1;
+        const retained = this.#store.getExternalExecution(intent.id);
+        assert.ok(retained);
+        assert.equal(retained.state, ExternalExecutionState.AUTHORIZED);
+        assert.equal(retained.intentDigest, intent.intentDigest);
+        if (this.#mode === 'MANUAL_BEFORE_OPERATION') {
+          assert.equal(
+            this.#store.getExternalMaintenanceIntentForExecution(intent.id, 1)?.state,
+            ExternalMaintenanceState.AUTHORIZED,
+          );
+        }
+        this.#intents.push(intent);
+        let backendOperationRef: string | undefined;
+        let backendSessionRef: string | undefined;
+        let failureCode: unknown;
+        let resultEventId: ReturnType<typeof decodeWorkerEvent>['id'] | undefined;
+        let state: 'READY' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED' = 'READY';
+        let turnInterruptCount = 0;
+        const recordRun = (rawRequest: WorkerRequest): void => {
+          this.#runCount += 1;
+          this.#resolveRunStarted();
+          this.#requests.push(rawRequest);
+        };
+        const backendFailureCode = this.#backendFailureCode;
+        const blocking = this.#blocking;
+        const blockedRunReleased = this.#blockedRunReleased;
+        const recordEvent = (event: ReturnType<typeof decodeWorkerEvent>): void => {
+          this.#events.push(event);
+        };
+        const compactionCount = this.#mode === 'MANUAL_BEFORE_OPERATION' ? 1 : 0;
+        const resultBinding = this.#resultBinding;
+        const worker: ExternalObservedWorkerPort = Object.freeze({
+          async *run(rawRequest: WorkerRequest, signal: AbortSignal): AsyncIterable<unknown> {
+            recordRun(rawRequest);
+            const processIdentityWithoutDigest = Object.freeze({
+              schemaVersion: 1 as const,
+              launchNonce: intent.processLaunchNonce,
+              processId: 10_000 + intent.id.length,
+              processGroupId: 10_000 + intent.id.length,
+              processGroupKind: 'POSIX_PROCESS_GROUP' as const,
+              processStartIdentity: `fixture-start:${intent.id}`,
+              executableIdentityDigest: intent.binaryIdentityDigest,
+              controlledStateRootIdentity: intent.controlledStateRootIdentity,
+            });
+            const processIdentity = Object.freeze({
+              ...processIdentityWithoutDigest,
+              identityDigest: digests.digest(
+                externalProcessIdentityProjection(processIdentityWithoutDigest),
+              ),
+            });
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'PROCESS_STARTED',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: request.attemptId,
+              requestWorkerSessionId: request.workerSessionId,
+              processIdentity,
+            });
+            backendSessionRef = `thread-${intent.id}`;
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'SESSION_STARTED',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: request.attemptId,
+              requestWorkerSessionId: request.workerSessionId,
+              backendSessionRef,
+            });
+            backendOperationRef = `turn-${intent.id}`;
+            state = 'RUNNING';
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'OPERATION_STARTED',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: request.attemptId,
+              requestWorkerSessionId: request.workerSessionId,
+              backendSessionRef,
+              backendOperationRef,
+              compactionCount,
+            });
+            try {
+              if (backendFailureCode !== undefined) {
+                failureCode = backendFailureCode;
+                state = 'FAILED';
+                return;
+              }
+              if (blocking) {
+                await Promise.race([
+                  blockedRunReleased,
+                  new Promise<void>((resolve) => {
+                    if (signal.aborted) {
+                      resolve();
+                      return;
+                    }
+                    signal.addEventListener('abort', () => resolve(), { once: true });
+                  }),
+                ]);
+                if (signal.aborted) {
+                  turnInterruptCount = 1;
+                  failureCode = 'HOST_CANCELLED';
+                  state = 'INTERRUPTED';
+                  return;
+                }
+              }
+              const delegate = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+              for await (const rawEvent of delegate.run(rawRequest, signal)) {
+                const event = decodeWorkerEvent(rawEvent);
+                recordEvent(event);
+                resultEventId = event.id;
+                yield rawEvent;
+              }
+              state = 'COMPLETED';
+            } finally {
+              const observedResultEventId =
+                resultEventId === undefined
+                  ? undefined
+                  : resultBinding === 'MATCH'
+                    ? resultEventId
+                    : workerEventId('worker-event_slice6-mismatched-observation');
+              onLifecycleEvent({
+                schemaVersion: 1,
+                kind: 'TERMINAL',
+                externalExecutionIntentDigest: intent.intentDigest,
+                requestAttemptId: request.attemptId,
+                requestWorkerSessionId: request.workerSessionId,
+                state,
+                processLaunchCount: 1,
+                backendSessionRef,
+                backendOperationRef,
+                compactionCount,
+                turnInterruptCount,
+                ...(failureCode === undefined ? {} : { failureCode }),
+                ...(observedResultEventId === undefined
+                  ? {}
+                  : { resultEventId: observedResultEventId }),
+              });
+            }
+          },
+          observation: () =>
+            Object.freeze({
+              schemaVersion: 1,
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: request.attemptId,
+              requestWorkerSessionId: request.workerSessionId,
+              state,
+              processLaunchCount: state === 'READY' ? 0 : 1,
+              ...(backendSessionRef === undefined ? {} : { backendSessionRef }),
+              ...(backendOperationRef === undefined ? {} : { backendOperationRef }),
+              compactionCount,
+              turnInterruptCount,
+              ...(failureCode === undefined ? {} : { failureCode }),
+              ...(resultEventId === undefined
+                ? {}
+                : {
+                    resultEventId:
+                      resultBinding === 'MATCH'
+                        ? resultEventId
+                        : workerEventId('worker-event_slice6-mismatched-observation'),
+                  }),
+            }),
+        });
+        return worker;
+      },
+      release: () => {
+        this.#releaseCount += 1;
+      },
+    });
+  }
+}
+
 function monotonicClock(): Clock {
   let offset = 1;
   const epoch = Date.parse(createdAt);
@@ -182,12 +616,113 @@ function policyDefinition(namespace: string): PolicyBundleDefinition {
   });
 }
 
-function createHarness(t: TestContext, namespace: string): DriverHarness {
+function externalProfileAuthority(
+  namespace: string,
+  mode: Exclude<ExternalFixtureMode, 'NONE'>,
+): Readonly<{
+  capability: ExternalBackendCapabilityRecord;
+  profile: ExecutionProfileDefinition;
+}> {
+  const binaryIdentityDigest = digests.digest({ namespace, kind: 'binary' });
+  const protocolSchemaDigest = digests.digest({ namespace, kind: 'protocol-schema' });
+  const configurationProfileDigest = digests.digest({ namespace, kind: 'configuration' });
+  const selectedCapabilities = [
+    ExternalBackendCapability.CONTROLLED_STATE_REOPEN,
+    ExternalBackendCapability.FRESH_SESSION,
+    ExternalBackendCapability.OPERATION_INTERRUPT,
+    ExternalBackendCapability.SAME_SESSION_BOUNDED_OPERATION,
+    ...(mode === 'MANUAL_BEFORE_OPERATION'
+      ? [
+          ExternalBackendCapability.MANUAL_COMPACTION,
+          ExternalBackendCapability.POST_COMPACTION_CONTINUATION,
+        ]
+      : []),
+  ].toSorted();
+  const capabilityWithoutDigest: Omit<ExternalBackendCapabilityRecord, 'recordDigest'> =
+    Object.freeze({
+      schemaVersion: 1,
+      backendKind: 'CODEX_APP_SERVER',
+      binaryIdentityDigest,
+      protocolSchemaDigest,
+      configurationProfileDigest,
+      capabilityEntries: Object.freeze(
+        selectedCapabilities.map((capability) =>
+          Object.freeze({
+            capability,
+            classification: ExternalBackendCapabilityClassification.SUPPORTED,
+            proofKind: 'DETERMINISTIC_SLICE6_FIXTURE',
+          }),
+        ),
+      ),
+      observedAt: createdAt,
+    });
+  const capability: ExternalBackendCapabilityRecord = Object.freeze({
+    ...capabilityWithoutDigest,
+    recordDigest: digests.digest(
+      externalBackendCapabilityRecordProjection(capabilityWithoutDigest),
+    ),
+  });
+  const externalExecution: ExternalExecutionProfileDefinition = Object.freeze({
+    schemaVersion: 1,
+    backendKind: capability.backendKind,
+    capabilityRecordDigest: capability.recordDigest,
+    selectedCapabilities: Object.freeze(selectedCapabilities),
+    workerPhases: Object.freeze([WorkflowPhase.IMPLEMENT]),
+    binaryIdentityDigest,
+    protocolSchemaDigest,
+    configurationProfileDigest,
+    executionConfigDigest: digests.digest({ namespace, kind: 'execution-config' }),
+    managedRequirementsDigest: digests.digest({ namespace, kind: 'managed-requirements' }),
+    instructionSourceManifestDigest: digests.digest({ namespace, kind: 'instructions' }),
+    controlledStateRootIdentity: `/fixture/${namespace}/controlled-state`,
+    environmentProjectionDigest: digests.digest({ namespace, kind: 'environment' }),
+    permissionProfileId: 'codeclosure-m2-fixture',
+    permissionProfileDigest: digests.digest({ namespace, kind: 'permission-profile' }),
+    model: 'gpt-fixture',
+    modelProvider: 'openai',
+    serviceTier: null,
+    reasoningEffort: 'low',
+    responseSchemaPolicy: 'M2_CLOSED_WORKER_RESULT_V1',
+    disabledIntegrationsDigest: digests.digest({ namespace, kind: 'disabled-integrations' }),
+    defaultThreadPolicy: ExternalThreadPolicy.FRESH,
+    continuityPolicy: ExternalContinuityPolicy.SAME_SESSION_BOUNDED_OPERATION,
+    compactionPolicy:
+      mode === 'MANUAL_BEFORE_OPERATION'
+        ? ExternalCompactionPolicy.MANUAL_BEFORE_OPERATION
+        : ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
+    retentionPolicy: ExternalRetentionPolicy.CONTROLLED,
+    fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
+    interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
+  });
+  const base = testExecutionProfileDefinition(namespace);
+  return Object.freeze({
+    capability,
+    profile: Object.freeze({
+      ...base,
+      schemaVersion: 2,
+      id: executionProfileId(`profile_${namespace}-external-v2`),
+      version: 'm2-external-driver-profile-v2',
+      workerAdapter: 'slice6-external-worker',
+      workerAdapterVersion: '1.0.0',
+      driverVersion: 'm2-workflow-driver-v2',
+      externalExecution,
+    }),
+  });
+}
+
+function createHarness(
+  t: TestContext,
+  namespace: string,
+  externalMode: ExternalFixtureMode = 'NONE',
+  transactionProbe?: NonNullable<Parameters<typeof openSqliteControlStore>[0]['transactionProbe']>,
+): DriverHarness {
   const directory = mkdtempSync(join(tmpdir(), `codeclosure-driver-${namespace}-`));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const filename = join(directory, 'state.sqlite');
   const store = openSqliteControlStore({
-    filename: join(directory, 'state.sqlite'),
+    filename,
     now: () => createdAt,
+    ...(transactionProbe === undefined ? {} : { transactionProbe }),
   });
   t.after(() => store.close());
   const ids = new DeterministicIds(namespace);
@@ -203,7 +738,10 @@ function createHarness(t: TestContext, namespace: string): DriverHarness {
         required: true,
       }),
     ]),
-    scope: Object.freeze({ projectPath: `/fixture/${namespace}`, allowedPaths: Object.freeze([]) }),
+    scope: Object.freeze({
+      projectPath: `/fixture/${namespace}`,
+      allowedPaths: Object.freeze(externalMode === 'NONE' ? [] : ['src']),
+    }),
     nonGoals: Object.freeze(['No real source edit', 'No model completion authority']),
     createdAt,
   });
@@ -220,12 +758,22 @@ function createHarness(t: TestContext, namespace: string): DriverHarness {
   if (policyInstall.status === 'POLICY_CONFLICT') {
     assert.fail(policyInstall.message);
   }
+  const external =
+    externalMode === 'NONE' ? undefined : externalProfileAuthority(namespace, externalMode);
+  if (external !== undefined) {
+    const capabilityInstall = store.installExternalBackendCapabilityRecord({
+      record: external.capability,
+      auditEventId: ids.nextAuditEventId(),
+      payloadDigest: external.capability.recordDigest,
+    });
+    assert.equal(capabilityInstall.status, 'INSTALLED');
+  }
   const profileInstall = createExecutionProfileInstaller({
     store,
     clock,
     ids,
     digests,
-  }).installExecutionProfile(testExecutionProfileDefinition(namespace));
+  }).installExecutionProfile(external?.profile ?? testExecutionProfileDefinition(namespace));
   if (profileInstall.status === 'PROFILE_CONFLICT') {
     assert.fail(profileInstall.message);
   }
@@ -247,6 +795,7 @@ function createHarness(t: TestContext, namespace: string): DriverHarness {
     digests,
   });
   return Object.freeze({
+    filename,
     store,
     ids,
     clock,
@@ -273,6 +822,53 @@ function runtimeProfile(
     worker,
     candidateSource: new FakeCandidateSource(),
     verification: new FakeVerificationRunner({ fixture: verificationFixture }),
+  });
+}
+
+function externalRuntimeProfile(
+  harness: DriverHarness,
+  externalWorker: ExternalWorkerInvocationPort,
+  localRunner: LocalCommandVerificationPort = new SequencedLocalCommandRunner([0]),
+): RuntimeExecutionProfile {
+  assert.equal(harness.profile.schemaVersion, 2);
+  return Object.freeze({
+    schemaVersion: 2,
+    profileId: harness.profile.id,
+    profileDigest: harness.profile.digest,
+    driverVersion: harness.profile.driverVersion,
+    worker: new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
+    externalWorker,
+    candidateSource: new FakeCandidateSource(),
+    verification: new FakeVerificationRunner(),
+    localCommandVerification: Object.freeze({
+      workspace: new LogicalCandidateWorkspace(harness.goal.id),
+      runner: localRunner,
+      profile: Object.freeze({
+        forbiddenRoots: Object.freeze(['/fixture/authority']),
+        check: Object.freeze({
+          version: 'slice6.local-command.1',
+          producerIdentity: harness.profile.verificationRunner,
+          operation: 'local-command.execute',
+          runnerIdentity: harness.profile.verificationRunner,
+          runnerVersion: harness.profile.verificationRunnerVersion,
+          executablePath: '/fixture/bin/slice6-check',
+          executableDigest: digests.digest({ kind: 'slice6-check' }),
+          declaredToolVersion: 'slice6-fixture',
+          argv: Object.freeze(['--check']),
+          cwd: '.',
+          environmentVariables: Object.freeze([]),
+          isolationProfileId: 'slice6-logical-isolation',
+          isolationProfileDigest: digests.digest({ kind: 'slice6-isolation' }),
+          timeoutMilliseconds: 1_000,
+          terminationGraceMilliseconds: 100,
+          stdoutLimitBytes: 1_024,
+          stderrLimitBytes: 1_024,
+          totalOutputLimitBytes: 2_048,
+          payloadRetentionLimitBytes: 2_048,
+          acceptedExitCodes: Object.freeze([0]),
+        }),
+      }),
+    }),
   });
 }
 
@@ -345,6 +941,34 @@ function driver(
   });
 }
 
+function m2Driver(
+  harness: DriverHarness,
+  profile: RuntimeExecutionProfile,
+  recovery: Parameters<typeof createM2WorkflowDriver>[0]['recovery'],
+  maxOperations?: number,
+) {
+  return createM2WorkflowDriver({
+    store: harness.store,
+    clock: harness.clock,
+    ids: harness.ids,
+    digests,
+    contextFactory: harness.contextFactory,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
+    phaseGuards: genericGuards,
+    recovery,
+    startProfile: profile,
+    ...(maxOperations === undefined ? {} : { maxOperations }),
+    profiles: Object.freeze({
+      resolve: (installed: ExecutionProfile) => {
+        assert.equal(installed.id, harness.profile.id);
+        assert.equal(installed.digest, harness.profile.digest);
+        return profile;
+      },
+    }),
+  });
+}
+
 void test('[I-001][I-003][I-008] public StartGoal drives one deterministic path to exact closeout', async (t) => {
   const harness = createHarness(t, 'driver-happy');
   const freshAuthority = harness.store.getWorkflowDriverAuthority(harness.goal.id);
@@ -406,6 +1030,948 @@ void test('[I-001][I-003][I-008] public StartGoal drives one deterministic path 
   const auditAfterReplay = application.getGoalAudit(harness.goal.id);
   assert.equal(auditAfterReplay.status, 'FOUND');
   assert.equal(auditAfterReplay.view.throughSequence, auditBeforeReplay.view.throughSequence);
+});
+
+void test('[I-006][I-008][M2-G12] external dispatch claim and authorization roll back before adapter creation at every new write boundary', async (t) => {
+  for (const faultStep of [
+    WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE,
+    WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_WRITE,
+  ]) {
+    await t.test(faultStep, async (subtest) => {
+      let injected = false;
+      const harness = createHarness(
+        subtest,
+        `driver-external-atomic-${faultStep.toLowerCase().replaceAll('_', '-')}`,
+        'FAIL_ON_OBSERVATION',
+        (step) => {
+          if (!injected && step === faultStep) {
+            injected = true;
+            throw new Error(`injected:${faultStep}`);
+          }
+        },
+      );
+      const externalWorker = new ExternalWorkerFixture(harness.store, 'FAIL_ON_OBSERVATION');
+      const profile = externalRuntimeProfile(harness, externalWorker);
+      const execution = m2Driver(
+        harness,
+        profile,
+        Object.freeze({
+          resumeGoal: () => {
+            throw new Error('Atomic-dispatch fixture does not enter recovery');
+          },
+        }),
+      );
+
+      const result = await execution.startGoal(startRequest(harness));
+      assert.equal(injected, true);
+      assert.ok(result.drive);
+      assert.equal(result.drive.stopReason, WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE);
+      assert.equal(result.drive.detailCode, 'DRIVER_EXTERNAL_DISPATCH_AUTHORIZATION_FAILED');
+      assert.equal(externalWorker.prepareCount, 1);
+      assert.equal(externalWorker.createCount, 0);
+      assert.equal(externalWorker.runCount, 0);
+      assert.equal(externalWorker.releaseCount, 1);
+      const authority = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+      assert.ok(authority?.latestPhaseAttempt);
+      assert.equal(authority.latestPhaseAttempt.phase, WorkflowPhase.IMPLEMENT);
+      assert.equal(authority.latestPhaseAttempt.status, AttemptStatus.FAILED);
+      assert.equal(
+        harness.store.getWorkerDispatchClaim(authority.latestPhaseAttempt.id),
+        undefined,
+      );
+      assert.equal(
+        harness.store.getExternalExecutionForAttempt(authority.latestPhaseAttempt.id),
+        undefined,
+      );
+    });
+  }
+});
+
+void test('[I-006][I-008][M2-G01][M2-G12] maintenance authorization rolls back before adapter creation at every write boundary', async (t) => {
+  for (const faultStep of [
+    WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_AUDIT_WRITE,
+    WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_WRITE,
+  ]) {
+    await t.test(faultStep, async (subtest) => {
+      let injected = false;
+      const harness = createHarness(
+        subtest,
+        `driver-external-maintenance-atomic-${faultStep.toLowerCase().replaceAll('_', '-')}`,
+        'MANUAL_BEFORE_OPERATION',
+        (step) => {
+          if (!injected && step === faultStep) {
+            injected = true;
+            throw new Error(`injected:${faultStep}`);
+          }
+        },
+      );
+      const externalWorker = new ExternalWorkerFixture(harness.store, 'MANUAL_BEFORE_OPERATION');
+      const execution = m2Driver(
+        harness,
+        externalRuntimeProfile(harness, externalWorker),
+        Object.freeze({
+          resumeGoal: () => {
+            throw new Error('Maintenance-authorization fixture does not enter recovery');
+          },
+        }),
+      );
+
+      const result = await execution.startGoal(startRequest(harness));
+      assert.equal(injected, true);
+      assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+      assert.equal(externalWorker.createCount, 0);
+      assert.equal(externalWorker.runCount, 0);
+      assert.equal(externalWorker.releaseCount, 1);
+      const authority = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+      assert.ok(authority?.latestPhaseAttempt);
+      assert.equal(authority.latestPhaseAttempt.status, AttemptStatus.FAILED);
+      const retained = harness.store.getExternalExecutionForAttempt(
+        authority.latestPhaseAttempt.id,
+      );
+      assert.ok(retained);
+      assert.equal(retained.state, ExternalExecutionState.ABANDONED);
+      assert.equal(
+        retained.failureCode,
+        ExternalExecutionAbandonReasonCode.MAINTENANCE_AUTHORIZATION_FAILED,
+      );
+      assert.equal(
+        harness.store.getExternalMaintenanceIntentForExecution(retained.id, 1),
+        undefined,
+      );
+      const reopened = openSqliteControlStore({
+        filename: harness.filename,
+        now: () => createdAt,
+      });
+      subtest.after(() => reopened.close());
+      assert.deepEqual(
+        reopened.getExternalExecutionForAttempt(authority.latestPhaseAttempt.id),
+        retained,
+      );
+    });
+  }
+});
+
+void test('[I-006][I-008][M2-G01] external observation and maintenance completion failures roll back without partial lifecycle authority', async (t) => {
+  const cases = [
+    {
+      mode: 'FAIL_ON_OBSERVATION' as const,
+      step: WorkerTransactionStep.AFTER_EXTERNAL_OBSERVATION_AUDIT_WRITE,
+      occurrence: 1,
+    },
+    {
+      mode: 'FAIL_ON_OBSERVATION' as const,
+      step: WorkerTransactionStep.AFTER_EXTERNAL_OBSERVATION_WRITE,
+      occurrence: 1,
+    },
+    {
+      mode: 'FAIL_ON_OBSERVATION' as const,
+      step: WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_AUDIT_WRITE,
+      occurrence: 2,
+    },
+    {
+      mode: 'FAIL_ON_OBSERVATION' as const,
+      step: WorkerTransactionStep.AFTER_EXTERNAL_EXECUTION_WRITE,
+      occurrence: 2,
+    },
+    {
+      mode: 'MANUAL_BEFORE_OPERATION' as const,
+      step: WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_AUDIT_WRITE,
+      occurrence: 2,
+    },
+    {
+      mode: 'MANUAL_BEFORE_OPERATION' as const,
+      step: WorkerTransactionStep.AFTER_EXTERNAL_MAINTENANCE_WRITE,
+      occurrence: 2,
+    },
+  ] as const;
+  for (const faultCase of cases) {
+    await t.test(
+      `${faultCase.mode}:${faultCase.step}:${String(faultCase.occurrence)}`,
+      async (subtest) => {
+        let observedOccurrence = 0;
+        let injected = false;
+        const harness = createHarness(
+          subtest,
+          `driver-external-observation-atomic-${faultCase.mode.toLowerCase().replaceAll('_', '-')}-${faultCase.step.toLowerCase().replaceAll('_', '-')}-${String(faultCase.occurrence)}`,
+          faultCase.mode,
+          (step) => {
+            if (step !== faultCase.step) {
+              return;
+            }
+            observedOccurrence += 1;
+            if (!injected && observedOccurrence === faultCase.occurrence) {
+              injected = true;
+              throw new Error(`injected:${faultCase.step}`);
+            }
+          },
+        );
+        const externalWorker = new ExternalWorkerFixture(harness.store, faultCase.mode);
+        const execution = m2Driver(
+          harness,
+          externalRuntimeProfile(harness, externalWorker),
+          Object.freeze({
+            resumeGoal: () => {
+              throw new Error('Observation-failure fixture does not enter recovery');
+            },
+          }),
+        );
+
+        const result = await execution.startGoal(startRequest(harness));
+        assert.equal(injected, true);
+        assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+        assert.equal(externalWorker.createCount, 1);
+        assert.equal(externalWorker.runCount, 1);
+        assert.equal(externalWorker.releaseCount, 1);
+        const authority = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+        assert.ok(authority?.latestPhaseAttempt);
+        assert.equal(authority.latestPhaseAttempt.status, AttemptStatus.FAILED);
+        const retained = harness.store.getExternalExecutionForAttempt(
+          authority.latestPhaseAttempt.id,
+        );
+        assert.ok(retained);
+        assert.equal(retained.state, ExternalExecutionState.ABANDONED);
+        assert.equal(
+          retained.failureCode,
+          ExternalExecutionAbandonReasonCode.OBSERVATION_ADMISSION_FAILED,
+        );
+        if (faultCase.mode === 'MANUAL_BEFORE_OPERATION') {
+          assert.ok(retained.lastObservationId);
+        } else {
+          assert.equal(retained.lastObservationId, undefined);
+        }
+        const maintenance = harness.store.getExternalMaintenanceIntentForExecution(retained.id, 1);
+        if (faultCase.mode === 'MANUAL_BEFORE_OPERATION') {
+          assert.ok(maintenance);
+          assert.equal(maintenance.state, ExternalMaintenanceState.FAILED);
+          assert.equal(
+            maintenance.failureCode,
+            ExternalMaintenanceFailureReasonCode.OBSERVATION_ADMISSION_FAILED,
+          );
+        } else {
+          assert.equal(maintenance, undefined);
+        }
+        const reopened = openSqliteControlStore({
+          filename: harness.filename,
+          now: () => createdAt,
+        });
+        subtest.after(() => reopened.close());
+        assert.deepEqual(
+          reopened.getExternalExecutionForAttempt(authority.latestPhaseAttempt.id),
+          retained,
+        );
+        assert.deepEqual(
+          reopened.getExternalMaintenanceIntentForExecution(retained.id, 1),
+          maintenance,
+        );
+      },
+    );
+  }
+});
+
+void test('[I-004][I-008][I-027][M2-G13] external IMPLEMENT is authorized before one manual-compaction Turn and reopens as bounded authority', async (t) => {
+  const harness = createHarness(t, 'driver-external-manual', 'MANUAL_BEFORE_OPERATION');
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'MANUAL_BEFORE_OPERATION');
+  const profile = externalRuntimeProfile(harness, externalWorker);
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('ResumeGoal is not exercised by the external happy fixture');
+      },
+    }),
+  );
+
+  const result = await execution.startGoal(startRequest(harness));
+  assert.equal(result.command.status, 'APPLIED');
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.CLOSED);
+  assert.equal(externalWorker.prepareCount, 1);
+  assert.equal(externalWorker.createCount, 1);
+  assert.equal(externalWorker.runCount, 1);
+  assert.equal(externalWorker.releaseCount, 1);
+  assert.equal(externalWorker.intents.length, 1);
+  const intent = externalWorker.intents[0];
+  assert.ok(intent);
+  assert.equal(intent.thread.kind, ExternalThreadPolicy.FRESH);
+  const retained = harness.store.getExternalExecution(intent.id);
+  assert.ok(retained);
+  assert.equal(retained.state, ExternalExecutionState.COMPLETED);
+  assert.equal(retained.compactionCount, 1);
+  assert.equal(retained.resultEventId === undefined, false);
+  assert.equal(
+    harness.store.getExternalMaintenanceIntentForExecution(intent.id, 1)?.state,
+    ExternalMaintenanceState.OBSERVED,
+  );
+  assert.equal(externalWorker.requests[0]?.contextPackage.schemaVersion, 2);
+  assert.ok(retained.lastObservationId);
+  const terminalObservation = harness.store.getExternalExecutionObservation(
+    retained.lastObservationId,
+  );
+  assert.ok(terminalObservation);
+  assert.throws(
+    () =>
+      decodeExternalExecutionObservation({
+        ...terminalObservation,
+        state: ExternalExecutionState.FAILED,
+        failureCode: ExternalWorkerFailureCode.CLIENT_FAILURE,
+      }),
+    /result Event does not match terminal state/,
+  );
+
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.getExternalExecution(intent.id), retained);
+  assert.deepEqual(
+    reopened.getExternalMaintenanceIntentForExecution(intent.id, 1),
+    harness.store.getExternalMaintenanceIntentForExecution(intent.id, 1),
+  );
+});
+
+void test('[I-004][I-008][M2-F10][M2-G14][M2-G15] repair uses a fresh external Session and exact Context v3 without old Thread history', async (t) => {
+  const harness = createHarness(t, 'driver-external-repair', 'FAIL_ON_OBSERVATION');
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'FAIL_ON_OBSERVATION');
+  const verification = new SequencedLocalCommandRunner([1, 0]);
+  const profile = externalRuntimeProfile(harness, externalWorker, verification);
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('ResumeGoal is not exercised by the external repair fixture');
+      },
+    }),
+  );
+
+  const first = await execution.startGoal(startRequest(harness));
+  assert.equal(first.drive?.stopReason, WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED);
+  const rejected = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(rejected?.acceptanceAuthority);
+  const rejection = rejected.acceptanceAuthority;
+  const repaired = await execution.repairGoal({
+    commandId: commandId('command_driver-external-repair-authorize'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: rejected.workflow.version,
+    acceptanceDecisionId: rejection.decision.id,
+    acceptanceDecisionDigest: rejection.decision.decisionDigest,
+    inputManifestDigest: rejection.manifest.manifestDigest,
+    candidateDigest: rejection.manifest.candidateDigest,
+    reason: 'bounded Slice 6 repair authorization',
+  });
+  assert.equal(repaired.command.status, 'APPLIED');
+  assert.equal(
+    repaired.drive?.stopReason,
+    WorkflowDriveStopReason.CLOSED,
+    JSON.stringify(repaired),
+  );
+  assert.equal(verification.runCount, 2);
+  assert.equal(externalWorker.intents.length, 2);
+  assert.equal(externalWorker.requests.length, 2);
+  const [firstIntent, repairIntent] = externalWorker.intents;
+  assert.ok(firstIntent);
+  assert.ok(repairIntent);
+  assert.notEqual(firstIntent.attemptId, repairIntent.attemptId);
+  assert.notEqual(firstIntent.workerSessionId, repairIntent.workerSessionId);
+  assert.equal(firstIntent.thread.kind, ExternalThreadPolicy.FRESH);
+  assert.equal(repairIntent.thread.kind, ExternalThreadPolicy.FRESH);
+  const repairRequest = externalWorker.requests[1];
+  assert.ok(repairRequest);
+  assert.equal(repairRequest.contextPackage.schemaVersion, 3);
+  const repairContext = repairRequest.contextPackage.repairContext;
+  const priorAttemptFeedback = repairRequest.contextPackage.priorAttemptFeedback;
+  assert.ok(repairContext);
+  assert.ok(priorAttemptFeedback);
+  assert.equal(repairContext.acceptanceDecisionId, rejection.decision.id);
+  assert.equal(
+    priorAttemptFeedback.items.some((item) => item.sourceRefs.includes(rejection.decision.id)),
+    true,
+  );
+  const serializedRepairContext = JSON.stringify(repairRequest.contextPackage);
+  assert.equal(serializedRepairContext.includes('thread-'), false);
+  assert.equal(serializedRepairContext.includes('transcript'), false);
+  assert.equal(serializedRepairContext.includes('reasoning'), false);
+
+  const repairRecord = harness.store.getAcceptanceRepairForRepairGeneration(
+    repairContext.repairCandidateGenerationId,
+  );
+  assert.ok(repairRecord);
+  const decision = harness.store.getAcceptanceDecision(repairRecord.acceptanceDecisionId);
+  const manifest = harness.store.getAcceptanceInputManifest(repairRecord.inputManifestDigest);
+  const evidenceSet = harness.store.getEvidenceSet(repairRecord.evidenceSetDigest);
+  const parent = harness.store.getCandidateGeneration(repairRecord.rejectedCandidateGenerationId);
+  const child = harness.store.getCandidateGeneration(repairRecord.repairCandidateGenerationId);
+  assert.ok(decision);
+  assert.ok(manifest);
+  assert.ok(evidenceSet);
+  assert.ok(parent);
+  assert.ok(child);
+  const evidence = evidenceSet.evidenceRefs.map((reference) => {
+    const record = harness.store.getEvidence(reference.evidenceId);
+    const eligibility = harness.store.getEvidenceEligibilityVersion(
+      reference.evidenceId,
+      reference.eligibilityVersion,
+    );
+    assert.ok(record);
+    assert.ok(eligibility);
+    return Object.freeze({ record, eligibility });
+  });
+  const freezeRecords = harness.store
+    .listEvidenceForGeneration(parent.id)
+    .filter(({ record }) => record.kind === 'CANDIDATE_FREEZE');
+  assert.equal(freezeRecords.length, 1);
+  const freezeRecord = freezeRecords[0]?.record;
+  assert.ok(freezeRecord);
+  const freezeEligibility = harness.store.getEvidenceEligibilityVersion(
+    freezeRecord.id,
+    aggregateVersion(1),
+  );
+  assert.ok(freezeEligibility);
+  const sources = Object.freeze({
+    goal: harness.goal,
+    workflowId: harness.workflow.id,
+    contextWorkflowVersion: repairRequest.contextPackage.workflowVersion,
+    policyBundleId: repairRecord.policyBundleId,
+    policyBundleDigest: repairRecord.policyBundleDigest,
+    repair: repairRecord,
+    decision,
+    manifest,
+    evidenceSet,
+    parent,
+    child,
+    freezeEvidence: Object.freeze({ record: freezeRecord, eligibility: freezeEligibility }),
+    evidence: Object.freeze(evidence),
+  });
+  const recompiled = compileBoundedM2RepairContext(sources, digests);
+  assert.deepEqual(recompiled.repairContext, repairContext);
+  assert.deepEqual(recompiled.priorAttemptFeedback, priorAttemptFeedback);
+  const firstEvidence = evidence[0];
+  assert.ok(firstEvidence);
+  const adversarialSources = [
+    Object.freeze({
+      ...sources,
+      goal: Object.freeze({ ...harness.goal, id: goalId('goal_wrong-repair-context') }),
+    }),
+    Object.freeze({
+      ...sources,
+      decision: Object.freeze({ ...decision, outcome: AcceptanceOutcome.ACCEPT }),
+    }),
+    Object.freeze({
+      ...sources,
+      child: Object.freeze({
+        ...child,
+        parentGenerationId: candidateGenerationId('generation_wrong-repair-parent'),
+      }),
+    }),
+    Object.freeze({ ...sources, evidence: Object.freeze([]) }),
+    Object.freeze({
+      ...sources,
+      evidence: Object.freeze([
+        Object.freeze({
+          ...firstEvidence,
+          eligibility: Object.freeze({
+            ...firstEvidence.eligibility,
+            state: EvidenceEligibilityState.INELIGIBLE,
+          }),
+        }),
+      ]),
+    }),
+    Object.freeze({
+      ...sources,
+      freezeEvidence: Object.freeze({
+        record: freezeRecord,
+        eligibility: Object.freeze({
+          ...freezeEligibility,
+          evidenceId: firstEvidence.record.id,
+        }),
+      }),
+    }),
+  ];
+  for (const adversarial of adversarialSources) {
+    assert.throws(() => compileBoundedM2RepairContext(adversarial, digests), /Repair Context/);
+  }
+  assert.equal(
+    priorAttemptFeedback.items.every(
+      (item) => item.sourceRefs.length > 0 && item.sourceRefs.length === item.sourceDigests.length,
+    ),
+    true,
+  );
+});
+
+void test('[I-008][I-009][M2-F11][M2-G16][M2-G17] a failed repair remains stopped through reopen, replay, Resume, stale authority, and late events', async (t) => {
+  const harness = createHarness(t, 'driver-external-repair-stop', 'FAIL_ON_OBSERVATION');
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'FAIL_ON_OBSERVATION');
+  const verification = new SequencedLocalCommandRunner([1, 1]);
+  const profile = externalRuntimeProfile(harness, externalWorker, verification);
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('ResumeGoal is not exercised by the failed-repair fixture');
+      },
+    }),
+  );
+  const first = await execution.startGoal(startRequest(harness));
+  assert.equal(first.drive?.stopReason, WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED);
+  const rejected = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(rejected?.acceptanceAuthority);
+  assert.ok(rejected.candidateAuthority);
+  const rejection = rejected.acceptanceAuthority;
+  const generationOneId = rejected.candidateAuthority.generation.id;
+  const generationOneEvidence = harness.store.listEvidenceForGeneration(generationOneId);
+  assert.equal(generationOneEvidence.length > 0, true);
+  const repairRequest = Object.freeze({
+    commandId: commandId('command_driver-external-failed-repair'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: rejected.workflow.version,
+    acceptanceDecisionId: rejection.decision.id,
+    acceptanceDecisionDigest: rejection.decision.decisionDigest,
+    inputManifestDigest: rejection.manifest.manifestDigest,
+    candidateDigest: rejection.manifest.candidateDigest,
+    reason: 'one bounded failed repair',
+  });
+  const repaired = await execution.repairGoal(repairRequest);
+  assert.equal(repaired.command.status, 'APPLIED');
+  assert.equal(
+    repaired.drive?.stopReason,
+    WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED,
+    JSON.stringify(repaired),
+  );
+  assert.equal(externalWorker.intents.length, 2);
+  assert.equal(externalWorker.runCount, 2);
+  const stopped = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(stopped);
+  assert.ok(stopped.candidateAuthority);
+  assert.ok(stopped.acceptanceAuthority);
+  assert.equal(stopped.candidateAuthority.generation.sequence, 2);
+  const generationTwoId = stopped.candidateAuthority.generation.id;
+  assert.notEqual(generationTwoId, generationOneId);
+  assert.equal(stopped.acceptanceAuthority.manifest.candidateGenerationId, generationTwoId);
+  const generationTwoEvidenceSet = harness.store.getEvidenceSet(
+    stopped.acceptanceAuthority.manifest.evidenceSetDigest,
+  );
+  assert.ok(generationTwoEvidenceSet);
+  assert.equal(
+    generationTwoEvidenceSet.evidenceRefs.every(
+      (reference) =>
+        harness.store.getEvidence(reference.evidenceId)?.candidateGenerationId === generationTwoId,
+    ),
+    true,
+  );
+  assert.deepEqual(harness.store.listEvidenceForGeneration(generationOneId), generationOneEvidence);
+
+  const replay = await execution.repairGoal(repairRequest);
+  assert.equal(replay.command.status, 'REPLAYED');
+  assert.ok(replay.drive);
+  assert.equal(replay.drive.stopReason, WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED);
+  assert.equal(replay.drive.operationCount, 0);
+  assert.equal(externalWorker.intents.length, 2);
+  assert.equal(externalWorker.runCount, 2);
+  assert.equal(
+    harness.store.getWorkflowDriverAuthority(harness.goal.id)?.candidateAuthority?.generation
+      .sequence,
+    2,
+  );
+
+  const reopenedStore = openSqliteControlStore({
+    filename: harness.filename,
+    now: () => createdAt,
+  });
+  t.after(() => reopenedStore.close());
+  const reopenedHarness: DriverHarness = Object.freeze({
+    ...harness,
+    store: reopenedStore,
+  });
+  const reopenedRecovery = createRecoveryCoordinator({
+    store: reopenedStore,
+    clock: harness.clock,
+    ids: harness.ids,
+    digests,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
+    inspector: new FakeRecoveryInspector([FakeRecoveryInspectionMode.EXACT]),
+    inspectorVersion: 'slice6-failed-repair-inspector-v1',
+    recoveryPolicyVersion: 'm2-failed-repair-stop-v1',
+  });
+  const reopenedExecution = m2Driver(reopenedHarness, profile, reopenedRecovery);
+  const reopenedAuthority = reopenedStore.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(reopenedAuthority);
+  const resume = await reopenedExecution.resumeGoal({
+    commandId: commandId('command_driver-external-failed-repair-resume'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: reopenedAuthority.workflow.version,
+  });
+  assert.equal(resume.command.output.ok, false);
+
+  const staleRepair = await reopenedExecution.repairGoal({
+    ...repairRequest,
+    commandId: commandId('command_driver-external-stale-repair-authority'),
+    expectedWorkflowVersion: reopenedAuthority.workflow.version,
+  });
+  assert.equal(staleRepair.command.output.ok, false);
+
+  const oldEvent = externalWorker.events[0];
+  const oldRequest = externalWorker.requests[0];
+  assert.ok(oldEvent);
+  assert.ok(oldRequest);
+  const lateEvent = decodeWorkerEvent({
+    ...oldEvent,
+    id: workerEventId('worker-event_slice6-late-generation-one'),
+  });
+  const lateAdmission = kernel(reopenedHarness, profile).admitWorkerEvent(lateEvent, oldRequest);
+  assert.notEqual(lateAdmission.status, 'ADMITTED');
+  assert.equal(externalWorker.intents.length, 2);
+  assert.equal(externalWorker.runCount, 2);
+  const finalAuthority = reopenedStore.getWorkflowDriverAuthority(harness.goal.id);
+  assert.equal(finalAuthority?.candidateAuthority?.generation.sequence, 2);
+  assert.deepEqual(reopenedStore.listEvidenceForGeneration(generationOneId), generationOneEvidence);
+});
+
+void test('[I-008][I-010][M2-G04] governed cancellation aborts the exact external operation and admits no late Worker result', async (t) => {
+  const harness = createHarness(t, 'driver-external-cancel', 'FAIL_ON_OBSERVATION');
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'FAIL_ON_OBSERVATION', true);
+  const profile = externalRuntimeProfile(harness, externalWorker);
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('ResumeGoal is not exercised by the cancellation fixture');
+      },
+    }),
+  );
+  const running = execution.startGoal(startRequest(harness));
+  await externalWorker.runStarted;
+  const current = harness.store.getWorkflow(harness.workflow.id);
+  assert.ok(current);
+  const cancelled = execution.cancelGoal({
+    commandId: commandId('command_driver-external-cancel-current'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: current.version,
+    reason: 'governed user cancellation',
+  });
+  assert.equal(cancelled.status, 'APPLIED');
+  const result = await running;
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.CANCELLED);
+  assert.equal(externalWorker.runCount, 1);
+  const intent = externalWorker.intents[0];
+  assert.ok(intent);
+  const retained = harness.store.getExternalExecution(intent.id);
+  assert.ok(retained);
+  assert.equal(retained.state, ExternalExecutionState.INTERRUPTED);
+  assert.equal(retained.turnInterruptCount, 1);
+  assert.equal(retained.resultEventId, undefined);
+});
+
+void test('[I-008][I-028][M2-G05] one observed backend failure blocks visibly without hidden launch or dispatch retry', async (t) => {
+  const harness = createHarness(t, 'driver-external-backend-failure', 'FAIL_ON_OBSERVATION');
+  const externalWorker = new ExternalWorkerFixture(
+    harness.store,
+    'FAIL_ON_OBSERVATION',
+    false,
+    ExternalWorkerFailureCode.CLIENT_FAILURE,
+  );
+  const profile = externalRuntimeProfile(harness, externalWorker);
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('Backend-failure fixture does not enter recovery');
+      },
+    }),
+  );
+
+  const result = await execution.startGoal(startRequest(harness));
+  assert.equal(result.command.status, 'APPLIED');
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.FAILED);
+  assert.equal(externalWorker.prepareCount, 1);
+  assert.equal(externalWorker.createCount, 1);
+  assert.equal(externalWorker.runCount, 1);
+  assert.equal(externalWorker.intents.length, 1);
+  const intent = externalWorker.intents[0];
+  assert.ok(intent);
+  const retained = harness.store.getExternalExecution(intent.id);
+  assert.ok(retained);
+  assert.equal(retained.state, ExternalExecutionState.FAILED);
+  assert.equal(retained.failureCode, ExternalWorkerFailureCode.CLIENT_FAILURE);
+  assert.equal(retained.resultEventId, undefined);
+
+  const replay = await execution.startGoal(startRequest(harness));
+  assert.equal(replay.command.status, 'REPLAYED');
+  assert.ok(replay.drive);
+  assert.equal(replay.drive.stopReason, WorkflowDriveStopReason.FAILED);
+  assert.equal(replay.drive.operationCount, 0);
+  assert.equal(externalWorker.prepareCount, 1);
+  assert.equal(externalWorker.runCount, 1);
+  assert.deepEqual(harness.store.getExternalExecution(intent.id), retained);
+});
+
+void test('[I-006][I-018][I-027][M2-C09] external completion cannot bind a different Worker event identity', async (t) => {
+  const harness = createHarness(t, 'driver-external-result-binding', 'FAIL_ON_OBSERVATION');
+  const externalWorker = new ExternalWorkerFixture(
+    harness.store,
+    'FAIL_ON_OBSERVATION',
+    false,
+    undefined,
+    'MISMATCH',
+  );
+  const execution = m2Driver(
+    harness,
+    externalRuntimeProfile(harness, externalWorker),
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('Result-binding fixture does not enter recovery');
+      },
+    }),
+  );
+
+  const result = await execution.startGoal(startRequest(harness));
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+  const authority = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(authority?.latestPhaseAttempt);
+  const retained = harness.store.getExternalExecutionForAttempt(authority.latestPhaseAttempt.id);
+  assert.ok(retained);
+  assert.equal(retained.state, ExternalExecutionState.ABANDONED);
+  assert.equal(retained.failureCode, ExternalExecutionAbandonReasonCode.INVALID_WORKER_OBSERVATION);
+  assert.equal(retained.resultEventId, undefined);
+  assert.equal(
+    harness.store.getWorkerEventReceipt(
+      workerEventId('worker-event_slice6-mismatched-observation'),
+    ),
+    undefined,
+  );
+});
+
+void test('[I-006][I-018][I-027][M2-G09] unrecognized adapter failure detail is rejected and never enters retained authority', async (t) => {
+  const harness = createHarness(t, 'driver-external-unrecognized-failure', 'FAIL_ON_OBSERVATION');
+  const unsafeDetail = 'raw adapter exception token=do-not-retain';
+  const externalWorker = new ExternalWorkerFixture(
+    harness.store,
+    'FAIL_ON_OBSERVATION',
+    false,
+    unsafeDetail,
+  );
+  const execution = m2Driver(
+    harness,
+    externalRuntimeProfile(harness, externalWorker),
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('Unrecognized-failure fixture does not enter recovery');
+      },
+    }),
+  );
+
+  const result = await execution.startGoal(startRequest(harness));
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+  assert.equal(externalWorker.createCount, 1);
+  assert.equal(externalWorker.runCount, 1);
+  const authority = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(authority?.latestPhaseAttempt);
+  const retained = harness.store.getExternalExecutionForAttempt(authority.latestPhaseAttempt.id);
+  assert.ok(retained);
+  assert.equal(retained.state, ExternalExecutionState.ABANDONED);
+  assert.equal(retained.failureCode, ExternalExecutionAbandonReasonCode.INVALID_WORKER_OBSERVATION);
+  assert.equal(JSON.stringify(retained).includes(unsafeDetail), false);
+  assert.ok(retained.lastObservationId);
+});
+
+void test('[I-008][I-009][I-010][M2-G06][M2-G07][M2-G08] restart abandons the old external dispatch before a fresh governed resume', async (t) => {
+  const harness = createHarness(t, 'driver-external-recovery', 'MANUAL_BEFORE_OPERATION');
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'MANUAL_BEFORE_OPERATION', true);
+  const profile = externalRuntimeProfile(harness, externalWorker);
+  const inspector = new FakeRecoveryInspector([
+    FakeRecoveryInspectionMode.EXACT,
+    FakeRecoveryInspectionMode.EXACT,
+  ]);
+  let processReconciliationCount = 0;
+  const recovery = createRecoveryCoordinator({
+    store: harness.store,
+    // Recovery must floor a rolled-back wall clock against retained external
+    // execution and maintenance authority rather than failing or backdating it.
+    clock: Object.freeze({ now: () => createdAt }),
+    ids: harness.ids,
+    digests,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
+    inspector,
+    externalProcessReconciler: Object.freeze({
+      reconcile: (identity: { readonly identityDigest: string }) => {
+        processReconciliationCount += 1;
+        if (processReconciliationCount === 1) {
+          externalWorker.releaseBlockedRun();
+        }
+        return Object.freeze({
+          schemaVersion: 1,
+          processIdentityDigest: identity.identityDigest,
+          disposition:
+            processReconciliationCount === 1
+              ? ExternalProcessReconciliationDisposition.TERMINATED
+              : ExternalProcessReconciliationDisposition.ABSENT,
+          observationRef: `fixture-process-reconciliation:${String(processReconciliationCount)}`,
+        });
+      },
+    }),
+    inspectorVersion: 'slice6-external-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm2-external-exact-same-phase-v1',
+  });
+  const execution = m2Driver(harness, profile, recovery);
+
+  const running = execution.startGoal(startRequest(harness));
+  await externalWorker.runStarted;
+  const active = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(active?.activeAttempt);
+  assert.ok(active.candidateAuthority);
+  const oldAttemptId = active.activeAttempt.id;
+  const generationId = active.candidateAuthority.generation.id;
+  const oldClaim = harness.store.getWorkerDispatchClaim(oldAttemptId);
+  const oldExecution = harness.store.getExternalExecutionForAttempt(oldAttemptId);
+  assert.ok(oldClaim);
+  assert.ok(oldExecution);
+  assert.equal(oldExecution.state, ExternalExecutionState.OPERATION_RUNNING);
+  assert.ok(oldExecution.processIdentity);
+  assert.equal(
+    harness.store.getExternalMaintenanceIntentForExecution(oldExecution.id, 1)?.state,
+    ExternalMaintenanceState.OBSERVED,
+  );
+
+  const startup = recovery.recoverOnStartup();
+  assert.equal(startup.reconciledCount, 1);
+  assert.equal(processReconciliationCount, 1);
+  assert.equal(harness.store.getAttempt(oldAttemptId)?.status, AttemptStatus.INTERRUPTED);
+  const abandoned = harness.store.getExternalExecutionForAttempt(oldAttemptId);
+  assert.ok(abandoned);
+  assert.equal(abandoned.state, ExternalExecutionState.ABANDONED);
+  assert.equal(
+    abandoned.failureCode,
+    ExternalExecutionAbandonReasonCode.RECOVERY_ABANDONED_ACTIVE_DISPATCH,
+  );
+  assert.equal(abandoned.resultEventId, undefined);
+  const abandonedMaintenance = harness.store.getExternalMaintenanceIntentForExecution(
+    abandoned.id,
+    1,
+  );
+  assert.ok(abandonedMaintenance);
+  assert.equal(abandonedMaintenance.state, ExternalMaintenanceState.OBSERVED);
+  assert.equal(abandonedMaintenance.failureCode, undefined);
+  const blocked = harness.store.getWorkflow(harness.workflow.id);
+  assert.equal(blocked?.runStatus, RunStatus.BLOCKED);
+
+  const stopped = await running;
+  assert.equal(stopped.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+  assert.deepEqual(harness.store.getWorkerDispatchClaim(oldAttemptId), oldClaim);
+  assert.deepEqual(harness.store.getExternalExecutionForAttempt(oldAttemptId), abandoned);
+
+  assert.ok(blocked);
+  const resumed = await execution.resumeGoal({
+    commandId: commandId('command_driver-external-recovery-resume'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: blocked.version,
+  });
+  assert.equal(resumed.command.status, 'APPLIED');
+  assert.equal(processReconciliationCount, 2);
+  assert.equal(resumed.drive?.stopReason, WorkflowDriveStopReason.CLOSED);
+  assert.equal(externalWorker.intents.length, 2);
+  const [oldIntent, resumedIntent] = externalWorker.intents;
+  assert.ok(oldIntent);
+  assert.ok(resumedIntent);
+  assert.notEqual(oldIntent.attemptId, resumedIntent.attemptId);
+  assert.notEqual(oldIntent.workerSessionId, resumedIntent.workerSessionId);
+  assert.equal(resumedIntent.thread.kind, ExternalThreadPolicy.FRESH);
+  assert.equal(
+    harness.store.getWorkflowDriverAuthority(harness.goal.id)?.candidateAuthority?.generation.id,
+    generationId,
+  );
+  assert.deepEqual(harness.store.getExternalExecutionForAttempt(oldAttemptId), abandoned);
+
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.getExternalExecutionForAttempt(oldAttemptId), abandoned);
+  assert.equal(reopened.getWorkflow(harness.workflow.id)?.runStatus, RunStatus.CLOSED);
+});
+
+void test('[I-008][I-009][M2-G06][M2-G08] ambiguous external process identity blocks startup and resume without redispatch', async (t) => {
+  const harness = createHarness(
+    t,
+    'driver-external-recovery-identity-mismatch',
+    'MANUAL_BEFORE_OPERATION',
+  );
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'MANUAL_BEFORE_OPERATION', true);
+  const inspector = new FakeRecoveryInspector([
+    FakeRecoveryInspectionMode.EXACT,
+    FakeRecoveryInspectionMode.EXACT,
+  ]);
+  let processReconciliationCount = 0;
+  const recovery = createRecoveryCoordinator({
+    store: harness.store,
+    clock: Object.freeze({ now: () => createdAt }),
+    ids: harness.ids,
+    digests,
+    policyBundleId: harness.policy.id,
+    policyBundleDigest: harness.policy.digest,
+    inspector,
+    externalProcessReconciler: Object.freeze({
+      reconcile: (identity: { readonly identityDigest: string }) => {
+        processReconciliationCount += 1;
+        return Object.freeze({
+          schemaVersion: 1,
+          processIdentityDigest: identity.identityDigest,
+          disposition: ExternalProcessReconciliationDisposition.IDENTITY_MISMATCH,
+          observationRef: `fixture-process-identity-mismatch:${String(processReconciliationCount)}`,
+        });
+      },
+    }),
+    inspectorVersion: 'slice6-external-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm2-external-exact-same-phase-v1',
+  });
+  const execution = m2Driver(harness, externalRuntimeProfile(harness, externalWorker), recovery);
+
+  const running = execution.startGoal(startRequest(harness));
+  await externalWorker.runStarted;
+  const active = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(active?.activeAttempt);
+  const oldAttemptId = active.activeAttempt.id;
+  assert.equal(
+    harness.store.getExternalExecutionForAttempt(oldAttemptId)?.state,
+    ExternalExecutionState.OPERATION_RUNNING,
+  );
+
+  const startup = recovery.recoverOnStartup();
+  assert.equal(startup.reconciledCount, 1);
+  assert.equal(processReconciliationCount, 1);
+  const startupRecord = harness.store.getLatestRecoveryReconciliation(harness.workflow.id);
+  assert.ok(startupRecord);
+  assert.equal(startupRecord.purpose, RecoveryReconciliationPurpose.STARTUP);
+  assert.equal(startupRecord.disposition, RecoveryReconciliationDisposition.BLOCKED);
+  assert.equal(startupRecord.reasonCode, RecoveryReasonCode.INSPECTOR_FAILURE);
+  assert.equal(externalWorker.intents.length, 1);
+
+  externalWorker.releaseBlockedRun();
+  const stopped = await running;
+  assert.equal(stopped.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+  const blocked = harness.store.getWorkflow(harness.workflow.id);
+  assert.ok(blocked);
+  assert.equal(blocked.runStatus, RunStatus.BLOCKED);
+
+  const resumed = await execution.resumeGoal({
+    commandId: commandId('command_driver-external-recovery-identity-mismatch-resume'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: blocked.version,
+  });
+  assert.equal(resumed.command.status, 'APPLIED');
+  assert.equal(resumed.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+  assert.equal(processReconciliationCount, 2);
+  assert.equal(externalWorker.intents.length, 1);
+  const resumeRecord = harness.store.getLatestRecoveryReconciliation(harness.workflow.id);
+  assert.ok(resumeRecord);
+  assert.equal(resumeRecord.purpose, RecoveryReconciliationPurpose.RESUME);
+  assert.equal(resumeRecord.disposition, RecoveryReconciliationDisposition.BLOCKED);
+  assert.equal(resumeRecord.reasonCode, RecoveryReasonCode.INSPECTOR_FAILURE);
 });
 
 void test('[I-008] process summaries reload the last committed boundary before stopping', async (t) => {

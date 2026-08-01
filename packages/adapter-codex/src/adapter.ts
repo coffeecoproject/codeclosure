@@ -15,6 +15,7 @@ import {
   type AppServerClientLimits,
   type AppServerCompactionEvent,
   type AppServerNotification,
+  type AppServerProcessIdentity,
   type AppServerProcessLaunch,
   type JsonObject,
   type JsonValue,
@@ -101,6 +102,7 @@ export interface CodexWorkerAdapterInput {
   readonly clientLimits?: Partial<AppServerClientLimits>;
   readonly directive: unknown;
   readonly launch: AppServerProcessLaunch;
+  readonly onLifecycleEvent: (event: unknown) => void;
   readonly observedAt: () => string;
 }
 
@@ -357,6 +359,17 @@ class InvocationObserver {
   readonly #failurePromise: Promise<void>;
   #failureResolve!: () => void;
   #itemPolicy?: CodexThreadItemPolicy;
+  readonly #maintenanceCompactionItems = new Map<
+    string,
+    Readonly<{ threadId: string; turnId: string }>
+  >();
+  readonly #authorizedMaintenanceCompactionItems = new Map<
+    string,
+    Readonly<{ threadId: string; turnId: string }>
+  >();
+  #maintenanceTerminalSeen = false;
+  #maintenanceTurnRef?: string;
+  #manualCompactionPending = false;
   #notificationCount = 0;
   readonly #observedThreadRefs = new Set<string>();
   readonly #observedTurnRefs = new Set<string>();
@@ -455,8 +468,38 @@ class InvocationObserver {
   }
 
   public bindTurn(turnId: string): void {
+    if (this.#maintenanceTurnRef === turnId) {
+      this.fail('TURN_BINDING_MISMATCH');
+      return;
+    }
     this.#backendOperationRef = turnId;
     this.#validateRefs();
+  }
+
+  public beginManualCompaction(): void {
+    if (
+      this.#directive.profile.compactionPolicy !== 'MANUAL_BEFORE_OPERATION' ||
+      this.#manualCompactionPending ||
+      this.#compactionCount !== 0
+    ) {
+      this.fail('COMPACTION_POLICY_VIOLATION');
+      return;
+    }
+    this.#manualCompactionPending = true;
+  }
+
+  public finishManualCompaction(): void {
+    if (
+      !this.#manualCompactionPending ||
+      this.#compactionCount !== 1 ||
+      this.#maintenanceCompactionItems.size !== 0 ||
+      this.#maintenanceTurnRef === undefined ||
+      !this.#maintenanceTerminalSeen
+    ) {
+      this.fail('COMPACTION_POLICY_VIOLATION');
+      return;
+    }
+    this.#manualCompactionPending = false;
   }
 
   public complete(eventId: string): void {
@@ -475,11 +518,48 @@ class InvocationObserver {
   }
 
   public recordCompaction(event: AppServerCompactionEvent): void {
-    this.#compactionCount += 1;
     this.#observedThreadRefs.add(event.threadId);
-    this.#observedTurnRefs.add(event.turnId);
-    this.#validateRefs();
-    this.fail('COMPACTION_POLICY_VIOLATION');
+    if (this.#directive.profile.compactionPolicy !== 'MANUAL_BEFORE_OPERATION') {
+      this.#compactionCount += 1;
+      this.#validateRefs();
+      this.fail('COMPACTION_POLICY_VIOLATION');
+      return;
+    }
+    if (
+      event.source !== 'REQUESTED_MANUAL' ||
+      this.#backendSessionRef === undefined ||
+      event.threadId !== this.#backendSessionRef
+    ) {
+      this.fail('COMPACTION_POLICY_VIOLATION');
+      return;
+    }
+    if (event.stage === 'STARTED') {
+      if (
+        !this.#manualCompactionPending ||
+        this.#maintenanceTurnRef !== event.turnId ||
+        this.#compactionCount !== 0 ||
+        this.#maintenanceCompactionItems.has(event.itemId)
+      ) {
+        this.fail('COMPACTION_POLICY_VIOLATION');
+        return;
+      }
+      this.#maintenanceCompactionItems.set(
+        event.itemId,
+        Object.freeze({ threadId: event.threadId, turnId: event.turnId }),
+      );
+      this.#authorizedMaintenanceCompactionItems.set(
+        event.itemId,
+        Object.freeze({ threadId: event.threadId, turnId: event.turnId }),
+      );
+      return;
+    }
+    const started = this.#maintenanceCompactionItems.get(event.itemId);
+    if (started?.threadId !== event.threadId || started.turnId !== event.turnId) {
+      this.fail('COMPACTION_POLICY_VIOLATION');
+      return;
+    }
+    this.#maintenanceCompactionItems.delete(event.itemId);
+    this.#compactionCount += 1;
   }
 
   public recordNotification(notification: AppServerNotification): void {
@@ -500,9 +580,6 @@ class InvocationObserver {
     if (typeof threadId === 'string') {
       this.#observedThreadRefs.add(threadId);
     }
-    if (typeof turnId === 'string') {
-      this.#observedTurnRefs.add(turnId);
-    }
     if (notification.method === 'thread/started') {
       const thread = params['thread'];
       if (isJsonObject(thread) && typeof thread['id'] === 'string') {
@@ -514,21 +591,75 @@ class InvocationObserver {
     if (notification.method === 'turn/started') {
       const turn = params['turn'];
       if (isJsonObject(turn) && typeof turn['id'] === 'string') {
-        this.#observedTurnRefs.add(turn['id']);
+        if (this.#manualCompactionPending) {
+          if (this.#maintenanceTurnRef !== undefined && this.#maintenanceTurnRef !== turn['id']) {
+            this.fail('COMPACTION_POLICY_VIOLATION');
+          } else {
+            this.#maintenanceTurnRef = turn['id'];
+          }
+        }
+        if (this.#maintenanceTurnRef !== turn['id']) {
+          this.#observedTurnRefs.add(turn['id']);
+        }
       } else {
         this.fail('TURN_BINDING_MISMATCH');
       }
+    }
+    const maintenanceTurn = typeof turnId === 'string' && turnId === this.#maintenanceTurnRef;
+    if (typeof turnId === 'string' && !maintenanceTurn) {
+      this.#observedTurnRefs.add(turnId);
     }
     if (notification.method === 'item/started' || notification.method === 'item/completed') {
       const item = params['item'];
       if (!isJsonObject(item)) {
         this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+      } else if (item['type'] === 'contextCompaction') {
+        const binding =
+          typeof item['id'] === 'string'
+            ? this.#authorizedMaintenanceCompactionItems.get(item['id'])
+            : undefined;
+        if (
+          binding === undefined ||
+          binding.threadId !== threadId ||
+          binding.turnId !== turnId ||
+          !maintenanceTurn
+        ) {
+          this.fail('COMPACTION_POLICY_VIOLATION');
+        }
+      } else if (this.#manualCompactionPending) {
+        this.fail('COMPACTION_POLICY_VIOLATION');
       } else {
         this.#recordItem(item, notification.method === 'item/started' ? 'STARTED' : 'COMPLETED');
       }
     }
     const terminal = projectTerminalTurn(notification);
-    if (terminal !== undefined) {
+    const maintenanceTerminal =
+      terminal !== undefined && terminal.turnId === this.#maintenanceTurnRef;
+    if (terminal !== undefined && maintenanceTerminal) {
+      if (
+        !this.#manualCompactionPending ||
+        this.#maintenanceTerminalSeen ||
+        terminal.status !== 'completed' ||
+        terminal.error !== null ||
+        terminal.items.length !== 1 ||
+        terminal.items.some((item) => {
+          if (!isJsonObject(item) || item['type'] !== 'contextCompaction') {
+            return true;
+          }
+          const binding =
+            typeof item['id'] === 'string'
+              ? this.#authorizedMaintenanceCompactionItems.get(item['id'])
+              : undefined;
+          return binding?.threadId !== terminal.threadId || binding.turnId !== terminal.turnId;
+        })
+      ) {
+        this.fail('COMPACTION_POLICY_VIOLATION');
+      } else {
+        this.#maintenanceTerminalSeen = true;
+      }
+    } else if (terminal !== undefined && this.#manualCompactionPending) {
+      this.fail('COMPACTION_POLICY_VIOLATION');
+    } else if (terminal !== undefined) {
       for (const item of terminal.items) {
         if (!isJsonObject(item)) {
           this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
@@ -706,6 +837,7 @@ export class CodexWorkerAdapter implements WorkerPort {
   readonly #clientLimits: Partial<AppServerClientLimits> | undefined;
   readonly #directive: CodexWorkerDirective;
   readonly #launch: AppServerProcessLaunch;
+  readonly #onLifecycleEvent: (event: unknown) => void;
   readonly #observedAt: () => string;
   #observer: InvocationObserver;
   #used = false;
@@ -713,7 +845,11 @@ export class CodexWorkerAdapter implements WorkerPort {
   public constructor(input: CodexWorkerAdapterInput) {
     this.#directive = decodeCodexWorkerDirective(input.directive);
     assertLaunchBindsDirective(this.#directive, input.launch);
+    if (typeof input.onLifecycleEvent !== 'function') {
+      throw new TypeError('Codex Worker lifecycle handler is required');
+    }
     this.#launch = input.launch;
+    this.#onLifecycleEvent = input.onLifecycleEvent;
     this.#observedAt = input.observedAt;
     this.#clientLimits = input.clientLimits;
     this.#observer = new InvocationObserver(this.#directive);
@@ -752,7 +888,6 @@ export class CodexWorkerAdapter implements WorkerPort {
     }
 
     this.#observer.markRunning();
-    this.#observer.markProcessLaunch();
     let client: AppServerClient | undefined;
     let terminalEvent: WorkerEvent | undefined;
     try {
@@ -775,9 +910,14 @@ export class CodexWorkerAdapter implements WorkerPort {
           },
         },
         launch: this.#launch,
+        launchNonce: this.#directive.processLaunchNonce,
         ...(this.#clientLimits === undefined ? {} : { limits: this.#clientLimits }),
         onCompactionEvent: (event) => observer.recordCompaction(event),
         onNotification: (notification) => observer.recordNotification(notification),
+        onProcessStarted: (identity) => {
+          observer.markProcessLaunch();
+          this.emitProcessStarted(identity);
+        },
         serverRequestHandlers: [
           serverRequestHandler({
             decodeParams: decodeCommandApproval,
@@ -854,6 +994,27 @@ export class CodexWorkerAdapter implements WorkerPort {
       assertEffectiveThread(effective, this.#directive);
       this.#observer.bindThread(effective.threadId);
       this.#observer.throwIfFailed();
+      this.emitLifecycleEvent({
+        kind: 'SESSION_STARTED',
+        backendSessionRef: effective.threadId,
+      });
+
+      if (this.#directive.profile.compactionPolicy === 'MANUAL_BEFORE_OPERATION') {
+        if (hostCancelled(signal)) {
+          throw adapterFailure('HOST_CANCELLED');
+        }
+        this.#observer.beginManualCompaction();
+        this.#observer.throwIfFailed();
+        const compacted = await client.compactThread({ threadId: effective.threadId });
+        if (compacted.threadId !== effective.threadId) {
+          throw adapterFailure('THREAD_BINDING_MISMATCH');
+        }
+        this.#observer.finishManualCompaction();
+        this.#observer.throwIfFailed();
+        if (hostCancelled(signal)) {
+          throw adapterFailure('HOST_CANCELLED');
+        }
+      }
 
       const prompt = renderCodexWorkerPrompt(this.#directive, request);
       if (Buffer.byteLength(prompt, 'utf8') > this.#directive.profile.maximumPromptBytes) {
@@ -890,6 +1051,12 @@ export class CodexWorkerAdapter implements WorkerPort {
       );
       this.#observer.bindTurn(started.turnId);
       this.#observer.throwIfFailed();
+      this.emitLifecycleEvent({
+        kind: 'OPERATION_STARTED',
+        backendSessionRef: effective.threadId,
+        backendOperationRef: started.turnId,
+        compactionCount: this.#observer.snapshot().compactionCount,
+      });
 
       const wait = await waitForTerminal(
         client,
@@ -982,8 +1149,67 @@ export class CodexWorkerAdapter implements WorkerPort {
         this.#observer.failureCode === 'BACKEND_TURN_FAILED')
     ) {
       this.#observer.complete(terminalEvent.id);
+    }
+    let terminalObservation = this.#observer.snapshot();
+    if (terminalObservation.state === 'READY' || terminalObservation.state === 'RUNNING') {
+      this.#observer.fail('CLIENT_FAILURE');
+      terminalEvent = undefined;
+      terminalObservation = this.#observer.snapshot();
+    }
+    if (terminalEvent !== undefined && terminalObservation.resultEventId === terminalEvent.id) {
       yield terminalEvent;
     }
+    this.emitLifecycleEvent({
+      kind: 'TERMINAL',
+      state: terminalObservation.state,
+      processLaunchCount: terminalObservation.processLaunchCount,
+      ...(terminalObservation.backendSessionRef === undefined
+        ? {}
+        : { backendSessionRef: terminalObservation.backendSessionRef }),
+      ...(terminalObservation.backendOperationRef === undefined
+        ? {}
+        : { backendOperationRef: terminalObservation.backendOperationRef }),
+      compactionCount: terminalObservation.compactionCount,
+      turnInterruptCount: terminalObservation.turnInterruptCount,
+      ...(terminalObservation.failureCode === undefined
+        ? {}
+        : { failureCode: terminalObservation.failureCode }),
+      ...(terminalObservation.resultEventId === undefined
+        ? {}
+        : { resultEventId: terminalObservation.resultEventId }),
+    });
+  }
+
+  private emitProcessStarted(identity: AppServerProcessIdentity): void {
+    const semantic = Object.freeze({
+      schemaVersion: identity.schemaVersion,
+      launchNonce: identity.launchNonce,
+      processId: identity.processId,
+      processGroupId: identity.processGroupId,
+      processGroupKind: identity.processGroupKind,
+      processStartIdentity: identity.processStartIdentity,
+      executableIdentityDigest: identity.executableIdentityDigest,
+      controlledStateRootIdentity: identity.controlledStateRootIdentity,
+    });
+    this.emitLifecycleEvent({
+      kind: 'PROCESS_STARTED',
+      processIdentity: Object.freeze({
+        ...semantic,
+        identityDigest: digestCanonical(semantic),
+      }),
+    });
+  }
+
+  private emitLifecycleEvent(event: Readonly<Record<string, unknown>>): void {
+    this.#onLifecycleEvent(
+      Object.freeze({
+        schemaVersion: 1,
+        externalExecutionIntentDigest: this.#directive.externalExecutionIntentDigest,
+        requestAttemptId: this.#directive.request.attemptId,
+        requestWorkerSessionId: this.#directive.request.workerSessionId,
+        ...event,
+      }),
+    );
   }
 }
 

@@ -18,24 +18,10 @@ implemented with isolated authority, scenario-specific terminal assertions,
 Goal-owned audit checks, and strict reopen comparison. The
 [M1 completion review](reviews/m1-completion-review.md) records the final
 quality and invariant evidence. Real project editing and Codex integration are
-not implemented in M1. M2 Slice 0 has accepted external-execution causality,
-controlled Candidate copy/lease, and real-verification contracts, but no M2
-Workflow state or Store migration is implemented. The bounded 0.146.0 live
-capability probe passes. The Slice 1 lower App Server client and offline
-fixtures are implemented and its bounded live compatibility preflight passes;
-the Slice 2 Goal-bound Adapter now maps one exact `IMPLEMENT` Context and
-strictly decoded terminal payload into the existing Worker event contract. It
-does not mutate Workflow state, persist external execution, create or freeze a
-Candidate, or issue Acceptance; ordinary M1 dispatch and event admission remain
-the only path into Workflow authority. Slice 3 now implements a separate local
-workspace adapter and public Runtime lease contract for bounded controlled
-copy, freeze, exact-parent repair, restart classification against a monotonically
-admitted canonical authority snapshot, and one-time-grant cleanup. That adapter
-owns filesystem mechanics only: it does not mutate Workflow or Store state, and
-trusted Runtime/Store composition remains later M2 work. Slice 4 now implements
-the separate local Verification adapter, closed Runtime request/result
-boundary, Runtime-derived local-command Evidence, and atomic SQLite payload
-transaction. It deliberately added no new Workflow transition. Slice 5 now
+not implemented in M1. M2 Slices 0 through 4 implement the accepted
+external-execution contracts, lower App Server client, Goal-bound Adapter,
+controlled-copy workspace, and bounded local Verification adapter without
+granting any adapter Workflow authority. Slice 5 now
 composes verification, rejection, repair, Acceptance, and closeout through the
 existing Runtime authority and implements that bounded in-process
 composition without adding a Workflow phase: failing required Evidence reaches
@@ -51,9 +37,13 @@ is selected, the Runtime also requires its current Check, Obligation, and
 read-only lease session before that Attempt and rejects the M1 fake-verification
 entry point. The M2 driver resolves the exact bound Profile before Start,
 Resume, or repair may mutate authority; Resume reuses that preflighted binding
-after the Recovery owner commits. Restart reconstruction of its external
-execution session, fresh repair Context, and failed-repair stop proof remain M2
-Slice 6. ADR 0031's protected acceptance-critical Verification Plan and
+after the Recovery owner commits. Slice 6 now persists Runtime-authorized
+external execution and Compact maintenance, admits bounded lifecycle
+observations at their actual process/session/operation/terminal boundaries,
+interrupts governed cancellation, reconciles an active dispatch before fresh
+resume, compiles exact repair Context version 3 without old chat,
+and preserves a failed-repair stop across reopen, ordinary Resume, stale
+authority, replay, and late events. ADR 0031's protected acceptance-critical Verification Plan and
 schema-version-3 Check/Evidence family, closed for bounded composition by ADR
 0032 and aligned with the existing first-Start and Check-before-Attempt
 lifecycle by ADR 0033, remain Slice 7. Goal Intake is an accepted pre-Goal
@@ -302,7 +292,8 @@ synchronous. A current `REJECT_REPAIRABLE` stops as
 `ACCEPTANCE_REPAIR_REQUIRED`; the M1 driver does not invent user authorization
 or an unbounded retry policy.
 
-M2 plans one controlled continuation for its bounded repair demonstration. A
+M2 Slice 6 implements one controlled continuation for its bounded repair
+demonstration. A
 repair generation uses a fresh Worker Session and Thread and receives current
 failure authority through a newly compiled Context Package, not through old
 conversation memory. If that repair also reaches `REJECT_REPAIRABLE`, the
@@ -820,11 +811,17 @@ concrete `BLOCKED` reason. A new Attempt may begin only after that transaction
 commits. The old Attempt, Context, Worker Session, and dispatch claim are never
 reused.
 
-For planned M2 external execution, the dispatch transaction also commits an
+For implemented M2 Slice 6 external execution, the dispatch transaction also commits an
 `ExternalExecutionRecord` in `AUTHORIZED` state before process spawn. Process,
 backend-session, backend-operation, maintenance, and terminal observations are
-separately admitted by the Runtime. A restart with an active external record
-marks the old execution `ABANDONED` while performing the existing M1
+separately admitted by the Runtime when each boundary occurs; a final adapter
+summary only cross-checks that retained lifecycle and cannot create it
+retroactively. The process observation binds a Runtime-issued launch nonce to
+the exact owned process-group identity. A restart first requires the external
+process reconciler to report that exact process absent or terminated. Identity
+mismatch, unavailable inspection, or termination failure remains `BLOCKED` and
+cannot authorize a replacement dispatch. Once safe, recovery marks the old
+execution `ABANDONED` while performing the existing M1
 reconciliation; it does not attach, resume, or synthesize a Worker result for
 that old Attempt. Any later resume uses a fresh Attempt and dispatch, with a
 fresh Thread by default. See

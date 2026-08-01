@@ -92,6 +92,81 @@ export const WorkerPortFailureReasonCode = {
 export type WorkerPortFailureReasonCode =
   (typeof WorkerPortFailureReasonCode)[keyof typeof WorkerPortFailureReasonCode];
 
+export const ExternalDispatchFailureReasonCode = {
+  PREPARATION_FAILED: 'EXTERNAL_WORKER_PREPARATION_FAILED',
+  AUTHORIZATION_FAILED: 'EXTERNAL_DISPATCH_AUTHORIZATION_FAILED',
+} as const;
+export type ExternalDispatchFailureReasonCode =
+  (typeof ExternalDispatchFailureReasonCode)[keyof typeof ExternalDispatchFailureReasonCode];
+
+export const ExternalWorkerFailureCode = {
+  ADAPTER_REUSED: 'ADAPTER_REUSED',
+  BACKEND_TURN_FAILED: 'BACKEND_TURN_FAILED',
+  CLEAN_SHUTDOWN_FAILED: 'CLEAN_SHUTDOWN_FAILED',
+  CLIENT_FAILURE: 'CLIENT_FAILURE',
+  COMPACTION_POLICY_VIOLATION: 'COMPACTION_POLICY_VIOLATION',
+  DECLINED_APPROVAL_REQUEST: 'DECLINED_APPROVAL_REQUEST',
+  EFFECTIVE_INPUT_MISMATCH: 'EFFECTIVE_INPUT_MISMATCH',
+  HOST_CANCELLED: 'HOST_CANCELLED',
+  INVALID_DIRECTIVE: 'INVALID_DIRECTIVE',
+  INVALID_REQUEST_BINDING: 'INVALID_REQUEST_BINDING',
+  INVALID_TERMINAL_PAYLOAD: 'INVALID_TERMINAL_PAYLOAD',
+  INVALID_WORKSPACE_LEASE: 'INVALID_WORKSPACE_LEASE',
+  NO_TERMINAL_PAYLOAD: 'NO_TERMINAL_PAYLOAD',
+  THREAD_BINDING_MISMATCH: 'THREAD_BINDING_MISMATCH',
+  TURN_BINDING_MISMATCH: 'TURN_BINDING_MISMATCH',
+  UNSUPPORTED_BACKEND_ACTIVITY: 'UNSUPPORTED_BACKEND_ACTIVITY',
+  UNSUPPORTED_PHASE: 'UNSUPPORTED_PHASE',
+} as const;
+export type ExternalWorkerFailureCode =
+  (typeof ExternalWorkerFailureCode)[keyof typeof ExternalWorkerFailureCode];
+
+export const ExternalExecutionAbandonReasonCode = {
+  MAINTENANCE_AUTHORIZATION_FAILED: 'EXTERNAL_MAINTENANCE_AUTHORIZATION_FAILED',
+  CANCELLED_BEFORE_INVOCATION: 'CANCELLED_BEFORE_EXTERNAL_INVOCATION',
+  WORKER_CREATION_FAILED: 'EXTERNAL_WORKER_CREATION_FAILED',
+  INVALID_WORKER_OBSERVATION: 'INVALID_EXTERNAL_WORKER_OBSERVATION',
+  OBSERVATION_ADMISSION_FAILED: 'EXTERNAL_OBSERVATION_ADMISSION_FAILED',
+  RECOVERY_ABANDONED_ACTIVE_DISPATCH: 'RECOVERY_ABANDONED_ACTIVE_DISPATCH',
+} as const;
+export type ExternalExecutionAbandonReasonCode =
+  (typeof ExternalExecutionAbandonReasonCode)[keyof typeof ExternalExecutionAbandonReasonCode];
+
+export const ExternalMaintenanceFailureReasonCode = {
+  CANCELLED_BEFORE_INVOCATION: 'CANCELLED_BEFORE_EXTERNAL_INVOCATION',
+  WORKER_CREATION_FAILED: 'EXTERNAL_WORKER_CREATION_FAILED',
+  WORKER_CANCELLED: 'EXTERNAL_WORKER_CANCELLED',
+  INVALID_WORKER_OBSERVATION: 'INVALID_EXTERNAL_WORKER_OBSERVATION',
+  NOT_OBSERVED: 'EXTERNAL_MAINTENANCE_NOT_OBSERVED',
+  OBSERVATION_ADMISSION_FAILED: 'EXTERNAL_OBSERVATION_ADMISSION_FAILED',
+  RECOVERY_ABANDONED_ACTIVE_DISPATCH: 'RECOVERY_ABANDONED_ACTIVE_DISPATCH',
+} as const;
+export type ExternalMaintenanceFailureReasonCode =
+  (typeof ExternalMaintenanceFailureReasonCode)[keyof typeof ExternalMaintenanceFailureReasonCode];
+export type ExternalMaintenanceFailureCode =
+  ExternalWorkerFailureCode | ExternalMaintenanceFailureReasonCode;
+
+const externalWorkerFailureCodeSchema = z.enum(ExternalWorkerFailureCode);
+const externalExecutionAbandonReasonCodeSchema = z.enum(ExternalExecutionAbandonReasonCode);
+const externalMaintenanceFailureCodeSchema = z.union([
+  externalWorkerFailureCodeSchema,
+  z.enum(ExternalMaintenanceFailureReasonCode),
+]);
+
+export function externalWorkerFailureCode(value: unknown): ExternalWorkerFailureCode {
+  return externalWorkerFailureCodeSchema.parse(value);
+}
+
+export function externalExecutionAbandonReasonCode(
+  value: unknown,
+): ExternalExecutionAbandonReasonCode {
+  return externalExecutionAbandonReasonCodeSchema.parse(value);
+}
+
+export function externalMaintenanceFailureCode(value: unknown): ExternalMaintenanceFailureCode {
+  return externalMaintenanceFailureCodeSchema.parse(value);
+}
+
 export interface WorkerFailureEvent extends WorkerEventBase {
   readonly type: 'WORKER_FAILURE';
   readonly reasonCode: WorkerFailureReasonCode;
@@ -428,6 +503,8 @@ export function attemptFailureClassForKnownWorkerReasonCode(
     case WorkerFailureReasonCode.BACKEND_FAILURE:
       return AttemptFailureClass.TRANSIENT_BACKEND;
     case WorkerPortFailureReasonCode.INVOCATION_FAILED:
+    case ExternalDispatchFailureReasonCode.PREPARATION_FAILED:
+    case ExternalDispatchFailureReasonCode.AUTHORIZATION_FAILED:
       return AttemptFailureClass.ABRUPT_TERMINATION;
     case WorkerPortFailureReasonCode.NON_ASYNC_STREAM:
     case WorkerPortFailureReasonCode.NO_TERMINAL_EVENT:

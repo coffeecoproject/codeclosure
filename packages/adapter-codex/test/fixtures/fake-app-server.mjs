@@ -371,6 +371,53 @@ function handleRequest(message) {
     send({ method: 'thread/started', params: { thread: { id: result.thread.id } } });
     return;
   }
+  if (message.method === 'thread/compact/start') {
+    const item = { id: 'manual-compaction-1', type: 'contextCompaction' };
+    const maintenanceTurnId = 'turn-maintenance-1';
+    send({ id: message.id, result: {} });
+    send({
+      method: 'turn/started',
+      params: {
+        threadId: message.params.threadId,
+        turn: turn('inProgress', [], null, maintenanceTurnId),
+      },
+    });
+    if (scenario === 'manual-compaction-extra-turn') {
+      send({
+        method: 'turn/started',
+        params: {
+          threadId: message.params.threadId,
+          turn: turn('inProgress', [], null, 'turn-maintenance-unexpected'),
+        },
+      });
+    }
+    send({
+      method: 'item/started',
+      params: {
+        item,
+        startedAtMs: 1,
+        threadId: message.params.threadId,
+        turnId: maintenanceTurnId,
+      },
+    });
+    send({
+      method: 'item/completed',
+      params: {
+        completedAtMs: 2,
+        item,
+        threadId: message.params.threadId,
+        turnId: maintenanceTurnId,
+      },
+    });
+    send({
+      method: 'turn/completed',
+      params: {
+        threadId: message.params.threadId,
+        turn: turn('completed', [item], null, maintenanceTurnId),
+      },
+    });
+    return;
+  }
   if (message.method === 'turn/start') {
     send({ id: message.id, result: { turn: turn('inProgress', []) } });
     send({

@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 through 5 are implemented and Slice 6 has not started
+- Status: In progress; Slices 0 through 6 are implemented and Slice 7 has not started
 - Plan date: 2026-07-30; authority boundary updated 2026-08-01
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -91,7 +91,7 @@ From the user's point of view, M2 should behave plainly:
 | 3 | real isolated Candidate workspace | Implemented | [Slice 3 review](../reviews/m2-slice3-candidate-workspace.md), controlled-copy, lease, freeze, repair, drift, restart, and cleanup tests |
 | 4 | real Verification Runner | Implemented | [Slice 4 review](../reviews/m2-slice4-real-verification.md), runner isolation, v2 Evidence, payload, mutation, and limit tests |
 | 5 | reject, repair, and accept orchestration | Implemented | [Slice 5 review](../reviews/m2-slice5-reject-repair-accept.md), real Candidate/verifier orchestration, compound drift transaction, repair, Acceptance, and reopen tests |
-| 6 | Thread, Compact, interruption, and restart policy | Not started | recovery and protocol-lifecycle tests |
+| 6 | Thread, Compact, interruption, and restart policy | Implemented | [Slice 6 review](../reviews/m2-slice6-thread-compact-restart.md), external lifecycle, fresh repair Context, cancellation, restart, and failed-repair stop tests |
 | 7 | trusted composition, CLI, and live demonstration | Not started | subprocess and bounded live proof |
 | 8 | milestone audit and acceptance harness | Not started | M2 acceptance run and dated review |
 
@@ -105,8 +105,10 @@ independent read-only execution, and Slice 5 proves deterministic
 reject/repair/accept orchestration and Candidate file continuity. Neither
 historical review is reinterpreted as proof of independently fixed
 verification semantics, fresh-Thread failure-context continuity, or the stop
-boundary after a failed repair. Slices 6 through 8 own those additional M2
-proofs.
+boundary after a failed repair. Slice 6 now owns and proves the Thread,
+external-execution, fresh repair-Context, restart, and failed-repair stop
+boundaries; Slices 7 and 8 own protected verification, trusted/live composition,
+and milestone exit.
 
 ## 3. Governing authority
 
@@ -1129,7 +1131,8 @@ Implementation record:
   Evidence, closes through deterministic Acceptance, and leaves the source
   checkout unchanged. The
   [Slice 5 review](../reviews/m2-slice5-reject-repair-accept.md) records exact
-  evidence and limitations. Slice 6 may begin but has not started.
+  evidence and limitations. Slice 6 is implemented; its separate review records
+  the additional external-execution and repair-Context proof.
 
 Slice 5's fresh child Candidate proves file continuity only. Its Context still
 uses the smaller M1 package, and its fixed local Check family does not yet
@@ -1204,6 +1207,17 @@ Exit proof:
   another generation or dispatch; and
 - the proof forbids unauthorized automatic continuation without imposing a
   product-wide maximum number of explicitly authorized repair generations.
+
+Implementation record: the
+[Slice 6 review](../reviews/m2-slice6-thread-compact-restart.md) records the
+exact source identity, focused commands, zero-skip results, documentation
+review, and remaining limitations. In particular, lifecycle authority is
+committed at the live process/session/operation/terminal boundaries rather than
+reconstructed from a final summary; a Runtime-issued launch nonce and exact
+process-group identity gate restart termination; and manual Compact admits one
+exact maintenance Turn plus one matching `contextCompaction` Item before the
+Worker Turn. An ambiguous process or an additional maintenance Turn fails
+closed. Slice 7 may begin; M2 acceptance has not started.
 
 ### Slice 7 — Trusted composition, CLI, and live demonstration
 

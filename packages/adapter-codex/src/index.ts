@@ -24,3 +24,8 @@ export {
   type CodexWorkerDirective,
   type CodexWorkerRequestBinding,
 } from './contracts.js';
+export {
+  CodexExternalProcessReconciler,
+  createCodexExternalProcessReconciler,
+  type CodexExternalProcessReconcilerLimits,
+} from './process-reconciler.js';

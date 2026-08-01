@@ -17,10 +17,11 @@ homes and assert exact terminal, audit, and reopen state. The
 [M1 completion review](docs/reviews/m1-completion-review.md) records the exact
 source identity, environment, quality stages, migration/schema inspection,
 dependency graph, and invariant coverage. Bounded controlled-copy Candidate
-isolation, bounded Darwin local-command verification, and in-process
-reject/repair/accept orchestration are now implemented through M2 Slice 5;
-external-execution recovery and trusted production composition remain later M2
-work. Components marked for later
+isolation, bounded Darwin local-command verification, in-process
+reject/repair/accept orchestration, Runtime-owned external-execution
+persistence, restart reconciliation, and fresh repair Context are now
+implemented through M2 Slice 6. Protected verification, trusted production
+composition, and the live Goal-bound path remain later M2 work. Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
@@ -75,12 +76,26 @@ and the selected local Runtime cannot fall back to the M1 fake-verification
 entry point. Verification Evidence cannot predate its
 authorizing Obligation even under clock rollback. The
 [Slice 5 review](docs/reviews/m2-slice5-reject-repair-accept.md) records its
-focused evidence and limitations. External-execution persistence and recovery
-composition, fresh repair Context, protected acceptance-critical verification,
-failed-repair stop proof, trusted CLI composition, and a live Goal-bound
-execution remain later M2 work. Slice 4 proves independent read-only execution;
-Slice 5 does not retroactively prove that its Check semantics were outside
-Worker mutation authority.
+focused evidence and limitations. Slice 6 is implemented: a protocol-neutral
+Execution Profile extension selects supported backend capabilities and exact
+Thread, continuity, Compact, interruption, fallback, and retention policies;
+Runtime atomically authorizes a Worker dispatch and external execution before
+adapter creation, admits each bounded process/session/operation/terminal
+lifecycle observation when it occurs, and retains a Runtime-issued launch
+nonce plus exact process identity for restart reconciliation. Recovery may
+terminate only the matching owned process group; missing or ambiguous identity
+keeps the Workflow blocked. A repair child
+uses Context Package/Manifest version 3 compiled only from exact current failure
+authority and source-labelled non-authoritative feedback. Retaining or deleting
+the old Thread does not change that projection. A failed bounded repair survives
+reopen and cannot be continued by ordinary Resume, a stale decision, duplicate
+command, or late Worker event. The
+[Slice 6 review](docs/reviews/m2-slice6-thread-compact-restart.md) records its
+focused evidence and limitations. Protected acceptance-critical verification,
+trusted CLI composition, and a live Goal-bound execution remain later M2 work.
+Slice 4 proves independent read-only execution; Slices 5 and 6 do not
+retroactively prove that the Check semantics were outside Worker mutation
+authority.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -437,8 +452,8 @@ authority and independently rechecked by Runtime and Store. `DISCOVERY` and
 port instead of a coding-Worker prompt. See
 [ADR 0016](docs/adr/0016-candidate-and-evidence-authority-boundary.md).
 
-Slice 6 will extend this smaller package for a fresh repair Worker Session and
-Thread. Runtime will compile the exact current `AcceptanceRepairRecord`,
+Slice 6 extends this smaller package for a fresh repair Worker Session and
+Thread. Runtime compiles the exact current `AcceptanceRepairRecord`,
 `REJECT_REPAIRABLE` decision, Acceptance Input Manifest, its exact Evidence
 Set, selected failing Evidence and eligibility snapshots, parent/child
 Candidate identities, and bounded source-labelled
@@ -822,8 +837,9 @@ packages/verification-local
 
 The App Server client, Codex Worker Adapter, local Candidate workspace, and
 local Verification packages are implemented. Slice 5 adds bounded trusted
-cross-package orchestration for the deterministic repair proof. Restart-aware
-external-execution composition and the public live path remain later M2 work.
+cross-package orchestration for the deterministic repair proof. Slice 6 adds
+restart-aware external-execution composition and fresh repair Context through
+the Runtime and Store. The public live path remains later M2 work.
 
 M1 keeps its minimal Context Manifest, Evidence, and Acceptance behavior inside
 `domain` and `runtime`. M1 Slice 6 implements that control without introducing a

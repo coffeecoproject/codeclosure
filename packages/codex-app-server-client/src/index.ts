@@ -33,6 +33,15 @@ export {
   defaultAppServerClientLimits,
   type AppServerClientLimits,
 } from './limits.js';
+export {
+  captureAppServerProcessIdentity,
+  decodeAppServerProcessIdentity,
+  reconcileAppServerProcess,
+  type AppServerProcessGroupKind,
+  type AppServerProcessIdentity,
+  type AppServerProcessReconciliationDisposition,
+  type AppServerProcessReconciliationResult,
+} from './process-ownership.js';
 export type { InitializeParams } from './protocol/InitializeParams.js';
 export type { InitializeResponse } from './protocol/InitializeResponse.js';
 export type { ServerNotification } from './protocol/ServerNotification.js';

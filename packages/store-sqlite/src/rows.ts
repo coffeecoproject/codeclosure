@@ -20,6 +20,10 @@ import {
   decodeEvidenceSet,
   decodeExecutionProfile,
   decodeExecutionProfileBinding,
+  decodeExternalBackendCapabilityRecord,
+  decodeExternalExecutionObservation,
+  decodeExternalExecutionRecord,
+  decodeExternalMaintenanceIntent,
   decodeRecoveryReconciliationRecord,
   decodeCloseoutRecord,
   decodePendingIssue,
@@ -50,6 +54,10 @@ import {
   type EvidenceSet,
   type ExecutionProfile,
   type ExecutionProfileBinding,
+  type ExternalBackendCapabilityRecord,
+  type ExternalExecutionObservation,
+  type ExternalExecutionRecord,
+  type ExternalMaintenanceIntent,
   type RecoveryReconciliationRecord,
   type CloseoutRecord,
   type Goal,
@@ -217,6 +225,9 @@ const contextManifestRowSchema = z.object({
   omission_decisions_json: z.string(),
   package_digest: z.string(),
   manifest_digest: z.string(),
+  logical_schema_version: z.number().int().positive().nullable().optional(),
+  repair_context_digest: z.string().nullable().optional(),
+  prior_attempt_feedback_digest: z.string().nullable().optional(),
 });
 
 const policyBundleRowSchema = z.object({
@@ -236,6 +247,106 @@ const executionProfileRowSchema = z.object({
   canonical_content_json: z.string(),
   profile_digest: z.string(),
   installed_at: z.string(),
+  logical_schema_version: z.number().int().positive().nullable().optional(),
+  capability_record_digest: z.string().nullable().optional(),
+  external_execution_json: z.string().nullable().optional(),
+});
+
+const externalBackendCapabilityRowSchema = z.object({
+  record_digest: z.string(),
+  schema_version: z.literal(1),
+  backend_kind: nonBlankStringSchema,
+  binary_identity_digest: z.string(),
+  protocol_schema_digest: z.string(),
+  configuration_profile_digest: z.string(),
+  capability_entries_json: z.string(),
+  observed_at: z.string(),
+});
+
+const externalExecutionRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.literal(1),
+  version: z.number().int().positive(),
+  state: z.string(),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version_at_authorization: z.number().int().positive(),
+  phase: workflowPhaseSchema,
+  phase_version: z.number().int().positive(),
+  attempt_id: z.string(),
+  worker_session_id: z.string(),
+  dispatch_claim_digest: z.string(),
+  context_manifest_id: z.string(),
+  context_manifest_digest: z.string(),
+  context_package_digest: z.string(),
+  execution_profile_id: z.string(),
+  execution_profile_digest: z.string(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  backend_kind: nonBlankStringSchema,
+  binary_identity_digest: z.string(),
+  binary_protocol_schema_digest: z.string(),
+  execution_config_digest: z.string(),
+  managed_requirements_digest: z.string(),
+  instruction_source_manifest_digest: z.string(),
+  controlled_state_root_identity: nonBlankStringSchema,
+  process_launch_nonce: z.string(),
+  thread_json: z.string(),
+  continuity_policy: z.string(),
+  compaction_policy: z.string(),
+  retention_policy: z.string(),
+  fallback_policy: z.string(),
+  interruption_policy: z.string(),
+  candidate_workspace_lease_id: z.string().nullable(),
+  candidate_workspace_lease_digest: z.string().nullable(),
+  candidate_workspace_cwd_identity: z.string().nullable(),
+  authorized_at: z.string(),
+  intent_digest: z.string(),
+  process_identity_json: z.string().nullable(),
+  backend_session_ref: z.string().nullable(),
+  backend_operation_ref: z.string().nullable(),
+  compaction_count: z.number().int().nonnegative(),
+  turn_interrupt_count: z.number().int().nonnegative(),
+  failure_code: z.string().nullable(),
+  result_event_id: z.string().nullable(),
+  updated_at: z.string(),
+  terminal_at: z.string().nullable(),
+  last_observation_id: z.string().nullable(),
+  audit_sequence: z.number().int().positive(),
+  record_digest: z.string(),
+});
+
+const externalExecutionObservationRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.literal(1),
+  external_execution_id: z.string(),
+  intent_digest: z.string(),
+  expected_record_version: z.number().int().positive(),
+  state: z.string(),
+  process_identity_json: z.string().nullable(),
+  backend_session_ref: z.string().nullable(),
+  backend_operation_ref: z.string().nullable(),
+  compaction_count: z.number().int().nonnegative(),
+  turn_interrupt_count: z.number().int().nonnegative(),
+  failure_code: z.string().nullable(),
+  result_event_id: z.string().nullable(),
+  observed_at: z.string(),
+  observation_digest: z.string(),
+});
+
+const externalMaintenanceIntentRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.literal(1),
+  external_execution_id: z.string(),
+  sequence: z.number().int().positive(),
+  kind: z.string(),
+  state: z.string(),
+  authorized_at: z.string(),
+  observed_at: z.string().nullable(),
+  failure_code: z.string().nullable(),
+  intent_digest: z.string(),
+  record_digest: z.string(),
 });
 
 const executionProfileBindingRowSchema = z.object({
@@ -634,9 +745,19 @@ export function decodeAttempt(row: unknown): Attempt {
 export function decodeContextManifestRow(row: unknown): ContextManifest {
   try {
     const parsed = contextManifestRowSchema.parse(row);
+    const logicalSchemaVersion = parsed.logical_schema_version ?? parsed.schema_version;
+    if (
+      (logicalSchemaVersion === 3) !==
+      (parsed.repair_context_digest !== null &&
+        parsed.repair_context_digest !== undefined &&
+        parsed.prior_attempt_feedback_digest !== null &&
+        parsed.prior_attempt_feedback_digest !== undefined)
+    ) {
+      throw new TypeError('Repair Context Manifest extension is incomplete');
+    }
     return decodeContextManifest({
       id: parsed.id,
-      schemaVersion: parsed.schema_version,
+      schemaVersion: logicalSchemaVersion,
       compilerVersion: parsed.compiler_version,
       createdAt: parsed.created_at,
       goalId: parsed.goal_id,
@@ -655,6 +776,12 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
       policyBundleDigest: parsed.policy_bundle_digest,
       capabilityGrantDigest: parsed.capability_grant_digest,
       responseContractDigest: parsed.response_contract_digest,
+      ...(logicalSchemaVersion !== 3
+        ? {}
+        : {
+            repairContextDigest: parsed.repair_context_digest,
+            priorAttemptFeedbackDigest: parsed.prior_attempt_feedback_digest,
+          }),
       entries: parseJson(parsed.entries_json, 'ContextManifest.entries'),
       omissionDecisions: parseJson(
         parsed.omission_decisions_json,
@@ -733,14 +860,42 @@ export function decodeExecutionProfileRow(row: unknown): InstalledExecutionProfi
     if (!isJsonObject(canonicalContent)) {
       throw new TypeError('Execution Profile canonical content must be an object');
     }
-    const profile: ExecutionProfile = decodeExecutionProfile({
-      ...canonicalContent,
-      digest: parsed.profile_digest,
-    });
+    const logicalSchemaVersion = parsed.logical_schema_version ?? parsed.schema_version;
+    const hasExternalExtension =
+      parsed.external_execution_json !== null && parsed.external_execution_json !== undefined;
+    if (
+      (logicalSchemaVersion === 2) !== hasExternalExtension ||
+      (logicalSchemaVersion === 2) !==
+        (parsed.capability_record_digest !== null && parsed.capability_record_digest !== undefined)
+    ) {
+      throw new TypeError('External Execution Profile extension is incomplete');
+    }
+    let externalExecution: ReturnType<typeof parseJson> | undefined;
+    if (hasExternalExtension) {
+      if (typeof parsed.external_execution_json !== 'string') {
+        throw new TypeError('External Execution Profile content is missing');
+      }
+      externalExecution = parseJson(
+        parsed.external_execution_json,
+        'ExecutionProfile.externalExecution',
+      );
+    }
+    const profile: ExecutionProfile = decodeExecutionProfile(
+      logicalSchemaVersion === 1
+        ? { ...canonicalContent, digest: parsed.profile_digest }
+        : {
+            ...canonicalContent,
+            schemaVersion: 2,
+            externalExecution,
+            digest: parsed.profile_digest,
+          },
+    );
     if (
       profile.id !== parsed.id ||
-      profile.schemaVersion !== parsed.schema_version ||
-      profile.version !== parsed.profile_version
+      profile.schemaVersion !== logicalSchemaVersion ||
+      profile.version !== parsed.profile_version ||
+      (profile.schemaVersion === 2 &&
+        profile.externalExecution.capabilityRecordDigest !== parsed.capability_record_digest)
     ) {
       throw new TypeError('Execution Profile storage columns disagree with canonical content');
     }
@@ -750,6 +905,176 @@ export function decodeExecutionProfileRow(row: unknown): InstalledExecutionProfi
       throw error;
     }
     throw new PersistenceDecodeError('ExecutionProfile', { cause: error });
+  }
+}
+
+export function decodeExternalBackendCapabilityRow(row: unknown): ExternalBackendCapabilityRecord {
+  try {
+    const parsed = externalBackendCapabilityRowSchema.parse(row);
+    return decodeExternalBackendCapabilityRecord({
+      schemaVersion: parsed.schema_version,
+      backendKind: parsed.backend_kind,
+      binaryIdentityDigest: parsed.binary_identity_digest,
+      protocolSchemaDigest: parsed.protocol_schema_digest,
+      configurationProfileDigest: parsed.configuration_profile_digest,
+      capabilityEntries: parseJson(
+        parsed.capability_entries_json,
+        'ExternalBackendCapabilityRecord.capabilityEntries',
+      ),
+      observedAt: parsed.observed_at,
+      recordDigest: parsed.record_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ExternalBackendCapabilityRecord', { cause: error });
+  }
+}
+
+export function decodeExternalExecutionRow(row: unknown): ExternalExecutionRecord {
+  try {
+    const parsed = externalExecutionRowSchema.parse(row);
+    return decodeExternalExecutionRecord({
+      schemaVersion: parsed.schema_version,
+      id: parsed.id,
+      goalId: parsed.goal_id,
+      goalRevision: parsed.goal_revision,
+      workflowId: parsed.workflow_id,
+      workflowVersionAtAuthorization: parsed.workflow_version_at_authorization,
+      phase: parsed.phase,
+      phaseVersion: parsed.phase_version,
+      attemptId: parsed.attempt_id,
+      workerSessionId: parsed.worker_session_id,
+      dispatchClaimDigest: parsed.dispatch_claim_digest,
+      contextManifestId: parsed.context_manifest_id,
+      contextManifestDigest: parsed.context_manifest_digest,
+      contextPackageDigest: parsed.context_package_digest,
+      executionProfileId: parsed.execution_profile_id,
+      executionProfileDigest: parsed.execution_profile_digest,
+      policyBundleId: parsed.policy_bundle_id,
+      policyBundleDigest: parsed.policy_bundle_digest,
+      backendKind: parsed.backend_kind,
+      binaryIdentityDigest: parsed.binary_identity_digest,
+      binaryProtocolSchemaDigest: parsed.binary_protocol_schema_digest,
+      executionConfigDigest: parsed.execution_config_digest,
+      managedRequirementsDigest: parsed.managed_requirements_digest,
+      instructionSourceManifestDigest: parsed.instruction_source_manifest_digest,
+      controlledStateRootIdentity: parsed.controlled_state_root_identity,
+      processLaunchNonce: parsed.process_launch_nonce,
+      thread: parseJson(parsed.thread_json, 'ExternalExecution.thread'),
+      continuityPolicy: parsed.continuity_policy,
+      compactionPolicy: parsed.compaction_policy,
+      retentionPolicy: parsed.retention_policy,
+      fallbackPolicy: parsed.fallback_policy,
+      interruptionPolicy: parsed.interruption_policy,
+      ...(parsed.candidate_workspace_lease_id === null
+        ? {}
+        : { candidateWorkspaceLeaseId: parsed.candidate_workspace_lease_id }),
+      ...(parsed.candidate_workspace_lease_digest === null
+        ? {}
+        : { candidateWorkspaceLeaseDigest: parsed.candidate_workspace_lease_digest }),
+      ...(parsed.candidate_workspace_cwd_identity === null
+        ? {}
+        : { candidateWorkspaceCwdIdentity: parsed.candidate_workspace_cwd_identity }),
+      authorizedAt: parsed.authorized_at,
+      intentDigest: parsed.intent_digest,
+      version: parsed.version,
+      state: parsed.state,
+      ...(parsed.process_identity_json === null
+        ? {}
+        : {
+            processIdentity: parseJson(
+              parsed.process_identity_json,
+              'ExternalExecution.processIdentity',
+            ),
+          }),
+      ...(parsed.backend_session_ref === null
+        ? {}
+        : { backendSessionRef: parsed.backend_session_ref }),
+      ...(parsed.backend_operation_ref === null
+        ? {}
+        : { backendOperationRef: parsed.backend_operation_ref }),
+      compactionCount: parsed.compaction_count,
+      turnInterruptCount: parsed.turn_interrupt_count,
+      ...(parsed.failure_code === null ? {} : { failureCode: parsed.failure_code }),
+      ...(parsed.result_event_id === null ? {} : { resultEventId: parsed.result_event_id }),
+      updatedAt: parsed.updated_at,
+      ...(parsed.terminal_at === null ? {} : { terminalAt: parsed.terminal_at }),
+      ...(parsed.last_observation_id === null
+        ? {}
+        : { lastObservationId: parsed.last_observation_id }),
+      auditSequence: parsed.audit_sequence,
+      recordDigest: parsed.record_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ExternalExecutionRecord', { cause: error });
+  }
+}
+
+export function decodeExternalExecutionObservationRow(row: unknown): ExternalExecutionObservation {
+  try {
+    const parsed = externalExecutionObservationRowSchema.parse(row);
+    return decodeExternalExecutionObservation({
+      schemaVersion: parsed.schema_version,
+      id: parsed.id,
+      externalExecutionId: parsed.external_execution_id,
+      intentDigest: parsed.intent_digest,
+      expectedRecordVersion: parsed.expected_record_version,
+      state: parsed.state,
+      ...(parsed.process_identity_json === null
+        ? {}
+        : {
+            processIdentity: parseJson(
+              parsed.process_identity_json,
+              'ExternalExecutionObservation.processIdentity',
+            ),
+          }),
+      ...(parsed.backend_session_ref === null
+        ? {}
+        : { backendSessionRef: parsed.backend_session_ref }),
+      ...(parsed.backend_operation_ref === null
+        ? {}
+        : { backendOperationRef: parsed.backend_operation_ref }),
+      compactionCount: parsed.compaction_count,
+      turnInterruptCount: parsed.turn_interrupt_count,
+      ...(parsed.failure_code === null ? {} : { failureCode: parsed.failure_code }),
+      ...(parsed.result_event_id === null ? {} : { resultEventId: parsed.result_event_id }),
+      observedAt: parsed.observed_at,
+      observationDigest: parsed.observation_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ExternalExecutionObservation', { cause: error });
+  }
+}
+
+export function decodeExternalMaintenanceIntentRow(row: unknown): ExternalMaintenanceIntent {
+  try {
+    const parsed = externalMaintenanceIntentRowSchema.parse(row);
+    return decodeExternalMaintenanceIntent({
+      schemaVersion: parsed.schema_version,
+      id: parsed.id,
+      externalExecutionId: parsed.external_execution_id,
+      sequence: parsed.sequence,
+      kind: parsed.kind,
+      state: parsed.state,
+      authorizedAt: parsed.authorized_at,
+      ...(parsed.observed_at === null ? {} : { observedAt: parsed.observed_at }),
+      ...(parsed.failure_code === null ? {} : { failureCode: parsed.failure_code }),
+      intentDigest: parsed.intent_digest,
+      recordDigest: parsed.record_digest,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ExternalMaintenanceIntent', { cause: error });
   }
 }
 

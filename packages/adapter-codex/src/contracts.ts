@@ -10,6 +10,7 @@ import {
   canonicalizeJson,
   decodeCandidateWorkspaceLease as decodeRuntimeCandidateWorkspaceLease,
   decodeWorkerRequest,
+  type ExternalWorkerFailureCode,
   type WorkerRequest,
 } from '@codeclosure/runtime';
 
@@ -34,24 +35,7 @@ export const CODEX_WORKER_PROMPT_TEMPLATE_DIGEST = digestCanonical({
   template: developerInstructionTemplate,
 });
 
-export type CodexAdapterFailureCode =
-  | 'ADAPTER_REUSED'
-  | 'BACKEND_TURN_FAILED'
-  | 'CLEAN_SHUTDOWN_FAILED'
-  | 'CLIENT_FAILURE'
-  | 'COMPACTION_POLICY_VIOLATION'
-  | 'DECLINED_APPROVAL_REQUEST'
-  | 'EFFECTIVE_INPUT_MISMATCH'
-  | 'HOST_CANCELLED'
-  | 'INVALID_DIRECTIVE'
-  | 'INVALID_REQUEST_BINDING'
-  | 'INVALID_TERMINAL_PAYLOAD'
-  | 'INVALID_WORKSPACE_LEASE'
-  | 'NO_TERMINAL_PAYLOAD'
-  | 'THREAD_BINDING_MISMATCH'
-  | 'TURN_BINDING_MISMATCH'
-  | 'UNSUPPORTED_BACKEND_ACTIVITY'
-  | 'UNSUPPORTED_PHASE';
+export type CodexAdapterFailureCode = ExternalWorkerFailureCode;
 
 export interface CodexWorkerRequestBinding {
   readonly attemptId: string;
@@ -120,7 +104,7 @@ export interface CodexExecutionProfileDirective {
   readonly approvalPolicy: 'never';
   readonly approvalsReviewer: 'user';
   readonly codexVersion: string;
-  readonly compactionPolicy: 'FAIL_ON_OBSERVATION';
+  readonly compactionPolicy: 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION';
   readonly configReadDigest: string;
   readonly controlledStateRootIdentity: string;
   readonly delegatedExecutableDigest: string;
@@ -151,6 +135,7 @@ export interface CodexExecutionProfileDirective {
 
 export interface CodexWorkerDirective {
   readonly externalExecutionIntentDigest: string;
+  readonly processLaunchNonce: string;
   readonly profile: CodexExecutionProfileDirective;
   readonly request: CodexWorkerRequestBinding;
   readonly schemaVersion: 1;
@@ -528,6 +513,13 @@ function decodeProfile(value: unknown): CodexExecutionProfileDirective {
   if (JSON.stringify(disabledIntegrations) !== JSON.stringify(requiredDisabled)) {
     throw new TypeError('profile disabled integrations do not match the bounded M2 set');
   }
+  const compactionPolicy = input['compactionPolicy'];
+  if (
+    compactionPolicy !== 'FAIL_ON_OBSERVATION' &&
+    compactionPolicy !== 'MANUAL_BEFORE_OPERATION'
+  ) {
+    throw new TypeError('profile.compactionPolicy is unsupported');
+  }
   return Object.freeze({
     approvalPolicy: exactLiteral(input['approvalPolicy'], 'never', 'profile.approvalPolicy'),
     approvalsReviewer: exactLiteral(
@@ -536,11 +528,7 @@ function decodeProfile(value: unknown): CodexExecutionProfileDirective {
       'profile.approvalsReviewer',
     ),
     codexVersion: nonBlankString(input['codexVersion'], 'profile.codexVersion'),
-    compactionPolicy: exactLiteral(
-      input['compactionPolicy'],
-      'FAIL_ON_OBSERVATION',
-      'profile.compactionPolicy',
-    ),
+    compactionPolicy,
     configReadDigest: digest(input['configReadDigest'], 'profile.configReadDigest'),
     controlledStateRootIdentity: absoluteRealDirectory(
       input['controlledStateRootIdentity'],
@@ -609,7 +597,14 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
   const input = object(value, 'Codex Worker directive');
   exactKeys(
     input,
-    ['externalExecutionIntentDigest', 'profile', 'request', 'schemaVersion', 'workspaceLease'],
+    [
+      'externalExecutionIntentDigest',
+      'processLaunchNonce',
+      'profile',
+      'request',
+      'schemaVersion',
+      'workspaceLease',
+    ],
     'Codex Worker directive',
   );
   const directive = Object.freeze({
@@ -617,6 +612,7 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
       input['externalExecutionIntentDigest'],
       'externalExecutionIntentDigest',
     ),
+    processLaunchNonce: digest(input['processLaunchNonce'], 'processLaunchNonce'),
     profile: decodeProfile(input['profile']),
     request: decodeRequestBinding(input['request']),
     schemaVersion: exactLiteral(input['schemaVersion'], 1, 'directive.schemaVersion'),
@@ -645,6 +641,7 @@ export function codexExternalExecutionIntentProjection(
   directive: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'>,
 ): unknown {
   return {
+    processLaunchNonce: directive.processLaunchNonce,
     profile: directive.profile,
     request: directive.request,
     schemaVersion: directive.schemaVersion,

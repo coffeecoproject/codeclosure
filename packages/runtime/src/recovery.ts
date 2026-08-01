@@ -16,6 +16,8 @@ import {
   decodeCandidateGeneration,
   decodeContextManifest,
   decodeExecutionProfileBinding,
+  decodeExternalExecutionRecord,
+  decodeExternalMaintenanceIntent,
   decodeGoalSnapshot,
   decodeRecoveryReconciliationRecord,
   decodeWorkflowPolicyBinding,
@@ -23,6 +25,7 @@ import {
   decideAttempt,
   deriveGoalStatus,
   executionProfileBindingProjection,
+  externalProcessIdentityProjection,
   goalId,
   goalRevision,
   isoTimestamp,
@@ -69,9 +72,13 @@ import type {
   RecoveryCatalogEntry,
   RecoveryControlStore,
   RecoveryIdentityGenerator,
+  ExternalProcessReconciler,
   StoreCommandResult,
 } from './ports.js';
-import { RecoverableBlockerKind } from './ports.js';
+import {
+  ExternalProcessReconciliationDisposition as RuntimeExternalProcessReconciliationDisposition,
+  RecoverableBlockerKind,
+} from './ports.js';
 import {
   RecoveryInspectionAvailability,
   RecoveryInspectionReasonCode,
@@ -122,12 +129,23 @@ const recoveryCatalogSchema = z
     policyBinding: z.unknown(),
     executionProfileBinding: z.unknown(),
     dispatchClaim: z.unknown().optional(),
+    externalExecution: z.unknown().optional(),
+    externalMaintenance: z.unknown().optional(),
     candidateAuthority: z
       .object({ candidate: z.unknown(), generation: z.unknown(), workflowId: z.string() })
       .strict()
       .optional(),
     lastAuditSequence: z.number().int().positive(),
     latestReconciliation: z.unknown().optional(),
+  })
+  .strict();
+
+const externalProcessReconciliationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    processIdentityDigest: z.string(),
+    disposition: z.enum(Object.values(RuntimeExternalProcessReconciliationDisposition)),
+    observationRef: z.string().min(1).max(16_384),
   })
   .strict();
 
@@ -164,6 +182,7 @@ export interface RecoveryCoordinatorDependencies {
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly inspector: RecoveryInspector;
+  readonly externalProcessReconciler?: ExternalProcessReconciler;
   readonly inspectorVersion: string;
   readonly recoveryPolicyVersion: string;
 }
@@ -279,6 +298,14 @@ function decodeRecoveryCatalog(value: unknown, digests: DigestProvider): Decoded
     parsed.dispatchClaim === undefined
       ? undefined
       : decodeWorkerDispatchClaim(parsed.dispatchClaim);
+  const externalExecution =
+    parsed.externalExecution === undefined
+      ? undefined
+      : decodeExternalExecutionRecord(parsed.externalExecution);
+  const externalMaintenance =
+    parsed.externalMaintenance === undefined
+      ? undefined
+      : decodeExternalMaintenanceIntent(parsed.externalMaintenance);
   const candidateAuthority =
     parsed.candidateAuthority === undefined
       ? undefined
@@ -299,6 +326,8 @@ function decodeRecoveryCatalog(value: unknown, digests: DigestProvider): Decoded
     policyBinding,
     executionProfileBinding,
     ...(dispatchClaim === undefined ? {} : { dispatchClaim }),
+    ...(externalExecution === undefined ? {} : { externalExecution }),
+    ...(externalMaintenance === undefined ? {} : { externalMaintenance }),
     ...(candidateAuthority === undefined ? {} : { candidateAuthority }),
     lastAuditSequence: parsed.lastAuditSequence,
     ...(latestReconciliation === undefined ? {} : { latestReconciliation }),
@@ -340,6 +369,15 @@ function decodeRecoveryCatalog(value: unknown, digests: DigestProvider): Decoded
         dispatchClaim.workflowId !== owner.workflow.id ||
         dispatchClaim.executionProfileId !== executionProfileBinding.profileId ||
         dispatchClaim.executionProfileDigest !== executionProfileBinding.profileDigest)) ||
+    (externalExecution !== undefined &&
+      (dispatchClaim === undefined ||
+        externalExecution.attemptId !== sourceAttempt.id ||
+        externalExecution.workflowId !== owner.workflow.id ||
+        externalExecution.goalId !== owner.goal.id ||
+        externalExecution.dispatchClaimDigest !==
+          sha256Digest(digests.digest(workerDispatchClaimProjection(dispatchClaim))))) ||
+    (externalMaintenance !== undefined &&
+      externalExecution?.id !== externalMaintenance.externalExecutionId) ||
     (latestReconciliation !== undefined &&
       (latestReconciliation.workflowId !== owner.workflow.id ||
         latestReconciliation.goalId !== owner.goal.id ||
@@ -402,6 +440,7 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
   readonly #policyBundleId: PolicyBundleId;
   readonly #policyBundleDigest: Sha256Digest;
   readonly #inspector: RecoveryInspector;
+  readonly #externalProcessReconciler: ExternalProcessReconciler | undefined;
   readonly #inspectorVersion: string;
   readonly #recoveryPolicyVersion: string;
 
@@ -419,6 +458,7 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
     this.#policyBundleId = policyBundleId(dependencies.policyBundleId);
     this.#policyBundleDigest = sha256Digest(dependencies.policyBundleDigest);
     this.#inspector = dependencies.inspector;
+    this.#externalProcessReconciler = dependencies.externalProcessReconciler;
     this.#inspectorVersion = dependencies.inspectorVersion;
     this.#recoveryPolicyVersion = dependencies.recoveryPolicyVersion;
   }
@@ -479,7 +519,17 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
       const auditIdentifier = auditEventId(this.#ids.nextAuditEventId());
       const workflowAuditIdentifier = auditEventId(this.#ids.nextAuditEventId());
       const recoveryAuditIdentifier = auditEventId(this.#ids.nextAuditEventId());
-      if (new Set([auditIdentifier, workflowAuditIdentifier, recoveryAuditIdentifier]).size !== 3) {
+      const externalExecutionAuditIdentifier = auditEventId(this.#ids.nextAuditEventId());
+      const externalMaintenanceAuditIdentifier = auditEventId(this.#ids.nextAuditEventId());
+      if (
+        new Set([
+          auditIdentifier,
+          workflowAuditIdentifier,
+          recoveryAuditIdentifier,
+          externalExecutionAuditIdentifier,
+          externalMaintenanceAuditIdentifier,
+        ]).size !== 5
+      ) {
         throw new TypeError('Startup recovery requires distinct Audit identities');
       }
       const rawResult = this.#store.commitStartupRecovery({
@@ -491,6 +541,8 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         payloadDigest: sha256Digest(this.#digests.digest(event)),
         recovery,
         recoveryAuditEventId: recoveryAuditIdentifier,
+        externalExecutionAuditEventId: externalExecutionAuditIdentifier,
+        externalMaintenanceAuditEventId: externalMaintenanceAuditIdentifier,
       });
       const result = decodeStoreCommandResult(rawResult);
       if (result.status !== 'APPLIED') {
@@ -737,14 +789,34 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
       executionProfileId: catalog.executionProfileBinding.profileId,
       executionProfileDigest: catalog.executionProfileBinding.profileDigest,
     });
+    const processReconciliation = this.reconcileExternalProcess(catalog);
     const inspection = this.inspectClosed(request);
-    const disposition = this.decideDisposition(request, inspection);
+    const inspectedDisposition = this.decideDisposition(request, inspection);
+    const disposition =
+      processReconciliation?.safe === false
+        ? Object.freeze({
+            disposition: RecoveryReconciliationDisposition.BLOCKED,
+            reasonCode: processReconciliation.reasonCode,
+            ...(inspectedDisposition.observedCandidateDigest === undefined
+              ? {}
+              : { observedCandidateDigest: inspectedDisposition.observedCandidateDigest }),
+          })
+        : inspectedDisposition;
     const inspectedAt = latestIsoTimestamp(
       isoTimestamp(this.#clock.now()),
       catalog.workflow.updatedAt,
       catalog.sourceAttempt.startedAt,
       ...(catalog.sourceAttempt.endedAt === undefined ? [] : [catalog.sourceAttempt.endedAt]),
       ...(catalog.dispatchClaim === undefined ? [] : [catalog.dispatchClaim.claimedAt]),
+      ...(catalog.externalExecution === undefined ? [] : [catalog.externalExecution.updatedAt]),
+      ...(catalog.externalMaintenance === undefined
+        ? []
+        : [
+            catalog.externalMaintenance.authorizedAt,
+            ...(catalog.externalMaintenance.observedAt === undefined
+              ? []
+              : [catalog.externalMaintenance.observedAt]),
+          ]),
     );
     const semantic = Object.freeze({
       id: recoveryReconciliationId(this.#ids.nextRecoveryReconciliationId()),
@@ -786,7 +858,12 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         ? {}
         : { safeResumePhase: catalog.workflow.phase }),
       reasonCode: disposition.reasonCode,
-      observationRefs: inspection.observationRefs,
+      observationRefs: Object.freeze([
+        ...new Set([
+          ...inspection.observationRefs,
+          ...(processReconciliation === undefined ? [] : [processReconciliation.observationRef]),
+        ]),
+      ]),
       inspectorVersion: this.#inspectorVersion,
       recoveryPolicyVersion: this.#recoveryPolicyVersion,
       inspectedAt,
@@ -808,6 +885,74 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         'Recovery Workflow Policy binding is incompatible with trusted Runtime composition',
       );
     }
+  }
+
+  private reconcileExternalProcess(catalog: DecodedRecoveryCatalog):
+    | Readonly<{
+        safe: boolean;
+        reasonCode: RecoveryReasonCode;
+        observationRef: string;
+      }>
+    | undefined {
+    const identity = catalog.externalExecution?.processIdentity;
+    if (identity === undefined) {
+      return undefined;
+    }
+    const expectedIdentityDigest = sha256Digest(
+      this.#digests.digest(externalProcessIdentityProjection(identity)),
+    );
+    if (identity.identityDigest !== expectedIdentityDigest) {
+      return Object.freeze({
+        safe: false,
+        reasonCode: RecoveryReasonCode.INSPECTOR_FAILURE,
+        observationRef: `external-process:${identity.identityDigest}:invalid-identity-digest`,
+      });
+    }
+    let rawResult: unknown;
+    try {
+      rawResult = this.#externalProcessReconciler?.reconcile(identity) ?? {
+        schemaVersion: 1,
+        processIdentityDigest: identity.identityDigest,
+        disposition: RuntimeExternalProcessReconciliationDisposition.UNAVAILABLE,
+        observationRef: `external-process:${identity.identityDigest}:reconciler-unavailable`,
+      };
+    } catch {
+      rawResult = {
+        schemaVersion: 1,
+        processIdentityDigest: identity.identityDigest,
+        disposition: RuntimeExternalProcessReconciliationDisposition.UNAVAILABLE,
+        observationRef: `external-process:${identity.identityDigest}:reconciler-failure`,
+      };
+    }
+    let result: z.infer<typeof externalProcessReconciliationSchema>;
+    try {
+      result = externalProcessReconciliationSchema.parse(rawResult);
+    } catch {
+      return Object.freeze({
+        safe: false,
+        reasonCode: RecoveryReasonCode.INSPECTOR_FAILURE,
+        observationRef: `external-process:${identity.identityDigest}:malformed-reconciliation`,
+      });
+    }
+    if (result.processIdentityDigest !== identity.identityDigest) {
+      return Object.freeze({
+        safe: false,
+        reasonCode: RecoveryReasonCode.INSPECTOR_FAILURE,
+        observationRef: result.observationRef,
+      });
+    }
+    const safe =
+      result.disposition === RuntimeExternalProcessReconciliationDisposition.ABSENT ||
+      result.disposition === RuntimeExternalProcessReconciliationDisposition.TERMINATED;
+    return Object.freeze({
+      safe,
+      reasonCode: safe
+        ? RecoveryReasonCode.EXACT_AUTHORITY_MATCH
+        : result.disposition === RuntimeExternalProcessReconciliationDisposition.UNAVAILABLE
+          ? RecoveryReasonCode.INSPECTION_UNAVAILABLE
+          : RecoveryReasonCode.INSPECTOR_FAILURE,
+      observationRef: result.observationRef,
+    });
   }
 
   private inspectClosed(request: RecoveryInspectionRequest): RecoveryInspectionResult {
