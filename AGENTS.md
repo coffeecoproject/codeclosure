@@ -34,29 +34,33 @@ Record a new ADR when a durable architectural decision changes.
 
 ## Current Milestone Boundary
 
-The M0 architecture baseline and the bounded M1 deterministic skeleton are
-complete. M1's `FakeWorker` control plane, authority boundaries, and acceptance
-evidence are the regression baseline and MUST remain valid.
+The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
+M2 Codex Vertical Slice are complete. M1's `FakeWorker` control plane and M2's
+version-bound real-Codex path, authority boundaries, and acceptance evidence
+are the regression baseline and MUST remain valid.
 
-M2 — Codex Vertical Slice — is the current milestone boundary. Its planned
-implementation will replace `FakeWorker` for selected phases with a direct
-Codex App Server adapter while preserving the M1 domain, Workflow, persistence,
-Candidate, Evidence, and Acceptance authority boundaries. Codex protocol types
-MUST NOT leak into the domain or Workflow Runtime, and Codex Thread, Turn,
-process, or model output MUST NOT become Goal, Workflow, Acceptance, or
-closeout authority.
+M2 preserves the M1 domain, Workflow, persistence, Candidate, Evidence, and
+Acceptance authority boundaries while selecting a direct Codex App Server
+adapter for bounded execution. Codex protocol types MUST NOT leak into the
+Domain or Workflow Runtime, and Codex Thread, Turn, process, or model output
+MUST NOT become Goal, Workflow, Acceptance, or closeout authority. A correct
+first-pass Codex edit MUST NOT be forced through an artificial failure merely
+to exercise repair.
 
-M2 must prove a deterministic real-Candidate and real-verifier reject, repair,
-and accept path without bypassing M1 guards, plus a separate bounded live Codex
-path whose first post-edit verification result is not prescribed. A correct
-first-pass Codex edit MUST NOT be forced through an artificial failure merely to
-exercise repair. Do not expand M2 into a rich TUI, multiple agents, cloud or
-multi-user execution, full Fact Graph traversal, or release and deployment
-authority.
+The next milestone boundary is M2.5 — Goal Intake and Materialization. Its
+implementation has not started and requires its own detailed implementation
+plan before code changes begin. Goal Intake MUST remain separate from the
+Goal-bound WorkerPort and MUST NOT reinterpret the completed M2 execution path
+as intent, Goal, Start, or Admission authority. Do not expand M2.5 into a rich
+TUI, multiple agents, cloud or multi-user execution, full Fact Graph traversal,
+or release and deployment authority.
 
-M2 implementation follows `docs/plans/m2-codex-vertical-slice.md` and its exit
-claim follows `docs/plans/m2-acceptance-plan.md`. Goal Intake is not M2 scope;
-M2.5 implementation MUST NOT begin until the independent M2 exit review passes.
+The completed M2 implementation and exit evidence remain in
+`docs/plans/m2-codex-vertical-slice.md`,
+`docs/plans/m2-acceptance-plan.md`, and
+`docs/reviews/m2-completion-review.md`. M2.5 implementation MUST NOT begin until
+the independent M2 exit review passes; that gate passed on 2026-08-02, but this
+status transition does not itself begin M2.5 implementation.
 
 ## Engineering Rules
 

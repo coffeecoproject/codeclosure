@@ -39,6 +39,7 @@ async function runProtected(
     audit: proof.audit,
     finalDrive: proof.finalDrive,
     m2: Object.freeze({
+      acceptanceTrace: proof.acceptanceTrace,
       branch: proof.mode,
       evidence: proof.evidence,
       generationCount: proof.generationCount,
@@ -91,6 +92,7 @@ async function runAdapterFailure(): Promise<CliDemoResult> {
     audit: proof.audit,
     finalDrive: proof.finalDrive,
     m2: Object.freeze({
+      acceptanceTrace: proof.acceptanceTrace,
       branch: 'ADAPTER_FAILURE',
       evidence: Object.freeze([]),
       generationCount: 1,
@@ -180,6 +182,7 @@ function cliRuntimeStopDiagnostic(
 
 function liveM2Detail(proof: M2LiveDemoProof): CliM2DemoDetail {
   return Object.freeze({
+    acceptanceTrace: proof.acceptanceTrace,
     branch: proof.branch,
     evidence: proof.evidence,
     generationCount: proof.generationCount,

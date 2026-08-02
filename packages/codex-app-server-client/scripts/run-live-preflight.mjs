@@ -78,6 +78,8 @@ check_for_update_on_startup = false
 allow_login_shell = false
 cli_auth_credentials_store = "file"
 sqlite_home = ${JSON.stringify(stateRoot)}
+include_apps_instructions = false
+include_collaboration_mode_instructions = false
 
 [analytics]
 enabled = false
@@ -102,9 +104,25 @@ goals = false
 hooks = false
 memories = false
 multi_agent = false
+multi_agent_v2 = false
 personality = false
+plugins = false
 remote_plugin = false
 skill_mcp_dependency_install = false
+skill_search = false
+tool_suggest = false
+
+[orchestrator.mcp]
+enabled = false
+
+[orchestrator.skills]
+enabled = false
+
+[skills]
+include_instructions = false
+
+[skills.bundled]
+enabled = false
 
 [shell_environment_policy]
 inherit = "none"
@@ -323,6 +341,10 @@ try {
       clientInfo: { name: 'codeclosure_m2', title: 'CodeClosure M2', version: '0.0.0' },
     },
     launch,
+    launchNonce: diagnosticDigest(
+      { profile: 'm2-slice1-live-client', workspace: realpathSync(workspace) },
+      'm2-slice1-live-launch-nonce-v1',
+    ),
     onNotification: (notification) => recordTerminalTurn(terminalState, notification),
   });
   const requirements = await client.request('configRequirements/read', undefined, (value) =>

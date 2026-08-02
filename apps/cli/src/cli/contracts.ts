@@ -165,7 +165,148 @@ export interface CliGoalAuditEnvelope {
   readonly result: GoalReadResult<GoalAuditView>;
 }
 
+export interface CliM2AcceptanceTrace {
+  readonly schemaVersion: 1;
+  readonly plan: Readonly<{
+    id: string;
+    digest: string;
+    workflowVersionAtLock: number;
+    criterionIds: readonly string[];
+    acceptanceRuleIds: readonly string[];
+    protectedAssetManifestDigest: string;
+    protectedAssets: readonly Readonly<{
+      logicalAssetId: string;
+      executionPath: string;
+      contentDigest: string;
+      byteLength: number;
+      protectionMode: string;
+    }>[];
+    semanticCheck: Readonly<{
+      version: string;
+      executableDigest: string;
+      isolationProfileId: string;
+      isolationProfileDigest: string;
+    }>;
+  }>;
+  readonly dispatches: readonly Readonly<{
+    attemptId: string;
+    workerSessionId: string;
+    contextManifestId: string;
+    contextManifestDigest: string;
+    contextPackageDigest: string;
+    candidateGenerationId?: string;
+    candidateDigest?: string;
+    repairContextDigest?: string;
+    priorAttemptFeedbackDigest?: string;
+    contextSources: readonly Readonly<{
+      kind: string;
+      sourceRef: string;
+      sourceRevision: string;
+      sourceDigest?: string;
+      authorityClass: string;
+      renderedDigest: string;
+    }>[];
+    repair?: Readonly<{
+      acceptanceRepairDigest: string;
+      acceptanceDecisionId: string;
+      acceptanceDecisionDigest: string;
+      evidenceSetDigest: string;
+      rejectedCandidateGenerationId: string;
+      rejectedCandidateDigest: string;
+      repairCandidateGenerationId: string;
+      parentChangeSetDigest: string;
+      failedEvidence: readonly Readonly<{
+        evidenceId: string;
+        evidenceRecordDigest: string;
+        verificationObligationId: string;
+        checkSpecificationId: string;
+        checkSpecificationDigest: string;
+      }>[];
+      constraintsToPreserve: readonly Readonly<{
+        kind: string;
+        sourceRef: string;
+        sourceDigest: string;
+      }>[];
+    }>;
+    priorAttemptFeedback?: Readonly<{
+      digest: string;
+      itemKinds: readonly string[];
+      sourceRefs: readonly string[];
+      sourceDigests: readonly string[];
+    }>;
+  }>[];
+  readonly verification: readonly Readonly<{
+    candidateGenerationId: string;
+    candidateDigest: string;
+    attemptId: string;
+    verificationObligationId: string;
+    checkId: string;
+    checkVersion: string;
+    checkDigest: string;
+    protectedAssetReadLeaseDigest: string;
+    isolationProfileId: string;
+    isolationProfileDigest: string;
+    environmentDigest: string;
+    evidenceId: string;
+    evidenceDigest: string;
+    result: 'FAIL' | 'PASS';
+  }>[];
+  readonly externalExecutions: readonly Readonly<{
+    id: string;
+    attemptId: string;
+    workerSessionId: string;
+    contextManifestId: string;
+    state: string;
+    backendSessionRef?: string;
+    backendOperationRef?: string;
+    controlledStateRootIdentity: string;
+    binaryIdentityDigest: string;
+    protocolSchemaDigest: string;
+    executionConfigDigest: string;
+    managedRequirementsDigest: string;
+    instructionSourceManifestDigest: string;
+    compactionCount: number;
+    turnInterruptCount: number;
+    intentDigest: string;
+    recordDigest: string;
+  }>[];
+  readonly repair?: Readonly<{
+    acceptanceDecisionId: string;
+    acceptanceDecisionDigest: string;
+    inputManifestDigest: string;
+    rejectedCandidateGenerationId: string;
+    rejectedCandidateDigest: string;
+    repairCandidateGenerationId: string;
+    repairCandidateSequence: number;
+    repairCandidateBaseDigest: string;
+    verificationCheckId: string;
+    verificationObligationIds: readonly string[];
+    evidenceSetDigest: string;
+    repairDigest: string;
+  }>;
+  readonly acceptance?: Readonly<{
+    decisionId: string;
+    decisionDigest: string;
+    outcome: string;
+    dominantReasonCode: string;
+    inputManifestDigest: string;
+    evidenceSetDigest: string;
+    candidateGenerationId: string;
+    candidateDigest: string;
+    closeout?: Readonly<{
+      acceptanceDecisionId: string;
+      acceptanceDecisionDigest: string;
+      inputManifestDigest: string;
+      candidateGenerationId: string;
+      candidateDigest: string;
+      evidenceSetDigest: string;
+      closedAt: string;
+    }>;
+  }>;
+}
+
 export interface CliM2DemoDetail {
+  readonly acceptanceTrace: CliM2AcceptanceTrace;
   readonly branch:
     | 'REPAIR_ACCEPTED'
     | 'REPAIR_FAILED_STOP'

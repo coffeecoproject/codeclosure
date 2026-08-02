@@ -626,6 +626,27 @@ void test('[M2 Slice 7] protected repair, bounded failed repair, and real adapte
       assert.equal(typeof field(item, 'candidateGenerationId'), 'string');
       assert.equal(typeof field(item, 'checkId'), 'string');
     }
+    const acceptanceTrace = field(m2, 'acceptanceTrace');
+    assert.equal(field(acceptanceTrace, 'schemaVersion'), 1);
+    const tracedPlan = field(acceptanceTrace, 'plan');
+    assert.equal(field(tracedPlan, 'id'), field(m2, 'planId'));
+    assert.equal(field(tracedPlan, 'digest'), field(m2, 'planDigest'));
+    assert.match(
+      String(field(tracedPlan, 'protectedAssetManifestDigest')),
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    const tracedAssets = field(tracedPlan, 'protectedAssets');
+    const tracedVerification = field(acceptanceTrace, 'verification');
+    const tracedExternalExecutions = field(acceptanceTrace, 'externalExecutions');
+    const tracedDispatches = field(acceptanceTrace, 'dispatches');
+    assert.ok(Array.isArray(tracedAssets));
+    assert.ok(Array.isArray(tracedVerification));
+    assert.ok(Array.isArray(tracedExternalExecutions));
+    assert.ok(Array.isArray(tracedDispatches));
+    assert.equal(tracedAssets.length, 1);
+    assert.equal(tracedVerification.length, expected.evidence.length);
+    assert.equal(tracedExternalExecutions.length, expected.branch === 'ADAPTER_FAILURE' ? 1 : 0);
+    assert.equal(tracedDispatches.length, expected.branch === 'ADAPTER_FAILURE' ? 1 : 2);
     if (expected.branch === 'ADAPTER_FAILURE') {
       assert.equal(field(m2, 'externalExecutionCount'), 1);
       assert.equal(field(m2, 'externalFailureCode'), 'EFFECTIVE_INPUT_MISMATCH');
@@ -856,6 +877,7 @@ void test('[M2 Slice 7] a governed live blocker retains only its closed external
 void test('[M2 Slice 7] a failed live repair remains a structured auditable stop', async () => {
   const deterministic = await runM2ProtectedDemoProof('REPAIR_FAILED_STOP');
   const liveProof: M2LiveDemoProof = Object.freeze({
+    acceptanceTrace: deterministic.acceptanceTrace,
     audit: deterministic.audit,
     branch: 'LIVE_REPAIR_HANDOFF_FAILED_STOP',
     evidence: deterministic.evidence,

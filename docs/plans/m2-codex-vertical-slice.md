@@ -1,6 +1,7 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 through 7 are implemented and Slice 8 has not started
+- Status: Complete; Slices 0 through 8 and the independent M2 exit review passed
+  on 2026-08-02
 - Plan date: 2026-07-30; authority boundary updated 2026-08-01
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -1283,7 +1284,8 @@ path followed its natural first verification result and closed from a
 first-pass `PASS`; the repair-handoff path began with a controlled failed
 parent, dispatched Codex only to the fresh repair child, and closed from fresh
 passing Evidence. Both paths retained source-checkout isolation and strict
-SQLite reopen equality. Slice 8 milestone acceptance has not started.
+SQLite reopen equality. Slice 8 later completed the canonical milestone
+acceptance procedure and independent exit review.
 
 ### Slice 8 — Milestone audit and acceptance harness
 
@@ -1318,6 +1320,14 @@ Exit proof:
 
 M2.5 implementation MUST NOT start before this slice and the independent exit
 review pass.
+
+Implementation record: `corepack pnpm accept:m2` passed all 93 mandatory rows
+with 892/892 tests, zero failed/skipped/unavailable checks, matched opening and
+closing source identities, a live repair-handoff `FAIL -> PASS` branch, and a
+natural live first-pass `PASS` branch. The dated
+[M2 completion review](../reviews/m2-completion-review.md) records the exact
+source, protocol, protected verification, repair Context, and non-effect
+evidence.
 
 ## 17. Test strategy
 

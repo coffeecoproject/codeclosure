@@ -56,10 +56,12 @@ import {
   type ExternalFailureCodeView,
   type GoalAuditView,
   type GoalStatusView,
+  type ExternalWorkerInvocationPort,
   type RuntimeCommandResult,
   type VerificationPort,
   type WorkflowDriveSummary,
   type WorkerPort,
+  type WorkerRequest,
 } from '@codeclosure/runtime';
 import {
   createCandidateLeasedWorker,
@@ -100,7 +102,164 @@ export type M2ProtectedDemoMode = 'REPAIR_ACCEPTED' | 'REPAIR_FAILED_STOP';
 export type M2ExternalDemoMode = 'ADAPTER_FAILURE' | 'LIVE' | 'LIVE_REPAIR_HANDOFF';
 type M2ExternalFailureCode = ExternalFailureCodeView;
 
+interface M2AcceptanceTrace {
+  readonly schemaVersion: 1;
+  readonly plan: Readonly<{
+    id: string;
+    digest: string;
+    workflowVersionAtLock: number;
+    policyBundleId: string;
+    policyBundleDigest: string;
+    executionProfileId: string;
+    executionProfileDigest: string;
+    criterionIds: readonly string[];
+    acceptanceRuleIds: readonly string[];
+    protectedAssetManifestDigest: string;
+    protectedAssets: readonly Readonly<{
+      logicalAssetId: string;
+      registeredProtectedRootIdentity: string;
+      exactRealpath: string;
+      executionPath: string;
+      fileMode: number;
+      byteLength: number;
+      contentDigest: string;
+      protectionMode: string;
+    }>[];
+    semanticCheck: Readonly<{
+      version: string;
+      executablePath: string;
+      executableDigest: string;
+      isolationProfileId: string;
+      isolationProfileDigest: string;
+    }>;
+  }>;
+  readonly dispatches: readonly Readonly<{
+    attemptId: string;
+    workerSessionId: string;
+    contextManifestId: string;
+    contextManifestDigest: string;
+    contextPackageDigest: string;
+    candidateGenerationId?: string;
+    candidateDigest?: string;
+    planId?: string;
+    planDigest?: string;
+    repairContextDigest?: string;
+    priorAttemptFeedbackDigest?: string;
+    contextSources: readonly Readonly<{
+      kind: string;
+      sourceRef: string;
+      sourceRevision: string;
+      sourceDigest?: string;
+      authorityClass: string;
+      renderedDigest: string;
+    }>[];
+    repair?: Readonly<{
+      acceptanceRepairDigest: string;
+      acceptanceDecisionId: string;
+      acceptanceDecisionDigest: string;
+      inputManifestDigest: string;
+      evidenceSetDigest: string;
+      rejectedCandidateGenerationId: string;
+      rejectedCandidateDigest: string;
+      repairCandidateGenerationId: string;
+      repairCandidateSequence: number;
+      repairCandidateBaseDigest: string;
+      parentChangeSetDigest: string;
+      failedEvidence: readonly Readonly<{
+        evidenceId: string;
+        evidenceRecordDigest: string;
+        evidenceEligibilityVersion: number;
+        verificationObligationId: string;
+        checkSpecificationId: string;
+        checkSpecificationDigest: string;
+      }>[];
+      constraintsToPreserve: readonly Readonly<{
+        kind: string;
+        sourceRef: string;
+        sourceDigest: string;
+      }>[];
+    }>;
+    priorAttemptFeedback?: Readonly<{
+      digest: string;
+      itemKinds: readonly string[];
+      sourceRefs: readonly string[];
+      sourceDigests: readonly string[];
+    }>;
+  }>[];
+  readonly verification: readonly Readonly<{
+    candidateGenerationId: string;
+    candidateDigest: string;
+    attemptId: string;
+    verificationObligationId: string;
+    checkId: string;
+    checkVersion: string;
+    checkDigest: string;
+    protectedAssetReadLeaseDigest: string;
+    isolationProfileId: string;
+    isolationProfileDigest: string;
+    environmentDigest: string;
+    evidenceId: string;
+    evidenceDigest: string;
+    result: 'FAIL' | 'PASS';
+  }>[];
+  readonly externalExecutions: readonly Readonly<{
+    id: string;
+    attemptId: string;
+    workerSessionId: string;
+    contextManifestId: string;
+    contextManifestDigest: string;
+    contextPackageDigest: string;
+    state: string;
+    backendSessionRef?: string;
+    backendOperationRef?: string;
+    controlledStateRootIdentity: string;
+    binaryIdentityDigest: string;
+    protocolSchemaDigest: string;
+    executionConfigDigest: string;
+    managedRequirementsDigest: string;
+    instructionSourceManifestDigest: string;
+    compactionCount: number;
+    turnInterruptCount: number;
+    intentDigest: string;
+    recordDigest: string;
+  }>[];
+  readonly repair?: Readonly<{
+    acceptanceDecisionId: string;
+    acceptanceDecisionDigest: string;
+    inputManifestDigest: string;
+    rejectedCandidateGenerationId: string;
+    rejectedCandidateDigest: string;
+    repairCandidateGenerationId: string;
+    repairCandidateSequence: number;
+    repairCandidateBaseDigest: string;
+    verificationCheckId: string;
+    verificationObligationIds: readonly string[];
+    evidenceSetDigest: string;
+    repairDigest: string;
+  }>;
+  readonly acceptance?: Readonly<{
+    decisionId: string;
+    decisionDigest: string;
+    outcome: string;
+    dominantReasonCode: string;
+    inputManifestDigest: string;
+    evidenceSetDigest: string;
+    candidateGenerationId: string;
+    candidateDigest: string;
+    closeout?: Readonly<{
+      acceptanceDecisionId: string;
+      acceptanceDecisionDigest: string;
+      inputManifestDigest: string;
+      candidateGenerationId: string;
+      candidateDigest: string;
+      evidenceSetDigest: string;
+      closedAt: string;
+    }>;
+  }>;
+}
+
 export interface M2ProtectedDemoProof {
+  readonly acceptanceTrace: M2AcceptanceTrace;
   readonly audit: GoalAuditView;
   readonly evidence: readonly Readonly<{
     candidateGenerationId: string;
@@ -128,6 +287,7 @@ export interface M2ProtectedDemoProof {
 }
 
 export interface M2AdapterFailureDemoProof {
+  readonly acceptanceTrace: M2AcceptanceTrace;
   readonly audit: GoalAuditView;
   readonly finalDrive: NonNullable<
     Awaited<ReturnType<WorkflowDriverCapability['startGoal']>>['drive']
@@ -142,6 +302,7 @@ export interface M2AdapterFailureDemoProof {
 }
 
 export interface M2LiveDemoProof {
+  readonly acceptanceTrace: M2AcceptanceTrace;
   readonly audit: GoalAuditView;
   readonly branch:
     | 'LIVE_FIRST_PASS_ACCEPTED'
@@ -525,6 +686,7 @@ export async function runM2ProtectedDemoProof(
       workspaceRoot,
     });
     const generationRoots = new Map<number, string>();
+    const workerRequests: WorkerRequest[] = [];
     const implementationWorker: CandidateLeasedWorkerFactory = Object.freeze({
       create: ({ lease }: Parameters<CandidateLeasedWorkerFactory['create']>[0]) => {
         generationRoots.set(lease.generationSequence, lease.root);
@@ -534,6 +696,7 @@ export async function runM2ProtectedDemoProof(
             request: Parameters<WorkerPort['run']>[0],
             signal: AbortSignal,
           ): AsyncIterable<unknown> {
+            workerRequests.push(request);
             const succeeds = lease.generationSequence > 1 && mode === 'REPAIR_ACCEPTED';
             writeFileSync(
               join(lease.root, 'src', 'result.txt'),
@@ -654,26 +817,44 @@ export async function runM2ProtectedDemoProof(
         assets: protectedAssets,
       }),
     };
-    const runtimeProfile: RuntimeExecutionProfile =
+    const trustedExternalWorker =
       codexProfile === undefined
-        ? Object.freeze({ schemaVersion: 1, ...runtimeProfileBase })
-        : Object.freeze({
-            schemaVersion: 2,
-            ...runtimeProfileBase,
-            externalWorker: createTrustedCodexInvocation({
-              authority: store,
-              clock,
-              forbiddenRoots,
-              profile: codexProfile,
-              workspace,
-              onCandidateLease: (lease) => {
-                generationRoots.set(lease.generationSequence, lease.root);
-              },
-              onAdapterDiagnostic: (event) => {
-                externalDiagnostic ??= event;
-              },
-            }),
+        ? undefined
+        : createTrustedCodexInvocation({
+            authority: store,
+            clock,
+            forbiddenRoots,
+            profile: codexProfile,
+            workspace,
+            onCandidateLease: (lease) => {
+              generationRoots.set(lease.generationSequence, lease.root);
+            },
+            onAdapterDiagnostic: (event) => {
+              externalDiagnostic ??= event;
+            },
           });
+    const observedExternalWorker: ExternalWorkerInvocationPort | undefined =
+      trustedExternalWorker === undefined
+        ? undefined
+        : Object.freeze({
+            prepare: (input: Parameters<ExternalWorkerInvocationPort['prepare']>[0]) => {
+              workerRequests.push(input.request);
+              return trustedExternalWorker.prepare(input);
+            },
+          });
+    let runtimeProfile: RuntimeExecutionProfile;
+    if (codexProfile === undefined) {
+      runtimeProfile = Object.freeze({ schemaVersion: 1, ...runtimeProfileBase });
+    } else {
+      if (observedExternalWorker === undefined) {
+        throw new TypeError('M2 external profile has no observed Worker invocation');
+      }
+      runtimeProfile = Object.freeze({
+        schemaVersion: 2,
+        ...runtimeProfileBase,
+        externalWorker: observedExternalWorker,
+      });
+    }
     const compiler = new MinimalContextCompiler({
       compilerVersion: 'm2-protected-cli-context-v1',
       maxPackageBytes: 64 * 1024,
@@ -771,6 +952,274 @@ export async function runM2ProtectedDemoProof(
         ...(failureCode === undefined ? {} : { failureCode }),
       });
     };
+    const buildAcceptanceTrace = (
+      rawVerificationRecords: readonly ReturnType<
+        ReturnType<typeof openSqliteControlStore>['listEvidenceForGeneration']
+      >[number]['record'][],
+    ): M2AcceptanceTrace => {
+      if (store === undefined) {
+        throw new TypeError('M2 acceptance trace requires an open authoritative Store');
+      }
+      const plan = store.getAcceptanceCriticalVerificationPlan(workflow.id);
+      if (plan === undefined) {
+        throw new TypeError('M2 acceptance trace has no protected Verification Plan');
+      }
+      const verification = Object.freeze(
+        rawVerificationRecords.map((record) => {
+          if (
+            record.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT ||
+            record.schemaVersion !== 3
+          ) {
+            throw new TypeError('M2 acceptance trace contains non-protected verification Evidence');
+          }
+          return Object.freeze({
+            candidateGenerationId: record.candidateGenerationId,
+            candidateDigest: record.candidateDigest,
+            attemptId: record.attemptId,
+            verificationObligationId: record.verificationObligationId,
+            checkId: record.checkSpec.id,
+            checkVersion: record.checkSpec.version,
+            checkDigest: digests.digest(record.checkSpec),
+            protectedAssetReadLeaseDigest: record.protectedAssetReadLeaseDigest,
+            isolationProfileId: record.checkSpec.isolationProfileId,
+            isolationProfileDigest: record.checkSpec.isolationProfileDigest,
+            environmentDigest: record.environmentIdentity.digest,
+            evidenceId: record.id,
+            evidenceDigest: record.recordDigest,
+            result:
+              record.resultStatus === EvidenceResultStatus.PASS
+                ? ('PASS' as const)
+                : ('FAIL' as const),
+          });
+        }),
+      );
+      const dispatches = Object.freeze(
+        workerRequests.map((request) => {
+          const manifest = store?.getContextManifest(request.contextManifestId);
+          if (manifest === undefined) {
+            throw new TypeError(
+              `M2 acceptance trace cannot resolve Context ${request.contextManifestId}`,
+            );
+          }
+          const repair = request.contextPackage.repairContext;
+          const feedback = request.contextPackage.priorAttemptFeedback;
+          return Object.freeze({
+            attemptId: request.attemptId,
+            workerSessionId: request.workerSessionId,
+            contextManifestId: request.contextManifestId,
+            contextManifestDigest: request.contextManifestDigest,
+            contextPackageDigest: request.packageDigest,
+            ...(request.contextPackage.candidateGenerationId === undefined
+              ? {}
+              : { candidateGenerationId: request.contextPackage.candidateGenerationId }),
+            ...(request.contextPackage.candidateDigest === undefined
+              ? {}
+              : { candidateDigest: request.contextPackage.candidateDigest }),
+            ...(request.contextPackage.acceptanceCriticalVerificationPlanId === undefined
+              ? {}
+              : { planId: request.contextPackage.acceptanceCriticalVerificationPlanId }),
+            ...(request.contextPackage.acceptanceCriticalVerificationPlanDigest === undefined
+              ? {}
+              : { planDigest: request.contextPackage.acceptanceCriticalVerificationPlanDigest }),
+            ...(manifest.repairContextDigest === undefined
+              ? {}
+              : { repairContextDigest: manifest.repairContextDigest }),
+            ...(manifest.priorAttemptFeedbackDigest === undefined
+              ? {}
+              : { priorAttemptFeedbackDigest: manifest.priorAttemptFeedbackDigest }),
+            contextSources: Object.freeze(
+              manifest.entries.map((entry) =>
+                Object.freeze({
+                  kind: entry.kind,
+                  sourceRef: entry.sourceRef,
+                  sourceRevision: entry.sourceRevision,
+                  ...(entry.sourceDigest === undefined ? {} : { sourceDigest: entry.sourceDigest }),
+                  authorityClass: entry.authorityClass,
+                  renderedDigest: entry.renderedDigest,
+                }),
+              ),
+            ),
+            ...(repair === undefined
+              ? {}
+              : {
+                  repair: Object.freeze({
+                    acceptanceRepairDigest: repair.acceptanceRepairDigest,
+                    acceptanceDecisionId: repair.acceptanceDecisionId,
+                    acceptanceDecisionDigest: repair.acceptanceDecisionDigest,
+                    inputManifestDigest: repair.inputManifestDigest,
+                    evidenceSetDigest: repair.evidenceSetDigest,
+                    rejectedCandidateGenerationId: repair.rejectedCandidateGenerationId,
+                    rejectedCandidateDigest: repair.rejectedCandidateDigest,
+                    repairCandidateGenerationId: repair.repairCandidateGenerationId,
+                    repairCandidateSequence: repair.repairCandidateSequence,
+                    repairCandidateBaseDigest: repair.repairCandidateBaseDigest,
+                    parentChangeSetDigest: repair.parentChangeSetDigest,
+                    failedEvidence: Object.freeze(
+                      repair.failedEvidence.map((evidence) =>
+                        Object.freeze({
+                          evidenceId: evidence.evidenceId,
+                          evidenceRecordDigest: evidence.evidenceRecordDigest,
+                          evidenceEligibilityVersion: evidence.evidenceEligibilityVersion,
+                          verificationObligationId: evidence.verificationObligationId,
+                          checkSpecificationId: evidence.checkSpecificationId,
+                          checkSpecificationDigest: evidence.checkSpecificationDigest,
+                        }),
+                      ),
+                    ),
+                    constraintsToPreserve: Object.freeze(
+                      repair.constraintsToPreserve.map((constraint) =>
+                        Object.freeze({
+                          kind: constraint.kind,
+                          sourceRef: constraint.sourceRef,
+                          sourceDigest: constraint.sourceDigest,
+                        }),
+                      ),
+                    ),
+                  }),
+                }),
+            ...(feedback === undefined
+              ? {}
+              : {
+                  priorAttemptFeedback: Object.freeze({
+                    digest: feedback.feedbackDigest,
+                    itemKinds: Object.freeze(feedback.items.map(({ kind }) => kind)),
+                    sourceRefs: Object.freeze(
+                      feedback.items.flatMap(({ sourceRefs }) => sourceRefs),
+                    ),
+                    sourceDigests: Object.freeze(
+                      feedback.items.flatMap(({ sourceDigests }) => sourceDigests),
+                    ),
+                  }),
+                }),
+          });
+        }),
+      );
+      const externalExecutions = Object.freeze(
+        externalExecutionAuthorizationIds().map((identifier) => {
+          const execution = store?.getExternalExecution(identifier);
+          if (execution === undefined) {
+            throw new TypeError(`M2 acceptance trace cannot resolve execution ${identifier}`);
+          }
+          return Object.freeze({
+            id: execution.id,
+            attemptId: execution.attemptId,
+            workerSessionId: execution.workerSessionId,
+            contextManifestId: execution.contextManifestId,
+            contextManifestDigest: execution.contextManifestDigest,
+            contextPackageDigest: execution.contextPackageDigest,
+            state: execution.state,
+            ...(execution.backendSessionRef === undefined
+              ? {}
+              : { backendSessionRef: execution.backendSessionRef }),
+            ...(execution.backendOperationRef === undefined
+              ? {}
+              : { backendOperationRef: execution.backendOperationRef }),
+            controlledStateRootIdentity: execution.controlledStateRootIdentity,
+            binaryIdentityDigest: execution.binaryIdentityDigest,
+            protocolSchemaDigest: execution.binaryProtocolSchemaDigest,
+            executionConfigDigest: execution.executionConfigDigest,
+            managedRequirementsDigest: execution.managedRequirementsDigest,
+            instructionSourceManifestDigest: execution.instructionSourceManifestDigest,
+            compactionCount: execution.compactionCount,
+            turnInterruptCount: execution.turnInterruptCount,
+            intentDigest: execution.intentDigest,
+            recordDigest: execution.recordDigest,
+          });
+        }),
+      );
+      const firstFailed = verification.find(({ result }) => result === 'FAIL');
+      const repair =
+        firstFailed === undefined
+          ? undefined
+          : store.getAcceptanceRepairForRejectedGeneration(firstFailed.candidateGenerationId);
+      const authority = store.getWorkflowDriverAuthority(goal.id);
+      const acceptance = authority?.acceptanceAuthority;
+      const closeout = store.getCloseoutForWorkflow(workflow.id);
+      return Object.freeze({
+        schemaVersion: 1,
+        plan: Object.freeze({
+          id: plan.id,
+          digest: plan.planDigest,
+          workflowVersionAtLock: plan.workflowVersionAtLock,
+          policyBundleId: plan.policyBundleId,
+          policyBundleDigest: plan.policyBundleDigest,
+          executionProfileId: plan.executionProfileId,
+          executionProfileDigest: plan.executionProfileDigest,
+          criterionIds: plan.acceptanceCriticalCriterionIds,
+          acceptanceRuleIds: plan.acceptanceRuleIds,
+          protectedAssetManifestDigest: plan.protectedAssetManifestDigest,
+          protectedAssets: Object.freeze(
+            plan.protectedAssets.map((asset) =>
+              Object.freeze({
+                logicalAssetId: asset.logicalAssetId,
+                registeredProtectedRootIdentity: asset.registeredProtectedRootIdentity,
+                exactRealpath: asset.exactRealpath,
+                executionPath: asset.executionPath,
+                fileMode: asset.fileMode,
+                byteLength: asset.byteLength,
+                contentDigest: asset.contentDigest,
+                protectionMode: asset.protectionMode,
+              }),
+            ),
+          ),
+          semanticCheck: Object.freeze({
+            version: plan.semanticCheckTemplate.checkVersion,
+            executablePath: plan.semanticCheckTemplate.executablePath,
+            executableDigest: plan.semanticCheckTemplate.executableDigest,
+            isolationProfileId: plan.semanticCheckTemplate.isolationProfileId,
+            isolationProfileDigest: plan.semanticCheckTemplate.isolationProfileDigest,
+          }),
+        }),
+        dispatches,
+        verification,
+        externalExecutions,
+        ...(repair === undefined
+          ? {}
+          : {
+              repair: Object.freeze({
+                acceptanceDecisionId: repair.acceptanceDecisionId,
+                acceptanceDecisionDigest: repair.acceptanceDecisionDigest,
+                inputManifestDigest: repair.inputManifestDigest,
+                rejectedCandidateGenerationId: repair.rejectedCandidateGenerationId,
+                rejectedCandidateDigest: repair.rejectedCandidateDigest,
+                repairCandidateGenerationId: repair.repairCandidateGenerationId,
+                repairCandidateSequence: repair.repairCandidateSequence,
+                repairCandidateBaseDigest: repair.repairCandidateBaseDigest,
+                verificationCheckId: repair.verificationCheckId,
+                verificationObligationIds: repair.verificationObligationIds,
+                evidenceSetDigest: repair.evidenceSetDigest,
+                repairDigest: repair.repairDigest,
+              }),
+            }),
+        ...(acceptance === undefined
+          ? {}
+          : {
+              acceptance: Object.freeze({
+                decisionId: acceptance.decision.id,
+                decisionDigest: acceptance.decision.decisionDigest,
+                outcome: acceptance.decision.outcome,
+                dominantReasonCode: acceptance.decision.dominantReasonCode,
+                inputManifestDigest: acceptance.manifest.manifestDigest,
+                evidenceSetDigest: acceptance.manifest.evidenceSetDigest,
+                candidateGenerationId: acceptance.manifest.candidateGenerationId,
+                candidateDigest: acceptance.manifest.candidateDigest,
+                ...(closeout === undefined
+                  ? {}
+                  : {
+                      closeout: Object.freeze({
+                        acceptanceDecisionId: closeout.acceptanceDecisionId,
+                        acceptanceDecisionDigest: closeout.acceptanceDecisionDigest,
+                        inputManifestDigest: closeout.inputManifestDigest,
+                        candidateGenerationId: closeout.candidateGenerationId,
+                        candidateDigest: closeout.candidateDigest,
+                        evidenceSetDigest: closeout.evidenceSetDigest,
+                        closedAt: closeout.closedAt,
+                      }),
+                    }),
+              }),
+            }),
+      });
+    };
     const strictReopenStatus = (expected: GoalStatusView): GoalStatusView => {
       store?.close();
       store = undefined;
@@ -820,8 +1269,10 @@ export async function runM2ProtectedDemoProof(
       }
       const sourceIdentity = assertSourceIdentityUnchanged();
       const audit = requireAudit(application, goal.id);
+      const acceptanceTrace = buildAcceptanceTrace([]);
       const reopenedStatus = strictReopenStatus(finalStatus);
       return Object.freeze({
+        acceptanceTrace,
         audit,
         finalDrive: initial.drive,
         finalStatus,
@@ -862,8 +1313,10 @@ export async function runM2ProtectedDemoProof(
       if (externalExecutionCount !== 1) {
         throw new TypeError('M2 live first-pass branch has an unexpected external call count');
       }
+      const acceptanceTrace = buildAcceptanceTrace([evidence.record]);
       const reopenedStatus = strictReopenStatus(finalStatus);
       return Object.freeze({
+        acceptanceTrace,
         audit,
         branch: 'LIVE_FIRST_PASS_ACCEPTED',
         evidence: Object.freeze([
@@ -1040,6 +1493,7 @@ export async function runM2ProtectedDemoProof(
             : ('FAIL' as const),
       }),
     ]);
+    const acceptanceTrace = buildAcceptanceTrace([firstEvidence.record, secondEvidence.record]);
     const reopenedStatus = strictReopenStatus(finalStatus);
     if (mode === 'LIVE' || mode === 'LIVE_REPAIR_HANDOFF') {
       const externalExecutionCount = audit.events.filter(
@@ -1050,6 +1504,7 @@ export async function runM2ProtectedDemoProof(
         throw new TypeError('M2 live repair branch has an unexpected external call count');
       }
       return Object.freeze({
+        acceptanceTrace,
         audit,
         branch:
           mode === 'LIVE'
@@ -1073,6 +1528,7 @@ export async function runM2ProtectedDemoProof(
       });
     }
     return Object.freeze({
+      acceptanceTrace,
       audit,
       evidence,
       finalDrive: repaired.drive,

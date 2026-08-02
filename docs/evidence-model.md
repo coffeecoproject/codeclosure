@@ -24,7 +24,8 @@ acceptance-critical Verification Plan and protected-asset authority, and ADR
 composition. ADR 0033 aligns protected-plan creation with the first Start
 transaction and makes the lease a Check-configuration value that excludes
 later Attempt/Obligation identity. Slice 7 implements the additive protected
-Check/Evidence binding and decisive-family admission.
+Check/Evidence binding and decisive-family admission. Slice 8 adds no Evidence
+kind and completed the bounded M2 exit review on 2026-08-02.
 Pre-Goal
 Intake observations are not part of the
 implemented Evidence model and cannot satisfy a formal Goal's Acceptance.

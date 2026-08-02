@@ -21,8 +21,9 @@ isolation, bounded Darwin local-command verification, in-process
 reject/repair/accept orchestration, Runtime-owned external-execution
 persistence, restart reconciliation, fresh repair Context, protected
 acceptance-critical verification, trusted CLI composition, and both bounded
-live Goal-bound paths are now implemented through M2 Slice 7. The independent
-Slice 8 milestone audit remains later M2 work. Components marked for later
+live Goal-bound paths are implemented, and the Slice 8 acceptance harness plus
+independent exit review completed the bounded M2 milestone on 2026-08-02.
+Goal Intake remains planned M2.5 behavior. Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
@@ -100,8 +101,9 @@ only the matching version-3 Evidence family into deterministic Acceptance. The
 production CLI exposes bounded protected, adapter-failure, ordinary live, and
 repair-handoff demonstrations without exposing raw authority capabilities. The
 [Slice 7 review](docs/reviews/m2-slice7-trusted-composition-cli-live.md) records
-the deterministic and live evidence plus remaining limitations. Slice 8 must
-still issue the independent M2 verdict; Slice 4's historical proof remains
+the deterministic and live evidence plus remaining limitations. The subsequent
+[M2 completion review](docs/reviews/m2-completion-review.md) issued the
+independent bounded M2 `PASS` verdict; Slice 4's historical proof remains
 limited to independent read-only execution and is not reinterpreted as the
 later protected-standard proof.
 

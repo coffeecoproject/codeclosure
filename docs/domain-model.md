@@ -47,7 +47,10 @@ strict codecs and SQLite migration, and repair Context Package/Manifest version
 turning the lease into a second mutable Store aggregate. The ADR 0031 plan plus schema-version-3
 Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
 ADR 0033's first-Start/static-lease alignment, and their Acceptance binding
-remain later M2 work.
+are implemented by Slice 7 without changing the existing M1 or schema-version-2
+authority meanings. Slice 8 adds no Domain authority; its independent review
+completed the bounded M2 milestone on 2026-08-02. Goal Intake records remain
+planned, unimplemented M2.5 behavior.
 
 ## Design Rules
 

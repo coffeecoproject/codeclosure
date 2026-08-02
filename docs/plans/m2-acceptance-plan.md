@@ -1,7 +1,7 @@
 # M2 Milestone Acceptance Plan
 
-- Status: Prepared; Slices 0 through 7 are implemented, Slice 8 has not started,
-  and milestone acceptance has not started
+- Status: Executed; the unconditional M2 verdict and independent exit review
+  passed on 2026-08-02
 - Plan date: 2026-07-30; authority boundary updated 2026-08-01
 - Milestone: M2
 - Implementation record: [M2 Codex vertical slice plan](m2-codex-vertical-slice.md)
@@ -561,14 +561,25 @@ stops without another repair.
 
 ## 9. Canonical executable procedure
 
-Slice 8 MUST add this repository command before M2 acceptance can begin:
+The canonical Slice 8 repository command is:
 
 ```sh
 corepack pnpm accept:m2
 ```
 
-The command does not exist at plan time and MUST NOT be reported as currently
-available. When implemented, it must execute in this order:
+The runner executes the complete offline procedure before crossing the live
+boundary. Immediately before any model-service request it MUST require the
+process environment to contain `CODECLOSURE_M2_LIVE_AUTHORIZED=1`. Absence of
+that exact value emits a machine-readable `BLOCKED` result for the mandatory
+live rows and makes no live call; it MUST NOT be treated as a skipped or passing
+case. This flag records operator authorization for this bounded acceptance
+invocation only. It is not Workflow, retry, Acceptance, Promotion, or external-
+effect authority. The auth source and credentials remain separate and MUST NOT
+appear in command, stage, matrix, or report output.
+
+The command is the only canonical executable M2 acceptance entry. Its presence
+does not complete Slice 8 or M2; it must execute in this order and the later
+dated independent review still owns the milestone verdict:
 
 1. validate entry conditions without printing credentials;
 2. capture opening source, Git, toolchain, platform, and Codex protocol
@@ -585,16 +596,18 @@ available. When implemented, it must execute in this order:
    reject/repair/accept fixture;
 8. run the deterministic anti-self-certification and failed-repair-stop
    fixtures;
-9. run the bounded live repair-Context handoff fixture;
-10. run the separate bounded live Codex edit-and-verify fixture and follow its
+9. run the bounded live App Server compatibility preflight against the exact
+   opening protocol and controlled-input identity;
+10. run the bounded live repair-Context handoff fixture;
+11. run the separate bounded live Codex edit-and-verify fixture and follow its
    natural first verification branch;
-11. close and strictly reopen authority for every demonstration, then compare
+12. close and strictly reopen authority for every demonstration, then compare
    public status and audit;
-12. prove fixture content projections and non-owned paths are unchanged, and
+13. prove fixture content projections and non-owned paths are unchanged, and
     account separately for Git metadata;
-13. capture closing source, environment, effective App Server input, and state
+14. capture closing source, environment, effective App Server input, and state
     identities; and
-14. emit a machine-readable row-by-row result with aggregate zero-skip counts.
+15. emit a machine-readable row-by-row result with aggregate zero-skip counts.
 
 After the executable command, the operator MUST inspect complete output, run
 `git diff --check`, inspect the actual diff and working-tree status, review the

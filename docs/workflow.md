@@ -50,6 +50,8 @@ existing first-Start and Check-before-Attempt lifecycle by ADR 0033. Trusted
 CLI composition exercises both the natural live branch and the separate fresh
 repair-handoff branch without granting Codex Workflow authority. Goal Intake is an accepted pre-Goal
 target for M2.5; it is not implemented and does not add another Workflow phase.
+Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
+2026-08-02.
 
 ## Purpose
 

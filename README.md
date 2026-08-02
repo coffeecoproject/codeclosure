@@ -11,30 +11,19 @@ complete.
 
 ## Status
 
-The M0 architecture baseline and bounded M1 deterministic skeleton are
-complete. M2 is the current implementation milestone. Its pre-implementation
-decision closure has passed against the selected local Codex version. The
-version-bound lower App Server client is implemented and has passed its bounded
-offline and live compatibility review. The Goal-bound Codex Worker Adapter is
-implemented and has passed its bounded offline contract review. The controlled-copy
-Candidate workspace adapter is also implemented and has passed its bounded
-containment, freeze, repair, drift, restart, and cleanup review. The bounded
-Darwin local-command verification path, strict versioned contracts,
-Runtime-derived Evidence, and atomic SQLite payload persistence are now
-implemented and have passed their focused isolation and authority review.
-The bounded in-process reject/repair/accept orchestration is also implemented.
-The latest completed bounded step adds protected acceptance-critical
-verification and trusted CLI composition; its deterministic protected paths
-and both required live Codex demonstrations have passed bounded review. The
-independent M2 exit audit has not started. The
+The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
+M2 Codex vertical slice are complete. M2 passed its independent exit review on
+2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
+stop, adapter-failure, live repair-handoff, and natural first-pass branches all
+green on one source identity. M2.5 Goal Intake remains unimplemented. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.
 
 This README intentionally does not duplicate the rolling slice, feature, or
-test inventory. M1 remains the regression baseline. M2 completion will require
-an independent exit review and will not prove Goal Intake, product completion,
-or authority to merge, release, deploy, or perform another external effect.
+test inventory. M1 and M2 remain regression baselines. M2 completion does not
+prove Goal Intake, product completion, or authority to merge, release, deploy,
+or perform another external effect.
 
 ## Development
 
@@ -68,6 +57,9 @@ Current repository commands are:
 - `pnpm build` — force a clean production compilation pass;
 - `pnpm gate:quality` — run formatting, documentation, lint/audits, typecheck,
   the seven test/proof stages, and the production build in the required order.
+- `pnpm accept:m2` — run the canonical M2 milestone procedure; it completes the
+  offline proof first and requires explicit bounded live authorization before
+  any model-service request.
 
 The exact implemented proof coverage is recorded in the M1 implementation plan
 and completion review. The test runner fails when any invoked test is failed,
@@ -134,6 +126,7 @@ not the product entry and not the completion authority.
 - [M1 completion review](docs/reviews/m1-completion-review.md)
 - [M2 Codex vertical-slice plan](docs/plans/m2-codex-vertical-slice.md)
 - [M2 milestone acceptance plan](docs/plans/m2-acceptance-plan.md)
+- [M2 completion review](docs/reviews/m2-completion-review.md)
 - [M0 architecture review](docs/reviews/m0-architecture-review.md)
 - [Accepted ADR index](docs/adr/README.md)
 
@@ -142,11 +135,11 @@ Repository instructions and document precedence are defined in
 
 ## Current Milestone Boundary
 
-M1 proved the deterministic local control plane with `FakeWorker` and remains
-the required regression baseline. M2 is limited to a real Codex execution,
-Candidate, verification, repair, and recovery vertical slice under those same
-authority rules. Goal Intake remains a separate M2.5 milestone that can begin
-only after M2 passes its exit review.
+M1 proved the deterministic local control plane with `FakeWorker`; M2 proved a
+bounded real-Codex Candidate, verification, repair, and recovery vertical slice
+under the same authority rules. Both remain required regression baselines.
+M2.5 Goal Intake is the next milestone, but its implementation has not started
+and requires its own detailed plan.
 
 ## Non-Goals
 

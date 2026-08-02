@@ -23,7 +23,8 @@ to each protected Package/Manifest and dispatch claim and exercises it through
 trusted bounded live composition. The existing M1 Compiler and Manifest
 authority are otherwise unchanged. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
-that are not implemented.
+that are not implemented. Slice 8 adds no Context authority and completed the
+bounded M2 exit review on 2026-08-02.
 
 ## Purpose
 
