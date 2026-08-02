@@ -215,7 +215,7 @@ Criterion identity, and a mapping containing only Worker-authored
 supplementary tests fail the rule. The Worker, runner, and Evidence record
 cannot change an obligation's criticality or proof-strength requirement.
 
-For the planned M2 `LOCAL_COMMAND_TEST_RESULT`, eligibility additionally
+For the implemented M2 `LOCAL_COMMAND_TEST_RESULT`, eligibility additionally
 requires the exact version-2 Check, executable/argv, Candidate and read-only
 workspace lease, runner, isolation/environment, observation, and retained
 payload bindings defined by ADR 0030. A zero exit code, Worker command Item, or

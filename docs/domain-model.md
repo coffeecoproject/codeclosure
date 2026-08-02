@@ -112,9 +112,11 @@ Check Specification, Verification Obligation, Evidence, Policy, or Execution
 Profile identity.
 
 The planned M2.5 Intake boundary adds distinct `RawRequestId`,
-`RawRequestRevision`, `IntakeRunId`, `IntentAnalysisProposalId`,
+`RawRequestRevision`, `IntakeRunId`, `IntakeManifestId`,
+`IntentAnalysisProposalId`,
 `IntentProjectionId`, `IntentProjectionRevision`, `MaterialAmbiguityId`,
-`ClarificationQuestionId`, `IntentAdmissionDecisionId`,
+`ClarificationQuestionId`, `ClarificationAnswerBindingId`,
+`IntentAdmissionDecisionId`,
 `IntentAdmissionPolicyId`, `AnswerOnlyResponseId`, `IntakeFailureRecordId`,
 `GoalMaterializationId`, and `GoalStartAuthorizationId` types. They MUST NOT be
 interchanged with Goal, Workflow, Attempt, Worker, Command, or Acceptance
@@ -129,6 +131,9 @@ relationship is:
 ```text
 RawRequest
   └── IntakeRun
+        ├── IntakeCommandReservation*
+        │     ├── IntakeManifest?
+        │     └── IntakeCommandOutcome?
         ├── RawRequestRevision 1
         │     └── RawRequestRevision 2?
         ├── IntentAnalysisProposal?
@@ -136,6 +141,8 @@ RawRequest
         ├── IntentAdmissionDecision?
         │     ├── CLARIFY
         │     │     └── ClarificationQuestion
+        │     │           └── ClarificationAnswerBinding?
+        │     │                 └── binds RawRequestRevision 2
         │     ├── NO_EXECUTION
         │     │     └── AnswerOnlyResponse?
         │     └── MATERIALIZE
@@ -152,6 +159,15 @@ The semantic distinctions are:
 RawRequestRevision
 = exact user-authored content admitted under retention policy and its trusted action
 
+IntakeCommandReservation
+= immutable ownership of one exact pre-Goal command input before external work
+
+IntakeManifest
+= immutable provenance and budget binding for one exact external Intake operation
+
+IntakeCommandOutcome
+= immutable Store-authored APPLIED | REJECTED | FAILED result for one reservation
+
 IntentAnalysisProposal
 = untrusted assistant analysis
 
@@ -160,6 +176,9 @@ IntentProjectionRevision
 
 IntentAdmissionDecision
 = CodeClosure's deterministic MATERIALIZE / CLARIFY / NO_EXECUTION decision
+
+ClarificationAnswerBinding
+= immutable exact causality from one Question and command to one Raw Request revision
 
 AnswerOnlyResponse
 = bounded non-authoritative answer content or typed delivery failure
@@ -179,6 +198,13 @@ canonical digests. A change to user content, trusted interaction action,
 objective, criteria, scope, non-goals, assumptions, requested execution
 disposition, or a material Source Binding creates a new revision and makes an
 earlier Projection/Admission chain stale for new Materialization.
+
+A clarification Raw Request revision also embeds the exact answered Question
+ID, question-spec/record digests, and issuing Decision ID/digest in its semantic
+projection. A revision admitted by any non-clarification command rejects that
+tuple. The later immutable Clarification Answer Binding may depend on the
+resulting revision digest, but the revision does not depend on that later
+record.
 
 `IntentAdmissionDecision` is a closed discriminated union. A pre-analysis
 `NO_EXECUTION` variant carries no Proposal/Projection binding and may omit
@@ -206,8 +232,12 @@ derive `NOT_REQUESTED`.
 `FAILED` is terminal for one Intake Run and binds exactly one immutable
 `IntakeFailureRecord`. M2.5 records no automatic retry authority: committed
 failure replay returns the same result, while another try creates a new Intake
-Run. Startup converts only a structurally valid orphaned `ANALYZING` Run to
-`FAILED / INTERRUPTED_ANALYSIS`; corrupt authority still fails strict reopen.
+Run. Startup reconciles a structurally valid orphaned `ANALYZING` Run by its
+immutable reservation operation kind: non-Answer-only analysis work becomes
+`FAILED / INTERRUPTED_ANALYSIS`, while Answer-only becomes
+`APPLIED / NO_EXECUTION / ANSWER_FAILED /
+INTERRUPTED_ANSWER_DELIVERY`. Recovery makes no assistant call; irreproducible
+inputs or corrupt authority fail strict reopen.
 
 The IntakeRun terminal fields are a closed union: `MATERIALIZED` binds one
 `MATERIALIZE` Decision and Goal; `NO_EXECUTION / ANSWER_ONLY` binds one
@@ -216,15 +246,45 @@ bind no answer; and `FAILED` binds one Failure Record without a terminal
 Decision, answer, or Goal. Non-terminal runs carry no terminal references.
 Mixed or partial shapes are invalid at domain, Store, and reopen boundaries.
 
+For the bounded M2.5 public loop, `IntakeRun.activeQuestionRef` is absent or
+binds exactly one active Clarification Question. Multiple immutable Question and
+Answer Binding records may exist across completed clarification turns, but
+question order does not identify an answer; each clarification command supplies
+the exact current Question ID, while Runtime resolves and binds its retained
+specification/record digests and issuing Decision ID/digest. Current state does
+not duplicate historical references, and M2.5 defines no batch-answer protocol.
+`NEEDS_CLARIFICATION` requires the singular reference and no Answer Binding for
+that Question; `ANALYZING` and terminal states reject an active reference.
+
+The clarification chain is deliberately acyclic. Trusted Runtime composition
+preallocates Decision/Question identities and constructs a bounded question
+specification. The Intent Admission Engine may issue `CLARIFY` only by binding
+that Question ID and `questionSpecDigest`; the Decision semantic digest includes
+the spec digest but excludes generated IDs. The resulting immutable Question
+record repeats the exact spec and binds the issuing Decision ID/digest, and its
+exact `questionDigest` includes those identities. Store independently
+recomputes and atomically validates both digests, the repeated fields, the
+Decision/Question cross-references, and the single active-question reference.
+Neither the prepared specification nor a Question row alone authorizes
+clarification.
+
+An accepted clarification creates a new Raw Request revision whose semantic
+digest includes the exact Question/Decision tuple. A later immutable
+`ClarificationAnswerBinding` binds that revision/digest plus the exact command
+reservation input; the Raw Request revision does not bind the Answer Binding
+back, so the chain remains acyclic. The owning transaction permits one Answer
+Binding per Question and atomically clears `activeQuestionRef`. Answered state
+is derived from the binding's existence rather than mutation of the Question.
+
 The Goal Intake Coordinator owns IntakeRun sequencing and validated Projection,
-Source Binding, ambiguity, and question records. The deterministic Intent
-Admission Engine owns Admission decisions. The Goal Manager validates formal
-intent, while the Workflow Runtime remains the only Workflow writer. The
-trusted Materialization transaction atomically persists the Admission Decision,
-formal Goal, initial Workflow, Materialization Record, exactly one Start
-Authorization for `AUTHORIZE_START` and none otherwise, audits, and command
-outcome. A later ordinary `StartGoal` transaction remains the only first-Start
-path. See
+Source Binding, ambiguity, Question, and Clarification Answer Binding records.
+The deterministic Intent Admission Engine owns Admission decisions. The Goal
+Manager validates formal intent, while the Workflow Runtime remains the only
+Workflow writer. The trusted Materialization transaction atomically persists
+the Admission Decision, formal Goal, initial Workflow, Materialization Record,
+exactly one Start Authorization for `AUTHORIZE_START` and none otherwise,
+audits, and command outcome. A later ordinary `StartGoal` transaction remains
+the only first-Start path. See
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and [Goal Intake](goal-intake.md).
 
@@ -1434,7 +1494,7 @@ current. The canonical field meanings and digest projections are defined in
 The current M1 Slice 6 implementation strictly decodes the manifest and
 decision, derives their digests from canonical semantic projections, and
 revalidates the exact decision before closeout or repair.
-The planned M2 additive Acceptance Input Manifest also binds the exact
+The implemented M2 additive Acceptance Input Manifest also binds the exact
 `AcceptanceCriticalVerificationPlan` ID/digest. Existing M1 and Slice 4/5
 manifest digests are not reinterpreted.
 The repair record is not another decision or state writer. It is immutable
@@ -1489,9 +1549,14 @@ describes.
 | --- | --- | --- | --- |
 | Raw Request revision — planned M2.5 | identified user / trusted interaction surface | Intake input and retention policy | Goal Intake Coordinator, immutable persistence |
 | Intake Run — planned M2.5 | user command / Intake policy | Goal Intake Coordinator | Goal Intake Coordinator through audited versioned transaction |
+| Intake Command Reservation — planned M2.5 | trusted application command with exact principal, target, version, and canonical input digest | Goal Intake Coordinator plus Store uniqueness, target, and digest backstops | Runtime transaction plan; immutable Store persistence before external work |
+| Intake Manifest — planned M2.5 | Runtime compiler over exact retained Intake, policy, adapter, response-contract, provenance, omission, and budget inputs | Goal Intake Coordinator canonical binding and Store digest/relationship backstops | Runtime transaction plan; immutable Store persistence with the owning reservation before external work |
+| Intake Command Outcome — planned M2.5 | Runtime compound-transaction result, never caller or assistant output | Store exact reservation, digest, version, disposition, causal-time, and authority-binding validation | Store-authored immutable persistence in the owning result transaction |
 | Intent Analysis Proposal — planned M2.5 | Intake Assistant | Goal Intake Coordinator closed-schema and binding validation | Goal Intake Coordinator, immutable untrusted-observation persistence |
 | Intent Projection revision — planned M2.5 | current Raw Request plus validated Proposal and observations | Goal Intake Coordinator and Projection policy | Goal Intake Coordinator, immutable revision persistence |
 | Source Binding / Material Ambiguity — planned M2.5 | exact source records and policy | Goal Intake Coordinator and source/materiality policy | Goal Intake Coordinator, immutable persistence |
+| Clarification Question — planned M2.5 | exact current Material Ambiguity plus Engine-issued `CLARIFY` Question-plan binding and question policy | Goal Intake Coordinator schema/current-question validation; Store recomputation of spec/Decision/record digests and exact bidirectional references | Runtime Admission transaction atomically persists Decision, Question, active reference, lifecycle, audit, and outcome; at most one active question in M2.5 |
+| Clarification Answer Binding — planned M2.5 | exact admitted clarification command plus Question-bound Raw Request revision | Goal Intake Coordinator schema/command/current-question validation; Store digest, parent, uniqueness, and cross-reference backstops | Runtime clarification transaction atomically persists Raw Request revision, immutable Answer Binding, cleared active reference, lifecycle, Manifest, audit, and outcome |
 | Intent Admission Policy — planned M2.5 | trusted composition definition | Runtime and Store canonical policy validation | Runtime installer, immutable Store persistence |
 | Intent Admission Decision — planned M2.5 | exact pre-analysis Raw Request or complete source-bound Projection view | deterministic Intent Admission Engine plus Store backstop | Admission Engine issuance; immutable Store persistence |
 | Answer-only Response — planned M2.5 | Intake Assistant answer content or Runtime-classified delivery failure | Goal Intake Coordinator closed-schema, budget, binding, and retention validation | Goal Intake Coordinator, immutable non-authoritative response persistence |

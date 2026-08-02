@@ -291,10 +291,14 @@ that CodeClosure can form a Goal from an incomplete natural-language request.
 ## M2.5 — Goal Intake and Materialization Vertical Slice
 
 Status: Not started. The scope below is planned behavior governed by
-[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
+and
+[ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md).
 M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
-gate passed on 2026-08-02; M2.5 implementation remains not started and requires
-its own detailed implementation plan.
+gate passed on 2026-08-02. The detailed
+[implementation plan](plans/m2.5-goal-intake-materialization.md) and
+[acceptance plan](plans/m2.5-acceptance-plan.md) now exist; M2.5 implementation
+remains not started.
 
 ### Objective
 
@@ -307,7 +311,8 @@ assistant Goal, Workflow, Start, Acceptance, or Admission authority.
 - immutable Raw Request revisions and versioned IntakeRun;
 - immutable Intent Analysis Proposals and Intent Projection revisions;
 - exact Source Bindings with Runtime-owned provenance classification;
-- explicit Material Ambiguity records and bounded clarification;
+- explicit Material Ambiguity records, bounded immutable Clarification
+  Questions, and immutable Question-to-Raw-Request Answer Bindings;
 - Goal Intake Assistant Adapter over the reusable App Server client;
 - deterministic Intent Admission Engine and versioned Admission Policy;
 - `MATERIALIZE`, `CLARIFY`, and reason-coded `NO_EXECUTION` decisions;
@@ -322,8 +327,9 @@ assistant Goal, Workflow, Start, Acceptance, or Admission authority.
 - immutable Goal Materialization Record, audits, command idempotency, separate
   Materialization/Start dispositions, and strict reopen validation;
 - basic CLI/read views for request, Proposal, Projection, Source Bindings,
-  ambiguity, Admission, Answer-only result, terminal failure/next action,
-  Materialization, and Start status; and
+  ambiguity, Clarification Question/Answer-Binding provenance, Admission,
+  Answer-only result, terminal failure/next action, Materialization, and Start
+  status; and
 - stale, concurrent, replay, partial-write, forged-authority, restart, and
   adapter-boundary adversarial tests.
 
@@ -333,6 +339,8 @@ assistant Goal, Workflow, Start, Acceptance, or Admission authority.
 - large-scale or write-capable project exploration;
 - automatic or execution-time Goal revision;
 - rich TUI or complete Human Decision UX;
+- multiple simultaneous Clarification Questions, batch answers, or a generic
+  questionnaire engine;
 - multiple Intake agents or model-voting pipelines;
 - automatic retry or resumption of the same failed Intake analysis operation;
 - long-term business knowledge base; and
@@ -350,8 +358,10 @@ For one bounded local governed-execution request:
    exact Source Bindings, and records the Material Ambiguity;
 4. Intent Admission returns `CLARIFY`, persists one bounded question, and
    creates no Goal or Workflow;
-5. the user answer produces Raw Request revision 2 and a new Projection, while
-   a stale attempt to materialize revision 1 is rejected;
+5. the user answer atomically produces Question-bound Raw Request revision 2,
+   one unique immutable Clarification Answer Binding, a cleared active Question
+   reference, and a new Projection, while a stale attempt to materialize
+   revision 1 is rejected;
 6. the exact revision-2 input produces deterministic
    `MATERIALIZE / AUTHORIZE_START`;
 7. Goal Materialization atomically creates Goal revision 1, its unique
@@ -360,8 +370,9 @@ For one bounded local governed-execution request:
 8. the application invokes the separately persisted ordinary `StartGoal`, and
    fault injection between the two operations leaves a visible `READY` Goal
    rather than partial or duplicate execution; and
-9. strict reopen returns the identical Raw Request-to-Projection-to-Admission-
-   to-Goal chain and its separate Start disposition.
+9. strict reopen returns the identical Question-to-Raw-Request-to-Answer-
+   Binding-to-Projection-to-Admission-to-Goal chain and its separate Start
+   disposition.
 
 Supplementary cases must show:
 
@@ -384,7 +395,9 @@ Supplementary cases must show:
   Projection fields on pre-analysis decisions, missing Materialization
   project/scope, and invalid kind/outcome/action/disposition combinations;
 - Intake persistence and strict reopen reject partial or mixed terminal
-  Decision, Answer-only, Failure, and Goal-reference shapes;
+  Decision, Answer-only, Failure, and Goal-reference shapes, plus missing,
+  duplicate, cross-Intake, or digest-mismatched Clarification Answer Bindings
+  and an answered active Question or active-reference/status mismatch;
 - redacted displays, omission markers, synthetic replacement text, and
   unavailable source content cannot satisfy a material `USER_STATED` binding;
 - a material field supported only by model inference cannot pass Admission;
@@ -392,10 +405,11 @@ Supplementary cases must show:
   or Admission Policy invalidates the earlier chain for Materialization;
 - direct `CreateGoal` remains unchanged and creates no synthetic Intake
   records;
-- exact command replay produces one materialization effect, while conflicting
-  reuse and concurrent losers fail closed;
-- injected failure at every Admission/Materialization compound-write boundary
-  leaves no partial Goal or Workflow authority;
+- exact command replay produces one clarification or Materialization effect,
+  while conflicting reuse and concurrent losers fail closed;
+- injected failure at every clarification, Admission, and Materialization
+  compound-write boundary leaves no partial Intake, Goal, or Workflow
+  authority;
 - Goal Materialization never creates an Attempt or dispatch; automatic Start
   passes the ordinary first-Start Policy/Profile/Context boundary;
 - a crash or failure between Materialization and Start leaves the Goal `READY`,

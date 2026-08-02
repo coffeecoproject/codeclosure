@@ -26,9 +26,14 @@ independent exit review completed the bounded M2 milestone on 2026-08-02.
 Goal Intake remains planned M2.5 behavior. Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
-The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
-[independent acceptance plan](docs/plans/m2-acceptance-plan.md) govern the
-current milestone. Slice 0 decision closure is implemented: repeated schema,
+The completed [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md)
+and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
+historical implementation and exit evidence. The
+[M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
+[M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the next
+planned milestone; no M2.5 implementation has started. The following M2 slice
+records remain historical status evidence. Slice 0 decision closure is
+implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
 and ADR 0028 through ADR 0030 are accepted. ADR 0031 through ADR 0033
 separately govern the protected-verification work planned for Slice 7; they do
@@ -109,13 +114,17 @@ later protected-standard proof.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
-[ADR 0027](docs/adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
-but is not implemented. M2 must preserve a reusable Codex App Server client
-boundary; the Intake Coordinator, Intent Projection/Admission authority, and
-Intake Assistant Adapter remain planned for M2.5. The same Intake boundary owns
-bounded non-authoritative Answer-only results and terminal Intake-failure
-classification. Materialization creates a `READY` Workflow; optional automatic
-execution still crosses the separate ordinary `StartGoal` boundary.
+[ADR 0027](docs/adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md),
+while
+[ADR 0034](docs/adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
+closes its pre-Goal command replay and verified SQLite activation boundaries.
+Goal Intake is not implemented. The completed M2 milestone preserved the
+reusable Codex App Server client boundary; the Intake Coordinator, Intent
+Projection/Admission authority, and Intake Assistant Adapter remain planned for
+M2.5. The same Intake boundary owns bounded non-authoritative Answer-only
+results and terminal Intake-failure classification. Materialization creates a
+`READY` Workflow; optional automatic execution still crosses the separate
+ordinary `StartGoal` boundary.
 
 ## Architectural Goal
 
@@ -279,11 +288,33 @@ requires a separate gateway and policy.
 
 Owns the pre-Goal IntakeRun lifecycle and validated Raw Request revisions,
 Intent Analysis Proposals, Intent Projection revisions, Source Bindings,
-Material Ambiguities, Clarification Questions, Answer-only result disposition,
-and terminal Intake failure classification. It compiles operation-specific
-Intake packages, invokes an Intake Assistant through a narrow port, validates
-all assistant output as untrusted input, and derives immutable Projection,
-AnswerOnlyResponse, and IntakeFailureRecord identity and digest authority.
+Material Ambiguities, Clarification Questions, immutable Clarification Answer
+Bindings, Answer-only result disposition, and terminal Intake failure
+classification. It compiles operation-specific Intake packages, invokes an
+Intake Assistant through a narrow port, validates all assistant output as
+untrusted input, and derives immutable Projection, AnswerOnlyResponse, and
+IntakeFailureRecord identity and digest authority. It also derives each
+Clarification Answer Binding from an already admitted Question-bound Raw Request
+revision and exact command reservation; neither the user nor the assistant
+authors that record envelope or digest.
+
+The planned Runtime composition reserves each exact pre-Goal command and its
+immutable operation Manifest before external work; the Store authors the final
+command outcome from the owning transaction. Startup recovery dispatches on
+that retained operation kind. Non-Answer-only analysis interruption becomes
+terminal Intake `FAILED`, while interrupted Answer-only delivery remains
+`NO_EXECUTION / ANSWER_FAILED` and recalls no model.
+
+For `CLARIFY`, composition may preallocate identities and construct one bounded
+question specification, but the Question becomes active only when the Intent
+Admission Engine binds it in the Decision and the Store atomically validates
+the exact acyclic Decision/Question relationship.
+
+An admitted clarification answer creates a Question-bound Raw Request revision
+followed by one immutable Answer Binding in the same transaction that clears the
+single active Question reference. The Question itself remains immutable, and
+the Runtime derives answered state from the unique binding rather than a
+mutable Question status.
 
 It cannot issue an Admission Decision by itself, create a formal Goal, mutate a
 Workflow, invoke `StartGoal`, dispatch a Goal-bound Worker, issue technical
@@ -768,8 +799,9 @@ Worker, Projection, Source Binding, Admission, Start, Acceptance, or
 persistence semantics. M2 implements and validates the Worker branch only;
 Goal Intake is not an M2 exit condition.
 
-For the planned M2 branch, Codex configuration and state are execution inputs,
-not ambient host truth. Trusted composition must either disable or exactly bind
+For the implemented bounded M2 Worker branch, Codex configuration and state are
+execution inputs, not ambient host truth. Trusted composition must either
+disable or exactly bind
 every effective config layer, instruction source, tool surface, state root, and
 non-secret model/runtime option to the Workflow's installed Execution Profile.
 Managed requirements are resolved before that profile is bound and may
@@ -966,8 +998,8 @@ and
 [ADR 0025](docs/adr/0025-separate-worker-event-idempotency-from-current-dispatch-termination.md).
 Persisted budgets, backoff, and automatic retry policy remain M4 work.
 
-M2 adds one narrower planned repair stop without introducing an automatic
-retry policy. Its bounded demonstration authorizes one exact repair child. If
+M2 added one narrower bounded repair stop without introducing an automatic
+retry policy. Its bounded contract authorizes one exact repair child. If
 that child fails verification, Runtime must finish the current Attempt and
 Worker Session, preserve visible repair-required authority, and create no
 generation 3, Thread, Turn, dispatch, process replay, or model fallback without
@@ -1014,6 +1046,13 @@ inspection, filesystem isolation verification, migration, post-migration
 authority validation, and exact binding comparison. Only after activation does
 composition invoke startup recovery, and recovery completes before any handler
 capability is published.
+
+The planned M2.5 extension under ADR 0034 adds every retained Intake project
+reference to that decoded snapshot. A structured project root supplied by
+`intake submit` or an eligible `intake clarify` is carried separately as an
+explicit denial root in the same isolation lease; it does not replace retained
+paths or become Raw Request authority until the active Runtime validates and
+commits the exact command.
 
 ## Initial Deployment Model
 

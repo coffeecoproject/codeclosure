@@ -107,8 +107,8 @@ Worker Adapter
 Codex App Server (M2)
 ```
 
-The public entry is `codeclosure`. Codex is the planned M2 execution backend,
-not the product entry and not the completion authority.
+The public entry is `codeclosure`. Codex is the implemented bounded M2 execution
+backend, not the product entry and not the completion authority.
 
 ## Canonical Documents
 
@@ -138,8 +138,10 @@ Repository instructions and document precedence are defined in
 M1 proved the deterministic local control plane with `FakeWorker`; M2 proved a
 bounded real-Codex Candidate, verification, repair, and recovery vertical slice
 under the same authority rules. Both remain required regression baselines.
-M2.5 Goal Intake is the next milestone, but its implementation has not started
-and requires its own detailed plan.
+M2.5 Goal Intake is the next milestone. Its detailed
+[implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
+[acceptance plan](docs/plans/m2.5-acceptance-plan.md) now exist, but product
+implementation has not started.
 
 ## Non-Goals
 

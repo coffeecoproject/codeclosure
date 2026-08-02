@@ -94,8 +94,10 @@ Raw Request Revision
              -> Intent Projection Revision
              -> Intent Admission Decision
                   |-- CLARIFY
+                  |     -> exact bound ClarificationQuestion (one active)
                   |     -> NEEDS_CLARIFICATION
-                  |     -> new Raw Request Revision
+                  |     -> Question-bound Raw Request Revision
+                  |     -> immutable ClarificationAnswerBinding
                   |     -> ANALYZING
                   |
                   |-- NO_EXECUTION
@@ -120,15 +122,26 @@ Intent Projection remain pre-Goal records. Only a deterministic `MATERIALIZE`
 decision over exact source-bound input, Goal Manager validation, and the
 Runtime's atomic Materialization transaction may create the formal Goal plus
 initial Workflow.
+
+A `CLARIFY` Decision and its one active Clarification Question use the acyclic
+specification/Decision/record binding defined by Goal Intake and commit
+atomically. Neither the prepared question specification nor the Question record
+creates Workflow state or answer authority by itself. An admitted answer
+atomically creates a Question-bound Raw Request revision, a unique immutable
+Answer Binding, and clears the active Question reference; it does not mutate the
+Question or create Workflow state.
+
 An `ANSWER_ONLY` decision may invoke a separate bounded answer operation. Its
 stored `AnswerOnlyResponse` reports `ANSWER_RETURNED` or `ANSWER_FAILED` but is
 not formal authority; answer delivery failure does not change the IntakeRun
 from terminal `NO_EXECUTION` to `FAILED`. `FAILED` instead closes the current
 IntakeRun after an Intake processing failure. M2.5 does not automatically retry
 that run: another attempt requires a new IntakeRun. On restart, a valid orphaned
-`ANALYZING` run that has no committed
-Proposal or Decision and no resumable operation is atomically reconciled to
-reason-coded `FAILED` before another model call.
+`ANALYZING` run is reconciled from its immutable reservation operation kind
+before another model call. Non-Answer-only analysis work becomes reason-coded
+`FAILED`; Answer-only becomes terminal `NO_EXECUTION / ANSWER_FAILED /
+INTERRUPTED_ANSWER_DELIVERY` with an `APPLIED` command outcome. Missing or
+irreproducible inputs and operation/state mismatch fail strict reopen.
 `READY_TO_MATERIALIZE` is a derived next action, not a stored state that can be
 consumed later. The accepted boundary is defined by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)

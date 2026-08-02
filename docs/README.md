@@ -17,9 +17,14 @@
 - [`context-compiler.md`](context-compiler.md)
 - [`acceptance-engine.md`](acceptance-engine.md)
 - [`evidence-model.md`](evidence-model.md)
+- [`goal-intake.md`](goal-intake.md)
 - [`milestones.md`](milestones.md)
 - [`plans/m1-deterministic-skeleton.md`](plans/m1-deterministic-skeleton.md) —
   executable build order and proof matrix for M1.
+- [`plans/m2.5-goal-intake-materialization.md`](plans/m2.5-goal-intake-materialization.md)
+  — planned implementation order for the bounded M2.5 slice.
+- [`plans/m2.5-acceptance-plan.md`](plans/m2.5-acceptance-plan.md) — independent
+  zero-skip exit assessment for M2.5.
 
 ## Decisions and Reviews
 

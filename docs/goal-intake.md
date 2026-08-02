@@ -4,9 +4,14 @@
 
 This document defines the accepted target contract for pre-Goal Intake under
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md).
-Goal Intake is not implemented. M2 must preserve the reusable App Server client
-seam but does not implement this user flow; the first planned implementation is
-the M2.5 vertical slice in [the milestone document](milestones.md).
+[ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
+additionally closes pre-Goal command replay and retained Intake project-path
+participation in verified SQLite activation.
+Goal Intake is not implemented. M2 completed with its reusable App Server client
+seam preserved. The
+[M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
+[independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
+contract into the next bounded milestone; implementation remains not started.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout
@@ -77,7 +82,8 @@ User natural-language request
              -> Intent Analysis Proposal
              -> validated Intent Projection Revision + Source Bindings
              -> Intent Admission Decision
-                  |-- CLARIFY -> bounded question -> new Raw Request Revision
+                  |-- CLARIFY -> bounded Question -> bound Raw Request Revision
+                  |              -> immutable Clarification Answer Binding
                   |-- NO_EXECUTION
                   |     `-- ANSWER_ONLY also returns a bounded non-authoritative answer result
                   `-- MATERIALIZE
@@ -143,12 +149,19 @@ Intake records. It:
 - constructs Intake Packages;
 - invokes an Intake Assistant through a narrow port;
 - validates untrusted assistant output;
-- allocates Proposal, Projection, question, and decision identities;
+- allocates Proposal, Projection, Question, clarification Answer Binding, and
+  Decision identities;
 - constructs Runtime-owned Source Bindings and ambiguity classifications;
 - computes canonical digests;
+- constructs immutable clarification Answer Bindings from exact admitted
+  commands and Raw Request revisions;
 - classifies and persists bounded Answer-only results and Intake failures;
 - persists records, status changes, and audit atomically; and
-- exposes typed read views and next actions.
+- exposes typed read views and next actions, including the exact current
+  question ID, specification/record digests, and answer schema for verifying
+  current clarification authority plus historical Question/Answer-Binding
+  provenance; `intake clarify` still accepts no caller-restated question data
+  beyond the ID.
 
 It cannot issue an Admission Decision on its own, create or revise a formal
 Goal, mutate Workflow state, issue technical Acceptance, write a Candidate, or
@@ -209,6 +222,7 @@ RawRequestRevision
   intakeRunId
   revision
   parentRevision?
+  answeredQuestionBinding?
   principalRef
   interactionAction
   admittedUserContent
@@ -219,6 +233,13 @@ RawRequestRevision
   retentionProfile
   submittedAt
   rawRequestDigest
+
+AnsweredQuestionBinding
+  clarificationQuestionId
+  questionSpecDigest
+  questionDigest
+  intentAdmissionDecisionId
+  intentAdmissionDecisionDigest
 ```
 
 The trusted interaction surface, not the assistant, authors
@@ -241,8 +262,12 @@ or Runtime-inserted redaction token.
 `rawRequestDigest` is the named, schema-versioned canonical digest of the
 revision's semantic fields, including principal, trusted action,
 `admittedContentDigest`, declared project/constraints, retention profile, and
-revision-chain binding. Generated record IDs, Runtime-authored `submittedAt`,
-and the digest field itself remain envelope metadata as declared by the owning
+revision-chain binding. For a clarification revision it also includes the
+complete `AnsweredQuestionBinding`; every other revision rejects that embedded
+value. The embedded Question and Decision IDs are governed relationship
+identities in this projection, not revision-envelope metadata. Any separately
+generated revision-record identity, Runtime-authored `submittedAt`, and the
+digest field itself remain envelope metadata as declared by the owning
 projection. Downstream Proposal, Projection, Admission, Materialization, and
 Start records bind this revision digest; they do not substitute the text-only
 digest for whole-revision identity.
@@ -255,8 +280,30 @@ submission; it does not silently replace content and preserve
 Redacted display and audit projections are derived separately and never become
 Raw Request source content.
 
-A clarification answer or correction creates a new immutable revision. It
-does not rewrite what the user previously said.
+A clarification answer or correction creates a new immutable revision with one
+complete `AnsweredQuestionBinding`. It does not rewrite what the user previously
+said or mutate the Question that it answers.
+
+The bounded M2.5 clarification command identifies one exact
+`ClarificationQuestionId`. The caller does not restate question content or
+digests; Runtime resolves and binds the retained `questionSpecDigest` and exact
+`questionDigest`. It validates that the question belongs to the Intake Run, is
+its single current unanswered question, still binds the current `CLARIFY`
+Decision and authority, and accepts the supplied answer shape before binding
+the new revision. The same transaction creates the immutable
+`ClarificationAnswerBinding` described below and clears the active Question
+reference. Question order or display position is never answer authority.
+
+When a current Clarification Question permits the user to establish or correct
+the filesystem project identity, the trusted surface captures that value as a
+separate structured project-path input. It is normalized and included in the
+pre-activation isolation lease before Runtime receives the command. After
+activation, Runtime validates the exact Intake version, current question ID,
+both question digests, and issuing Decision binding before binding the path to
+the new Raw Request revision. Free-form answer text, assistant output, and a
+project path supplied to an unrelated question cannot be interpreted as
+replacement project authority. If the current question does not permit a
+project correction, the user must start a new Intake Run.
 
 ## Intake Run
 
@@ -272,7 +319,7 @@ IntakeRun
   projectRef?
   activeRawRequestRevision
   activeIntentProjectionRevision?
-  activeQuestionRefs[]
+  activeQuestionRef?
   terminalDecisionRef?
   terminalFailureRef?
   answerOnlyResponseRef?
@@ -280,6 +327,19 @@ IntakeRun
   createdAt
   updatedAt
 ```
+
+For M2.5, `activeQuestionRef` is absent or carries exactly one Question ID,
+`questionSpecDigest`, `questionDigest`, and issuing Decision ID/digest. A bare
+Question ID is not sufficient current-question authority. Immutable Question
+and Answer Binding rows retain history; the IntakeRun current-state field does
+not double as a history collection. A future batch protocol requires a new
+schema and policy rather than relaxing this singular field.
+
+`NEEDS_CLARIFICATION` requires exactly one `activeQuestionRef` whose Question
+has no Answer Binding. `ANALYZING` and every terminal status require the field
+to be absent. The clarification-answer transaction moves directly from the
+first shape to `ANALYZING` with no active reference; Store and strict reopen
+reject every other status/reference/binding combination.
 
 Planned `IntakeRunStatus` values are:
 
@@ -317,6 +377,87 @@ shape fails schema, transaction, and strict-reopen validation.
 
 `READY_TO_MATERIALIZE` may be rendered as a derived next action from a current
 admission plan. It is not persisted as a reusable lifecycle authorization.
+
+## Pre-Goal Command Reservation and Replay
+
+Pre-Goal Intake commands use the separate immutable contract accepted in
+[ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md).
+They MUST NOT target a placeholder Goal or weaken the existing Goal/Workflow
+`processed_commands` contract.
+
+Before invoking an Intent-analysis assistant, Answer-only assistant, or future
+project observer, Runtime atomically persists one exact
+`IntakeCommandReservation`, the initial Raw Request/IntakeRun authority, exact
+operation Manifest/bindings, and audit. The reservation binds `CommandId`,
+closed operation kind, trusted principal, target, canonical input digest,
+expected/observed Intake version, Manifest/policy/adapter/response-contract
+identity when external work is required, and causal time. Failure to commit
+that boundary authorizes no external call.
+
+For clarification, the reservation and canonical command input additionally
+bind the exact current `ClarificationQuestionId`, `questionSpecDigest`,
+`questionDigest`, and answer schema resolved from Store. A stale, foreign,
+already answered, Decision-mismatched, spec-substituted, or record-substituted
+question creates no Raw Request revision and invokes no assistant.
+
+An accepted clarification reservation atomically creates the new Raw Request
+revision with its embedded `AnsweredQuestionBinding`, one unique immutable
+`ClarificationAnswerBinding`, the cleared active Question reference, updated
+IntakeRun version/status, exact operation Manifest/bindings, and audit before
+the next analysis call. Partial answer authority is never externally visible.
+
+A deterministic admitted rejection instead commits the reservation,
+`REJECTED` outcome, exact observed Intake version, and audit together. It
+creates no Raw Request revision, Intake lifecycle transition, or external call.
+Invalid input, missing target, replay-integrity failure, and command conflict do
+not become stored rejections.
+
+The final compound transaction adds one separate immutable Store-authored
+`IntakeCommandOutcome`:
+
+- `APPLIED` for a committed `CLARIFY`, intentional `NO_EXECUTION`, successful
+  Materialization, or `NO_EXECUTION / ANSWER_FAILED` result;
+- `REJECTED` for a deterministic admitted command rejection against one exact
+  Intake version; or
+- `FAILED` only when one terminal Intake Failure Record, `FAILED` status, audit,
+  and result commit together.
+
+An uncommitted Store, audit, codec, clock, replay-integrity, command-conflict,
+or adapter failure cannot become a stored final outcome. The active state of a
+reservation with no outcome is derived; the reservation itself is not mutated
+through status strings.
+
+Exact active duplicate delivery starts no second external operation and exposes
+only a typed non-authoritative `IN_PROGRESS` view or the same in-process
+completion. Exact final replay returns the stored Intake outcome without
+another assistant call or new Raw Request revision, Clarification Answer
+Binding, Intake, Admission, Goal, Workflow, Materialization, Start
+Authorization, or Intake audit effect. Reusing a `CommandId` with another input
+digest fails closed. Startup reconciles only a structurally valid orphaned
+operation according to its immutable operation kind before publishing handlers;
+corrupt or mixed authority blocks strict reopen.
+
+The separately preallocated ordinary `StartGoal` command still uses the
+existing Goal/Workflow command journal. An Intake outcome cannot replace its
+processed outcome or become completion authority. After replay of a
+materialized `AUTHORIZE_START` result, the application coordinator may
+separately resubmit only that exact Start command. Ordinary first-Start guards
+then perform a still-missing Start, return its processed result, or reject it;
+they cannot recreate first-Start authority or redispatch a retained Attempt.
+
+A trusted deterministic preflight that already knows a no-external-operation
+terminal result commits the current Intake authority, any admitted new Raw
+Request revision, reservation, `NO_EXECUTION` Decision, terminal status,
+`APPLIED` outcome, and audits in one transaction. It creates no intermediate
+`ANALYZING` operation and cannot be recovered as interrupted assistant work.
+
+An orphaned Answer-only reservation is not an orphaned Intent-analysis result.
+At startup, its immutable operation kind authorizes only deterministic
+recalculation of the exact prepared Admission input and one atomic
+`NO_EXECUTION / ANSWER_FAILED / INTERRUPTED_ANSWER_DELIVERY` response, audit,
+and `APPLIED` outcome. Recovery does not recall the assistant. An unprovable
+Decision binding or operation/state mismatch blocks reopen instead of becoming
+either `ANSWER_FAILED` or Intake `FAILED`.
 
 ## Intent Analysis Proposal
 
@@ -479,29 +620,107 @@ MaterialAmbiguity
   resolvedByRawRequestRevision?
 ```
 
-One or more unresolved material ambiguities require `CLARIFY`. The same
-transaction persists bounded `ClarificationQuestion` records:
+One or more unresolved material ambiguities require `CLARIFY`. Under M2.5,
+trusted Runtime composition first constructs one bounded canonical question
+specification and preallocates the Decision and Question IDs:
 
 ```text
-ClarificationQuestion
-  id
+ClarificationQuestionSpec
+  schemaVersion
   intakeRunId
   basedOnProjectionRevision?
   ambiguityRef
   prompt
   affectedFields[]
   answerSchema
+  questionSpecDigest
+
+QuestionPlanBinding
+  questionId
+  questionSpecDigest
+
+ClarificationQuestion
+  id
+  schemaVersion
+  intakeRunId
+  intentAdmissionDecisionId
+  intentAdmissionDecisionDigest
+  basedOnProjectionRevision?
+  ambiguityRef
+  prompt
+  affectedFields[]
+  answerSchema
+  questionSpecDigest
   createdAt
-  answeredByRawRequestRevision?
+  questionDigest
 ```
+
+`ClarificationQuestionSpec` is an embedded canonical value, not an independent
+authority record. `questionSpecDigest` covers its exact Intake, Projection,
+ambiguity, prompt, affected fields, and answer schema, and excludes the
+preallocated Decision/Question IDs, timestamps, and its own digest output. The
+Admission Engine may return `CLARIFY` only with a
+`QuestionPlanBinding` for that preallocated Question ID and exact spec digest.
+The Decision semantic digest includes the spec digest but excludes the generated
+Question ID under ADR 0006.
+
+After the Engine issues the Decision, the Coordinator constructs the immutable
+Question record by repeating the exact specification and binding the issuing
+Decision ID/digest. `questionDigest` is an exact relationship digest that
+includes the Question ID, Decision ID/digest, repeated specification, and
+`questionSpecDigest`; it excludes only `createdAt` and itself. The Decision does
+not include `questionDigest`, so digest construction remains acyclic. Store
+independently recomputes both digests and atomically validates the repeated
+fields, Decision-to-Question references, current ambiguity/Projection, exactly
+one active question, lifecycle transition, audit, and command outcome. No
+Decision-only or Question-only write is valid.
+
+An accepted answer creates a separate immutable relationship record:
+
+```text
+ClarificationAnswerBinding
+  id
+  schemaVersion
+  intakeRunId
+  clarificationQuestionId
+  questionSpecDigest
+  questionDigest
+  intentAdmissionDecisionId
+  intentAdmissionDecisionDigest
+  rawRequestId
+  rawRequestRevision
+  rawRequestDigest
+  commandId
+  canonicalCommandInputDigest
+  answeredAt
+  answerBindingDigest
+```
+
+The new Raw Request revision embeds the same Question/Decision tuple before its
+`rawRequestDigest` is computed. `answerBindingDigest` then covers the schema
+version, exact Intake, Question/Decision tuple, Raw Request ID/revision/digest,
+Command ID, and canonical command-input digest; it excludes the generated
+Answer Binding ID, `answeredAt`, and itself. The Store independently recomputes
+the Raw Request and Answer Binding digests, validates every repeated field and
+parent/current-run relationship, permits at most one Answer Binding per
+Question, and atomically clears `activeQuestionRef`. The dependency order is
+Question, then Raw Request revision, then Answer Binding, so no digest cycle is
+introduced.
 
 Questions are prioritized and bounded. The system SHOULD avoid asking for
 facts that formal `DISCOVERY` can safely establish later, and MUST NOT force
 the user to choose implementation details that do not change Goal intent or
 authorization.
 
-An answer is a new user-input revision with its own provenance. It may lead to
-a new Proposal and Projection; it does not mutate earlier records in place.
+The M2.5 Admission Policy emits exactly one active question when it returns
+`CLARIFY`. Older answered Questions and their Answer Bindings remain immutable
+history. A clarification command binds that active question's ID, spec digest,
+record digest, issuing Decision, and answer schema; it cannot answer by array
+position or carry answers for several questions.
+
+An answer is a new user-input revision with its own provenance plus one exact
+immutable Answer Binding. It may lead to a new Proposal and Projection; it does
+not mutate earlier records in place.
 
 ## Intent Admission Decision
 
@@ -562,6 +781,7 @@ ClarifyIntentDecision
   common
   kind = CLARIFY
   projectionBinding
+  questionPlanBinding
   projectOrScopeRef?
   outcome = CLARIFY
   reasonCode
@@ -581,7 +801,11 @@ MaterializeIntentDecision
 separate authority record. A Store codec MUST reject a partial identity/digest
 tuple, Projection fields on `PRE_ANALYSIS_NO_EXECUTION`, a missing project/scope
 on `MATERIALIZE`, or any unknown kind/outcome/action/disposition combination.
-`CLARIFY` requires at least one current unresolved Material Ambiguity.
+`CLARIFY` requires at least one current unresolved Material Ambiguity and one
+complete `QuestionPlanBinding`; every other Decision variant rejects that
+binding. The Store validates the plan binding against the exact Question record
+in the same compound transaction.
+
 `MATERIALIZE` requires every material ambiguity in the bound set to be resolved
 and permits `LEAVE_READY` only for `MATERIALIZE_ONLY` and `AUTHORIZE_START` only
 for `GOVERNED_EXECUTION`. `ANSWER_ONLY` cannot materialize.
@@ -661,7 +885,7 @@ Assistant calls and optional project observations occur outside a control-store
 transaction. Admission then reloads one exact current snapshot and commits one
 closed result:
 
-- `CLARIFY` persists the Decision, questions, `NEEDS_CLARIFICATION` status,
+- `CLARIFY` persists the Decision, one exact Question, `NEEDS_CLARIFICATION` status,
   audits, and command outcome atomically;
 - `NO_EXECUTION` persists the Decision, terminal `NO_EXECUTION` status, optional
   Answer-only response result, audits, and command outcome atomically; or
@@ -712,8 +936,10 @@ AnswerFailed
 
 The initial closed Answer-only failure reasons are
 `ASSISTANT_UNAVAILABLE`, `ASSISTANT_TIMEOUT`, `ASSISTANT_PROTOCOL_ERROR`, and
-`RESPONSE_REJECTED`. Raw adapter exceptions and unknown response fields do not
-enter the record or audit.
+`RESPONSE_REJECTED`; startup recovery additionally uses
+`INTERRUPTED_ANSWER_DELIVERY` only for an exact structurally valid orphaned
+Answer-only reservation. Raw adapter exceptions and unknown response fields do
+not enter the record or audit.
 
 The trusted Coordinator authors record identity, bindings, disposition, safe
 failure classification, and digests after validating the bounded response. The
@@ -777,12 +1003,16 @@ command returns the stored failure result without another assistant call. The
 user starts a new Intake Run, optionally reusing safely admitted user content,
 when they want to try again.
 
-After acquiring exclusive Runtime ownership on startup, M2.5 reconciles a valid
-persisted `ANALYZING` Run that has no committed Proposal/Decision and no
-supported resumable Intake operation to `FAILED / INTERRUPTED_ANALYSIS` in one
-versioned audited transaction before any new assistant call. Missing,
-contradictory, or corrupt authority still fails strict reopen rather than being
-rewritten as an ordinary failure.
+After acquiring exclusive Runtime ownership on startup, M2.5 uses the immutable
+reservation operation kind to reconcile a valid persisted `ANALYZING` Run
+before making any assistant call. Non-Answer-only analysis orphans become
+`FAILED / INTERRUPTED_ANALYSIS` in one versioned audited transaction. An
+Answer-only orphan instead deterministically revalidates its exact retained
+Admission input and commits `NO_EXECUTION /
+ANSWER_FAILED / INTERRUPTED_ANSWER_DELIVERY` with an `APPLIED` command outcome.
+Missing or irreproducible Decision inputs, contradictory operation/state shape,
+mixed-terminal authority, or corrupted state fail strict reopen rather than
+being rewritten as an ordinary failure.
 
 ## Goal Materialization
 
@@ -826,10 +1056,12 @@ The Materialization Record binds the complete consumed identities and digests
 to the resulting Goal and Workflow. It is not technical Acceptance and cannot
 authorize closeout or external Promotion.
 
-An exact replay returns the stored result without another effect. A stale
-version, changed source, unresolved material ambiguity, mismatched project,
-concurrent winner, reused identity with different input, or persistence failure
-produces no partial formal authority.
+An exact replay returns the stored Intake result without another
+Materialization effect. For `AUTHORIZE_START`, the coordinator may then
+separately resubmit only the preallocated ordinary Start command under the next
+section. A stale version, changed source, unresolved material ambiguity,
+mismatched project, concurrent winner, reused identity with different input, or
+persistence failure produces no partial formal authority.
 
 ## Automatic Start
 
@@ -963,7 +1195,8 @@ The planned `IntakePackage` contains only policy-authorized inputs such as:
 
 - exact Raw Request revisions and digests;
 - the current Intent Projection revision and digest, when one exists;
-- answered and unresolved Clarification Questions;
+- answered Clarification Questions with their exact Answer Bindings and the
+  current unresolved Question, when present;
 - declared project/scope identity;
 - optional bounded project observations;
 - required response schema and byte/collection budgets; and
@@ -971,8 +1204,17 @@ The planned `IntakePackage` contains only policy-authorized inputs such as:
 
 The durable `IntakeManifest` records every included or intentionally omitted
 input, its revision, provenance, digest, and budget decision. It does not carry
-fabricated Goal, Workflow, phase, Attempt, Worker Session, Candidate, Policy
-binding, Execution Profile binding, or Acceptance identities.
+fabricated Goal, Workflow, phase, Attempt, Worker Session, Candidate, Workflow
+Policy binding, Execution Profile binding, or Acceptance identities. It still
+binds its exact Admission Policy as described below.
+
+Each external Intake operation owns one immutable Manifest ID and canonical
+digest. The Manifest commits with its command reservation and exact operation
+bindings before the adapter is invoked. For Answer-only it additionally binds
+the exact prepared Decision input, Admission Policy, adapter, response
+contract, and budgets needed to classify an interrupted delivery without model
+recall. A missing, partial, or irreproducible Manifest authorizes no external
+call and cannot be repaired from conversation history.
 
 Answer-only handling uses a separate bounded `AnswerOnlyPackage` and response
 contract containing only the exact Raw Request binding, prepared
@@ -1060,11 +1302,26 @@ the project and Candidate. Tables and codecs must use explicit typed IDs,
 versions, enums, schemas, canonical profiles, and foreign-key relationships.
 
 Every Intake mutation writes current state and its audit event in one
-transaction. Raw Request revisions, Proposals, Projection revisions, Admission
-Decisions, Materialization Records, and Goal Start Authorizations are immutable.
-Startup validation and strict reopen reject broken revision chains, missing
-digests, cross-run references, multiple Materializations, conflicting Start
-authorizations, or retained formal authority without its exact source records.
+transaction. Raw Request revisions, Questions, Clarification Answer Bindings,
+Proposals, Projection revisions, Admission Decisions, Materialization Records,
+and Goal Start Authorizations are immutable. Startup validation and strict
+reopen reject broken revision chains, missing or duplicate Answer Bindings,
+active Questions that already have an Answer Binding, cross-run references,
+multiple Materializations, conflicting Start authorizations, or retained formal
+authority without its exact source records.
+
+Verified SQLite activation includes every explicit and retained Intake
+project/scope path under ADR 0034 before migration, recovery, or handler
+publication. An allowed structured project correction on `intake clarify` is
+included alongside, and never instead of, all retained paths. The bootstrap
+snapshot is a denial input for filesystem isolation, not Raw Request, Source
+Binding, Admission, Goal, or recovery authority. Only later Runtime validation
+of the exact version, project-identity Question ID, both question digests, and
+issuing Decision can bind that explicit path to a new revision. The
+post-migration decoded retained Intake/Goal project-reference set must match the
+retained pre-migration snapshot, while the current explicit path is separately
+revalidated through the same lease before Runtime may commit it. Subsequent
+strict reads and reopen then include the new retained reference.
 
 Audit payloads store safe projections and digests, not unrestricted request,
 assistant, project, or exception text. Status and audit views explain source
@@ -1075,7 +1332,17 @@ projection and excludes its own digest field. Proposal, Projection, Admission,
 Materialization, and Start-Authorization semantic digests exclude generated
 record IDs and Runtime-authored envelope timestamps unless a time-dependent
 policy explicitly includes a source-bound observed-time input. Runtime times
-still obey causal floors and remain auditable.
+still obey causal floors and remain auditable. The Admission Decision therefore
+binds `questionSpecDigest`, not the generated Question ID, in its semantic
+projection. `ClarificationQuestion.questionDigest` is separately declared an
+exact relationship projection and includes the Question ID plus issuing
+Decision ID/digest; this distinguishes exact answer authority from equivalent
+question semantics without a cyclic digest. A clarification Raw Request digest
+includes its embedded `AnsweredQuestionBinding`; the later
+`ClarificationAnswerBinding.answerBindingDigest` includes that exact revision
+digest plus its Question, Decision, and command bindings. Neither projection
+binds the later Answer Binding from the Raw Request side, so the complete
+answer chain remains acyclic.
 
 ## Privacy and Retention
 
@@ -1087,7 +1354,8 @@ define separate retention policy for:
 - redacted display content;
 - assistant request and response payloads;
 - optional project observations;
-- Projection, Source Binding, ambiguity, and question records;
+- Projection, Source Binding, ambiguity, Question, and clarification Answer
+  Binding records;
 - Admission and Materialization records; and
 - diagnostic transcripts and worker-session state.
 
@@ -1161,8 +1429,9 @@ failure/restart handling, optional separately committed automatic Start, basic
 CLI/read views, persistence/reopen, and adversarial authority tests.
 
 Basic M2.5 does not require broad project exploration, full Fact Graph,
-automatic Goal revision, rich TUI, multiple Intake agents, or a long-term
-business knowledge base.
+automatic Goal revision, multiple simultaneous Questions, batch answers, a
+Question lifecycle state machine, rich TUI, multiple Intake agents, or a
+long-term business knowledge base.
 
 ### M3 and M4
 
@@ -1195,12 +1464,19 @@ Before M2.5 can claim completion, tests must cover at least:
 1. a clear source-bound execution command materializes exactly one Goal and
    binds exactly one Goal Start Authorization plus its automatic ordinary Start
    command identity;
-2. a material ambiguity produces bounded clarification and no Goal;
+2. a material ambiguity produces exactly one active bounded question and no
+   Goal; clarification binds its exact Question ID, specification/record
+   digests, and issuing Decision; an accepted answer creates one bound Raw
+   Request revision and unique immutable Answer Binding while clearing the
+   active reference; positional, stale, foreign, already answered, or
+   mismatched question input fails closed;
 3. Answer-only returns either bounded `ANSWER_RETURNED` content or a typed
    `ANSWER_FAILED` result while creating no Goal, and exact committed replay
    does not call the assistant again;
 4. denied, unsupported, and abandoned requests remain distinct non-execution
-   results with `answerDisposition = NOT_REQUESTED`;
+   results with `answerDisposition = NOT_REQUESTED`, and a dispositive
+   no-external preflight commits its reservation, Decision, terminal state,
+   `APPLIED` outcome, and audits without an intermediate `ANALYZING` state;
 5. a governed read-only repository investigation is not incorrectly treated as
    answer-only;
 6. assistant output claiming Admission, Goal identity, user action, or formal
@@ -1209,16 +1485,26 @@ Before M2.5 can claim completion, tests must cover at least:
    payloads;
 8. Proposal, Projection, revision, digest, parent-chain, Source Binding, and
    project/scope mismatch, including partial bindings, Projection fields on a
-   pre-analysis Decision, and missing project/scope on `MATERIALIZE`;
+   pre-analysis Decision, missing project/scope on `MATERIALIZE`, substituted
+   Question-plan/Decision binding, prompt, affected fields, answer schema,
+   question-spec/record digest, issuing Decision, embedded
+   `AnsweredQuestionBinding`, or immutable Answer Binding, an unrelated
+   clarification attempting a project correction, and a permitted structured
+   correction failing to include both retained and explicit roots in
+   pre-activation isolation;
 9. a material Projection field supported only by model inference, redacted
    display text, an omission marker, or unavailable source content;
 10. Answer-only content offered as Source Binding, Fact, Criterion, Human
     Decision, Evidence, Acceptance, Goal, Workflow, or execution authority;
 11. new user input after an earlier Projection or Admission computation;
-12. concurrent Materialization attempts and exact command replay;
-13. injected failure at every Admission/Goal/Workflow/Materialization/Start-
-    Authorization/audit/outcome write boundary;
-14. a crash before Start, a failure during Start, and replay after Start commit;
+12. concurrent clarification answers, concurrent Materialization attempts, and
+    exact command replay producing at most one respective effect;
+13. injected failure at every `CLARIFY` Decision/Question/active-reference,
+    clarification Raw Request/Answer-Binding/active-reference, Goal/Workflow/
+    Materialization/Start-Authorization/audit/outcome write boundary;
+14. a crash before Start, a failure during Start, Intake replay followed by the
+    separately resubmitted exact preallocated Start command, and replay after
+    Start commit;
 15. the preallocated automatic `StartGoal` racing a different explicit manual
     `StartGoal`, with exactly one first-Start Policy/Profile binding, Context,
     Attempt, dispatch claim, and typed loser outcome;
@@ -1229,14 +1515,19 @@ Before M2.5 can claim completion, tests must cover at least:
 19. assistant timeout, unavailability, protocol failure, and interrupted
     analysis producing one terminal typed `FAILED` result with no automatic
     recall;
-20. restart converting a valid orphaned `ANALYZING` Run to exactly one
-    `FAILED / INTERRUPTED_ANALYSIS` result before another assistant call;
-21. restart with partial, contradictory, mixed-terminal, or corrupted Intake
-    authority;
+20. restart resolving a valid orphaned `ANALYZING` Run by reservation operation
+    kind before another assistant call: Intent analysis becomes exactly one
+    `FAILED / INTERRUPTED_ANALYSIS` result, while Answer-only becomes exactly
+    one `APPLIED / NO_EXECUTION / ANSWER_FAILED /
+    INTERRUPTED_ANSWER_DELIVERY` result;
+21. restart with missing, duplicate, cross-Intake, or digest-mismatched
+    clarification Answer Bindings, an answered active Question, or other
+    partial, contradictory, mixed-terminal, or corrupted Intake authority;
 22. Codex process exit, Compact, Thread loss, and interrupted proposal stream;
 23. Intake adapter or project explorer attempting Store, Goal, Workflow,
     Candidate, Evidence, source-write, WorkerPort, or StartGoal access;
 24. Intake observation or Answer-only content offered as Goal-bound Evidence;
 25. direct `CreateGoal` regression without synthesized Intake records; and
-26. successful strict reopen reproducing the exact Raw Request-to-Projection-
-    Admission-to-Goal authority chain and separate Start disposition.
+26. successful strict reopen reproducing the exact Question-to-Raw-Request-to-
+    Answer-Binding-to-Projection-to-Admission-to-Goal authority chain and
+    separate Start disposition.

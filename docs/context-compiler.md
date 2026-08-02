@@ -240,7 +240,7 @@ ContextManifest
   manifestDigest
 ```
 
-The planned protected M2 Context schema is additive. Under the bounded
+The implemented protected M2 Context schema is additive. Under the bounded
 acceptance-critical Profile, both the Package identity and Manifest MUST carry
 the same `AcceptanceCriticalVerificationPlan` ID/digest from the first Context
 through every later Worker Context. The two fields MUST be present together and
@@ -581,7 +581,8 @@ Context Compiler.
 The planned Intake path instead uses:
 
 ```text
-Raw Request revision + optional current Intent Projection + clarification state
+Raw Request revision + optional current Intent Projection
+  + current Question / immutable Answer-Binding clarification state
   + optional bounded project observations
   + Intake policy and assistant response contract
   -> Intake Package + Intake Manifest
@@ -589,12 +590,13 @@ Raw Request revision + optional current Intent Projection + clarification state
 ```
 
 An Intake Manifest binds only IntakeRun, Raw Request revision/digest, optional
-current Intent Projection revision/digest, question, project/scope, Intake
-policy, adapter, provenance, omission, and budget identity. It cannot be used as
-a Goal-bound Context Manifest, Worker dispatch claim, Evidence input, or
-Acceptance input. Source Binding, Material Ambiguity, and Intent Admission are
-performed by their owning Runtime components after assistant output validates;
-the assistant and Intake compiler cannot author those decisions. A
+current Intent Projection revision/digest, current Question or historical
+Question/Answer-Binding references, project/scope, Intake policy, adapter,
+provenance, omission, and budget identity. It cannot be used as a Goal-bound
+Context Manifest, Worker dispatch claim, Evidence input, or Acceptance input.
+Source Binding, Material Ambiguity, and Intent Admission are performed by their
+owning Runtime components after assistant output validates; the assistant and
+Intake compiler cannot author those decisions. A
 `PRE_ANALYSIS_NO_EXECUTION` decision does not compile an intent-analysis Intake
 Package or call the assistant to decide Admission. Its `ANSWER_ONLY` subtype
 may use a separate `AnswerOnlyPackage` and bounded answer response contract,

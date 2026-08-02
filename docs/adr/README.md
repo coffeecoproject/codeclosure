@@ -39,6 +39,7 @@ supersedes it.
 | [0031](0031-protect-acceptance-critical-verification-from-worker-writable-assets.md) | Protect acceptance-critical verification from Worker-writable assets | Accepted |
 | [0032](0032-close-bounded-m2-protected-verification-composition.md) | Close bounded M2 protected-verification composition | Accepted |
 | [0033](0033-align-protected-verification-with-start-and-check-lifecycle.md) | Align protected verification with Start and Check lifecycle | Accepted |
+| [0034](0034-close-pre-goal-command-replay-and-sqlite-activation.md) | Close pre-Goal command replay and SQLite activation | Accepted |
 
 ## ADR lifecycle
 

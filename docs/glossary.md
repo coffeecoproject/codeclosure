@@ -38,7 +38,7 @@ freeze time. Evidence and acceptance bind to this digest.
 
 ## Candidate Workspace Lease
 
-A planned M2 Runtime-issued, digest-bound authority that resolves one exact
+An implemented M2 Runtime-issued, digest-bound authority that resolves one exact
 Candidate generation below a CodeClosure-owned workspace root. It grants only
 the declared mutable or read-only access mode and cannot be replaced with the
 user source checkout, authority home, another generation, or a filesystem
@@ -49,12 +49,22 @@ alias.
 The successful technical terminal phase for one accepted Goal revision and
 Candidate. Closeout is not merge, release, deployment, or production consent.
 
+## Clarification Answer Binding
+
+A planned M2.5 immutable relationship from one exact Clarification Question,
+its issuing Admission Decision, and one admitted clarification command to the
+new Raw Request revision that carries the user's answer. Its existence, rather
+than mutation of the Question, establishes that the Question was answered.
+
 ## Clarification Question
 
-A versioned, scoped pre-Goal question whose answer may materially change a Goal
-Projection's objective, criteria, scope, non-goals, project identity, risk, or
-execution authorization. It is not a Workflow blocker because no formal
-Workflow exists yet.
+A versioned, scoped pre-Goal question whose answer may materially change an
+Intent Projection's objective, criteria, scope, non-goals, project identity,
+risk, or execution authorization. It is not a Workflow blocker because no formal
+Workflow exists yet. In planned M2.5, it becomes active only through an
+Engine-issued `CLARIFY` binding to its preallocated ID and specification digest;
+its exact record digest then binds the issuing Decision. M2.5 permits at most
+one active question, and the Question remains immutable after an answer.
 
 ## Completion Request
 
@@ -88,14 +98,14 @@ semantics.
 
 ## External Backend Capability Record
 
-A planned M2 Runtime-owned classification of exact binary/schema behavior as
+An implemented M2 Runtime-owned classification of exact binary/schema behavior as
 `SUPPORTED`, `UNSUPPORTED`, or `UNKNOWN`, with its proof source. An Execution
 Profile may select only supported capabilities; protocol method presence alone
 does not prove operational behavior.
 
 ## External Execution Record
 
-A planned M2 protocol-neutral Runtime record that binds durable dispatch intent
+An implemented M2 protocol-neutral Runtime record that binds durable dispatch intent
 to observed external process, backend session, operation, and terminal state.
 Codex Thread and Turn IDs may appear only as opaque backend references and do
 not become Workflow, Worker-result, or completion authority.
