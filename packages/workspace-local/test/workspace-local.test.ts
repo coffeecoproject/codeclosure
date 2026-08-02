@@ -60,6 +60,7 @@ import {
   LocalCandidateWorkspaceFailureCode,
   WorkspaceReconciliationClassification,
   createLocalCandidateWorkspace,
+  observeLocalCandidateSourceIdentity,
   type LocalCandidateWorkspace,
 } from '@codeclosure/workspace-local';
 import {
@@ -354,6 +355,20 @@ function freeze(
   }
   return { frozen, observation };
 }
+
+void test('[I-007][M2-F04] source identity observes tree bytes separately from Git metadata', (t) => {
+  const value = fixture(t);
+  const before = observeLocalCandidateSourceIdentity(value.sourceRoot);
+
+  writeFileSync(join(value.sourceRoot, 'src', 'order.ts'), 'export const charge = "changed";\n');
+  const contentChanged = observeLocalCandidateSourceIdentity(value.sourceRoot);
+  assert.notEqual(contentChanged.sourceTreeDigest, before.sourceTreeDigest);
+
+  git(value.sourceRoot, ['add', 'src/order.ts']);
+  const indexChanged = observeLocalCandidateSourceIdentity(value.sourceRoot);
+  assert.equal(indexChanged.sourceTreeDigest, contentChanged.sourceTreeDigest);
+  assert.notEqual(indexChanged.sourceGitMetadataDigest, contentChanged.sourceGitMetadataDigest);
+});
 
 void test('[I-007][I-011][M2-D01][M2-D02][M2-D09] controlled copy preserves exact dirty bytes and source authority', (t) => {
   const value = fixture(t);

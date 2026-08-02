@@ -5,11 +5,31 @@ import ts from 'typescript';
 
 const PRIVILEGED_PACKAGE_ROOTS = new Map([
   [
+    '@codeclosure/adapter-codex',
+    'CLI adapters must not import the raw Codex Worker adapter capability.',
+  ],
+  [
+    '@codeclosure/codex-app-server-client',
+    'CLI adapters must not import the raw Codex App Server client capability.',
+  ],
+  [
+    '@codeclosure/domain',
+    'CLI adapters must receive compiled views rather than construct Domain authority.',
+  ],
+  [
     '@codeclosure/runtime/composition',
     'CLI adapters must receive the public application facade, not construct Runtime coordinators.',
   ],
   ['@codeclosure/store-sqlite', 'CLI adapters must not import the control Store.'],
   ['@codeclosure/testing', 'CLI adapters must not import test fixtures or fake capabilities.'],
+  [
+    '@codeclosure/verification-local',
+    'CLI adapters must not import the raw local verifier capability.',
+  ],
+  [
+    '@codeclosure/workspace-local',
+    'CLI adapters must not import the raw Candidate workspace capability.',
+  ],
 ]);
 
 const PUBLIC_ADAPTER_RUNTIME_IMPORTS = new Set([
@@ -19,6 +39,7 @@ const PUBLIC_ADAPTER_RUNTIME_IMPORTS = new Set([
   'CommandOutput',
   'CreateGoalRequest',
   'DrivenGoalCommandResult',
+  'ExternalFailureCodeView',
   'FailedCommandOutput',
   'GoalAuditEventView',
   'GoalAuditView',
@@ -67,6 +88,93 @@ const RUNTIME_PROFILE_COMPOSITION_IMPORTS = new Set([
   'RuntimeExecutionProfileResolver',
 ]);
 
+const M2_CODEX_ADAPTER_IMPORTS = new Set([
+  'CODEX_WORKER_CANDIDATE_TRUST_POLICY',
+  'CODEX_WORKER_DISABLED_FEATURES',
+  'CODEX_WORKER_PROMPT_PROFILE',
+  'CODEX_WORKER_PROMPT_TEMPLATE_DIGEST',
+  'CodexExecutionProfileDirective',
+  'CodexWorkerRequestBinding',
+  'createCodexWorkerAdapter',
+  'createCodexWorkerDirective',
+  'digestCanonical',
+]);
+
+const M2_CODEX_CLIENT_IMPORTS = new Set([
+  'AppServerProcessLaunch',
+  'JsonValue',
+  'VerifiedCodexInstallation',
+  'createControlledAppServerLaunch',
+  'isJsonObject',
+  'startAppServerClient',
+  'verifyBundledCodexInstallation',
+]);
+
+const M2_CODEX_DOMAIN_IMPORTS = new Set([
+  'CandidateGenerationState',
+  'ExternalBackendCapability',
+  'ExternalBackendCapabilityClassification',
+  'ExternalBackendCapabilityRecord',
+  'ExternalCompactionPolicy',
+  'ExternalContinuityPolicy',
+  'ExternalExecutionIntent',
+  'ExternalExecutionProfileDefinition',
+  'ExternalFallbackPolicy',
+  'ExternalInterruptionPolicy',
+  'ExternalRetentionPolicy',
+  'ExternalThreadPolicy',
+  'ExternalWorkerDispatchPolicy',
+  'RunStatus',
+  'WorkflowPhase',
+  'externalBackendCapabilityRecordProjection',
+  'isoTimestamp',
+  'sha256Digest',
+]);
+
+const M2_PROOF_CLIENT_IMPORTS = new Set(['AppServerClientError', 'AppServerClientErrorCode']);
+
+const M2_PROOF_DOMAIN_IMPORTS = new Set([
+  'EvidenceKind',
+  'EvidenceResultStatus',
+  'ExecutionProfileDefinition',
+  'ExternalExecutionRecord',
+  'ExternalExecutionProfileDefinition',
+  'ExternalWorkerDispatchPolicy',
+  'PolicyBundleDefinition',
+  'createGoal',
+  'createWorkflow',
+  'externalExecutionId',
+  'executionProfileId',
+  'goalId',
+  'goalRevision',
+  'isoTimestamp',
+  'policyBundleId',
+  'sha256Digest',
+  'successCriterionId',
+  'workflowId',
+]);
+
+const M2_PROOF_RUNTIME_COMPOSITION_IMPORTS = new Set([
+  'CandidateLeasedWorkerFactory',
+  'RuntimeExecutionProfile',
+  'WorkflowDriverCapability',
+  'createCandidateLeasedWorker',
+  'createM1DeterministicPhaseGuardEvaluator',
+  'createProtectedM2WorkflowDriver',
+]);
+
+const M2_PROOF_VERIFICATION_IMPORTS = new Set([
+  'DARWIN_SEATBELT_PROFILE_ID',
+  'LOCAL_COMMAND_RUNNER_IDENTITY',
+  'LOCAL_COMMAND_RUNNER_VERSION',
+  'createDarwinSeatbeltIsolation',
+  'createLocalCommandVerificationRunner',
+  'createProtectedAssetReadLeaseAuthority',
+  'darwinSeatbeltProtectedProfileDigest',
+  'inspectProtectedVerificationAsset',
+  'protectedVerificationAssetManifestDigest',
+]);
+
 const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
   [
     'apps/cli/src/composition/trusted-composition.ts',
@@ -81,6 +189,34 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
     new Map([
       ['@codeclosure/runtime/composition', RUNTIME_PROFILE_COMPOSITION_IMPORTS],
       ['@codeclosure/testing', TRUSTED_COMPOSITION_TESTING_IMPORTS],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m2-codex-worker-invocation.ts',
+    new Map([
+      ['@codeclosure/adapter-codex', M2_CODEX_ADAPTER_IMPORTS],
+      ['@codeclosure/codex-app-server-client', M2_CODEX_CLIENT_IMPORTS],
+      ['@codeclosure/domain', M2_CODEX_DOMAIN_IMPORTS],
+      ['@codeclosure/runtime/composition', new Set(['CandidateLeasedWorkerAuthorityReader'])],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m2-protected-demo-proof.ts',
+    new Map([
+      ['@codeclosure/codex-app-server-client', M2_PROOF_CLIENT_IMPORTS],
+      ['@codeclosure/domain', M2_PROOF_DOMAIN_IMPORTS],
+      ['@codeclosure/runtime/composition', M2_PROOF_RUNTIME_COMPOSITION_IMPORTS],
+      ['@codeclosure/store-sqlite', new Set(['openSqliteControlStore'])],
+      ['@codeclosure/testing', new Set(['DeterministicIds', 'FakeWorker', 'FakeWorkerFixture'])],
+      ['@codeclosure/verification-local', M2_PROOF_VERIFICATION_IMPORTS],
+      [
+        '@codeclosure/workspace-local',
+        new Set([
+          'LocalCandidateSourceIdentity',
+          'createLocalCandidateWorkspace',
+          'observeLocalCandidateSourceIdentity',
+        ]),
+      ],
     ]),
   ],
   ['apps/cli/src/composition/m1-restart-proof-observer.ts', new Map()],
@@ -172,6 +308,37 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
     Object.freeze({
       values: new Set(['runM1RestartResumeProof']),
       types: new Set(),
+    }),
+  ],
+  [
+    'apps/cli/src/composition/m2-codex-worker-invocation.ts',
+    Object.freeze({
+      values: new Set([
+        'M2_CODEX_PERMISSION_PROFILE_ID',
+        'createTrustedCodexInvocation',
+        'prepareTrustedCodexProfile',
+      ]),
+      types: new Set([
+        'CreateTrustedCodexInvocationInput',
+        'M2CodexAdapterDiagnostic',
+        'PrepareTrustedCodexProfileInput',
+        'TrustedCodexProfileAuthority',
+        'TrustedCodexRoots',
+      ]),
+    }),
+  ],
+  [
+    'apps/cli/src/composition/m2-protected-demo-proof.ts',
+    Object.freeze({
+      values: new Set(['M2ExternalDemoBlockedError', 'runM2ProtectedDemoProof']),
+      types: new Set([
+        'M2AdapterFailureDemoProof',
+        'M2ExternalDemoMode',
+        'M2ExternalDemoOptions',
+        'M2LiveDemoProof',
+        'M2ProtectedDemoMode',
+        'M2ProtectedDemoProof',
+      ]),
     }),
   ],
 ]);
@@ -306,6 +473,29 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
       ],
     ]),
   ],
+  [
+    'apps/cli/src/composition/m2-codex-worker-invocation.js',
+    new Map([
+      [
+        'apps/cli/src/composition/m2-protected-demo-proof.ts',
+        new Set([
+          'M2CodexAdapterDiagnostic',
+          'TrustedCodexProfileAuthority',
+          'createTrustedCodexInvocation',
+          'prepareTrustedCodexProfile',
+        ]),
+      ],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m2-protected-demo-proof.js',
+    new Map([
+      [
+        'apps/cli/src/composition/demo-proof.ts',
+        new Set(['M2ExternalDemoBlockedError', 'M2LiveDemoProof', 'runM2ProtectedDemoProof']),
+      ],
+    ]),
+  ],
 ]);
 
 const DYNAMIC_LOADER_MODULES = new Set(['module', 'node:module']);
@@ -315,6 +505,7 @@ const CLI_ENTRY_COMPOSITION_IMPORTS = new Set([
   'createCliCommandId',
   'createCliInvocationComposition',
   'runM1DemoProof',
+  'runDemoProof',
   'validateCliStartProfileName',
 ]);
 
@@ -327,6 +518,7 @@ const TRUSTED_COMPOSITION_ROOT_EXPORTS = new Map([
     }),
   ],
   ['./m1-demo-proof.js', Object.freeze({ values: new Set(['runM1DemoProof']), types: new Set() })],
+  ['./demo-proof.js', Object.freeze({ values: new Set(['runDemoProof']), types: new Set() })],
   [
     './trusted-composition.js',
     Object.freeze({
@@ -370,6 +562,12 @@ const NODE_BUILTIN_MODULES_BY_FILE = new Map([
   ],
   ['apps/cli/src/composition/m1-stale-closeout-proof.ts', new Set(['node:fs', 'node:os'])],
   ['apps/cli/src/composition/recovery-inspector.ts', new Set(['node:fs'])],
+  ['apps/cli/src/composition/demo-proof.ts', new Set(['node:fs', 'node:os', 'node:path'])],
+  ['apps/cli/src/composition/m2-codex-worker-invocation.ts', new Set(['node:fs', 'node:path'])],
+  [
+    'apps/cli/src/composition/m2-protected-demo-proof.ts',
+    new Set(['node:child_process', 'node:crypto', 'node:fs', 'node:os', 'node:path']),
+  ],
 ]);
 
 // This source gate catches statically evident engineering miswiring. It is not a
@@ -684,6 +882,10 @@ export function findCliBoundaryViolationsInSource(source, filePath, repositoryRo
         continue;
       }
       if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
+        checkPrivilegedExportName(statement.name, statement.name.text, 'values');
+        continue;
+      }
+      if (ts.isClassDeclaration(statement) && statement.name !== undefined) {
         checkPrivilegedExportName(statement.name, statement.name.text, 'values');
         continue;
       }

@@ -5,6 +5,7 @@ import {
   RunStatus,
   WorkerResultKind,
   WorkflowPhase,
+  acceptanceCriticalVerificationPlanId,
   candidateGenerationId,
   contextManifestId,
   assertContextEntryAuthorityInvariant,
@@ -19,6 +20,7 @@ import {
   policyBundleId,
   sha256Digest,
   type Attempt,
+  type AcceptanceCriticalVerificationPlanId,
   type CandidateGenerationId,
   type ContextCompilation,
   type ContextManifest,
@@ -58,6 +60,10 @@ export interface CompileContextInput {
   readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
+  readonly protectedPlan?: {
+    readonly id: AcceptanceCriticalVerificationPlanId;
+    readonly digest: Sha256Digest;
+  };
   readonly selectedEntries?: readonly ContextSourceInput[];
   readonly omissionDecisions?: readonly ContextOmissionDecision[];
   readonly candidate?: ContextCandidateBinding;
@@ -373,6 +379,13 @@ export function contextManifestDigestProjection(
     executionProfileDigest: manifest.executionProfileDigest,
     policyBundleId: manifest.policyBundleId,
     policyBundleDigest: manifest.policyBundleDigest,
+    ...(manifest.acceptanceCriticalVerificationPlanId === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlanId: manifest.acceptanceCriticalVerificationPlanId,
+          acceptanceCriticalVerificationPlanDigest:
+            manifest.acceptanceCriticalVerificationPlanDigest,
+        }),
     capabilityGrantDigest: manifest.capabilityGrantDigest,
     responseContractDigest: manifest.responseContractDigest,
     ...(manifest.repairContextDigest === undefined
@@ -416,6 +429,13 @@ export class MinimalContextCompiler {
     const profileDigest = sha256Digest(rawInput.executionProfileDigest);
     const policyIdentifier = policyBundleId(rawInput.policyBundleId);
     const policyDigest = sha256Digest(rawInput.policyBundleDigest);
+    const protectedPlan =
+      rawInput.protectedPlan === undefined
+        ? undefined
+        : Object.freeze({
+            id: acceptanceCriticalVerificationPlanId(rawInput.protectedPlan.id),
+            digest: sha256Digest(rawInput.protectedPlan.digest),
+          });
 
     if (
       workflow.goalId !== goal.id ||
@@ -498,7 +518,7 @@ export class MinimalContextCompiler {
     }
 
     const contextPackage = decodeContextPackage({
-      schemaVersion: repair === undefined ? 2 : 3,
+      schemaVersion: protectedPlan === undefined ? (repair === undefined ? 2 : 3) : 4,
       goalId: goal.id,
       goalRevision: goal.revision,
       workflowId: workflow.id,
@@ -530,6 +550,12 @@ export class MinimalContextCompiler {
       executionProfileDigest: profileDigest,
       policyBundleId: policyIdentifier,
       policyBundleDigest: policyDigest,
+      ...(protectedPlan === undefined
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanId: protectedPlan.id,
+            acceptanceCriticalVerificationPlanDigest: protectedPlan.digest,
+          }),
       responseContract: contract,
     });
 
@@ -571,6 +597,12 @@ export class MinimalContextCompiler {
       executionProfileDigest: profileDigest,
       policyBundleId: policyIdentifier,
       policyBundleDigest: policyDigest,
+      ...(protectedPlan === undefined
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanId: protectedPlan.id,
+            acceptanceCriticalVerificationPlanDigest: protectedPlan.digest,
+          }),
       capabilityGrantDigest,
       responseContractDigest,
       ...(repairContextDigest === undefined ? {} : { repairContextDigest }),

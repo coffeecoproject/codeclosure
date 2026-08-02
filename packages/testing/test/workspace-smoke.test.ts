@@ -23,9 +23,14 @@ void test('[I-001][I-003][I-007] CLI declares only its trusted composition packa
   assert.equal('@codeclosure/store-sqlite' in dependencies, true);
   assert.equal('@codeclosure/testing' in dependencies, true);
   assert.deepEqual(Object.keys(dependencies).toSorted(), [
+    '@codeclosure/adapter-codex',
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/domain',
     '@codeclosure/runtime',
     '@codeclosure/store-sqlite',
     '@codeclosure/testing',
+    '@codeclosure/verification-local',
+    '@codeclosure/workspace-local',
     'zod',
   ]);
 });

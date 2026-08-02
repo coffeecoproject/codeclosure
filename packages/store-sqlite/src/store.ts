@@ -33,6 +33,7 @@ import {
   applyWorkflowEvent,
   acceptanceDecisionProjection,
   acceptanceInputManifestProjection,
+  acceptanceCriticalVerificationPlanProjection,
   acceptanceRepairRecordProjection,
   acceptanceDecisionId,
   aggregateVersion,
@@ -47,6 +48,7 @@ import {
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
   decodeAcceptanceRepairRecord,
+  decodeAcceptanceCriticalVerificationPlan,
   decodeCandidate,
   decodeCandidateEvent,
   decodeCandidateGeneration,
@@ -98,6 +100,7 @@ import {
   isTerminalAttemptWorkflowRunStatusAuthorized,
   policyBundleId,
   policyBundleProjection,
+  protectedAssetManifestProjection,
   workflowPolicyBindingProjection,
   recoveryReconciliationId,
   recoveryReconciliationProjection,
@@ -111,6 +114,7 @@ import {
   type AcceptanceDecisionId,
   type AcceptanceInputManifest,
   type AcceptanceRepairRecord,
+  type AcceptanceCriticalVerificationPlan,
   type Attempt,
   type AttemptEvent,
   type AttemptId,
@@ -163,6 +167,8 @@ import {
   compileBoundedM2RepairContext,
   contextManifestDigestProjection,
   compileM1AcceptanceInput,
+  createProtectedAssetReadLease,
+  assertProtectedLocalCommandCheckMatchesPlan,
   createAppliedStoredCommandOutcome,
   createRejectedStoredCommandOutcome,
   canonicalizeJson,
@@ -252,6 +258,7 @@ import {
   type PolicyInstallResult,
   type RecordIgnoredWorkerEvent,
   RecoverableBlockerKind,
+  RecoveryContinuityBarrier,
   type RecoveryCatalogEntry,
   type RecordCommandRejection,
   type StoreCommandResult,
@@ -282,6 +289,7 @@ import {
   decodeAcceptanceDecisionRow,
   decodeAcceptanceInputManifestRow,
   decodeAcceptanceRepairRow,
+  decodeAcceptanceCriticalVerificationPlanRow,
   decodeAuditEvent,
   decodeCandidateGenerationRow,
   decodeCandidateRow,
@@ -341,6 +349,8 @@ export const WorkerTransactionStep = {
   AFTER_EXECUTION_PROFILE_BINDING_WRITE: 'AFTER_EXECUTION_PROFILE_BINDING_WRITE',
   AFTER_WORKFLOW_POLICY_BINDING_AUDIT_WRITE: 'AFTER_WORKFLOW_POLICY_BINDING_AUDIT_WRITE',
   AFTER_WORKFLOW_POLICY_BINDING_WRITE: 'AFTER_WORKFLOW_POLICY_BINDING_WRITE',
+  AFTER_PROTECTED_VERIFICATION_PLAN_AUDIT_WRITE: 'AFTER_PROTECTED_VERIFICATION_PLAN_AUDIT_WRITE',
+  AFTER_PROTECTED_VERIFICATION_PLAN_WRITE: 'AFTER_PROTECTED_VERIFICATION_PLAN_WRITE',
 } as const;
 export type WorkerTransactionStep =
   (typeof WorkerTransactionStep)[keyof typeof WorkerTransactionStep];
@@ -909,6 +919,14 @@ function validateCommitContextBoundAttemptStart(
     rawInput.executionProfileBindingAuditEventId === undefined
       ? undefined
       : auditEventId(rawInput.executionProfileBindingAuditEventId);
+  const protectedPlan =
+    rawInput.acceptanceCriticalVerificationPlan === undefined
+      ? undefined
+      : decodeAcceptanceCriticalVerificationPlan(rawInput.acceptanceCriticalVerificationPlan);
+  const protectedPlanAuditEventId =
+    rawInput.acceptanceCriticalVerificationPlanAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.acceptanceCriticalVerificationPlanAuditEventId);
   if (
     input.event.type !== 'ATTEMPT_STARTED' ||
     input.event.attempt.contextManifestId !== contextManifest.id ||
@@ -929,6 +947,24 @@ function validateCommitContextBoundAttemptStart(
     executionProfileBinding.boundAt > contextManifest.createdAt ||
     (input.event.attempt.sequence === 1) !== (policyBindingAuditEventId !== undefined) ||
     (input.event.attempt.sequence === 1) !== (executionProfileBindingAuditEventId !== undefined) ||
+    (protectedPlan === undefined) !== (protectedPlanAuditEventId === undefined) ||
+    (contextManifest.schemaVersion === 4) !==
+      (contextManifest.acceptanceCriticalVerificationPlanId !== undefined) ||
+    (input.event.attempt.sequence === 1 && contextManifest.schemaVersion === 4) !==
+      (protectedPlan !== undefined) ||
+    (input.event.attempt.sequence !== 1 && protectedPlan !== undefined) ||
+    (protectedPlan !== undefined &&
+      (protectedPlan.id !== contextManifest.acceptanceCriticalVerificationPlanId ||
+        protectedPlan.planDigest !== contextManifest.acceptanceCriticalVerificationPlanDigest ||
+        protectedPlan.goalId !== contextManifest.goalId ||
+        protectedPlan.goalRevision !== contextManifest.goalRevision ||
+        protectedPlan.workflowId !== contextManifest.workflowId ||
+        protectedPlan.workflowVersionAtLock !== contextManifest.workflowVersion ||
+        protectedPlan.policyBundleId !== contextManifest.policyBundleId ||
+        protectedPlan.policyBundleDigest !== contextManifest.policyBundleDigest ||
+        protectedPlan.executionProfileId !== contextManifest.executionProfileId ||
+        protectedPlan.executionProfileDigest !== contextManifest.executionProfileDigest ||
+        protectedPlan.createdAt !== contextManifest.createdAt)) ||
     (input.event.attempt.sequence === 1 &&
       (policyBinding.startCommandId !== input.event.commandId ||
         policyBinding.boundAt !== input.event.occurredAt ||
@@ -948,6 +984,10 @@ function validateCommitContextBoundAttemptStart(
     ...(executionProfileBindingAuditEventId === undefined
       ? {}
       : { executionProfileBindingAuditEventId }),
+    ...(protectedPlan === undefined ? {} : { acceptanceCriticalVerificationPlan: protectedPlan }),
+    ...(protectedPlanAuditEventId === undefined
+      ? {}
+      : { acceptanceCriticalVerificationPlanAuditEventId: protectedPlanAuditEventId }),
   });
 }
 
@@ -1719,6 +1759,7 @@ export class SqliteControlStore
       store.assertRetainedCandidateEvidenceAuthorityClosure();
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
+      store.assertRetainedProtectedVerificationAuthorityClosure();
       return store;
     } catch (error) {
       database.close();
@@ -1769,6 +1810,7 @@ export class SqliteControlStore
       store.assertRetainedCandidateEvidenceAuthorityClosure();
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
+      store.assertRetainedProtectedVerificationAuthorityClosure();
       store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
       isolationLease.assertCurrent();
       database.exec('COMMIT');
@@ -1906,6 +1948,9 @@ export class SqliteControlStore
       const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
       const closeout = this.getCloseoutForWorkflow(workflow.id);
       const latestRecoveryReconciliation = this.getLatestRecoveryReconciliation(workflow.id);
+      const acceptanceCriticalVerificationPlan = this.getAcceptanceCriticalVerificationPlan(
+        workflow.id,
+      );
 
       let decisionIdentifier: AcceptanceDecisionId | undefined;
       if (closeout !== undefined) {
@@ -1969,6 +2014,9 @@ export class SqliteControlStore
             }),
         ...(closeout === undefined ? {} : { closeout }),
         ...(latestRecoveryReconciliation === undefined ? {} : { latestRecoveryReconciliation }),
+        ...(acceptanceCriticalVerificationPlan === undefined
+          ? {}
+          : { acceptanceCriticalVerificationPlan }),
       });
     });
   }
@@ -2114,6 +2162,37 @@ export class SqliteControlStore
                            AND attempt.workflow_id = ?
                       )
                     )
+                 OR (
+                      audit.aggregate_type = 'EXTERNAL_EXECUTION'
+                  AND EXISTS (
+                        SELECT 1
+                          FROM external_execution_records AS execution
+                         WHERE execution.id = audit.aggregate_id
+                           AND execution.goal_id = ?
+                      )
+                    )
+                 OR (
+                      audit.aggregate_type = 'EXTERNAL_EXECUTION_OBSERVATION'
+                  AND EXISTS (
+                        SELECT 1
+                          FROM external_execution_observations AS observation
+                          JOIN external_execution_records AS execution
+                            ON execution.id = observation.external_execution_id
+                         WHERE observation.id = audit.aggregate_id
+                           AND execution.goal_id = ?
+                      )
+                    )
+                 OR (
+                      audit.aggregate_type = 'EXTERNAL_MAINTENANCE'
+                  AND EXISTS (
+                        SELECT 1
+                          FROM external_maintenance_intents AS maintenance
+                          JOIN external_execution_records AS execution
+                            ON execution.id = maintenance.external_execution_id
+                         WHERE maintenance.id = audit.aggregate_id
+                           AND execution.goal_id = ?
+                      )
+                    )
                  OR EXISTS (
                       SELECT 1
                         FROM processed_commands AS processed
@@ -2134,7 +2213,16 @@ export class SqliteControlStore
                     )
               ORDER BY audit.sequence`,
           )
-          .all(goalIdentifier, owner.workflow.id, owner.workflow.id, goalIdentifier, goalIdentifier)
+          .all(
+            goalIdentifier,
+            owner.workflow.id,
+            owner.workflow.id,
+            goalIdentifier,
+            goalIdentifier,
+            goalIdentifier,
+            goalIdentifier,
+            goalIdentifier,
+          )
           .map((row) => decodeAuditEvent(row)),
       );
       return Object.freeze({
@@ -2177,23 +2265,56 @@ export class SqliteControlStore
   ): ContextManifest | undefined {
     this.assertOpen();
     const manifestIdentifier = contextManifestId(rawContextManifestIdentifier);
-    const row = this.hasTable('repair_context_manifest_extensions')
-      ? this.#database
-          .prepare(
-            `SELECT context.*,
-                    extension.logical_schema_version,
-                    extension.repair_context_digest,
-                    extension.prior_attempt_feedback_digest
+    const hasRepair = this.hasTable('repair_context_manifest_extensions');
+    const hasProtected = this.hasTable('protected_context_manifest_extensions');
+    const row =
+      hasRepair || hasProtected
+        ? this.#database
+            .prepare(
+              `SELECT context.*,
+                    repair.logical_schema_version,
+                    repair.repair_context_digest,
+                    repair.prior_attempt_feedback_digest,
+                    protected.logical_schema_version AS protected_logical_schema_version,
+                    protected.verification_plan_id,
+                    protected.verification_plan_digest
                FROM context_manifests AS context
-               LEFT JOIN repair_context_manifest_extensions AS extension
-                 ON extension.context_manifest_id = context.id
+               ${hasRepair ? 'LEFT JOIN repair_context_manifest_extensions AS repair ON repair.context_manifest_id = context.id' : 'LEFT JOIN (SELECT NULL AS context_manifest_id, NULL AS logical_schema_version, NULL AS repair_context_digest, NULL AS prior_attempt_feedback_digest) AS repair ON 0'}
+               ${hasProtected ? 'LEFT JOIN protected_context_manifest_extensions AS protected ON protected.context_manifest_id = context.id' : 'LEFT JOIN (SELECT NULL AS context_manifest_id, NULL AS logical_schema_version, NULL AS verification_plan_id, NULL AS verification_plan_digest) AS protected ON 0'}
               WHERE context.id = ?`,
-          )
-          .get(manifestIdentifier)
-      : this.#database
-          .prepare('SELECT * FROM context_manifests WHERE id = ?')
-          .get(manifestIdentifier);
+            )
+            .get(manifestIdentifier)
+        : this.#database
+            .prepare('SELECT * FROM context_manifests WHERE id = ?')
+            .get(manifestIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedContextManifestRow(row);
+  }
+
+  public getAcceptanceCriticalVerificationPlan(
+    rawWorkflowIdentifier: WorkflowId,
+  ): AcceptanceCriticalVerificationPlan | undefined {
+    this.assertOpen();
+    const workflowIdentifier = workflowId(rawWorkflowIdentifier);
+    if (!this.hasTable('acceptance_critical_verification_plans')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare('SELECT * FROM acceptance_critical_verification_plans WHERE workflow_id = ?')
+      .get(workflowIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const plan = decodeAcceptanceCriticalVerificationPlanRow(row);
+    const { planDigest: retainedPlanDigest, ...semanticPlan } = plan;
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(
+        acceptanceCriticalVerificationPlanProjection(Object.freeze(semanticPlan)),
+      ),
+    );
+    if (retainedPlanDigest !== expectedDigest) {
+      throw new StoreInvariantError(`Protected Verification Plan ${plan.id} has a false digest`);
+    }
+    return plan;
   }
 
   public getCandidateForGoal(rawGoalIdentifier: GoalId): Candidate | undefined {
@@ -2738,6 +2859,33 @@ export class SqliteControlStore
           ? undefined
           : this.getExternalMaintenanceIntentForExecution(externalExecution.id, 1);
       const candidateAuthority = this.getCandidateAuthorityForWorkflow(workflow.id);
+      const currentLocalVerificationObligations =
+        candidateAuthority === undefined
+          ? []
+          : this.listVerificationObligations(goal.id).filter(
+              (obligation) =>
+                obligation.goalRevision === goal.revision &&
+                obligation.candidateGenerationId === candidateAuthority.generation.id &&
+                obligation.requiredEvidenceKind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
+            );
+      const coveredLocalVerificationObligationIds = new Set(
+        candidateAuthority === undefined
+          ? []
+          : this.listEvidenceForGeneration(candidateAuthority.generation.id)
+              .filter(
+                ({ record, eligibility }) =>
+                  record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT &&
+                  eligibility.state === EvidenceEligibilityState.ELIGIBLE,
+              )
+              .map(({ record }) => record.verificationObligationId),
+      );
+      const continuityBarrier =
+        workflow.phase === WorkflowPhase.EVIDENCE_BUILD &&
+        currentLocalVerificationObligations.some(
+          (obligation) => !coveredLocalVerificationObligationIds.has(obligation.id),
+        )
+          ? RecoveryContinuityBarrier.LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE
+          : undefined;
       const watermark = auditSequenceWatermarkRowSchema.parse(
         this.#database
           .prepare('SELECT COALESCE(MAX(sequence), 0) AS through_sequence FROM audit_events')
@@ -2752,6 +2900,7 @@ export class SqliteControlStore
         goal,
         workflow,
         blockerKind,
+        ...(continuityBarrier === undefined ? {} : { continuityBarrier }),
         sourceAttempt,
         ...(contextManifest === undefined ? {} : { contextManifest }),
         policyBinding,
@@ -2817,6 +2966,7 @@ export class SqliteControlStore
       );
       const freezeCheck = freezeChecks[0];
       const verificationCheck = localVerificationChecks[0] ?? fakeVerificationChecks[0];
+      const protectedPlan = this.getAcceptanceCriticalVerificationPlan(workflow.id);
       const verificationRef =
         verificationCheck === undefined
           ? undefined
@@ -2849,6 +2999,11 @@ export class SqliteControlStore
         relatedSpecifications.length !== 2 + localVerificationChecks.length ||
         freezeCheck === undefined ||
         verificationCheck === undefined ||
+        (protectedPlan === undefined) !==
+          !(
+            verificationCheck.kind === CheckSpecificationKind.LOCAL_COMMAND &&
+            verificationCheck.schemaVersion === 3
+          ) ||
         setRows.length !== 1
       ) {
         return undefined;
@@ -2902,6 +3057,9 @@ export class SqliteControlStore
         retainedFactCount,
         retainedDecisionCount,
         policyBundle: installedPolicy.bundle,
+        ...(protectedPlan === undefined
+          ? {}
+          : { acceptanceCriticalVerificationPlan: protectedPlan }),
       });
     });
   }
@@ -4227,12 +4385,17 @@ export class SqliteControlStore
         const existingBinding = this.getExecutionProfileBinding(
           input.executionProfileBinding.workflowId,
         );
+        const existingPlan = this.getAcceptanceCriticalVerificationPlan(
+          input.executionProfileBinding.workflowId,
+        );
         if (
           existing?.attemptId !== input.contextManifest.attemptId ||
           existingPolicyBinding === undefined ||
           canonicalizeJson(existingPolicyBinding) !== canonicalizeJson(input.policyBinding) ||
           existingBinding === undefined ||
-          canonicalizeJson(existingBinding) !== canonicalizeJson(input.executionProfileBinding)
+          canonicalizeJson(existingBinding) !== canonicalizeJson(input.executionProfileBinding) ||
+          canonicalizeJson(existingPlan) !==
+            canonicalizeJson(input.acceptanceCriticalVerificationPlan)
         ) {
           throw new StoreInvariantError(
             `Replayed Attempt ${input.contextManifest.attemptId} has no exact Context/Policy/Profile binding`,
@@ -4246,6 +4409,7 @@ export class SqliteControlStore
 
       let persistedPolicyBinding: WorkflowPolicyBinding;
       let persistedBinding: ExecutionProfileBinding;
+      let persistedPlan: AcceptanceCriticalVerificationPlan | undefined;
       if (startEvent.attempt.sequence === 1) {
         if (input.policyBindingAuditEventId === undefined) {
           throw new StoreInvariantError('First Worker Attempt has no Policy binding audit');
@@ -4275,6 +4439,30 @@ export class SqliteControlStore
           throw new StoreInvariantError('Execution Profile binding was not persisted readably');
         }
         persistedBinding = inserted;
+        if (input.acceptanceCriticalVerificationPlan !== undefined) {
+          if (input.acceptanceCriticalVerificationPlanAuditEventId === undefined) {
+            throw new StoreInvariantError('Protected Start has no Plan creation audit');
+          }
+          this.insertAcceptanceCriticalVerificationPlan(
+            input.acceptanceCriticalVerificationPlan,
+            input.acceptanceCriticalVerificationPlanAuditEventId,
+            input.event.commandId,
+            input.correlationId,
+            input.causationId,
+          );
+          persistedPlan = this.getAcceptanceCriticalVerificationPlan(
+            input.acceptanceCriticalVerificationPlan.workflowId,
+          );
+          if (
+            persistedPlan === undefined ||
+            canonicalizeJson(persistedPlan) !==
+              canonicalizeJson(input.acceptanceCriticalVerificationPlan)
+          ) {
+            throw new StoreInvariantError('Protected Verification Plan was not retained exactly');
+          }
+        } else if (input.contextManifest.schemaVersion === 4) {
+          throw new StoreInvariantError('First protected Context has no atomically created Plan');
+        }
       } else {
         const existingPolicy = this.getWorkflowPolicyBinding(input.policyBinding.workflowId);
         if (
@@ -4292,6 +4480,18 @@ export class SqliteControlStore
           throw new StoreInvariantError('Later Worker Attempt changed its Execution Profile');
         }
         persistedBinding = existing;
+        persistedPlan = this.getAcceptanceCriticalVerificationPlan(
+          input.executionProfileBinding.workflowId,
+        );
+        if (
+          (input.contextManifest.schemaVersion === 4) !== (persistedPlan !== undefined) ||
+          (persistedPlan !== undefined &&
+            (input.contextManifest.acceptanceCriticalVerificationPlanId !== persistedPlan.id ||
+              input.contextManifest.acceptanceCriticalVerificationPlanDigest !==
+                persistedPlan.planDigest))
+        ) {
+          throw new StoreInvariantError('Later Worker Context changed protected Plan authority');
+        }
       }
 
       this.insertContextManifest(input.contextManifest);
@@ -4312,6 +4512,9 @@ export class SqliteControlStore
           contextManifest: persistedManifest,
           policyBinding: persistedPolicyBinding,
           executionProfileBinding: persistedBinding,
+          ...(persistedPlan === undefined
+            ? {}
+            : { acceptanceCriticalVerificationPlan: persistedPlan }),
         }),
       };
     });
@@ -7218,8 +7421,11 @@ export class SqliteControlStore
            workspace_lease_digest, policy_bundle_digest,
            check_spec_json, environment_identity_json, started_at, ended_at,
            observation_json, payload_refs_json, observation_digest, result_status,
-           recorded_at, record_digest, policy_bundle_id
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           recorded_at, record_digest, policy_bundle_id,
+           acceptance_critical_verification_plan_id,
+           acceptance_critical_verification_plan_digest,
+           protected_asset_manifest_digest, protected_asset_read_lease_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -7251,6 +7457,18 @@ export class SqliteControlStore
         record.recordedAt,
         record.recordDigest,
         record.policyBundleId,
+        record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT && record.schemaVersion === 3
+          ? record.acceptanceCriticalVerificationPlanId
+          : null,
+        record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT && record.schemaVersion === 3
+          ? record.acceptanceCriticalVerificationPlanDigest
+          : null,
+        record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT && record.schemaVersion === 3
+          ? record.protectedAssetManifestDigest
+          : null,
+        record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT && record.schemaVersion === 3
+          ? record.protectedAssetReadLeaseDigest
+          : null,
       );
   }
 
@@ -7317,12 +7535,14 @@ export class SqliteControlStore
            workflow_version, phase, fact_snapshot_digest, decision_set_digest,
            scenario_set_digest, candidate_generation_id, candidate_digest,
            evidence_set_digest, pending_issue_set_digest, policy_bundle_id,
-           policy_bundle_digest, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           policy_bundle_digest, created_at,
+           acceptance_critical_verification_plan_id,
+           acceptance_critical_verification_plan_digest
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         manifest.manifestDigest,
-        manifest.schemaVersion,
+        1,
         manifest.goalId,
         manifest.goalRevision,
         manifest.workflowId,
@@ -7338,6 +7558,8 @@ export class SqliteControlStore
         manifest.policyBundleId,
         manifest.policyBundleDigest,
         manifest.createdAt,
+        manifest.schemaVersion === 2 ? manifest.acceptanceCriticalVerificationPlanId : null,
+        manifest.schemaVersion === 2 ? manifest.acceptanceCriticalVerificationPlanDigest : null,
       );
   }
 
@@ -8458,7 +8680,10 @@ export class SqliteControlStore
         manifest.packageDigest,
         manifest.manifestDigest,
       );
-    if (manifest.schemaVersion === 3) {
+    if (
+      manifest.schemaVersion === 3 ||
+      (manifest.schemaVersion === 4 && manifest.repairContextDigest !== undefined)
+    ) {
       if (
         manifest.repairContextDigest === undefined ||
         manifest.priorAttemptFeedbackDigest === undefined ||
@@ -8477,6 +8702,86 @@ export class SqliteControlStore
         )
         .run(manifest.id, manifest.repairContextDigest, manifest.priorAttemptFeedbackDigest);
     }
+    if (manifest.schemaVersion === 4) {
+      if (
+        manifest.acceptanceCriticalVerificationPlanId === undefined ||
+        manifest.acceptanceCriticalVerificationPlanDigest === undefined ||
+        !this.hasTable('protected_context_manifest_extensions')
+      ) {
+        throw new StoreInvariantError(
+          `Protected Context Manifest ${manifest.id} lacks its Plan authority`,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO protected_context_manifest_extensions(
+             context_manifest_id, logical_schema_version, verification_plan_id,
+             verification_plan_digest
+           ) VALUES (?, 4, ?, ?)`,
+        )
+        .run(
+          manifest.id,
+          manifest.acceptanceCriticalVerificationPlanId,
+          manifest.acceptanceCriticalVerificationPlanDigest,
+        );
+    }
+  }
+
+  private insertAcceptanceCriticalVerificationPlan(
+    plan: AcceptanceCriticalVerificationPlan,
+    auditIdentifier: AuditEventId,
+    startCommandId: CommandId,
+    correlationId?: string,
+    causationId?: string,
+  ): void {
+    const { planDigest, ...semanticPlan } = plan;
+    const expectedDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(
+        acceptanceCriticalVerificationPlanProjection(Object.freeze(semanticPlan)),
+      ),
+    );
+    if (planDigest !== expectedDigest) {
+      throw new StoreInvariantError(`Protected Verification Plan ${plan.id} has a false digest`);
+    }
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'ACCEPTANCE_CRITICAL_VERIFICATION_PLAN',
+      aggregateId: plan.id,
+      eventType: 'ACCEPTANCE_CRITICAL_VERIFICATION_PLAN_CREATED',
+      commandId: startCommandId,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(causationId === undefined ? {} : { causationId }),
+      payloadDigest: plan.planDigest,
+      occurredAt: plan.createdAt,
+    });
+    this.probe(WorkerTransactionStep.AFTER_PROTECTED_VERIFICATION_PLAN_AUDIT_WRITE);
+    const auditSequence = this.auditSequence(auditIdentifier);
+    this.#database
+      .prepare(
+        `INSERT INTO acceptance_critical_verification_plans(
+           id, schema_version, goal_id, goal_revision, workflow_id,
+           workflow_version_at_lock, policy_bundle_id, policy_bundle_digest,
+           execution_profile_id, execution_profile_digest,
+           protected_asset_manifest_digest, canonical_json, plan_digest, audit_sequence
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        plan.id,
+        plan.schemaVersion,
+        plan.goalId,
+        plan.goalRevision,
+        plan.workflowId,
+        plan.workflowVersionAtLock,
+        plan.policyBundleId,
+        plan.policyBundleDigest,
+        plan.executionProfileId,
+        plan.executionProfileDigest,
+        plan.protectedAssetManifestDigest,
+        serializeJson(decodeJsonValue(plan)),
+        plan.planDigest,
+        auditSequence,
+      );
+    this.probe(WorkerTransactionStep.AFTER_PROTECTED_VERIFICATION_PLAN_WRITE);
   }
 
   private assertRecoveryMatchesCurrentAuthority(
@@ -9723,7 +10028,10 @@ export class SqliteControlStore
     }
 
     let repairCompilation: ReturnType<typeof compileBoundedM2RepairContext> | undefined;
-    if (manifest.schemaVersion === 3) {
+    if (
+      manifest.schemaVersion === 3 ||
+      (manifest.schemaVersion === 4 && manifest.repairContextDigest !== undefined)
+    ) {
       if (candidateBinding === undefined) {
         throw new StoreInvariantError(
           `Repair Context Manifest ${manifest.id} has no child Candidate binding`,
@@ -9860,6 +10168,13 @@ export class SqliteControlStore
       executionProfileDigest: installedProfile.profile.digest,
       policyBundleId: installedPolicy.bundle.id,
       policyBundleDigest: installedPolicy.bundle.digest,
+      ...(manifest.schemaVersion === 4
+        ? {
+            acceptanceCriticalVerificationPlanId: manifest.acceptanceCriticalVerificationPlanId,
+            acceptanceCriticalVerificationPlanDigest:
+              manifest.acceptanceCriticalVerificationPlanDigest,
+          }
+        : {}),
       responseContract: m1WorkerResponseContract(manifest.phase),
     });
     const expectedEntries = deriveContextManifestEntries(
@@ -9894,14 +10209,24 @@ export class SqliteControlStore
       }
       throw error;
     }
-    if (
-      manifest.packageDigest !== expectedPackageDigest ||
-      manifest.capabilityGrantDigest !== expectedCapabilityGrantDigest ||
-      manifest.responseContractDigest !== expectedResponseContractDigest ||
-      canonicalizeJson(manifest.entries) !== canonicalizeJson(expectedEntries)
-    ) {
+    if (manifest.packageDigest !== expectedPackageDigest) {
       throw new StoreInvariantError(
-        `Context Manifest ${manifest.id} does not match its authoritative sources`,
+        `Context Manifest ${manifest.id} package digest does not match its authoritative sources`,
+      );
+    }
+    if (manifest.capabilityGrantDigest !== expectedCapabilityGrantDigest) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} capability digest does not match its Attempt`,
+      );
+    }
+    if (manifest.responseContractDigest !== expectedResponseContractDigest) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} response digest does not match its phase`,
+      );
+    }
+    if (canonicalizeJson(manifest.entries) !== canonicalizeJson(expectedEntries)) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} entries do not match its authoritative sources`,
       );
     }
     return manifest;
@@ -10550,6 +10875,281 @@ export class SqliteControlStore
     }
   }
 
+  private assertRetainedProtectedVerificationAuthorityClosure(): void {
+    if (!this.hasTable('acceptance_critical_verification_plans')) {
+      return;
+    }
+
+    const planRows = this.#database
+      .prepare('SELECT * FROM acceptance_critical_verification_plans ORDER BY workflow_id')
+      .all();
+    const plansByWorkflow = new Map<WorkflowId, AcceptanceCriticalVerificationPlan>();
+    for (const row of planRows) {
+      const decoded = decodeAcceptanceCriticalVerificationPlanRow(row);
+      const plan = this.getAcceptanceCriticalVerificationPlan(decoded.workflowId);
+      const goal = this.getGoal(decoded.goalId);
+      const workflow = this.getWorkflow(decoded.workflowId);
+      const policy = this.getPolicyBundle(decoded.policyBundleId)?.bundle;
+      const profile = this.getExecutionProfile(decoded.executionProfileId)?.profile;
+      const policyBinding = this.getWorkflowPolicyBinding(decoded.workflowId);
+      const profileBinding = this.getExecutionProfileBinding(decoded.workflowId);
+      const planAudits = this.listAuditEvents(
+        'ACCEPTANCE_CRITICAL_VERIFICATION_PLAN',
+        decoded.id,
+      ).filter((audit) => audit.eventType === 'ACCEPTANCE_CRITICAL_VERIFICATION_PLAN_CREATED');
+      const firstAttemptRow = this.#database
+        .prepare('SELECT * FROM attempts WHERE workflow_id = ? AND sequence = 1')
+        .get(decoded.workflowId);
+      const firstAttempt =
+        firstAttemptRow === undefined ? undefined : decodeAttempt(firstAttemptRow);
+      const firstAttemptAudit =
+        firstAttempt === undefined
+          ? undefined
+          : this.listAuditEvents('ATTEMPT', firstAttempt.id).find(
+              (audit) => audit.eventType === 'ATTEMPT_STARTED',
+            );
+      const firstManifest =
+        firstAttempt?.contextManifestId === undefined
+          ? undefined
+          : this.getContextManifest(firstAttempt.contextManifestId);
+      const requiredCriteria =
+        goal?.successCriteria
+          .filter(({ required }) => required)
+          .map(({ id }) => id)
+          .sort() ?? [];
+      const requiredRules = policy === undefined ? [] : [...policy.acceptanceRules].sort();
+      if (
+        plan === undefined ||
+        canonicalizeJson(plan) !== canonicalizeJson(decoded) ||
+        plansByWorkflow.has(decoded.workflowId) ||
+        goal?.revision !== decoded.goalRevision ||
+        workflow?.goalId !== decoded.goalId ||
+        workflow.goalRevision !== decoded.goalRevision ||
+        workflow.version < decoded.workflowVersionAtLock ||
+        policy?.digest !== decoded.policyBundleDigest ||
+        profile?.digest !== decoded.executionProfileDigest ||
+        policyBinding?.policyBundleId !== decoded.policyBundleId ||
+        policyBinding.policyBundleDigest !== decoded.policyBundleDigest ||
+        profileBinding?.profileId !== decoded.executionProfileId ||
+        profileBinding.profileDigest !== decoded.executionProfileDigest ||
+        canonicalizeJson(decoded.acceptanceCriticalCriterionIds) !==
+          canonicalizeJson(requiredCriteria) ||
+        canonicalizeJson(decoded.acceptanceRuleIds) !== canonicalizeJson(requiredRules) ||
+        decoded.protectedAssetManifestDigest !==
+          sha256Digest(
+            canonicalAuthorityDigests.digest(
+              protectedAssetManifestProjection(decoded.protectedAssets),
+            ),
+          ) ||
+        planAudits.length !== 1 ||
+        planAudits[0]?.actorType !== 'RUNTIME' ||
+        planAudits[0].commandId === undefined ||
+        planAudits[0].commandId !== firstAttemptAudit?.commandId ||
+        planAudits[0].payloadDigest !== decoded.planDigest ||
+        planAudits[0].occurredAt !== decoded.createdAt ||
+        firstAttempt?.startedAt !== decoded.createdAt ||
+        firstManifest?.schemaVersion !== 4 ||
+        firstManifest.workflowVersion !== decoded.workflowVersionAtLock ||
+        firstManifest.acceptanceCriticalVerificationPlanId !== decoded.id ||
+        firstManifest.acceptanceCriticalVerificationPlanDigest !== decoded.planDigest
+      ) {
+        throw new StoreInvariantError(
+          `Protected Verification Plan ${decoded.id} has incomplete retained Start authority`,
+        );
+      }
+      const contextIdentifiers = this.#database
+        .prepare('SELECT id FROM context_manifests WHERE workflow_id = ? ORDER BY id')
+        .all(decoded.workflowId);
+      for (const identifierRow of contextIdentifiers) {
+        const identifier = contextManifestId(authorityIdentifierRowSchema.parse(identifierRow).id);
+        const manifest = this.getContextManifest(identifier);
+        if (
+          manifest?.schemaVersion !== 4 ||
+          manifest.acceptanceCriticalVerificationPlanId !== decoded.id ||
+          manifest.acceptanceCriticalVerificationPlanDigest !== decoded.planDigest
+        ) {
+          throw new StoreInvariantError(
+            `Protected Workflow ${decoded.workflowId} has a Context outside its immutable Plan`,
+          );
+        }
+      }
+      plansByWorkflow.set(decoded.workflowId, decoded);
+    }
+
+    const protectedContextRows = this.#database
+      .prepare('SELECT context_manifest_id AS id FROM protected_context_manifest_extensions')
+      .all();
+    for (const row of protectedContextRows) {
+      const identifier = contextManifestId(authorityIdentifierRowSchema.parse(row).id);
+      const manifest = this.getContextManifest(identifier);
+      if (manifest === undefined || !plansByWorkflow.has(manifest.workflowId)) {
+        throw new StoreInvariantError(
+          `Protected Context ${identifier} has no immutable Verification Plan`,
+        );
+      }
+    }
+
+    const specifications = this.listCheckSpecifications();
+    for (const specification of specifications) {
+      if (
+        specification.kind !== CheckSpecificationKind.LOCAL_COMMAND ||
+        specification.schemaVersion !== 3
+      ) {
+        continue;
+      }
+      const generationRow = this.#database
+        .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+        .get(specification.candidateGenerationId);
+      const decodedGeneration =
+        generationRow === undefined ? undefined : decodeCandidateGenerationRow(generationRow);
+      const workflow =
+        decodedGeneration === undefined
+          ? undefined
+          : this.getWorkflow(decodedGeneration.workflowId);
+      const goal = workflow === undefined ? undefined : this.getGoal(workflow.goalId);
+      const plan =
+        decodedGeneration === undefined
+          ? undefined
+          : plansByWorkflow.get(decodedGeneration.workflowId);
+      if (
+        decodedGeneration === undefined ||
+        goal === undefined ||
+        workflow === undefined ||
+        plan === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Protected Check ${specification.id} has no retained owner or Plan`,
+        );
+      }
+      const lease = createProtectedAssetReadLease(
+        {
+          plan,
+          goal,
+          workflow,
+          generation: decodedGeneration.generation,
+          checkSpecificationId: specification.id,
+          checkSpecificationVersion: specification.version,
+        },
+        canonicalAuthorityDigests,
+      );
+      assertProtectedLocalCommandCheckMatchesPlan(
+        specification,
+        plan,
+        lease,
+        canonicalAuthorityDigests,
+      );
+    }
+
+    const evidenceRows = this.#database
+      .prepare('SELECT * FROM evidence_records WHERE schema_version = 3 ORDER BY id')
+      .all();
+    for (const row of evidenceRows) {
+      const record = this.decodeVerifiedEvidenceRecordRow(row);
+      if (record.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT || record.schemaVersion !== 3) {
+        throw new StoreInvariantError(`Protected Evidence ${record.id} has an invalid family`);
+      }
+      const persistedCheck = this.getCheckSpecification(record.checkSpec.id);
+      const plan = plansByWorkflow.get(record.workflowId);
+      const workflow = this.getWorkflow(record.workflowId);
+      const goal = workflow === undefined ? undefined : this.getGoal(workflow.goalId);
+      const generation = this.getCandidateGeneration(record.candidateGenerationId);
+      const obligation = this.getVerificationObligation(record.verificationObligationId);
+      const attempt = this.getAttempt(record.attemptId);
+      if (
+        persistedCheck === undefined ||
+        canonicalizeJson(persistedCheck) !== canonicalizeJson(record.checkSpec) ||
+        plan === undefined ||
+        workflow === undefined ||
+        goal === undefined ||
+        generation === undefined ||
+        obligation === undefined ||
+        attempt?.workflowId !== record.workflowId ||
+        attempt.phase !== WorkflowPhase.EVIDENCE_BUILD ||
+        obligation.candidateGenerationId !== record.candidateGenerationId ||
+        obligation.checkSpecRef !== `${record.checkSpec.id}@${record.checkSpec.version}`
+      ) {
+        throw new StoreInvariantError(
+          `Protected Evidence ${record.id} has incomplete invocation causality`,
+        );
+      }
+      const lease = createProtectedAssetReadLease(
+        {
+          plan,
+          goal,
+          workflow,
+          generation,
+          checkSpecificationId: record.checkSpec.id,
+          checkSpecificationVersion: record.checkSpec.version,
+        },
+        canonicalAuthorityDigests,
+      );
+      assertProtectedLocalCommandCheckMatchesPlan(
+        record.checkSpec,
+        plan,
+        lease,
+        canonicalAuthorityDigests,
+      );
+      if (record.protectedAssetReadLeaseDigest !== lease.leaseDigest) {
+        throw new StoreInvariantError(
+          `Protected Evidence ${record.id} changed its static asset lease`,
+        );
+      }
+    }
+
+    if (this.hasTable('evidence_sets')) {
+      const setRows = this.#database.prepare('SELECT * FROM evidence_sets ORDER BY digest').all();
+      for (const row of setRows) {
+        const set = decodeEvidenceSetRow(row);
+        const generationRow = this.#database
+          .prepare('SELECT * FROM candidate_generations WHERE id = ?')
+          .get(set.candidateGenerationId);
+        const decodedGeneration =
+          generationRow === undefined ? undefined : decodeCandidateGenerationRow(generationRow);
+        const plan =
+          decodedGeneration === undefined
+            ? undefined
+            : plansByWorkflow.get(decodedGeneration.workflowId);
+        if (plan === undefined) {
+          continue;
+        }
+        for (const reference of set.evidenceRefs) {
+          const record = this.getEvidence(reference.evidenceId);
+          if (
+            record?.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT ||
+            record.schemaVersion !== 3 ||
+            record.acceptanceCriticalVerificationPlanId !== plan.id ||
+            record.acceptanceCriticalVerificationPlanDigest !== plan.planDigest
+          ) {
+            throw new StoreInvariantError(
+              `Protected Evidence Set ${set.digest} contains a supplementary Check family`,
+            );
+          }
+        }
+      }
+    }
+
+    if (this.hasTable('acceptance_input_manifests')) {
+      const manifestRows = this.#database
+        .prepare('SELECT * FROM acceptance_input_manifests ORDER BY manifest_digest')
+        .all();
+      for (const row of manifestRows) {
+        const manifest = decodeAcceptanceInputManifestRow(row);
+        const plan = plansByWorkflow.get(manifest.workflowId);
+        if (
+          (plan === undefined) !== (manifest.schemaVersion === 1) ||
+          (plan !== undefined &&
+            manifest.schemaVersion === 2 &&
+            (manifest.acceptanceCriticalVerificationPlanId !== plan.id ||
+              manifest.acceptanceCriticalVerificationPlanDigest !== plan.planDigest))
+        ) {
+          throw new StoreInvariantError(
+            `Acceptance Manifest ${manifest.manifestDigest} changed protected Plan authority`,
+          );
+        }
+      }
+    }
+  }
+
   private assertRetainedRecoveryAuthorityClosure(): void {
     if (!this.hasTable('recovery_reconciliations')) {
       return;
@@ -10889,6 +11489,18 @@ export class SqliteControlStore
         .all(goal.id, goal.revision)
         .map((row) => decodePendingIssueRow(row)),
     );
+    const protectedPlan = this.getAcceptanceCriticalVerificationPlan(manifest.workflowId);
+    if (
+      (protectedPlan === undefined) !== (manifest.schemaVersion === 1) ||
+      (protectedPlan !== undefined &&
+        manifest.schemaVersion === 2 &&
+        (manifest.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+          manifest.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest))
+    ) {
+      throw new StoreInvariantError(
+        `Acceptance Input Manifest ${manifest.manifestDigest} changed protected Plan authority`,
+      );
+    }
     const compiled = compileM1AcceptanceInput(
       Object.freeze({
         goal,
@@ -10910,6 +11522,9 @@ export class SqliteControlStore
           goal.id,
         ),
         policyBundle: installedPolicy.bundle,
+        ...(protectedPlan === undefined
+          ? {}
+          : { acceptanceCriticalVerificationPlan: protectedPlan }),
       }),
       manifest.createdAt,
       canonicalAuthorityDigests,

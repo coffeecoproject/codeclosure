@@ -7,7 +7,11 @@
  */
 export { createRecoveryCoordinator } from './recovery.js';
 export type { RecoveryCoordinatorDependencies } from './recovery.js';
-export { createM2WorkflowDriver, createWorkflowDriver } from './workflow-driver.js';
+export {
+  createM2WorkflowDriver,
+  createProtectedM2WorkflowDriver,
+  createWorkflowDriver,
+} from './workflow-driver.js';
 export type {
   RuntimeExecutionProfile,
   RuntimeExecutionProfileResolver,

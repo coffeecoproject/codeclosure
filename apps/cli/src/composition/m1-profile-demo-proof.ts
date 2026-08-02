@@ -4,11 +4,8 @@ import { join } from 'node:path';
 
 import { WorkflowDriveStopReason } from '@codeclosure/runtime';
 
-import {
-  CliDemoProofCode,
-  type CliDemoProofResult,
-  type CliDemoScenario,
-} from '../cli/contracts.js';
+import { CliDemoProofCode, type CliDemoProofResult } from '../cli/contracts.js';
+import type { M1DemoScenario } from './m1-demo-proof.js';
 import { ProtectedPathKind } from './data-home.js';
 import {
   assertM1ProofReopen,
@@ -24,7 +21,7 @@ import {
   type TrustedCliComposition,
 } from './trusted-composition.js';
 
-type DirectProfileScenario = Exclude<CliDemoScenario, 'stale-closeout' | 'restart-resume'>;
+type DirectProfileScenario = Exclude<M1DemoScenario, 'stale-closeout' | 'restart-resume'>;
 type DuplicateResultObservation = ReturnType<
   TrustedCliComposition['proofObservation']['readDuplicateResultWorker']
 >;

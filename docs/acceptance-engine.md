@@ -15,7 +15,8 @@ planned additive acceptance-critical Verification Plan and protected-asset
 rule, while ADR 0032 closes the bounded single-plan, lease, Profile, and
 Evidence-family composition. ADR 0033 aligns the plan with first-Start
 atomicity and separates the static Check lease from later Attempt/Obligation
-causality. Slice 7 has not implemented that Acceptance input or checker.
+causality. Slice 7 implements that protected Acceptance input and checker
+without changing the M1 rule set.
 Intent Admission and
 Goal Materialization are a separate
 pre-Goal authority and are not implemented by the Acceptance Engine.
@@ -98,7 +99,7 @@ its immutable `WorkflowPolicyBinding`. The currently configured or most
 recently installed Policy is not a substitute. See
 [ADR 0022](adr/0022-immutable-workflow-policy-binding.md).
 
-For the planned M2 acceptance-critical extension, an additive version of this
+For the M2 acceptance-critical extension, an additive version of this
 manifest MUST also bind the immutable
 `AcceptanceCriticalVerificationPlan` ID/digest. The referenced Evidence Set
 MUST contain the exact generation-specific Check and protected-asset manifest
@@ -204,7 +205,7 @@ A rule cannot return an untyped success string.
 - runtime/source/environment identities agree;
 - run-owned resource cleanup is proven when applicable.
 
-For the planned M2 acceptance-critical rule, the immutable Policy MUST mark
+For the M2 acceptance-critical rule, the immutable Policy MUST mark
 which required Criteria and Verification Obligations are acceptance-critical.
 Each such obligation MUST resolve to eligible passing Evidence bound to the
 exact pre-Worker Verification Plan, protected-asset manifest, concrete Check,
@@ -401,7 +402,7 @@ project correctness:
 This is enough to prove fail-closed closeout without pretending M1 validates
 real software.
 
-Slice 7 will add the separate M2 acceptance-critical rule without changing the
+Slice 7 adds the separate M2 acceptance-critical rule without changing the
 M1 rule set or reinterpreting Slice 4/5 decisions. It proves only one bounded
 protected Check/Oracle path, not arbitrary-project validation completeness.
 

@@ -8,7 +8,12 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../../packages/codex-app-server-client" },
+    { "path": "../../packages/domain" },
     { "path": "../../packages/runtime" },
+    { "path": "../../packages/adapter-codex" },
+    { "path": "../../packages/workspace-local" },
+    { "path": "../../packages/verification-local" },
     { "path": "../../packages/store-sqlite" },
     { "path": "../../packages/testing" }
   ]

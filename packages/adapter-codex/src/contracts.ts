@@ -19,6 +19,21 @@ const portableRelativePathPattern = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\\).+
 
 export const CODEX_WORKER_ADAPTER_VERSION = 'm2-slice2-v1';
 export const CODEX_WORKER_PROMPT_PROFILE = 'codeclosure-implement-v1';
+export const CODEX_WORKER_CANDIDATE_TRUST_POLICY = 'EXACT_CANDIDATE_UNTRUSTED';
+export const CODEX_WORKER_DISABLED_FEATURES = Object.freeze([
+  'apps',
+  'goals',
+  'hooks',
+  'memories',
+  'multi_agent',
+  'multi_agent_v2',
+  'personality',
+  'plugins',
+  'remote_plugin',
+  'skill_mcp_dependency_install',
+  'skill_search',
+  'tool_suggest',
+]);
 
 const developerInstructionTemplate = [
   'You are operating as a bounded CodeClosure IMPLEMENT worker.',
@@ -36,6 +51,50 @@ export const CODEX_WORKER_PROMPT_TEMPLATE_DIGEST = digestCanonical({
 });
 
 export type CodexAdapterFailureCode = ExternalWorkerFailureCode;
+
+export type CodexItemRejectionCode =
+  | 'COMMAND_ACTIONS'
+  | 'COMMAND_CWD'
+  | 'COMMAND_DURATION'
+  | 'COMMAND_EXIT_CODE'
+  | 'COMMAND_FIELD_SET'
+  | 'COMMAND_ID'
+  | 'COMMAND_OUTPUT'
+  | 'COMMAND_PLUGIN_BINDING'
+  | 'COMMAND_PROCESS_ID'
+  | 'COMMAND_SOURCE'
+  | 'COMMAND_STATUS'
+  | 'COMMAND_TEXT'
+  | 'ITEM_SCHEMA'
+  | 'UNSELECTED_ITEM_TYPE';
+
+export type CodexAdapterDiagnosticEvent =
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'NOTIFICATION_LIMIT';
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'UNSUPPORTED_NOTIFICATION';
+      method: string;
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'MALFORMED_ITEM';
+      location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'ITEM_POLICY_UNAVAILABLE';
+      location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'UNSUPPORTED_ITEM';
+      itemType: string;
+      location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
+      reasonCode: CodexItemRejectionCode;
+    }>;
 
 export interface CodexWorkerRequestBinding {
   readonly attemptId: string;
@@ -103,6 +162,7 @@ export type CodexThreadDirective =
 export interface CodexExecutionProfileDirective {
   readonly approvalPolicy: 'never';
   readonly approvalsReviewer: 'user';
+  readonly candidateTrustPolicy: typeof CODEX_WORKER_CANDIDATE_TRUST_POLICY;
   readonly codexVersion: string;
   readonly compactionPolicy: 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION';
   readonly configReadDigest: string;
@@ -127,18 +187,19 @@ export interface CodexExecutionProfileDirective {
   readonly protocolSnapshotDigest: string;
   readonly reasoningEffort: string;
   readonly retentionPolicy: 'CONTROLLED';
-  readonly serviceTier: string | null;
+  readonly serviceTier: string;
   readonly secretEnvironmentNames: readonly string[];
   readonly terminalTimeoutMilliseconds: number;
   readonly thread: CodexThreadDirective;
 }
 
 export interface CodexWorkerDirective {
+  readonly directiveDigest: string;
   readonly externalExecutionIntentDigest: string;
   readonly processLaunchNonce: string;
   readonly profile: CodexExecutionProfileDirective;
   readonly request: CodexWorkerRequestBinding;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly workspaceLease: CandidateWorkspaceLease;
 }
 
@@ -453,6 +514,7 @@ function decodeProfile(value: unknown): CodexExecutionProfileDirective {
     [
       'approvalPolicy',
       'approvalsReviewer',
+      'candidateTrustPolicy',
       'codexVersion',
       'compactionPolicy',
       'configReadDigest',
@@ -484,10 +546,6 @@ function decodeProfile(value: unknown): CodexExecutionProfileDirective {
     ],
     'directive.profile',
   );
-  const serviceTier = input['serviceTier'];
-  if (serviceTier !== null && typeof serviceTier !== 'string') {
-    throw new TypeError('profile.serviceTier must be string or null');
-  }
   const instructionSources = decodeInstructionSources(input['instructionSources']);
   const instructionSourceManifestDigest = digest(
     input['instructionSourceManifestDigest'],
@@ -526,6 +584,11 @@ function decodeProfile(value: unknown): CodexExecutionProfileDirective {
       input['approvalsReviewer'],
       'user',
       'profile.approvalsReviewer',
+    ),
+    candidateTrustPolicy: exactLiteral(
+      input['candidateTrustPolicy'],
+      CODEX_WORKER_CANDIDATE_TRUST_POLICY,
+      'profile.candidateTrustPolicy',
     ),
     codexVersion: nonBlankString(input['codexVersion'], 'profile.codexVersion'),
     compactionPolicy,
@@ -584,7 +647,7 @@ function decodeProfile(value: unknown): CodexExecutionProfileDirective {
       input['secretEnvironmentNames'],
       'profile.secretEnvironmentNames',
     ),
-    serviceTier: serviceTier === null ? null : nonBlankString(serviceTier, 'profile.serviceTier'),
+    serviceTier: nonBlankString(input['serviceTier'], 'profile.serviceTier'),
     terminalTimeoutMilliseconds: positiveInteger(
       input['terminalTimeoutMilliseconds'],
       'profile.terminalTimeoutMilliseconds',
@@ -598,6 +661,7 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
   exactKeys(
     input,
     [
+      'directiveDigest',
       'externalExecutionIntentDigest',
       'processLaunchNonce',
       'profile',
@@ -608,6 +672,7 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
     'Codex Worker directive',
   );
   const directive = Object.freeze({
+    directiveDigest: digest(input['directiveDigest'], 'directiveDigest'),
     externalExecutionIntentDigest: digest(
       input['externalExecutionIntentDigest'],
       'externalExecutionIntentDigest',
@@ -615,20 +680,53 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
     processLaunchNonce: digest(input['processLaunchNonce'], 'processLaunchNonce'),
     profile: decodeProfile(input['profile']),
     request: decodeRequestBinding(input['request']),
-    schemaVersion: exactLiteral(input['schemaVersion'], 1, 'directive.schemaVersion'),
+    schemaVersion: exactLiteral(input['schemaVersion'], 2, 'directive.schemaVersion'),
     workspaceLease: decodeWorkspaceLease(input['workspaceLease']),
   });
   assertDirectiveInternalBinding(directive);
   if (directive.profile.promptTemplateDigest !== CODEX_WORKER_PROMPT_TEMPLATE_DIGEST) {
     throw new TypeError('directive prompt template is unsupported');
   }
-  if (
-    directive.externalExecutionIntentDigest !==
-    digestCanonical(codexExternalExecutionIntentProjection(directive))
-  ) {
-    throw new TypeError('external execution intent digest is inconsistent');
+  if (directive.directiveDigest !== digestCanonical(codexWorkerDirectiveProjection(directive))) {
+    throw new TypeError('Codex Worker directive digest is inconsistent');
   }
   return directive;
+}
+
+/**
+ * Trusted composition factory. The Runtime-owned external intent digest is an
+ * opaque binding supplied by the caller; the separate directive digest binds
+ * the complete adapter projection without pretending to recreate that intent.
+ */
+export function createCodexWorkerDirective(value: unknown): CodexWorkerDirective {
+  const input = object(value, 'Codex Worker directive input');
+  exactKeys(
+    input,
+    [
+      'externalExecutionIntentDigest',
+      'processLaunchNonce',
+      'profile',
+      'request',
+      'schemaVersion',
+      'workspaceLease',
+    ],
+    'Codex Worker directive input',
+  );
+  const withoutDigest: Omit<CodexWorkerDirective, 'directiveDigest'> = Object.freeze({
+    externalExecutionIntentDigest: digest(
+      input['externalExecutionIntentDigest'],
+      'externalExecutionIntentDigest',
+    ),
+    processLaunchNonce: digest(input['processLaunchNonce'], 'processLaunchNonce'),
+    profile: decodeProfile(input['profile']),
+    request: decodeRequestBinding(input['request']),
+    schemaVersion: exactLiteral(input['schemaVersion'], 2, 'directive.schemaVersion'),
+    workspaceLease: decodeWorkspaceLease(input['workspaceLease']),
+  });
+  return decodeCodexWorkerDirective({
+    ...withoutDigest,
+    directiveDigest: digestCanonical(codexWorkerDirectiveProjection(withoutDigest)),
+  });
 }
 
 export function candidateWorkspaceLeaseProjection(
@@ -637,10 +735,11 @@ export function candidateWorkspaceLeaseProjection(
   return runtimeCandidateWorkspaceLeaseProjection(lease);
 }
 
-export function codexExternalExecutionIntentProjection(
-  directive: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'>,
+export function codexWorkerDirectiveProjection(
+  directive: Omit<CodexWorkerDirective, 'directiveDigest'>,
 ): unknown {
   return {
+    externalExecutionIntentDigest: directive.externalExecutionIntentDigest,
     processLaunchNonce: directive.processLaunchNonce,
     profile: directive.profile,
     request: directive.request,

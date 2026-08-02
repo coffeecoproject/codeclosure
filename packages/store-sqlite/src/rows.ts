@@ -12,6 +12,7 @@ import {
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
   decodeAcceptanceRepairRecord,
+  decodeAcceptanceCriticalVerificationPlan,
   decodeCandidate,
   decodeCandidateGeneration,
   decodeCheckSpecification,
@@ -44,6 +45,7 @@ import {
   type AcceptanceDecision,
   type AcceptanceInputManifest,
   type AcceptanceRepairRecord,
+  type AcceptanceCriticalVerificationPlan,
   type AuditEventId,
   type CommandId,
   type Candidate,
@@ -228,6 +230,26 @@ const contextManifestRowSchema = z.object({
   logical_schema_version: z.number().int().positive().nullable().optional(),
   repair_context_digest: z.string().nullable().optional(),
   prior_attempt_feedback_digest: z.string().nullable().optional(),
+  protected_logical_schema_version: z.number().int().positive().nullable().optional(),
+  verification_plan_id: z.string().nullable().optional(),
+  verification_plan_digest: z.string().nullable().optional(),
+});
+
+const acceptanceCriticalVerificationPlanRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.literal(1),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version_at_lock: z.number().int().positive(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  execution_profile_id: z.string(),
+  execution_profile_digest: z.string(),
+  protected_asset_manifest_digest: z.string(),
+  canonical_json: z.string(),
+  plan_digest: z.string(),
+  audit_sequence: z.number().int().positive(),
 });
 
 const policyBundleRowSchema = z.object({
@@ -408,6 +430,7 @@ const recoveryReconciliationRowSchema = z.object({
     'CANDIDATE_GENERATION_MISMATCH',
     'CANDIDATE_BASE_IDENTITY_MISMATCH',
     'CANDIDATE_DIGEST_MISMATCH',
+    'LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE',
     'UNSUPPORTED_RECOVERY_PHASE',
   ]),
   observation_refs_json: z.string(),
@@ -525,6 +548,10 @@ const evidenceRecordRowSchema = z.object({
   result_status: nonBlankStringSchema,
   recorded_at: z.string(),
   record_digest: z.string(),
+  acceptance_critical_verification_plan_id: z.string().nullable().optional(),
+  acceptance_critical_verification_plan_digest: z.string().nullable().optional(),
+  protected_asset_manifest_digest: z.string().nullable().optional(),
+  protected_asset_read_lease_digest: z.string().nullable().optional(),
 });
 
 const evidenceEligibilityRowSchema = z.object({
@@ -581,6 +608,8 @@ const acceptanceInputManifestRowSchema = z.object({
   policy_bundle_id: z.string(),
   policy_bundle_digest: z.string(),
   created_at: z.string(),
+  acceptance_critical_verification_plan_id: z.string().nullable().optional(),
+  acceptance_critical_verification_plan_digest: z.string().nullable().optional(),
 });
 
 const acceptanceDecisionRowSchema = z.object({
@@ -745,15 +774,34 @@ export function decodeAttempt(row: unknown): Attempt {
 export function decodeContextManifestRow(row: unknown): ContextManifest {
   try {
     const parsed = contextManifestRowSchema.parse(row);
-    const logicalSchemaVersion = parsed.logical_schema_version ?? parsed.schema_version;
+    const logicalSchemaVersion =
+      parsed.protected_logical_schema_version ??
+      parsed.logical_schema_version ??
+      parsed.schema_version;
+    const hasRepairContext =
+      parsed.repair_context_digest !== null &&
+      parsed.repair_context_digest !== undefined &&
+      parsed.prior_attempt_feedback_digest !== null &&
+      parsed.prior_attempt_feedback_digest !== undefined;
+    const hasPartialRepairContext =
+      (parsed.repair_context_digest !== null && parsed.repair_context_digest !== undefined) !==
+      (parsed.prior_attempt_feedback_digest !== null &&
+        parsed.prior_attempt_feedback_digest !== undefined);
     if (
-      (logicalSchemaVersion === 3) !==
-      (parsed.repair_context_digest !== null &&
-        parsed.repair_context_digest !== undefined &&
-        parsed.prior_attempt_feedback_digest !== null &&
-        parsed.prior_attempt_feedback_digest !== undefined)
+      hasPartialRepairContext ||
+      (logicalSchemaVersion === 3 && !hasRepairContext) ||
+      (logicalSchemaVersion === 2 && hasRepairContext)
     ) {
       throw new TypeError('Repair Context Manifest extension is incomplete');
+    }
+    if (
+      (logicalSchemaVersion === 4) !==
+      (parsed.verification_plan_id !== null &&
+        parsed.verification_plan_id !== undefined &&
+        parsed.verification_plan_digest !== null &&
+        parsed.verification_plan_digest !== undefined)
+    ) {
+      throw new TypeError('Protected Context Manifest extension is incomplete');
     }
     return decodeContextManifest({
       id: parsed.id,
@@ -774,9 +822,15 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
       executionProfileDigest: parsed.execution_profile_digest,
       policyBundleId: parsed.policy_bundle_id,
       policyBundleDigest: parsed.policy_bundle_digest,
+      ...(logicalSchemaVersion !== 4
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanId: parsed.verification_plan_id,
+            acceptanceCriticalVerificationPlanDigest: parsed.verification_plan_digest,
+          }),
       capabilityGrantDigest: parsed.capability_grant_digest,
       responseContractDigest: parsed.response_contract_digest,
-      ...(logicalSchemaVersion !== 3
+      ...(parsed.repair_context_digest === null || parsed.repair_context_digest === undefined
         ? {}
         : {
             repairContextDigest: parsed.repair_context_digest,
@@ -795,6 +849,38 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
       throw error;
     }
     throw new PersistenceDecodeError('ContextManifest', { cause: error });
+  }
+}
+
+export function decodeAcceptanceCriticalVerificationPlanRow(
+  row: unknown,
+): AcceptanceCriticalVerificationPlan {
+  try {
+    const parsed = acceptanceCriticalVerificationPlanRowSchema.parse(row);
+    const plan = decodeAcceptanceCriticalVerificationPlan(
+      parseJson(parsed.canonical_json, 'AcceptanceCriticalVerificationPlan.canonical'),
+    );
+    if (
+      plan.id !== parsed.id ||
+      plan.goalId !== parsed.goal_id ||
+      plan.goalRevision !== parsed.goal_revision ||
+      plan.workflowId !== parsed.workflow_id ||
+      plan.workflowVersionAtLock !== parsed.workflow_version_at_lock ||
+      plan.policyBundleId !== parsed.policy_bundle_id ||
+      plan.policyBundleDigest !== parsed.policy_bundle_digest ||
+      plan.executionProfileId !== parsed.execution_profile_id ||
+      plan.executionProfileDigest !== parsed.execution_profile_digest ||
+      plan.protectedAssetManifestDigest !== parsed.protected_asset_manifest_digest ||
+      plan.planDigest !== parsed.plan_digest
+    ) {
+      throw new TypeError('Protected Verification Plan columns disagree with canonical content');
+    }
+    return plan;
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('AcceptanceCriticalVerificationPlan', { cause: error });
   }
 }
 
@@ -1339,6 +1425,27 @@ export function decodeEvidenceRecordRow(row: unknown): EvidenceRecord {
       ...(parsed.workspace_lease_digest === null
         ? {}
         : { workspaceLeaseDigest: parsed.workspace_lease_digest }),
+      ...(parsed.acceptance_critical_verification_plan_id === null ||
+      parsed.acceptance_critical_verification_plan_id === undefined
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanId: parsed.acceptance_critical_verification_plan_id,
+          }),
+      ...(parsed.acceptance_critical_verification_plan_digest === null ||
+      parsed.acceptance_critical_verification_plan_digest === undefined
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanDigest:
+              parsed.acceptance_critical_verification_plan_digest,
+          }),
+      ...(parsed.protected_asset_manifest_digest === null ||
+      parsed.protected_asset_manifest_digest === undefined
+        ? {}
+        : { protectedAssetManifestDigest: parsed.protected_asset_manifest_digest }),
+      ...(parsed.protected_asset_read_lease_digest === null ||
+      parsed.protected_asset_read_lease_digest === undefined
+        ? {}
+        : { protectedAssetReadLeaseDigest: parsed.protected_asset_read_lease_digest }),
       policyBundleId: parsed.policy_bundle_id,
       policyBundleDigest: parsed.policy_bundle_digest,
       checkSpec: parseJson(parsed.check_spec_json, 'EvidenceRecord.checkSpec'),
@@ -1441,8 +1548,17 @@ export function decodePendingIssueRow(row: unknown): PendingIssue {
 export function decodeAcceptanceInputManifestRow(row: unknown): AcceptanceInputManifest {
   try {
     const parsed = acceptanceInputManifestRowSchema.parse(row);
+    const hasPlanId =
+      parsed.acceptance_critical_verification_plan_id !== null &&
+      parsed.acceptance_critical_verification_plan_id !== undefined;
+    const hasPlanDigest =
+      parsed.acceptance_critical_verification_plan_digest !== null &&
+      parsed.acceptance_critical_verification_plan_digest !== undefined;
+    if (parsed.schema_version !== 1 || hasPlanId !== hasPlanDigest) {
+      throw new TypeError('Acceptance Input Manifest storage extension is incomplete');
+    }
     return decodeAcceptanceInputManifest({
-      schemaVersion: parsed.schema_version,
+      schemaVersion: hasPlanId ? 2 : 1,
       goalId: parsed.goal_id,
       goalRevision: parsed.goal_revision,
       workflowId: parsed.workflow_id,
@@ -1459,6 +1575,19 @@ export function decodeAcceptanceInputManifestRow(row: unknown): AcceptanceInputM
       policyBundleDigest: parsed.policy_bundle_digest,
       createdAt: parsed.created_at,
       manifestDigest: parsed.manifest_digest,
+      ...(parsed.acceptance_critical_verification_plan_id === null ||
+      parsed.acceptance_critical_verification_plan_id === undefined
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanId: parsed.acceptance_critical_verification_plan_id,
+          }),
+      ...(parsed.acceptance_critical_verification_plan_digest === null ||
+      parsed.acceptance_critical_verification_plan_digest === undefined
+        ? {}
+        : {
+            acceptanceCriticalVerificationPlanDigest:
+              parsed.acceptance_critical_verification_plan_digest,
+          }),
     });
   } catch (error) {
     throw new PersistenceDecodeError('AcceptanceInputManifest', { cause: error });

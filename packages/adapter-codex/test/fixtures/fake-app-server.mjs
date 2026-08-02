@@ -5,19 +5,20 @@ const scenario = process.argv[2] ?? 'happy';
 let initialized = false;
 let pendingApproval;
 let turnId = 'turn-fixture';
+let configReadCount = 0;
 
 function send(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function turn(status, items, error = null, id = turnId) {
+function turn(status, items, error = null, id = turnId, itemsView = 'full') {
   return {
     completedAt: status === 'inProgress' ? null : 2,
     durationMs: status === 'inProgress' ? null : 1_000,
     error,
     id,
     items,
-    itemsView: 'full',
+    itemsView,
     startedAt: 1,
     status,
   };
@@ -133,6 +134,31 @@ function terminalItems(message) {
       finalItem,
     ];
   }
+  const selectedCommandSource = {
+    'unified-exec-interaction': 'unifiedExecInteraction',
+    'unified-exec-startup': 'unifiedExecStartup',
+    'user-shell-command': 'userShell',
+  }[scenario];
+  if (selectedCommandSource !== undefined) {
+    return [
+      {
+        aggregatedOutput: null,
+        command: 'fixture-command',
+        commandActions: [],
+        cwd: message.params.cwd,
+        durationMs: null,
+        exitCode: null,
+        id: `${scenario}-1`,
+        pluginId: null,
+        processId: null,
+        scriptPath: null,
+        source: selectedCommandSource,
+        status: 'completed',
+        type: 'commandExecution',
+      },
+      finalItem,
+    ];
+  }
   if (scenario === 'skill-user-message') {
     return [
       {
@@ -212,9 +238,19 @@ function terminalItems(message) {
 
 function sendItemLifecycles(threadId, items) {
   for (const item of items) {
+    const startedItem =
+      item.type === 'commandExecution' && item.status !== 'inProgress'
+        ? {
+            ...item,
+            aggregatedOutput: null,
+            durationMs: null,
+            exitCode: null,
+            status: 'inProgress',
+          }
+        : item;
     send({
       method: 'item/started',
-      params: { item, startedAtMs: 1, threadId, turnId },
+      params: { item: startedItem, startedAtMs: 1, threadId, turnId },
     });
     send({
       method: 'item/completed',
@@ -276,16 +312,35 @@ function sendTerminal(message) {
     return;
   }
   const items = terminalItems(message);
-  if (scenario !== 'terminal-only-unknown-item' && scenario !== 'terminal-only-in-progress-item') {
+  if (
+    scenario !== 'terminal-only-unknown-item' &&
+    scenario !== 'terminal-only-in-progress-item' &&
+    scenario !== 'terminal-summary-without-completed'
+  ) {
     sendItemLifecycles(threadId, items);
   }
   const terminalThreadId = scenario === 'wrong-thread' ? 'thread-split' : threadId;
   const terminalTurnId = scenario === 'wrong-turn' ? 'turn-split' : turnId;
+  const terminalOnly =
+    scenario === 'terminal-only-unknown-item' || scenario === 'terminal-only-in-progress-item';
+  const summaryItem = [...items].reverse().find((item) => item.type === 'agentMessage');
+  const terminalViewItems = terminalOnly || summaryItem === undefined ? items : [summaryItem];
+  const itemsView =
+    terminalOnly || scenario === 'terminal-full-view'
+      ? 'full'
+      : summaryItem === undefined
+        ? 'notLoaded'
+        : 'summary';
+  if (scenario === 'terminal-summary-mismatch' && summaryItem !== undefined) {
+    const payload = JSON.parse(summaryItem.text);
+    payload.result.summary = 'Terminal summary did not match item/completed.';
+    terminalViewItems[0] = { ...summaryItem, text: JSON.stringify(payload) };
+  }
   const notification = {
     method: 'turn/completed',
     params: {
       threadId: terminalThreadId,
-      turn: turn('completed', items, null, terminalTurnId),
+      turn: turn('completed', terminalViewItems, null, terminalTurnId, itemsView),
     },
   };
   if (scenario === 'missing-items-view') {
@@ -301,6 +356,7 @@ function threadResponse(message) {
   const instructionSources =
     scenario === 'instruction-extra' ? [`${process.cwd()}/UNBOUND_INSTRUCTIONS.md`] : [];
   const id = message.method === 'thread/resume' ? message.params.threadId : 'thread-fixture';
+  const writableRoots = scenario === 'thread-sandbox-drift' ? [message.params.cwd] : [];
   return {
     approvalPolicy: message.params.approvalPolicy,
     approvalsReviewer: message.params.approvalsReviewer,
@@ -310,15 +366,51 @@ function threadResponse(message) {
     modelProvider: message.params.modelProvider,
     reasoningEffort: 'low',
     sandbox: {
-      excludeSlashTmp: true,
-      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: false,
+      excludeTmpdirEnvVar: false,
       networkAccess: false,
       type: 'workspaceWrite',
-      writableRoots: [message.params.cwd],
+      writableRoots,
     },
-    serviceTier: message.params.serviceTier ?? null,
+    serviceTier: scenario === 'thread-service-tier-drift' ? 'priority' : message.params.serviceTier,
     thread: { id },
   };
+}
+
+function hasExactCandidateTurnPolicy(message) {
+  const policy = message.params.sandboxPolicy;
+  return (
+    message.params.serviceTier === 'default' &&
+    policy?.type === 'workspaceWrite' &&
+    policy.networkAccess === false &&
+    policy.excludeSlashTmp === true &&
+    policy.excludeTmpdirEnvVar === true &&
+    Array.isArray(policy.writableRoots) &&
+    policy.writableRoots.length === 1 &&
+    policy.writableRoots[0] === message.params.cwd
+  );
+}
+
+function hasExactCandidateTrustOverride(message) {
+  const config = message.params.config;
+  const projects = config?.projects;
+  const cwd = message.params.cwd;
+  const trust = projects?.[cwd];
+  return (
+    config !== null &&
+    typeof config === 'object' &&
+    !Array.isArray(config) &&
+    JSON.stringify(Object.keys(config).sort()) === JSON.stringify(['projects']) &&
+    projects !== null &&
+    typeof projects === 'object' &&
+    !Array.isArray(projects) &&
+    JSON.stringify(Object.keys(projects).sort()) === JSON.stringify([cwd]) &&
+    trust !== null &&
+    typeof trust === 'object' &&
+    !Array.isArray(trust) &&
+    JSON.stringify(Object.keys(trust).sort()) === JSON.stringify(['trust_level']) &&
+    trust.trust_level === 'untrusted'
+  );
 }
 
 function handleRequest(message) {
@@ -333,15 +425,47 @@ function handleRequest(message) {
     return;
   }
   if (message.method === 'config/read') {
+    configReadCount += 1;
+    const disabledFeatures = {
+      apps: false,
+      goals: false,
+      hooks: false,
+      memories: false,
+      multi_agent: false,
+      multi_agent_v2: false,
+      personality: false,
+      plugins: scenario === 'profile-bound-plugin-enabled',
+      remote_plugin: false,
+      skill_mcp_dependency_install: false,
+      skill_search: false,
+      tool_suggest: false,
+    };
     send({
       id: message.id,
       result: {
         config: {
           approval_policy: 'never',
           default_permissions: 'codeclosure-m2',
-          model: scenario === 'config-drift' ? 'gpt-drift' : 'gpt-fixture',
+          features: disabledFeatures,
+          include_apps_instructions: false,
+          include_collaboration_mode_instructions: false,
+          mcp_servers:
+            scenario === 'profile-bound-mcp-configured' ? { fixture: { enabled: true } } : {},
+          model:
+            scenario === 'config-drift' ||
+            (scenario === 'thread-config-writeback' && configReadCount > 1)
+              ? 'gpt-drift'
+              : 'gpt-fixture',
           model_provider: 'openai',
           model_reasoning_effort: 'low',
+          orchestrator: {
+            mcp: { enabled: false },
+            skills: { enabled: false },
+          },
+          skills: {
+            bundled: { enabled: false },
+            include_instructions: false,
+          },
           web_search: 'disabled',
         },
         layers: [],
@@ -366,6 +490,13 @@ function handleRequest(message) {
     return;
   }
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
+    if (!hasExactCandidateTrustOverride(message)) {
+      send({
+        id: message.id,
+        error: { code: -32602, message: 'candidate trust override mismatch' },
+      });
+      return;
+    }
     const result = threadResponse(message);
     send({ id: message.id, result });
     send({ method: 'thread/started', params: { thread: { id: result.thread.id } } });
@@ -419,6 +550,13 @@ function handleRequest(message) {
     return;
   }
   if (message.method === 'turn/start') {
+    if (!hasExactCandidateTurnPolicy(message)) {
+      send({
+        id: message.id,
+        error: { code: -32602, message: 'fixture requires the exact Candidate Turn policy' },
+      });
+      return;
+    }
     send({ id: message.id, result: { turn: turn('inProgress', []) } });
     send({
       method: 'turn/started',
@@ -456,6 +594,22 @@ lines.on('line', (line) => {
         userAgent: 'adapter-fixture',
       },
     });
+    if (
+      scenario === 'remote-control-disabled' ||
+      scenario === 'remote-control-connected' ||
+      scenario === 'remote-control-disabled-environment'
+    ) {
+      send({
+        method: 'remoteControl/status/changed',
+        params: {
+          environmentId:
+            scenario === 'remote-control-disabled' ? null : 'fixture-remote-environment',
+          installationId: 'fixture-installation',
+          serverName: 'fixture-server',
+          status: scenario === 'remote-control-connected' ? 'connected' : 'disabled',
+        },
+      });
+    }
     return;
   }
   if (message.method === 'initialized') {

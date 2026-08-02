@@ -10,10 +10,12 @@ import {
   attemptId,
   decodeCandidateGeneration,
   decodeCheckSpecification,
+  decodeProtectedAssetReadLease,
   decodeVerificationObligation,
   goalId,
   goalRevision,
   policyBundleId,
+  protectedAssetReadLeaseProjection,
   sha256Digest,
   workflowId,
   workflowVersion,
@@ -22,6 +24,7 @@ import {
   type GoalId,
   type GoalRevision,
   type LocalCommandCheckSpecification,
+  type ProtectedAssetReadLease,
   type CheckSpecificationId,
   type PolicyBundleId,
   type Sha256Digest,
@@ -38,7 +41,11 @@ import {
 } from './candidate-workspace-contracts.js';
 import type { DigestProvider } from './ports.js';
 
-export { LocalCommandDiagnosticCode, LocalCommandTerminationKind } from '@codeclosure/domain';
+export {
+  LocalCommandDiagnosticCode,
+  LocalCommandTerminationKind,
+  sha256Digest,
+} from '@codeclosure/domain';
 export type { Sha256Digest } from '@codeclosure/domain';
 
 export interface LocalCommandEnvironmentVariable {
@@ -69,10 +76,11 @@ export interface CreateLocalCommandCheckSpecificationInput {
   readonly totalOutputLimitBytes: number;
   readonly payloadRetentionLimitBytes: number;
   readonly acceptedExitCodes: readonly number[];
+  readonly protectedAssetReadLease?: ProtectedAssetReadLease;
 }
 
-export interface LocalCommandVerificationRequest {
-  readonly schemaVersion: 2;
+interface LocalCommandVerificationRequestBase {
+  readonly schemaVersion: 2 | 3;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
   readonly workflowId: WorkflowId;
@@ -83,13 +91,27 @@ export interface LocalCommandVerificationRequest {
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
   readonly obligation: VerificationObligation;
-  readonly checkSpec: LocalCommandCheckSpecification;
   readonly runnerIdentity: string;
   readonly runnerVersion: string;
   readonly isolationProfileId: string;
   readonly isolationProfileDigest: Sha256Digest;
   readonly environmentVariables: readonly LocalCommandEnvironmentVariable[];
 }
+
+export interface LocalCommandVerificationRequestV2 extends LocalCommandVerificationRequestBase {
+  readonly schemaVersion: 2;
+  /** Strict decoding rejects schema-version-3 Checks on this compatibility request. */
+  readonly checkSpec: LocalCommandCheckSpecification;
+}
+
+export interface ProtectedLocalCommandVerificationRequest extends LocalCommandVerificationRequestBase {
+  readonly schemaVersion: 3;
+  readonly checkSpec: Extract<LocalCommandCheckSpecification, { readonly schemaVersion: 3 }>;
+  readonly protectedAssetReadLease: ProtectedAssetReadLease;
+}
+
+export type LocalCommandVerificationRequest =
+  LocalCommandVerificationRequestV2 | ProtectedLocalCommandVerificationRequest;
 
 export interface LocalCommandVerificationResult {
   readonly schemaVersion: 1;
@@ -107,11 +129,12 @@ export interface LocalCommandVerificationResult {
 }
 
 export interface LocalCommandVerificationPort {
-  run(request: LocalCommandVerificationRequest): Promise<unknown>;
+  /** Adapter boundary input is untrusted and MUST be strictly decoded by the runner. */
+  run(request: unknown): Promise<unknown>;
 }
 
-export interface VerificationIsolationRequest {
-  readonly schemaVersion: 1;
+interface VerificationIsolationRequestBase {
+  readonly schemaVersion: 1 | 2;
   readonly executablePath: string;
   readonly argv: readonly string[];
   readonly cwd: string;
@@ -127,6 +150,18 @@ export interface VerificationIsolationRequest {
   readonly totalOutputLimitBytes: number;
   readonly payloadRetentionLimitBytes: number;
 }
+
+export interface VerificationIsolationRequestV1 extends VerificationIsolationRequestBase {
+  readonly schemaVersion: 1;
+}
+
+export interface ProtectedVerificationIsolationRequest extends VerificationIsolationRequestBase {
+  readonly schemaVersion: 2;
+  readonly protectedAssetReadLease: ProtectedAssetReadLease;
+}
+
+export type VerificationIsolationRequest =
+  VerificationIsolationRequestV1 | ProtectedVerificationIsolationRequest;
 
 export interface VerificationIsolationPort {
   run(request: VerificationIsolationRequest): Promise<unknown>;
@@ -148,27 +183,44 @@ const environmentVariableSchema = z
   })
   .strict();
 
-const localCommandRequestSchema = z
+const localCommandRequestBaseShape = {
+  goalId: z.string(),
+  goalRevision: z.number().int().positive(),
+  workflowId: z.string(),
+  workflowVersion: z.number().int().positive(),
+  attemptId: z.string(),
+  generation: z.unknown(),
+  workspaceLease: z.unknown(),
+  policyBundleId: z.string(),
+  policyBundleDigest: z.string(),
+  obligation: z.unknown(),
+  checkSpec: z.unknown(),
+  runnerIdentity: z.string().min(1),
+  runnerVersion: z.string().min(1),
+  isolationProfileId: z.string().min(1),
+  isolationProfileDigest: z.string(),
+  environmentVariables: z.array(environmentVariableSchema).max(1_024),
+} as const;
+
+const localCommandRequestV2Schema = z
   .object({
     schemaVersion: z.literal(2),
-    goalId: z.string(),
-    goalRevision: z.number().int().positive(),
-    workflowId: z.string(),
-    workflowVersion: z.number().int().positive(),
-    attemptId: z.string(),
-    generation: z.unknown(),
-    workspaceLease: z.unknown(),
-    policyBundleId: z.string(),
-    policyBundleDigest: z.string(),
-    obligation: z.unknown(),
-    checkSpec: z.unknown(),
-    runnerIdentity: z.string().min(1),
-    runnerVersion: z.string().min(1),
-    isolationProfileId: z.string().min(1),
-    isolationProfileDigest: z.string(),
-    environmentVariables: z.array(environmentVariableSchema).max(1_024),
+    ...localCommandRequestBaseShape,
   })
   .strict();
+
+const localCommandRequestV3Schema = z
+  .object({
+    schemaVersion: z.literal(3),
+    ...localCommandRequestBaseShape,
+    protectedAssetReadLease: z.unknown(),
+  })
+  .strict();
+
+const localCommandRequestSchema = z.discriminatedUnion('schemaVersion', [
+  localCommandRequestV2Schema,
+  localCommandRequestV3Schema,
+]);
 
 function sameOrWithin(path: string, parent: string): boolean {
   const relation = relative(parent, path);
@@ -193,6 +245,29 @@ export function localCommandEnvironmentDigest(
   return sha256Digest(digests.digest(environmentProjection(variables)));
 }
 
+function protectedAssetReadLeaseDigest(
+  lease: ProtectedAssetReadLease,
+  digests: DigestProvider,
+): Sha256Digest {
+  return sha256Digest(digests.digest(protectedAssetReadLeaseProjection(lease)));
+}
+
+export function createLocalCommandCheckSpecification(
+  input: CreateLocalCommandCheckSpecificationInput & {
+    readonly protectedAssetReadLease?: undefined;
+  },
+  digests: DigestProvider,
+): Extract<LocalCommandCheckSpecification, { readonly schemaVersion: 2 }>;
+export function createLocalCommandCheckSpecification(
+  input: CreateLocalCommandCheckSpecificationInput & {
+    readonly protectedAssetReadLease: ProtectedAssetReadLease;
+  },
+  digests: DigestProvider,
+): Extract<LocalCommandCheckSpecification, { readonly schemaVersion: 3 }>;
+export function createLocalCommandCheckSpecification(
+  input: CreateLocalCommandCheckSpecificationInput,
+  digests: DigestProvider,
+): LocalCommandCheckSpecification;
 export function createLocalCommandCheckSpecification(
   input: CreateLocalCommandCheckSpecificationInput,
   digests: DigestProvider,
@@ -201,8 +276,27 @@ export function createLocalCommandCheckSpecification(
   if (lease.accessMode !== CandidateWorkspaceAccessMode.READ_ONLY) {
     throw new TypeError('Local command Check requires a read-only Candidate workspace lease');
   }
+  const protectedLease =
+    input.protectedAssetReadLease === undefined
+      ? undefined
+      : decodeProtectedAssetReadLease(input.protectedAssetReadLease);
+  if (
+    protectedLease !== undefined &&
+    (protectedLease.checkSpecificationId !== input.id ||
+      protectedLease.checkSpecificationVersion !== input.version ||
+      protectedLease.goalId !== lease.goalId ||
+      protectedLease.goalRevision !== lease.goalRevision ||
+      protectedLease.workflowId !== lease.workflowId ||
+      protectedLease.candidateGenerationId !== lease.candidateGenerationId ||
+      protectedLease.candidateDigest !== lease.candidateDigest ||
+      protectedLease.isolationProfileId !== input.isolationProfileId ||
+      protectedLease.isolationProfileDigest !== input.isolationProfileDigest ||
+      protectedAssetReadLeaseDigest(protectedLease, digests) !== protectedLease.leaseDigest)
+  ) {
+    throw new TypeError('Protected asset lease does not bind the concrete Check authority');
+  }
   const decoded = decodeCheckSpecification({
-    schemaVersion: 2,
+    schemaVersion: protectedLease === undefined ? 2 : 3,
     id: input.id,
     version: input.version,
     kind: CheckSpecificationKind.LOCAL_COMMAND,
@@ -242,6 +336,15 @@ export function createLocalCommandCheckSpecification(
     totalOutputLimitBytes: input.totalOutputLimitBytes,
     payloadRetentionLimitBytes: input.payloadRetentionLimitBytes,
     acceptedExitCodes: input.acceptedExitCodes,
+    ...(protectedLease === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlanId: protectedLease.acceptanceCriticalVerificationPlanId,
+          acceptanceCriticalVerificationPlanDigest:
+            protectedLease.acceptanceCriticalVerificationPlanDigest,
+          protectedAssetManifestDigest: protectedLease.protectedAssetManifestDigest,
+          protectedAssetReadLeaseDigest: protectedLease.leaseDigest,
+        }),
   });
   if (decoded.kind !== CheckSpecificationKind.LOCAL_COMMAND) {
     throw new TypeError('Local command Check changed kind during construction');
@@ -264,7 +367,17 @@ export function decodeLocalCommandVerificationRequest(
   const environmentVariables = Object.freeze(
     parsed.environmentVariables.map((entry) => Object.freeze({ ...entry })),
   );
-  const request: LocalCommandVerificationRequest = Object.freeze({
+  if (
+    (parsed.schemaVersion === 2 && decodedCheckSpec.schemaVersion !== 2) ||
+    (parsed.schemaVersion === 3 && decodedCheckSpec.schemaVersion !== 3)
+  ) {
+    throw new TypeError('Local command request schema does not match its Check Specification');
+  }
+  const protectedLease =
+    parsed.schemaVersion === 3
+      ? decodeProtectedAssetReadLease(parsed.protectedAssetReadLease)
+      : undefined;
+  const commonRequest = {
     schemaVersion: parsed.schemaVersion,
     goalId: goalId(parsed.goalId),
     goalRevision: goalRevision(parsed.goalRevision),
@@ -282,7 +395,26 @@ export function decodeLocalCommandVerificationRequest(
     isolationProfileId: parsed.isolationProfileId,
     isolationProfileDigest: sha256Digest(parsed.isolationProfileDigest),
     environmentVariables,
-  });
+  } as const;
+  const request: LocalCommandVerificationRequest =
+    parsed.schemaVersion === 3 &&
+    decodedCheckSpec.schemaVersion === 3 &&
+    protectedLease !== undefined
+      ? Object.freeze({
+          ...commonRequest,
+          schemaVersion: 3 as const,
+          checkSpec: decodedCheckSpec,
+          protectedAssetReadLease: protectedLease,
+        })
+      : parsed.schemaVersion === 2 && decodedCheckSpec.schemaVersion === 2
+        ? Object.freeze({
+            ...commonRequest,
+            schemaVersion: 2 as const,
+            checkSpec: decodedCheckSpec,
+          })
+        : (() => {
+            throw new TypeError('Local command request is not a supported authority version');
+          })();
   const variableNames = environmentVariables.map(({ name }) => name);
   const environmentByteLength = environmentVariables.reduce(
     (total, { name, value }) =>
@@ -325,6 +457,30 @@ export function decodeLocalCommandVerificationRequest(
     decodedCheckSpec.environmentDigest
   ) {
     throw new TypeError('Local command environment values do not match the Check Specification');
+  }
+  if (
+    request.schemaVersion === 3 &&
+    (protectedAssetReadLeaseDigest(request.protectedAssetReadLease, digests) !==
+      request.protectedAssetReadLease.leaseDigest ||
+      request.protectedAssetReadLease.goalId !== request.goalId ||
+      request.protectedAssetReadLease.goalRevision !== request.goalRevision ||
+      request.protectedAssetReadLease.workflowId !== request.workflowId ||
+      request.protectedAssetReadLease.candidateGenerationId !== request.generation.id ||
+      request.protectedAssetReadLease.candidateDigest !== request.generation.frozenDigest ||
+      request.protectedAssetReadLease.checkSpecificationId !== request.checkSpec.id ||
+      request.protectedAssetReadLease.checkSpecificationVersion !== request.checkSpec.version ||
+      request.protectedAssetReadLease.isolationProfileId !== request.isolationProfileId ||
+      request.protectedAssetReadLease.isolationProfileDigest !== request.isolationProfileDigest ||
+      request.protectedAssetReadLease.acceptanceCriticalVerificationPlanId !==
+        request.checkSpec.acceptanceCriticalVerificationPlanId ||
+      request.protectedAssetReadLease.acceptanceCriticalVerificationPlanDigest !==
+        request.checkSpec.acceptanceCriticalVerificationPlanDigest ||
+      request.protectedAssetReadLease.protectedAssetManifestDigest !==
+        request.checkSpec.protectedAssetManifestDigest ||
+      request.protectedAssetReadLease.leaseDigest !==
+        request.checkSpec.protectedAssetReadLeaseDigest)
+  ) {
+    throw new TypeError('Protected local command request contains cross-authority bindings');
   }
   return request;
 }

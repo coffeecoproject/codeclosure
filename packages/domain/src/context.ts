@@ -1,5 +1,6 @@
 import {
   acceptanceDecisionId,
+  acceptanceCriticalVerificationPlanId,
   aggregateVersion,
   candidateGenerationId,
   checkSpecificationId,
@@ -17,6 +18,7 @@ import {
   workflowVersion,
   type AttemptId,
   type AcceptanceDecisionId,
+  type AcceptanceCriticalVerificationPlanId,
   type AggregateVersion,
   type CandidateGenerationId,
   type CheckSpecificationId,
@@ -162,7 +164,7 @@ export interface PriorAttemptFeedback {
 }
 
 export interface ContextPackage {
-  readonly schemaVersion: 2 | 3;
+  readonly schemaVersion: 2 | 3 | 4;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
   readonly workflowId: WorkflowId;
@@ -181,6 +183,8 @@ export interface ContextPackage {
   readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
+  readonly acceptanceCriticalVerificationPlanId?: AcceptanceCriticalVerificationPlanId;
+  readonly acceptanceCriticalVerificationPlanDigest?: Sha256Digest;
   readonly responseContract: WorkerResponseContract;
 }
 
@@ -201,7 +205,7 @@ export interface ContextOmissionDecision {
 
 export interface ContextManifest {
   readonly id: ContextManifestId;
-  readonly schemaVersion: 2 | 3;
+  readonly schemaVersion: 2 | 3 | 4;
   readonly compilerVersion: string;
   readonly createdAt: IsoTimestamp;
   readonly goalId: GoalId;
@@ -216,6 +220,8 @@ export interface ContextManifest {
   readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
+  readonly acceptanceCriticalVerificationPlanId?: AcceptanceCriticalVerificationPlanId;
+  readonly acceptanceCriticalVerificationPlanDigest?: Sha256Digest;
   readonly capabilityGrantDigest: Sha256Digest;
   readonly responseContractDigest: Sha256Digest;
   readonly repairContextDigest?: Sha256Digest;
@@ -466,7 +472,8 @@ export function assertWorkerResponseContractInvariant(contract: WorkerResponseCo
 export function assertContextPackageInvariant(contextPackage: ContextPackage): void {
   if (
     field(contextPackage, 'schemaVersion') !== 2 &&
-    field(contextPackage, 'schemaVersion') !== 3
+    field(contextPackage, 'schemaVersion') !== 3 &&
+    field(contextPackage, 'schemaVersion') !== 4
   ) {
     throw new TypeError('Context Package schema version is unsupported');
   }
@@ -479,6 +486,11 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
   sha256Digest(contextPackage.executionProfileDigest);
   policyBundleId(contextPackage.policyBundleId);
   sha256Digest(contextPackage.policyBundleDigest);
+  const protectedPlanId = contextPackage.acceptanceCriticalVerificationPlanId;
+  const protectedPlanDigest = contextPackage.acceptanceCriticalVerificationPlanDigest;
+  if ((protectedPlanId === undefined) !== (protectedPlanDigest === undefined)) {
+    throw new TypeError('Context protected Plan ID and digest must be present together');
+  }
   if (
     !isKnown(WorkflowPhase, contextPackage.phase) ||
     contextPackage.phase === WorkflowPhase.CLOSEOUT
@@ -532,11 +544,12 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
   if (contextPackage.schemaVersion === 2) {
     if (
       contextPackage.repairContext !== undefined ||
-      contextPackage.priorAttemptFeedback !== undefined
+      contextPackage.priorAttemptFeedback !== undefined ||
+      protectedPlanId !== undefined
     ) {
       throw new TypeError('Context Package v2 cannot contain repair authority');
     }
-  } else {
+  } else if (contextPackage.schemaVersion === 3) {
     if (
       contextPackage.phase !== WorkflowPhase.IMPLEMENT ||
       contextPackage.candidateGenerationId === undefined ||
@@ -554,12 +567,51 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
     ) {
       throw new TypeError('Repair Context does not bind the Package Candidate child');
     }
+    if (protectedPlanId !== undefined) {
+      throw new TypeError('Repair Context Package v3 cannot contain protected Plan authority');
+    }
+  } else {
+    if (protectedPlanId === undefined || protectedPlanDigest === undefined) {
+      throw new TypeError('Protected Context Package v4 requires exact Plan authority');
+    }
+    acceptanceCriticalVerificationPlanId(protectedPlanId);
+    sha256Digest(protectedPlanDigest);
+    if (
+      (contextPackage.repairContext === undefined) !==
+      (contextPackage.priorAttemptFeedback === undefined)
+    ) {
+      throw new TypeError('Protected repair Context requires both repair values');
+    }
+    if (
+      contextPackage.repairContext !== undefined &&
+      contextPackage.priorAttemptFeedback !== undefined
+    ) {
+      if (
+        contextPackage.phase !== WorkflowPhase.IMPLEMENT ||
+        contextPackage.candidateGenerationId === undefined
+      ) {
+        throw new TypeError('Protected repair Context requires IMPLEMENT Candidate authority');
+      }
+      assertRepairContextInvariant(contextPackage.repairContext);
+      assertPriorAttemptFeedbackInvariant(contextPackage.priorAttemptFeedback);
+      if (
+        contextPackage.repairContext.repairCandidateGenerationId !==
+          contextPackage.candidateGenerationId ||
+        contextPackage.repairContext.repairCandidateBaseDigest !== contextPackage.candidateDigest
+      ) {
+        throw new TypeError('Protected repair Context does not bind its Candidate child');
+      }
+    }
   }
   assertWorkerResponseContractInvariant(contextPackage.responseContract);
 }
 
 export function assertContextManifestInvariant(manifest: ContextManifest): void {
-  if (field(manifest, 'schemaVersion') !== 2 && field(manifest, 'schemaVersion') !== 3) {
+  if (
+    field(manifest, 'schemaVersion') !== 2 &&
+    field(manifest, 'schemaVersion') !== 3 &&
+    field(manifest, 'schemaVersion') !== 4
+  ) {
     throw new TypeError('Context Manifest schema version is unsupported');
   }
   contextManifestId(manifest.id);
@@ -578,16 +630,22 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
   }
   assertCandidateBinding(manifest.candidateGenerationId, manifest.candidateDigest);
   sha256Digest(manifest.policyBundleDigest);
+  const protectedPlanId = manifest.acceptanceCriticalVerificationPlanId;
+  const protectedPlanDigest = manifest.acceptanceCriticalVerificationPlanDigest;
+  if ((protectedPlanId === undefined) !== (protectedPlanDigest === undefined)) {
+    throw new TypeError('Context Manifest protected Plan pair is incomplete');
+  }
   sha256Digest(manifest.capabilityGrantDigest);
   sha256Digest(manifest.responseContractDigest);
   if (manifest.schemaVersion === 2) {
     if (
       manifest.repairContextDigest !== undefined ||
-      manifest.priorAttemptFeedbackDigest !== undefined
+      manifest.priorAttemptFeedbackDigest !== undefined ||
+      protectedPlanId !== undefined
     ) {
       throw new TypeError('Context Manifest v2 cannot contain repair digests');
     }
-  } else {
+  } else if (manifest.schemaVersion === 3) {
     if (
       manifest.phase !== WorkflowPhase.IMPLEMENT ||
       manifest.candidateGenerationId === undefined ||
@@ -599,6 +657,35 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
     }
     sha256Digest(manifest.repairContextDigest);
     sha256Digest(manifest.priorAttemptFeedbackDigest);
+    if (protectedPlanId !== undefined) {
+      throw new TypeError('Context Manifest v3 cannot contain protected Plan authority');
+    }
+  } else {
+    if (protectedPlanId === undefined || protectedPlanDigest === undefined) {
+      throw new TypeError('Protected Context Manifest v4 requires exact Plan authority');
+    }
+    acceptanceCriticalVerificationPlanId(protectedPlanId);
+    sha256Digest(protectedPlanDigest);
+    if (
+      (manifest.repairContextDigest === undefined) !==
+      (manifest.priorAttemptFeedbackDigest === undefined)
+    ) {
+      throw new TypeError('Protected repair Manifest requires both repair digests');
+    }
+    if (
+      manifest.repairContextDigest !== undefined &&
+      manifest.priorAttemptFeedbackDigest !== undefined
+    ) {
+      if (
+        manifest.phase !== WorkflowPhase.IMPLEMENT ||
+        manifest.candidateGenerationId === undefined ||
+        manifest.candidateDigest === undefined
+      ) {
+        throw new TypeError('Protected repair Manifest requires IMPLEMENT Candidate authority');
+      }
+      sha256Digest(manifest.repairContextDigest);
+      sha256Digest(manifest.priorAttemptFeedbackDigest);
+    }
   }
   sha256Digest(manifest.packageDigest);
   sha256Digest(manifest.manifestDigest);

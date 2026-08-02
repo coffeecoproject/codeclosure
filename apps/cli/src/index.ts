@@ -19,7 +19,7 @@ import { executeGoalStatus } from './commands/goal-status.js';
 import {
   createCliCommandId,
   createCliInvocationComposition,
-  runM1DemoProof,
+  runDemoProof,
   validateCliStartProfileName,
 } from './composition/index.js';
 
@@ -145,10 +145,7 @@ async function runCli(args: readonly string[]): Promise<number> {
         break;
       }
       case 'demo run':
-        envelope = await executeDemoRun(
-          Object.freeze({ run: runM1DemoProof }),
-          invocation.scenario,
-        );
+        envelope = await executeDemoRun(Object.freeze({ run: runDemoProof }), invocation.scenario);
         break;
     }
   } catch (error) {

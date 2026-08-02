@@ -1,11 +1,82 @@
 import type {
   DrivenGoalCommandResult,
+  ExternalFailureCodeView,
   GoalAuditView,
   GoalReadResult,
   GoalStatusView,
   RuntimeCommandResult,
   WorkflowDriveSummary,
 } from '@codeclosure/runtime';
+export type CliExternalFailureCode = ExternalFailureCodeView;
+export type CliExternalItemRejectionCode =
+  | 'COMMAND_ACTIONS'
+  | 'COMMAND_CWD'
+  | 'COMMAND_DURATION'
+  | 'COMMAND_EXIT_CODE'
+  | 'COMMAND_FIELD_SET'
+  | 'COMMAND_ID'
+  | 'COMMAND_OUTPUT'
+  | 'COMMAND_PLUGIN_BINDING'
+  | 'COMMAND_PROCESS_ID'
+  | 'COMMAND_SOURCE'
+  | 'COMMAND_STATUS'
+  | 'COMMAND_TEXT'
+  | 'ITEM_SCHEMA'
+  | 'UNSELECTED_ITEM_TYPE';
+export type CliExternalDiagnostic =
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'NOTIFICATION_LIMIT';
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'UNSUPPORTED_NOTIFICATION';
+      method: string;
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'MALFORMED_ITEM';
+      location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'ITEM_POLICY_UNAVAILABLE';
+      location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'UNSUPPORTED_ITEM';
+      itemType: string;
+      location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
+      reasonCode: CliExternalItemRejectionCode;
+    }>;
+
+export interface CliRuntimeStopDiagnostic {
+  readonly schemaVersion: 1;
+  readonly stage: 'INITIAL_DRIVE' | 'REPAIR_DRIVE';
+  readonly commandStatus: RuntimeCommandResult['status'];
+  readonly externalExecution: Readonly<{
+    readonly schemaVersion: 1;
+    readonly id: string;
+    readonly attemptId: string;
+    readonly state:
+      | 'AUTHORIZED'
+      | 'PROCESS_OBSERVED'
+      | 'SESSION_OBSERVED'
+      | 'OPERATION_RUNNING'
+      | 'COMPLETED'
+      | 'INTERRUPTED'
+      | 'FAILED'
+      | 'ABANDONED';
+    readonly failureCode: CliExternalFailureCode | null;
+  }> | null;
+  readonly drive: Readonly<{
+    readonly schemaVersion: 1;
+    readonly stopReason: WorkflowDriveSummary['stopReason'];
+    readonly detailCode: string;
+    readonly operationCount: number;
+  }> | null;
+}
 
 export const CliOperation = {
   GOAL_CREATE: 'goal create',
@@ -27,6 +98,11 @@ export const CliDemoScenario = {
   RESTART_RESUME: 'restart-resume',
   DUPLICATE_RESULT: 'duplicate-result',
   CANDIDATE_DRIFT: 'candidate-drift',
+  M2_PROTECTED_REPAIR: 'm2-protected-repair',
+  M2_PROTECTED_FAILED_REPAIR: 'm2-protected-failed-repair',
+  M2_ADAPTER_FAILURE: 'm2-adapter-failure',
+  M2_LIVE: 'm2-live',
+  M2_LIVE_REPAIR_HANDOFF: 'm2-live-repair-handoff',
 } as const;
 export type CliDemoScenario = (typeof CliDemoScenario)[keyof typeof CliDemoScenario];
 
@@ -39,6 +115,11 @@ export const CliDemoProofCode = {
   RESTART_RESUME_FRESH_ATTEMPT: 'RESTART_RESUME_FRESH_ATTEMPT',
   DUPLICATE_RESULT_DEDUPLICATED: 'DUPLICATE_RESULT_DEDUPLICATED',
   CANDIDATE_DRIFT_INVALIDATED: 'CANDIDATE_DRIFT_INVALIDATED',
+  M2_PROTECTED_REPAIR_ACCEPTED: 'M2_PROTECTED_REPAIR_ACCEPTED',
+  M2_PROTECTED_FAILED_REPAIR_STOPPED: 'M2_PROTECTED_FAILED_REPAIR_STOPPED',
+  M2_ADAPTER_FAILURE_GOVERNED: 'M2_ADAPTER_FAILURE_GOVERNED',
+  M2_LIVE_NATURAL_BRANCH_CLOSED: 'M2_LIVE_NATURAL_BRANCH_CLOSED',
+  M2_LIVE_REPAIR_HANDOFF_CLOSED: 'M2_LIVE_REPAIR_HANDOFF_CLOSED',
 } as const;
 export type CliDemoProofCode = (typeof CliDemoProofCode)[keyof typeof CliDemoProofCode];
 
@@ -84,6 +165,38 @@ export interface CliGoalAuditEnvelope {
   readonly result: GoalReadResult<GoalAuditView>;
 }
 
+export interface CliM2DemoDetail {
+  readonly branch:
+    | 'REPAIR_ACCEPTED'
+    | 'REPAIR_FAILED_STOP'
+    | 'ADAPTER_FAILURE'
+    | 'LIVE_FIRST_PASS_ACCEPTED'
+    | 'LIVE_REPAIR_ACCEPTED'
+    | 'LIVE_REPAIR_FAILED_STOP'
+    | 'LIVE_REPAIR_HANDOFF_ACCEPTED'
+    | 'LIVE_REPAIR_HANDOFF_FAILED_STOP';
+  readonly evidence: readonly Readonly<{
+    candidateGenerationId: string;
+    candidateDigest: string;
+    checkId: string;
+    evidenceDigest: string;
+    result: 'FAIL' | 'PASS';
+  }>[];
+  readonly generationCount: number;
+  readonly initialDriveStop: WorkflowDriveSummary['stopReason'];
+  readonly planId: string;
+  readonly planDigest: string;
+  readonly sourceIdentity: {
+    readonly schemaVersion: 1;
+    readonly sourceGitMetadataDigest: string;
+    readonly sourceTreeDigest: string;
+  };
+  readonly sourceUnchanged: true;
+  readonly workerWritableTestPassed?: true;
+  readonly externalExecutionCount?: number;
+  readonly externalFailureCode?: CliExternalFailureCode;
+}
+
 export interface CliDemoProofResult {
   readonly schemaVersion: 1;
   readonly scenario: CliDemoScenario;
@@ -101,13 +214,81 @@ export interface CliDemoProofResult {
     readonly reconciledCount: number;
     readonly recoveryIds: readonly string[];
   };
+  readonly m2?: CliM2DemoDetail;
 }
+
+export interface CliDemoFailedResult {
+  readonly schemaVersion: 3;
+  readonly scenario: typeof CliDemoScenario.M2_LIVE | typeof CliDemoScenario.M2_LIVE_REPAIR_HANDOFF;
+  readonly passed: false;
+  readonly outcome: 'FAILED';
+  readonly failureCode: 'LIVE_VERIFICATION_FAILED';
+  readonly message: string;
+  readonly goalId: GoalStatusView['goalId'];
+  readonly finalStatus: GoalStatusView;
+  readonly reopenedStatus: GoalStatusView;
+  readonly audit: GoalAuditView;
+  readonly finalDrive: WorkflowDriveSummary;
+  readonly m2: CliM2DemoDetail;
+}
+
+interface CliDemoBlockedResultBase {
+  readonly scenario:
+    | typeof CliDemoScenario.M2_ADAPTER_FAILURE
+    | typeof CliDemoScenario.M2_LIVE
+    | typeof CliDemoScenario.M2_LIVE_REPAIR_HANDOFF;
+  readonly passed: false;
+  readonly outcome: 'BLOCKED';
+  readonly blockerCode:
+    | 'AUTH_UNAVAILABLE'
+    | 'BACKEND_UNAVAILABLE'
+    | 'BINARY_UNAVAILABLE'
+    | 'MODEL_UNAVAILABLE'
+    | 'NETWORK_UNAVAILABLE'
+    | 'PROTOCOL_INCOMPATIBLE';
+  readonly message: string;
+}
+
+export type CliDemoBlockedResult = CliDemoBlockedResultBase &
+  (
+    | Readonly<{ readonly schemaVersion: 2; readonly externalFailureCode?: never }>
+    | Readonly<{
+        readonly schemaVersion: 3;
+        readonly externalFailureCode: CliExternalFailureCode;
+        readonly externalDiagnostic?: never;
+      }>
+    | Readonly<{
+        readonly schemaVersion: 4;
+        readonly externalFailureCode: CliExternalFailureCode;
+        readonly externalDiagnostic: CliExternalDiagnostic;
+      }>
+    | (Readonly<{
+        readonly schemaVersion: 5;
+        readonly runtimeStop: CliRuntimeStopDiagnostic;
+      }> &
+        (
+          | Readonly<{
+              readonly externalFailureCode?: never;
+              readonly externalDiagnostic?: never;
+            }>
+          | Readonly<{
+              readonly externalFailureCode: CliExternalFailureCode;
+              readonly externalDiagnostic?: never;
+            }>
+          | Readonly<{
+              readonly externalFailureCode: CliExternalFailureCode;
+              readonly externalDiagnostic: CliExternalDiagnostic;
+            }>
+        ))
+  );
+
+export type CliDemoResult = CliDemoProofResult | CliDemoFailedResult | CliDemoBlockedResult;
 
 export interface CliDemoResultEnvelope {
   readonly schemaVersion: 1;
   readonly kind: 'DEMO_RESULT';
   readonly operation: typeof CliOperation.DEMO_RUN;
-  readonly result: CliDemoProofResult;
+  readonly result: CliDemoResult;
 }
 
 export interface CliErrorEnvelope {

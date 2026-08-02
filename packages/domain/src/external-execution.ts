@@ -115,13 +115,19 @@ export const ExternalInterruptionPolicy = {
 export type ExternalInterruptionPolicy =
   (typeof ExternalInterruptionPolicy)[keyof typeof ExternalInterruptionPolicy];
 
+export const ExternalWorkerDispatchPolicy = {
+  ALL_SELECTED_ATTEMPTS: 'ALL_SELECTED_ATTEMPTS',
+  ACCEPTANCE_REPAIR_ONLY: 'ACCEPTANCE_REPAIR_ONLY',
+} as const;
+export type ExternalWorkerDispatchPolicy =
+  (typeof ExternalWorkerDispatchPolicy)[keyof typeof ExternalWorkerDispatchPolicy];
+
 /**
  * Non-secret, canonical external-execution portion of Execution Profile v2.
  * Values are backend-neutral identities and policies; no process handle,
  * credential, Codex DTO, or function belongs in this record.
  */
-export interface ExternalExecutionProfileDefinition {
-  readonly schemaVersion: 1;
+interface ExternalExecutionProfileDefinitionBase {
   readonly backendKind: string;
   readonly capabilityRecordDigest: Sha256Digest;
   readonly selectedCapabilities: readonly ExternalBackendCapability[];
@@ -149,6 +155,20 @@ export interface ExternalExecutionProfileDefinition {
   readonly fallbackPolicy: ExternalFallbackPolicy;
   readonly interruptionPolicy: ExternalInterruptionPolicy;
 }
+
+/** Original Slice 6 meaning: every selected phase Attempt uses the external Worker. */
+export interface ExternalExecutionProfileDefinitionV1 extends ExternalExecutionProfileDefinitionBase {
+  readonly schemaVersion: 1;
+}
+
+/** Slice 7 adds a profile-bound repair-only handoff without adapter discretion. */
+export interface ExternalExecutionProfileDefinitionV2 extends ExternalExecutionProfileDefinitionBase {
+  readonly schemaVersion: 2;
+  readonly workerDispatchPolicy: ExternalWorkerDispatchPolicy;
+}
+
+export type ExternalExecutionProfileDefinition =
+  ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2;
 
 export const ExternalExecutionState = {
   AUTHORIZED: 'AUTHORIZED',
@@ -384,7 +404,7 @@ export function assertExternalBackendCapabilityRecordInvariant(
 export function assertExternalExecutionProfileDefinitionInvariant(
   profile: ExternalExecutionProfileDefinition,
 ): void {
-  if (rawField(profile, 'schemaVersion') !== 1) {
+  if (rawField(profile, 'schemaVersion') !== 1 && rawField(profile, 'schemaVersion') !== 2) {
     throw new TypeError('External Execution Profile definition schema is unsupported');
   }
   nonBlank(profile.backendKind, 'External backend kind');
@@ -407,6 +427,14 @@ export function assertExternalExecutionProfileDefinitionInvariant(
   }
   if (profile.workerPhases.length === 0) {
     throw new TypeError('External Execution Profile must select Worker-backed phases');
+  }
+  if (
+    profile.schemaVersion === 2 &&
+    (!known(ExternalWorkerDispatchPolicy, profile.workerDispatchPolicy) ||
+      (profile.workerDispatchPolicy === ExternalWorkerDispatchPolicy.ACCEPTANCE_REPAIR_ONLY &&
+        (profile.workerPhases.length !== 1 || profile.workerPhases[0] !== WorkflowPhase.IMPLEMENT)))
+  ) {
+    throw new TypeError('External Worker dispatch policy is invalid for the selected phases');
   }
   let previousPhase: string | undefined;
   for (const phase of profile.workerPhases) {

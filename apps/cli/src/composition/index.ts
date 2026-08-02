@@ -4,6 +4,7 @@ export type {
   RunM1StaleCloseoutProofOptions,
 } from './m1-stale-closeout-proof.js';
 export { runM1DemoProof } from './m1-demo-proof.js';
+export { runDemoProof } from './demo-proof.js';
 export {
   createCliCommandId,
   createCliComposition,

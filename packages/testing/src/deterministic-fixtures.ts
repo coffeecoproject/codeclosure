@@ -1,4 +1,5 @@
 import {
+  acceptanceCriticalVerificationPlanId,
   attemptId,
   acceptanceDecisionId,
   auditEventId,
@@ -19,6 +20,7 @@ import {
   workerSessionId,
   verificationObligationId,
   workflowId,
+  type AcceptanceCriticalVerificationPlanId,
   type AttemptId,
   type AcceptanceDecisionId,
   type AuditEventId,
@@ -75,6 +77,10 @@ export class DeterministicIds {
 
   public nextGoalId(): GoalId {
     return goalId(`goal_${this.nextSuffix()}`);
+  }
+
+  public nextAcceptanceCriticalVerificationPlanId(): AcceptanceCriticalVerificationPlanId {
+    return acceptanceCriticalVerificationPlanId(`verification-plan_${this.nextSuffix()}`);
   }
 
   public nextWorkflowId(): WorkflowId {

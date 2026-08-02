@@ -19,9 +19,10 @@ source identity, environment, quality stages, migration/schema inspection,
 dependency graph, and invariant coverage. Bounded controlled-copy Candidate
 isolation, bounded Darwin local-command verification, in-process
 reject/repair/accept orchestration, Runtime-owned external-execution
-persistence, restart reconciliation, and fresh repair Context are now
-implemented through M2 Slice 6. Protected verification, trusted production
-composition, and the live Goal-bound path remain later M2 work. Components marked for later
+persistence, restart reconciliation, fresh repair Context, protected
+acceptance-critical verification, trusted CLI composition, and both bounded
+live Goal-bound paths are now implemented through M2 Slice 7. The independent
+Slice 8 milestone audit remains later M2 work. Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) and
@@ -91,11 +92,18 @@ the old Thread does not change that projection. A failed bounded repair survives
 reopen and cannot be continued by ordinary Resume, a stale decision, duplicate
 command, or late Worker event. The
 [Slice 6 review](docs/reviews/m2-slice6-thread-compact-restart.md) records its
-focused evidence and limitations. Protected acceptance-critical verification,
-trusted CLI composition, and a live Goal-bound execution remain later M2 work.
-Slice 4 proves independent read-only execution; Slices 5 and 6 do not
-retroactively prove that the Check semantics were outside Worker mutation
-authority.
+focused evidence and limitations. Slice 7 is implemented: trusted composition
+creates one immutable protected Verification Plan in the first Start
+transaction, derives the generation-specific protected Check and read lease,
+executes the exact protected Oracle outside Worker-writable assets, and admits
+only the matching version-3 Evidence family into deterministic Acceptance. The
+production CLI exposes bounded protected, adapter-failure, ordinary live, and
+repair-handoff demonstrations without exposing raw authority capabilities. The
+[Slice 7 review](docs/reviews/m2-slice7-trusted-composition-cli-live.md) records
+the deterministic and live evidence plus remaining limitations. Slice 8 must
+still issue the independent M2 verdict; Slice 4's historical proof remains
+limited to independent read-only execution and is not reinterpreted as the
+later protected-standard proof.
 
 The source-bound Intent Admission and automatic Goal Materialization target is
 accepted in
@@ -468,9 +476,9 @@ policies: deleting the old Thread cannot erase failure authority, while
 retaining it cannot silently make the transcript authoritative. Missing,
 stale, or mismatched repair inputs block dispatch.
 
-Slice 7 will add the exact protected Verification Plan ID/digest to both the
-Context Package and Manifest under the bounded protected Profile. Runtime will
-derive that pair from first-Start authority and require every protected
+Slice 7 adds the exact protected Verification Plan ID/digest to both the
+Context Package and Manifest under the bounded protected Profile. Runtime
+derives that pair from first-Start authority and requires every protected
 dispatch claim to revalidate it; M1 and non-protected Context schemas retain
 their existing meaning.
 
@@ -517,16 +525,16 @@ local-command family becomes the exact verification authority when installed.
 Mixed or partial families fail in Runtime, Store, SQLite triggers, and reopen
 validation.
 
-ADR 0031 requires a later M2 additive authority record before a local-command
-family may be decisive for an acceptance-critical Criterion. Trusted
-composition fixes an immutable pre-Worker Verification Plan and protected-asset
-manifest; each frozen generation's Check and Evidence bind back to that exact
-plan. Worker-authored tests may produce labelled supplementary Evidence but
-cannot alone satisfy the protected obligation. ADR 0032 fixes exactly one such
-plan for the bounded Workflow, defines a deterministic protected-asset read
-lease and version-2 isolation profile, and keeps supplementary records outside
-the decisive one-family Evidence Set. This is planned Slice 7 work, not an
-implemented Slice 5 claim.
+Slice 7 implements ADR 0031's additive authority before a local-command family
+may be decisive for an acceptance-critical Criterion. Trusted composition
+fixes an immutable pre-Worker Verification Plan and protected-asset manifest;
+each frozen generation's Check and Evidence bind back to that exact plan.
+Worker-authored tests may produce labelled supplementary Evidence but cannot
+alone satisfy the protected obligation. ADR 0032 fixes exactly one such plan
+for the bounded Workflow, defines a deterministic protected-asset read lease
+and version-2 isolation profile, and keeps supplementary records outside the
+decisive one-family Evidence Set. This remains a Slice 7 claim and does not
+reinterpret Slice 5's historical proof.
 
 ### Acceptance Engine
 

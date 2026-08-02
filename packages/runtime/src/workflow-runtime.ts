@@ -18,6 +18,7 @@ import {
   WorkflowPhase,
   WorkflowRejectionCode,
   acceptanceRepairRecordProjection,
+  acceptanceCriticalVerificationPlanProjection,
   acceptanceDecisionId,
   aggregateVersion,
   attemptId,
@@ -37,6 +38,7 @@ import {
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
   decodeAcceptanceRepairRecord,
+  decodeAcceptanceCriticalVerificationPlan,
   decodeCloseoutRecord,
   decodeEvidenceEligibility,
   decodeEvidenceRecord,
@@ -76,6 +78,8 @@ import {
   verificationObligationId,
   type AttemptDecision,
   type AcceptanceDecisionId,
+  type AcceptanceCriticalVerificationPlan,
+  type AcceptanceCriticalVerificationPlanId,
   type Attempt,
   type AttemptId,
   type AttemptStarted,
@@ -95,6 +99,7 @@ import {
   type ExecutionProfileId,
   type IsoTimestamp,
   type LocalCommandCheckSpecification,
+  type ProtectedAssetReadLease,
   type PolicyBundle,
   type PolicyBundleId,
   type Sha256Digest,
@@ -194,6 +199,13 @@ import {
   type LocalCommandVerificationPort,
 } from './local-command-verification-contracts.js';
 import {
+  assertProtectedLocalCommandCheckMatchesPlan,
+  createAcceptanceCriticalVerificationPlan,
+  createProtectedAssetReadLease,
+  freezeAcceptanceCriticalVerificationPlanProposal,
+  type ProtectedVerificationRuntimeDependencies,
+} from './protected-verification.js';
+import {
   LocalCommandVerificationFailureCode,
   executeLocalCommandVerification,
   type LocalCommandVerificationExecution,
@@ -273,6 +285,10 @@ export interface AttemptContextCompilationRequest {
   readonly executionProfileDigest: Sha256Digest;
   readonly policyBundleId: PolicyBundleId;
   readonly policyBundleDigest: Sha256Digest;
+  readonly protectedPlan?: {
+    readonly id: AcceptanceCriticalVerificationPlanId;
+    readonly digest: Sha256Digest;
+  };
   readonly candidate?: {
     readonly generationId: CandidateGenerationId;
     readonly digest: Sha256Digest;
@@ -313,7 +329,10 @@ export interface AcceptanceRuntimeDependencies {
 export interface LocalCommandVerificationRuntimeProfile {
   /** Trusted roots in addition to the source root, which the workspace adds itself. */
   readonly forbiddenRoots: readonly string[];
-  readonly check: Omit<CreateLocalCommandCheckSpecificationInput, 'id' | 'workspaceLease'>;
+  readonly check: Omit<
+    CreateLocalCommandCheckSpecificationInput,
+    'id' | 'workspaceLease' | 'protectedAssetReadLease'
+  >;
 }
 
 export interface LocalCommandVerificationRuntimeDependencies {
@@ -394,6 +413,7 @@ export interface WorkflowRuntimeKernelDependencies extends WorkflowRuntimeDepend
   readonly candidateEvidence?: CandidateEvidenceRuntimeDependencies;
   readonly localCommandVerification?: LocalCommandVerificationRuntimeDependencies;
   readonly acceptance?: AcceptanceRuntimeDependencies;
+  readonly protectedVerification?: ProtectedVerificationRuntimeDependencies;
 }
 
 type FinishAttemptRequest =
@@ -438,6 +458,7 @@ interface ActiveLocalCommandVerificationAuthority {
   readonly lease: CandidateWorkspaceLease;
   readonly checkSpecification: LocalCommandCheckSpecification;
   readonly obligations: readonly VerificationObligation[];
+  readonly protectedAssetReadLease?: ProtectedAssetReadLease;
 }
 
 interface PreparedAttemptContext {
@@ -1030,6 +1051,7 @@ export class WorkflowRuntimeKernel {
   readonly #candidateEvidence: CandidateEvidenceRuntimeDependencies | undefined;
   readonly #candidateEvidenceStore: CandidateEvidenceControlStore | undefined;
   readonly #localCommandVerification: LocalCommandVerificationRuntimeDependencies | undefined;
+  readonly #protectedVerification: ProtectedVerificationRuntimeDependencies | undefined;
   readonly #acceptance: AcceptanceRuntimeDependencies | undefined;
   readonly #acceptanceStore: AcceptanceControlStore | undefined;
   readonly #preparedWorkerRequests = new Map<AttemptId, WorkerRequest>();
@@ -1142,6 +1164,27 @@ export class WorkflowRuntimeKernel {
     } else {
       this.#acceptance = undefined;
     }
+    if (dependencies.protectedVerification !== undefined) {
+      if (
+        this.#workerContext === undefined ||
+        this.#candidateEvidence === undefined ||
+        this.#localCommandVerification === undefined ||
+        this.#acceptance === undefined
+      ) {
+        throw new TypeError(
+          'Protected verification requires Worker, Candidate, local verification, and Acceptance authority',
+        );
+      }
+      this.#protectedVerification = Object.freeze({
+        identities: dependencies.protectedVerification.identities,
+        proposal: freezeAcceptanceCriticalVerificationPlanProposal(
+          dependencies.protectedVerification.proposal,
+        ),
+        assets: dependencies.protectedVerification.assets,
+      });
+    } else {
+      this.#protectedVerification = undefined;
+    }
   }
 
   public takePreparedWorkerRequest(attemptIdentifier: AttemptId): WorkerRequest | undefined {
@@ -1204,6 +1247,10 @@ export class WorkflowRuntimeKernel {
       const manifest = this.decodeStoreSnapshot(operationId, 'CONTEXT_MANIFEST_INVALID', () =>
         decodeContextManifest(rawManifest),
       );
+      const protectedPlan = this.resolveAcceptanceCriticalVerificationPlan(
+        operationId,
+        workflow.id,
+      );
       const boundProfile = this.resolveBoundExecutionProfile(operationId, workflow);
       if (boundProfile === undefined) {
         return Object.freeze({
@@ -1250,7 +1297,21 @@ export class WorkflowRuntimeKernel {
         boundProfile.binding.goalId !== goal.id ||
         boundProfile.binding.workflowId !== workflow.id ||
         boundProfile.binding.profileId !== request.executionProfileId ||
-        boundProfile.binding.profileDigest !== request.executionProfileDigest
+        boundProfile.binding.profileDigest !== request.executionProfileDigest ||
+        (protectedPlan === undefined &&
+          (this.#protectedVerification !== undefined ||
+            manifest.schemaVersion === 4 ||
+            request.contextPackage.schemaVersion === 4 ||
+            manifest.acceptanceCriticalVerificationPlanId !== undefined ||
+            request.contextPackage.acceptanceCriticalVerificationPlanId !== undefined)) ||
+        (protectedPlan !== undefined &&
+          (manifest.schemaVersion !== 4 ||
+            request.contextPackage.schemaVersion !== 4 ||
+            manifest.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+            manifest.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+            request.contextPackage.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+            request.contextPackage.acceptanceCriticalVerificationPlanDigest !==
+              protectedPlan.planDigest))
       ) {
         return Object.freeze({
           status: 'NOT_ELIGIBLE',
@@ -1936,6 +1997,9 @@ export class WorkflowRuntimeKernel {
               policyBundleId: configuredProfile.policyBundleId,
               policyBundleDigest: configuredProfile.policyBundleDigest,
             }),
+        ...(this.#protectedVerification === undefined
+          ? {}
+          : { protectedVerificationProposal: this.#protectedVerification.proposal }),
       },
       missingResource: 'Goal',
       missingIdentifier: input.goalId,
@@ -2006,6 +2070,28 @@ export class WorkflowRuntimeKernel {
           activePolicy,
           event.occurredAt,
         );
+        const resultingWorkflow = applyAttemptEvent(workflow, undefined, event).workflow;
+        const protectedVerification = this.#protectedVerification;
+        const protectedPlan =
+          protectedVerification === undefined
+            ? undefined
+            : createAcceptanceCriticalVerificationPlan(
+                {
+                  id: this.internalOperation(
+                    input.commandId,
+                    'PROTECTED_VERIFICATION_PLAN_ID_GENERATION_FAILURE',
+                    () =>
+                      protectedVerification.identities.nextAcceptanceCriticalVerificationPlanId(),
+                  ),
+                  goal,
+                  resultingWorkflow,
+                  policyBundle: activePolicy.bundle,
+                  executionProfile: activeProfile.profile,
+                  proposal: protectedVerification.proposal,
+                  createdAt: event.occurredAt,
+                },
+                this.#digests,
+              );
         const prepared = this.prepareAttemptContext(
           input.commandId,
           goal,
@@ -2015,6 +2101,7 @@ export class WorkflowRuntimeKernel {
           activeProfile,
           profileBinding,
           activePolicy,
+          protectedPlan,
         );
         if (prepared === undefined) {
           throw new CommandExecutionFailure(
@@ -2043,6 +2130,14 @@ export class WorkflowRuntimeKernel {
               policyBindingAuditEventId: this.nextAuditEventId(input.commandId),
               executionProfileBinding: prepared.executionProfileBinding,
               executionProfileBindingAuditEventId: this.nextAuditEventId(input.commandId),
+              ...(protectedPlan === undefined
+                ? {}
+                : {
+                    acceptanceCriticalVerificationPlan: protectedPlan,
+                    acceptanceCriticalVerificationPlanAuditEventId: this.nextAuditEventId(
+                      input.commandId,
+                    ),
+                  }),
             }),
           afterApplied: () => {
             this.#preparedWorkerRequests.set(attemptIdentifier, prepared.request);
@@ -2096,7 +2191,12 @@ export class WorkflowRuntimeKernel {
             this.#localCommandVerification !== undefined,
           );
           if (this.#localCommandVerification !== undefined) {
-            this.assertActiveLocalCommandVerificationAuthority(generation, evidencePolicy);
+            this.assertActiveLocalCommandVerificationAuthority(
+              input.commandId,
+              workflow,
+              generation,
+              evidencePolicy,
+            );
           }
           evidenceAuthorityFloors = evidencePolicy.obligations.map(
             (obligation) => obligation.createdAt,
@@ -2141,6 +2241,7 @@ export class WorkflowRuntimeKernel {
           boundProfile?.profile,
           boundProfile?.binding,
           boundPolicy?.policy,
+          this.resolveAcceptanceCriticalVerificationPlan(input.commandId, workflow.id),
         );
         if (isM1WorkerPhase(workflow.phase) && prepared === undefined) {
           throw new CommandExecutionFailure(
@@ -2433,6 +2534,7 @@ export class WorkflowRuntimeKernel {
       );
     }
     let issuedLease: CandidateWorkspaceLease | undefined;
+    let issuedProtectedAssetReadLease: ProtectedAssetReadLease | undefined;
     const result = this.executeCommand({
       commandId: input.commandId,
       target,
@@ -2476,6 +2578,15 @@ export class WorkflowRuntimeKernel {
           );
         }
         const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
+        const protectedPlan = this.resolveAcceptanceCriticalVerificationPlan(
+          input.commandId,
+          workflow.id,
+        );
+        if ((this.#protectedVerification === undefined) !== (protectedPlan === undefined)) {
+          throw new TypeError(
+            'Protected Verification Plan and trusted Runtime composition are incomplete',
+          );
+        }
         const occurredAt = this.causalNow(
           input.commandId,
           workflow.updatedAt,
@@ -2494,21 +2605,91 @@ export class WorkflowRuntimeKernel {
           workflowVersion: workflow.version,
           generation: authority.generation,
           allowedPaths: goal.scope.allowedPaths,
-          forbiddenRoots: local.profile.forbiddenRoots,
+          forbiddenRoots: Object.freeze(
+            [
+              ...local.profile.forbiddenRoots,
+              ...(protectedPlan?.protectedAssets.map(
+                ({ registeredProtectedRootIdentity }) => registeredProtectedRootIdentity,
+              ) ?? []),
+            ]
+              .filter((value, index, values) => values.indexOf(value) === index)
+              .sort(),
+          ),
         });
         issuedLease = decodeCandidateWorkspaceLease(rawLease);
+        const checkIdentifier = this.internalOperation(
+          input.commandId,
+          'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
+          () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
+        );
+        const template = protectedPlan?.semanticCheckTemplate;
+        issuedProtectedAssetReadLease =
+          protectedPlan === undefined
+            ? undefined
+            : createProtectedAssetReadLease(
+                {
+                  plan: protectedPlan,
+                  goal,
+                  workflow,
+                  generation: authority.generation,
+                  checkSpecificationId: checkIdentifier,
+                  checkSpecificationVersion: protectedPlan.semanticCheckTemplate.checkVersion,
+                },
+                this.#digests,
+              );
+        if (issuedProtectedAssetReadLease !== undefined) {
+          const protectedVerification = this.#protectedVerification;
+          if (protectedVerification === undefined) {
+            throw new TypeError('Protected verification authority disappeared during execution');
+          }
+          protectedVerification.assets.assertLeaseCurrent(issuedProtectedAssetReadLease);
+        }
         const checkSpecification = createLocalCommandCheckSpecification(
           {
-            ...local.profile.check,
-            id: this.internalOperation(
-              input.commandId,
-              'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
-              () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
-            ),
+            ...(template === undefined
+              ? local.profile.check
+              : {
+                  version: template.checkVersion,
+                  producerIdentity: template.producerIdentity,
+                  operation: template.operation,
+                  runnerIdentity: template.runnerIdentity,
+                  runnerVersion: template.runnerVersion,
+                  executablePath: template.executablePath,
+                  executableDigest: template.executableDigest,
+                  declaredToolVersion: template.declaredToolVersion,
+                  argv: template.argv,
+                  cwd: template.cwd,
+                  environmentVariables: template.environmentVariables,
+                  isolationProfileId: template.isolationProfileId,
+                  isolationProfileDigest: template.isolationProfileDigest,
+                  timeoutMilliseconds: template.timeoutMilliseconds,
+                  terminationGraceMilliseconds: template.terminationGraceMilliseconds,
+                  stdoutLimitBytes: template.stdoutLimitBytes,
+                  stderrLimitBytes: template.stderrLimitBytes,
+                  totalOutputLimitBytes: template.totalOutputLimitBytes,
+                  payloadRetentionLimitBytes: template.payloadRetentionLimitBytes,
+                  acceptedExitCodes: template.acceptedExitCodes,
+                }),
+            id: checkIdentifier,
             workspaceLease: issuedLease,
+            ...(issuedProtectedAssetReadLease === undefined
+              ? {}
+              : { protectedAssetReadLease: issuedProtectedAssetReadLease }),
           },
           this.#digests,
         );
+        if (
+          protectedPlan !== undefined &&
+          issuedProtectedAssetReadLease !== undefined &&
+          checkSpecification.schemaVersion === 3
+        ) {
+          assertProtectedLocalCommandCheckMatchesPlan(
+            checkSpecification,
+            protectedPlan,
+            issuedProtectedAssetReadLease,
+            this.#digests,
+          );
+        }
         const localPolicy = createLocalCommandVerificationPolicy(
           goal,
           authority.generation,
@@ -2561,6 +2742,9 @@ export class WorkflowRuntimeKernel {
                 lease: issuedLease,
                 checkSpecification: localPolicy.verification,
                 obligations: localPolicy.obligations,
+                ...(issuedProtectedAssetReadLease === undefined
+                  ? {}
+                  : { protectedAssetReadLease: issuedProtectedAssetReadLease }),
               }),
             );
           },
@@ -2608,6 +2792,7 @@ export class WorkflowRuntimeKernel {
       readonly generation: CandidateGeneration & { readonly frozenDigest: Sha256Digest };
       readonly session: ActiveLocalCommandVerificationAuthority;
       readonly policy: ActiveWorkerPolicy;
+      readonly protectedPlan?: AcceptanceCriticalVerificationPlan;
     };
     try {
       const inputDigest = this.digest(input.commandId, digestInput, 'COMMAND_DIGEST_FAILURE');
@@ -2652,6 +2837,28 @@ export class WorkflowRuntimeKernel {
         );
       }
       local.workspace.assertLeaseCurrent(session.lease);
+      const protectedPlan =
+        session.protectedAssetReadLease === undefined
+          ? undefined
+          : this.resolveAcceptanceCriticalVerificationPlan(input.commandId, workflow.id);
+      if (session.protectedAssetReadLease !== undefined) {
+        if (
+          this.#protectedVerification === undefined ||
+          protectedPlan === undefined ||
+          session.checkSpecification.schemaVersion !== 3
+        ) {
+          throw new TypeError('Protected local verification request authority is incomplete');
+        }
+        this.#protectedVerification.assets.assertLeaseCurrent(session.protectedAssetReadLease);
+        assertProtectedLocalCommandCheckMatchesPlan(
+          session.checkSpecification,
+          protectedPlan,
+          session.protectedAssetReadLease,
+          this.#digests,
+        );
+      } else if (session.checkSpecification.schemaVersion === 3) {
+        throw new TypeError('Protected local verification Check has no static asset lease');
+      }
       const obligation = session.obligations.find((entry) => entry.id === input.obligationId);
       const storedCheck = this.requireCandidateEvidenceStore().getCheckSpecification(
         session.checkSpecification.id,
@@ -2675,6 +2882,7 @@ export class WorkflowRuntimeKernel {
         generation: candidate,
         session,
         policy: this.resolveCandidateEvidencePolicy(input.commandId, workflow),
+        ...(protectedPlan === undefined ? {} : { protectedPlan }),
       });
     } catch (error) {
       return rejected(
@@ -2703,6 +2911,10 @@ export class WorkflowRuntimeKernel {
       );
     }
     let execution: LocalCommandVerificationExecution;
+    const protectedInvocation = requestAuthority.session.protectedAssetReadLease !== undefined;
+    if (protectedInvocation) {
+      this.#activeLocalCommandVerification.delete(requestAuthority.generation.id);
+    }
     try {
       let verificationTimeFloor = latestIsoTimestamp(
         requestAuthority.workflow.updatedAt,
@@ -2718,27 +2930,48 @@ export class WorkflowRuntimeKernel {
           return verificationTimeFloor;
         },
       });
+      const requestBase = {
+        goalId: requestAuthority.goal.id,
+        goalRevision: requestAuthority.goal.revision,
+        workflowId: requestAuthority.workflow.id,
+        workflowVersion: requestAuthority.workflow.version,
+        attemptId: requestAuthority.attempt.id,
+        generation: requestAuthority.generation,
+        workspaceLease: requestAuthority.session.lease,
+        policyBundleId: requestAuthority.policy.bundle.id,
+        policyBundleDigest: requestAuthority.policy.bundle.digest,
+        obligation,
+        checkSpec: requestAuthority.session.checkSpecification,
+        runnerIdentity: requestAuthority.session.checkSpecification.runnerIdentity,
+        runnerVersion: requestAuthority.session.checkSpecification.runnerVersion,
+        isolationProfileId: requestAuthority.session.checkSpecification.isolationProfileId,
+        isolationProfileDigest: requestAuthority.session.checkSpecification.isolationProfileDigest,
+      } as const;
+      const verificationRequest =
+        requestAuthority.session.checkSpecification.schemaVersion === 3 &&
+        requestAuthority.session.protectedAssetReadLease !== undefined &&
+        requestAuthority.protectedPlan !== undefined
+          ? Object.freeze({
+              ...requestBase,
+              schemaVersion: 3 as const,
+              checkSpec: requestAuthority.session.checkSpecification,
+              protectedAssetReadLease: requestAuthority.session.protectedAssetReadLease,
+              environmentVariables:
+                requestAuthority.protectedPlan.semanticCheckTemplate.environmentVariables,
+            })
+          : requestAuthority.session.checkSpecification.schemaVersion === 2 &&
+              requestAuthority.session.protectedAssetReadLease === undefined
+            ? Object.freeze({
+                ...requestBase,
+                schemaVersion: 2 as const,
+                checkSpec: requestAuthority.session.checkSpecification,
+                environmentVariables: local.profile.check.environmentVariables,
+              })
+            : (() => {
+                throw new TypeError('Local verification request authority versions do not match');
+              })();
       execution = await executeLocalCommandVerification(
-        {
-          schemaVersion: 2,
-          goalId: requestAuthority.goal.id,
-          goalRevision: requestAuthority.goal.revision,
-          workflowId: requestAuthority.workflow.id,
-          workflowVersion: requestAuthority.workflow.version,
-          attemptId: requestAuthority.attempt.id,
-          generation: requestAuthority.generation,
-          workspaceLease: requestAuthority.session.lease,
-          policyBundleId: requestAuthority.policy.bundle.id,
-          policyBundleDigest: requestAuthority.policy.bundle.digest,
-          obligation,
-          checkSpec: requestAuthority.session.checkSpecification,
-          runnerIdentity: requestAuthority.session.checkSpecification.runnerIdentity,
-          runnerVersion: requestAuthority.session.checkSpecification.runnerVersion,
-          isolationProfileId: requestAuthority.session.checkSpecification.isolationProfileId,
-          isolationProfileDigest:
-            requestAuthority.session.checkSpecification.isolationProfileDigest,
-          environmentVariables: local.profile.check.environmentVariables,
-        },
+        verificationRequest,
         this.internalOperation(input.commandId, 'EVIDENCE_ID_GENERATION_FAILURE', () =>
           evidenceId(this.requireCandidateEvidenceRuntime().identities.nextEvidenceId()),
         ),
@@ -2747,8 +2980,19 @@ export class WorkflowRuntimeKernel {
           runner: local.runner,
           clock: verificationClock,
           digests: this.#digests,
+          ...(this.#protectedVerification === undefined
+            ? {}
+            : { protectedAssets: this.#protectedVerification.assets }),
         },
       );
+      if (
+        requestAuthority.session.protectedAssetReadLease !== undefined &&
+        this.#protectedVerification !== undefined
+      ) {
+        this.#protectedVerification.assets.assertLeaseCurrent(
+          requestAuthority.session.protectedAssetReadLease,
+        );
+      }
     } catch (error) {
       return rejected(
         input.commandId,
@@ -2758,6 +3002,15 @@ export class WorkflowRuntimeKernel {
           'LOCAL_COMMAND_VERIFICATION_EXECUTION_FAILED',
         ),
       );
+    } finally {
+      if (protectedInvocation) {
+        try {
+          local.workspace.releaseLease(requestAuthority.session.lease);
+        } catch {
+          // The protected session is consumed even when best-effort workspace
+          // cleanup cannot complete. Recovery may remove the retained directory.
+        }
+      }
     }
 
     const result = this.commitLocalCommandVerificationExecution(
@@ -2776,7 +3029,11 @@ export class WorkflowRuntimeKernel {
             eligibility.state === EvidenceEligibilityState.ELIGIBLE,
         ),
     );
-    if (result.status === 'APPLIED' && (execution.status === 'FAILED' || allObligationsCovered)) {
+    if (
+      !protectedInvocation &&
+      result.status === 'APPLIED' &&
+      (execution.status === 'FAILED' || allObligationsCovered)
+    ) {
       this.#activeLocalCommandVerification.delete(requestAuthority.generation.id);
       try {
         local.workspace.releaseLease(requestAuthority.session.lease);
@@ -4978,6 +5235,15 @@ export class WorkflowRuntimeKernel {
       .int()
       .nonnegative()
       .parse(Reflect.get(raw, 'retainedDecisionCount'));
+    const rawProtectedPlan: unknown = Reflect.get(raw, 'acceptanceCriticalVerificationPlan');
+    const protectedPlan =
+      rawProtectedPlan === undefined
+        ? undefined
+        : this.decodeStoreSnapshot(
+            commandIdentifier,
+            'ACCEPTANCE_PROTECTED_VERIFICATION_PLAN_INVALID',
+            () => decodeAcceptanceCriticalVerificationPlan(rawProtectedPlan),
+          );
     if (
       decodedGoal.id !== goal.id ||
       decodedGoal.revision !== goal.revision ||
@@ -4993,6 +5259,35 @@ export class WorkflowRuntimeKernel {
     ) {
       throw new TypeError('Acceptance authority records do not share one current owner');
     }
+    if (protectedPlan !== undefined) {
+      if (
+        this.#protectedVerification === undefined ||
+        verificationCheck.kind !== CheckSpecificationKind.LOCAL_COMMAND ||
+        verificationCheck.schemaVersion !== 3
+      ) {
+        throw new TypeError('Protected Acceptance authority has no trusted asset runtime');
+      }
+      const lease = createProtectedAssetReadLease(
+        {
+          plan: protectedPlan,
+          goal: decodedGoal,
+          workflow: decodedWorkflow,
+          generation,
+          checkSpecificationId: verificationCheck.id,
+          checkSpecificationVersion: verificationCheck.version,
+        },
+        this.#digests,
+      );
+      assertProtectedLocalCommandCheckMatchesPlan(
+        verificationCheck,
+        protectedPlan,
+        lease,
+        this.#digests,
+      );
+      this.#protectedVerification.assets.assertLeaseCurrent(lease);
+    } else if (verificationCheck.schemaVersion === 3) {
+      throw new TypeError('Protected Acceptance Check has no immutable Plan');
+    }
     return Object.freeze({
       goal: decodedGoal,
       workflow: decodedWorkflow,
@@ -5007,6 +5302,7 @@ export class WorkflowRuntimeKernel {
       retainedFactCount,
       retainedDecisionCount,
       policyBundle,
+      ...(protectedPlan === undefined ? {} : { acceptanceCriticalVerificationPlan: protectedPlan }),
     });
   }
 
@@ -5426,6 +5722,8 @@ export class WorkflowRuntimeKernel {
   }
 
   private assertActiveLocalCommandVerificationAuthority(
+    commandIdentifier: CommandId,
+    workflow: WorkflowInstance,
     generation: CandidateGeneration,
     policy: ReturnType<typeof validateAcceptanceCandidateEvidencePolicy>,
   ): void {
@@ -5442,6 +5740,25 @@ export class WorkflowRuntimeKernel {
     }
     try {
       local.workspace.assertLeaseCurrent(session.lease);
+      if (session.protectedAssetReadLease !== undefined) {
+        const plan = this.resolveAcceptanceCriticalVerificationPlan(commandIdentifier, workflow.id);
+        if (
+          this.#protectedVerification === undefined ||
+          plan === undefined ||
+          session.checkSpecification.schemaVersion !== 3
+        ) {
+          throw new TypeError('Protected local verification authority is incomplete');
+        }
+        this.#protectedVerification.assets.assertLeaseCurrent(session.protectedAssetReadLease);
+        assertProtectedLocalCommandCheckMatchesPlan(
+          session.checkSpecification,
+          plan,
+          session.protectedAssetReadLease,
+          this.#digests,
+        );
+      } else if (session.checkSpecification.schemaVersion === 3) {
+        throw new TypeError('Protected Check has no full static asset lease');
+      }
     } catch {
       throw new CommandExecutionFailure(
         commandError(
@@ -6481,6 +6798,44 @@ export class WorkflowRuntimeKernel {
     );
   }
 
+  private resolveAcceptanceCriticalVerificationPlan(
+    commandIdentifier: CommandId,
+    workflowIdentifier: WorkflowId,
+  ): AcceptanceCriticalVerificationPlan | undefined {
+    const workerStore = this.requireWorkerStore();
+    if (workerStore.getAcceptanceCriticalVerificationPlan === undefined) {
+      if (this.#protectedVerification !== undefined) {
+        throw new TypeError('Store does not expose protected Verification Plan authority');
+      }
+      return undefined;
+    }
+    const raw = this.storeOperation(
+      commandIdentifier,
+      'PROTECTED_VERIFICATION_PLAN_READ_FAILURE',
+      () => workerStore.getAcceptanceCriticalVerificationPlan?.(workflowIdentifier),
+    );
+    if (raw === undefined) {
+      return undefined;
+    }
+    const plan = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'PROTECTED_VERIFICATION_PLAN_INVALID',
+      () => decodeAcceptanceCriticalVerificationPlan(raw),
+    );
+    if (
+      plan.workflowId !== workflowIdentifier ||
+      plan.planDigest !==
+        this.digest(
+          commandIdentifier,
+          acceptanceCriticalVerificationPlanProjection(plan),
+          'PROTECTED_VERIFICATION_PLAN_DIGEST_FAILURE',
+        )
+    ) {
+      throw new TypeError('Protected Verification Plan authority is stale or corrupt');
+    }
+    return plan;
+  }
+
   private prepareAttemptContext(
     commandIdentifier: CommandId,
     goal: Goal,
@@ -6490,6 +6845,7 @@ export class WorkflowRuntimeKernel {
     activeProfile: ActiveExecutionProfile | undefined,
     profileBinding: ExecutionProfileBinding | undefined,
     activePolicy: ActiveWorkerPolicy | undefined,
+    protectedPlan: AcceptanceCriticalVerificationPlan | undefined,
   ): PreparedAttemptContext | undefined {
     const workerContext = this.#workerContext;
     if (workerContext === undefined) {
@@ -6540,6 +6896,19 @@ export class WorkflowRuntimeKernel {
     ) {
       throw new TypeError('Context Attempt predates its active Profile or Policy');
     }
+    if (
+      protectedPlan !== undefined &&
+      (protectedPlan.goalId !== goal.id ||
+        protectedPlan.goalRevision !== goal.revision ||
+        protectedPlan.workflowId !== applied.workflow.id ||
+        protectedPlan.workflowVersionAtLock > applied.workflow.version ||
+        protectedPlan.policyBundleId !== installedPolicy.id ||
+        protectedPlan.policyBundleDigest !== installedPolicy.digest ||
+        protectedPlan.executionProfileId !== activeProfile.profile.id ||
+        protectedPlan.executionProfileDigest !== activeProfile.profile.digest)
+    ) {
+      throw new TypeError('Protected Verification Plan is stale for Context compilation');
+    }
     let candidateBinding:
       { readonly generationId: CandidateGenerationId; readonly digest: Sha256Digest } | undefined;
     if (applied.workflow.phase === WorkflowPhase.IMPLEMENT) {
@@ -6587,6 +6956,9 @@ export class WorkflowRuntimeKernel {
       executionProfileDigest: activeProfile.profile.digest,
       policyBundleId: installedPolicy.id,
       policyBundleDigest: installedPolicy.digest,
+      ...(protectedPlan === undefined
+        ? {}
+        : { protectedPlan: { id: protectedPlan.id, digest: protectedPlan.planDigest } }),
       ...(candidateBinding === undefined ? {} : { candidate: candidateBinding }),
       ...(repair === undefined ? {} : { repair }),
     });
@@ -6598,20 +6970,39 @@ export class WorkflowRuntimeKernel {
     if (
       contextPackage.selectedEntries.length !== 0 ||
       manifest.omissionDecisions.length !== 0 ||
-      (repair === undefined &&
+      (protectedPlan === undefined &&
+        repair === undefined &&
         (contextPackage.schemaVersion !== 2 ||
           manifest.schemaVersion !== 2 ||
           contextPackage.repairContext !== undefined ||
           contextPackage.priorAttemptFeedback !== undefined ||
           manifest.repairContextDigest !== undefined ||
           manifest.priorAttemptFeedbackDigest !== undefined)) ||
-      (repair !== undefined &&
+      (protectedPlan === undefined &&
+        repair !== undefined &&
         (contextPackage.schemaVersion !== 3 ||
           manifest.schemaVersion !== 3 ||
           canonicalizeJson(contextPackage.repairContext) !==
             canonicalizeJson(repair.repairContext) ||
           canonicalizeJson(contextPackage.priorAttemptFeedback) !==
             canonicalizeJson(repair.priorAttemptFeedback))) ||
+      (protectedPlan !== undefined &&
+        (contextPackage.schemaVersion !== 4 ||
+          manifest.schemaVersion !== 4 ||
+          contextPackage.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+          contextPackage.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+          manifest.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+          manifest.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+          (repair === undefined &&
+            (contextPackage.repairContext !== undefined ||
+              contextPackage.priorAttemptFeedback !== undefined ||
+              manifest.repairContextDigest !== undefined ||
+              manifest.priorAttemptFeedbackDigest !== undefined)) ||
+          (repair !== undefined &&
+            (canonicalizeJson(contextPackage.repairContext) !==
+              canonicalizeJson(repair.repairContext) ||
+              canonicalizeJson(contextPackage.priorAttemptFeedback) !==
+                canonicalizeJson(repair.priorAttemptFeedback))))) ||
       (candidateBinding === undefined &&
         (contextPackage.candidateGenerationId !== undefined ||
           contextPackage.candidateDigest !== undefined ||
@@ -6723,6 +7114,10 @@ export class WorkflowRuntimeKernel {
       contextPackage.policyBundleDigest !== manifest.policyBundleDigest ||
       contextPackage.executionProfileId !== manifest.executionProfileId ||
       contextPackage.executionProfileDigest !== manifest.executionProfileDigest ||
+      contextPackage.acceptanceCriticalVerificationPlanId !==
+        manifest.acceptanceCriticalVerificationPlanId ||
+      contextPackage.acceptanceCriticalVerificationPlanDigest !==
+        manifest.acceptanceCriticalVerificationPlanDigest ||
       contextPackage.executionProfileId !== activeProfile.profile.id ||
       contextPackage.executionProfileDigest !== activeProfile.profile.digest ||
       profileBinding.goalId !== goal.id ||

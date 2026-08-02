@@ -8,8 +8,7 @@ implementation provides the deterministic subset described under
 fail-closed source subset, exact digest binding, atomic Attempt binding,
 `FakeWorker` dispatch, and Candidate-authority binding for `IMPLEMENT`.
 Retrieval, relevance packing, and a full Fact Graph remain planned for later
-milestones. ADR 0028 now fixes the planned M2 Thread/configuration boundary, but
-no trusted live Goal-bound Codex Context dispatch is implemented. Its bounded 0.146.0 Slice 0 live
+milestones. ADR 0028 fixes the M2 Thread/configuration boundary. Its bounded 0.146.0 Slice 0 live
 capability proof passes, and the Slice 1 lower client is implemented without a
 Worker Context mapping. Slice 2 now implements the bounded adapter projection:
 one current `IMPLEMENT` Context Package is rendered into the exact App Server
@@ -18,12 +17,11 @@ policy, and response bindings are revalidated. Slice 5 composes the smaller M1
 Context shape through the deterministic reject/repair/accept path. Slice 6 now
 implements Context Package/Manifest version 3 for a fresh repair Thread using
 the closed bounded-M2 failure-source set defined below, with strict Store
-reconstruction on reopen. Slice 7 will add the protected
-Plan identity pair required by
+reconstruction on reopen. Slice 7 now adds the protected Plan identity pair required by
 [ADR 0033](adr/0033-align-protected-verification-with-start-and-check-lifecycle.md)
-to each protected Package/Manifest and dispatch claim. The existing M1 Compiler
-and Manifest authority are otherwise unchanged, and trusted live composition
-remains later M2 work. This is the Goal-bound Worker Context Compiler;
+to each protected Package/Manifest and dispatch claim and exercises it through
+trusted bounded live composition. The existing M1 Compiler and Manifest
+authority are otherwise unchanged. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest
 that are not implemented.
 
@@ -486,7 +484,7 @@ policy from injecting content into a new Context Package. M2 defaults are:
 M2 does not implement semantic history search, automatic conversation
 summarization, or dynamic relevance selection. Those remain M3 candidates.
 
-### M2 App Server input closure — planned
+### M2 App Server input closure — implemented
 
 An App Server may add effective instructions or tools from Codex configuration,
 project guidance, user state, or managed requirements. Those inputs are not

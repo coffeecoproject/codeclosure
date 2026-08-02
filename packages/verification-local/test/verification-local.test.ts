@@ -8,6 +8,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,17 +19,20 @@ import test, { type TestContext } from 'node:test';
 
 import {
   CandidateGenerationState,
+  acceptanceCriticalVerificationPlanId,
   attemptId,
   candidateGenerationId,
   candidateId,
   checkSpecificationId,
   decodeCandidateGeneration,
+  decodeProtectedAssetReadLease,
   decodeVerificationObligation,
   goalId,
   goalRevision,
   evidenceId,
   isoTimestamp,
   policyBundleId,
+  protectedAssetReadLeaseProjection,
   sha256Digest,
   successCriterionId,
   verificationObligationId,
@@ -48,6 +53,7 @@ import {
   type CandidateWorkspaceLease,
   type LocalCommandEnvironmentVariable,
   type LocalCommandVerificationRequest,
+  type ProtectedLocalCommandVerificationRequest,
 } from '@codeclosure/runtime';
 import {
   DARWIN_SEATBELT_PROFILE_ID,
@@ -55,7 +61,11 @@ import {
   LOCAL_COMMAND_RUNNER_VERSION,
   createDarwinSeatbeltIsolation,
   createLocalCommandVerificationRunner,
+  createProtectedAssetReadLeaseAuthority,
   darwinSeatbeltProfileDigest,
+  darwinSeatbeltProtectedProfileDigest,
+  inspectProtectedVerificationAsset,
+  protectedVerificationAssetManifestDigest,
 } from '@codeclosure/verification-local';
 
 const digests = new CanonicalJsonSha256DigestProvider();
@@ -249,6 +259,141 @@ function runnerFor(fixtureValue: Fixture) {
   });
 }
 
+function protectedRequestFor(
+  fixtureValue: Fixture,
+  asset: ReturnType<typeof inspectProtectedVerificationAsset>,
+  executablePath: string,
+  argv: readonly string[],
+  suffix: string,
+): ProtectedLocalCommandVerificationRequest {
+  const executable = realpathSync(executablePath);
+  const candidateDigest = fixtureValue.generation.frozenDigest;
+  if (candidateDigest === undefined) {
+    assert.fail('Protected fixture Candidate must be frozen');
+  }
+  const { leaseDigest: fixtureLeaseDigest, ...fixtureLeaseFields } = fixtureValue.lease;
+  assert.match(fixtureLeaseDigest, /^sha256:[0-9a-f]{64}$/u);
+  const workspaceLeaseFields = Object.freeze({
+    ...fixtureLeaseFields,
+    forbiddenRoots: Object.freeze(
+      [...fixtureValue.lease.forbiddenRoots, asset.registeredProtectedRootIdentity]
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .sort(),
+    ),
+  });
+  const workspaceLease = decodeCandidateWorkspaceLease({
+    ...workspaceLeaseFields,
+    leaseDigest: digestCandidateWorkspaceValue(
+      candidateWorkspaceLeaseProjection(workspaceLeaseFields),
+    ),
+  });
+  const checkId = checkSpecificationId(`check_protected-${suffix}`);
+  const checkVersion = 'm2.protected.1';
+  const leaseFields = Object.freeze({
+    schemaVersion: 1 as const,
+    goalId: fixtureValue.lease.goalId,
+    goalRevision: fixtureValue.lease.goalRevision,
+    workflowId: fixtureValue.lease.workflowId,
+    candidateGenerationId: fixtureValue.generation.id,
+    candidateDigest,
+    acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+      `verification-plan_protected-${suffix}`,
+    ),
+    acceptanceCriticalVerificationPlanDigest: sha256Digest(
+      `sha256:${createHash('sha256').update(`plan:${suffix}`).digest('hex')}`,
+    ),
+    protectedAssetManifestDigest: protectedVerificationAssetManifestDigest([asset]),
+    checkSpecificationId: checkId,
+    checkSpecificationVersion: checkVersion,
+    isolationProfileId: DARWIN_SEATBELT_PROFILE_ID,
+    isolationProfileDigest: darwinSeatbeltProtectedProfileDigest(),
+    accessMode: 'READ_ONLY' as const,
+    lifecyclePolicy: 'SINGLE_VERIFICATION_INVOCATION' as const,
+    assets: Object.freeze([asset]),
+  });
+  const protectedAssetReadLease = decodeProtectedAssetReadLease({
+    ...leaseFields,
+    leaseDigest: digests.digest(protectedAssetReadLeaseProjection(leaseFields)),
+  });
+  const checkSpec = createLocalCommandCheckSpecification(
+    {
+      id: checkId,
+      version: checkVersion,
+      producerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
+      operation: 'local-command.execute',
+      runnerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
+      runnerVersion: LOCAL_COMMAND_RUNNER_VERSION,
+      executablePath: executable,
+      executableDigest: bytesDigest(executable),
+      declaredToolVersion: 'fixture-system-tool',
+      argv,
+      workspaceLease,
+      protectedAssetReadLease,
+      cwd: '.',
+      environmentVariables: emptyEnvironment,
+      isolationProfileId: DARWIN_SEATBELT_PROFILE_ID,
+      isolationProfileDigest: darwinSeatbeltProtectedProfileDigest(),
+      timeoutMilliseconds: 2_000,
+      terminationGraceMilliseconds: 100,
+      stdoutLimitBytes: 4_096,
+      stderrLimitBytes: 4_096,
+      totalOutputLimitBytes: 8_192,
+      payloadRetentionLimitBytes: 8_192,
+      acceptedExitCodes: [0],
+    },
+    digests,
+  );
+  const obligation = decodeVerificationObligation({
+    id: verificationObligationId(`obligation_protected-${suffix}`),
+    goalId: fixtureValue.lease.goalId,
+    goalRevision: fixtureValue.lease.goalRevision,
+    candidateGenerationId: fixtureValue.generation.id,
+    sourceCriterionRefs: [successCriterionId('criterion_verification-local')],
+    scenarioRefs: ['criterion:criterion_verification-local'],
+    checkSpecRef: `${checkSpec.id}@${checkSpec.version}`,
+    requiredEvidenceKind: 'LOCAL_COMMAND_TEST_RESULT',
+    strength: 'M2_LOCAL_COMMAND',
+    createdAt: timestamp,
+  });
+  return Object.freeze({
+    schemaVersion: 3,
+    goalId: fixtureValue.lease.goalId,
+    goalRevision: fixtureValue.lease.goalRevision,
+    workflowId: fixtureValue.lease.workflowId,
+    workflowVersion: fixtureValue.lease.workflowVersion,
+    attemptId: attemptId(`attempt_protected-${suffix}`),
+    generation: fixtureValue.generation,
+    workspaceLease,
+    policyBundleId: policyBundleId('policy_verification-local'),
+    policyBundleDigest: sha256Digest(
+      `sha256:${createHash('sha256').update('policy-v1').digest('hex')}`,
+    ),
+    obligation,
+    checkSpec,
+    protectedAssetReadLease,
+    runnerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
+    runnerVersion: LOCAL_COMMAND_RUNNER_VERSION,
+    isolationProfileId: DARWIN_SEATBELT_PROFILE_ID,
+    isolationProfileDigest: darwinSeatbeltProtectedProfileDigest(),
+    environmentVariables: emptyEnvironment,
+  });
+}
+
+function protectedRunnerFor(fixtureValue: Fixture, protectedRoot: string) {
+  return createLocalCommandVerificationRunner({
+    workspaceLeases: Object.freeze({
+      assertLeaseCurrent: (lease: CandidateWorkspaceLease) => lease,
+    }),
+    protectedAssets: createProtectedAssetReadLeaseAuthority({
+      protectedRoots: Object.freeze([protectedRoot]),
+    }),
+    isolation: createDarwinSeatbeltIsolation({
+      runRootBase: fixtureValue.runRoot,
+      credentialRoots: [fixtureValue.credentialRoot],
+    }),
+  });
+}
+
 void test('[M2-E02] unsupported or unenforceable isolation fails before verification', (t) => {
   const value = fixture(t);
   assert.throws(
@@ -266,6 +411,137 @@ void test('[M2-E02] unsupported or unenforceable isolation fails before verifica
         sandboxExecutablePath: '/usr/bin/false',
       }),
     /cannot be enforced/,
+  );
+});
+
+void test('[M2-E11] protected asset identity rejects mutation, deletion, and alias substitution', (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'codeclosure-protected-assets-')));
+  t.after(() => rmSync(root, { force: true, recursive: true }));
+  const protectedRoot = join(root, 'protected');
+  mkdirSync(protectedRoot, { mode: 0o700 });
+  const assetPath = join(protectedRoot, 'oracle.txt');
+  writeFileSync(assetPath, 'expected\n', { mode: 0o400 });
+  const asset = inspectProtectedVerificationAsset({
+    logicalAssetId: 'fixture.oracle',
+    registeredProtectedRootIdentity: realpathSync(protectedRoot),
+    executionPath: realpathSync(assetPath),
+  });
+  const assets = Object.freeze([asset]);
+  const leaseFields = Object.freeze({
+    schemaVersion: 1 as const,
+    goalId: goalId('goal_protected-assets'),
+    goalRevision: goalRevision(1),
+    workflowId: workflowId('workflow_protected-assets'),
+    candidateGenerationId: candidateGenerationId('generation_protected-assets'),
+    candidateDigest: sha256Digest(`sha256:${'1'.repeat(64)}`),
+    acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+      'verification-plan_protected-assets',
+    ),
+    acceptanceCriticalVerificationPlanDigest: sha256Digest(`sha256:${'2'.repeat(64)}`),
+    protectedAssetManifestDigest: protectedVerificationAssetManifestDigest(assets),
+    checkSpecificationId: checkSpecificationId('check_protected-assets'),
+    checkSpecificationVersion: 'm2.protected.1',
+    isolationProfileId: DARWIN_SEATBELT_PROFILE_ID,
+    isolationProfileDigest: darwinSeatbeltProtectedProfileDigest(),
+    accessMode: 'READ_ONLY' as const,
+    lifecyclePolicy: 'SINGLE_VERIFICATION_INVOCATION' as const,
+    assets,
+  });
+  const lease = decodeProtectedAssetReadLease({
+    ...leaseFields,
+    leaseDigest: digests.digest(protectedAssetReadLeaseProjection(leaseFields)),
+  });
+  const authority = createProtectedAssetReadLeaseAuthority({
+    protectedRoots: Object.freeze([realpathSync(protectedRoot)]),
+  });
+  assert.deepEqual(authority.assertLeaseCurrent(lease), lease);
+
+  chmodSync(assetPath, 0o600);
+  writeFileSync(assetPath, 'weakened\n');
+  assert.throws(
+    () => authority.assertLeaseCurrent(lease),
+    /stale, aliased, missing, or content-drifted/,
+  );
+
+  writeFileSync(assetPath, 'expected\n');
+  chmodSync(assetPath, 0o400);
+  assert.deepEqual(authority.assertLeaseCurrent(lease), lease);
+  unlinkSync(assetPath);
+  assert.throws(
+    () => authority.assertLeaseCurrent(lease),
+    /stale, aliased, missing, or content-drifted/,
+  );
+
+  writeFileSync(assetPath, 'expected\n', { mode: 0o400 });
+  const aliasPath = join(protectedRoot, 'oracle-alias.txt');
+  symlinkSync(assetPath, aliasPath);
+  assert.throws(
+    () =>
+      inspectProtectedVerificationAsset({
+        logicalAssetId: 'fixture.oracle-alias',
+        registeredProtectedRootIdentity: realpathSync(protectedRoot),
+        executionPath: aliasPath,
+      }),
+    /exact regular file/,
+  );
+});
+
+void test('[M2-E14] protected Seatbelt profile reads only the exact lease and denies root widening and writes', async (t) => {
+  const value = fixture(t);
+  const protectedRoot = join(value.runRoot, '..', 'protected-oracle');
+  mkdirSync(protectedRoot, { mode: 0o700 });
+  const exactRoot = realpathSync(protectedRoot);
+  const assetPath = join(exactRoot, 'oracle.txt');
+  const siblingPath = join(exactRoot, 'unleased.txt');
+  writeFileSync(assetPath, 'protected-oracle\n', { mode: 0o400 });
+  writeFileSync(siblingPath, 'must-not-read\n', { mode: 0o400 });
+  const asset = inspectProtectedVerificationAsset({
+    logicalAssetId: 'fixture.protected-oracle',
+    registeredProtectedRootIdentity: exactRoot,
+    executionPath: realpathSync(assetPath),
+  });
+  const runner = protectedRunnerFor(value, exactRoot);
+
+  const exactRead = protectedRequestFor(value, asset, '/bin/cat', [assetPath], 'exact-read');
+  const exactResult = decodeLocalCommandVerificationResult(
+    exactRead,
+    await runner.run(exactRead),
+    digests,
+  );
+  assert.equal(exactResult.terminationKind, 'EXITED');
+  assert.equal(exactResult.exitCode, 0);
+  assert.equal(Buffer.from(exactResult.stdoutBytes).toString('utf8'), 'protected-oracle\n');
+
+  const widenedRead = protectedRequestFor(value, asset, '/bin/ls', [exactRoot], 'root-read');
+  const widenedResult = decodeLocalCommandVerificationResult(
+    widenedRead,
+    await runner.run(widenedRead),
+    digests,
+  );
+  assert.equal(widenedResult.terminationKind, 'EXITED');
+  assert.notEqual(widenedResult.exitCode, 0);
+  assert.equal(Buffer.from(widenedResult.stdoutBytes).includes(Buffer.from('unleased.txt')), false);
+
+  const protectedWrite = protectedRequestFor(value, asset, '/usr/bin/touch', [assetPath], 'write');
+  const writeResult = decodeLocalCommandVerificationResult(
+    protectedWrite,
+    await runner.run(protectedWrite),
+    digests,
+  );
+  assert.equal(writeResult.terminationKind, 'EXITED');
+  assert.notEqual(writeResult.exitCode, 0);
+  assert.equal(readFileSync(assetPath, 'utf8'), 'protected-oracle\n');
+
+  await assert.rejects(
+    runner.run({
+      ...exactRead,
+      isolationProfileDigest: darwinSeatbeltProfileDigest(),
+      checkSpec: {
+        ...exactRead.checkSpec,
+        isolationProfileDigest: darwinSeatbeltProfileDigest(),
+      },
+    }),
+    /strict decoding|does not match/i,
   );
 });
 

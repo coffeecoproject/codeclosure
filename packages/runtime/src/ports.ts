@@ -2,6 +2,7 @@ import type {
   AcceptanceDecision,
   AcceptanceDecisionId,
   AcceptanceInputManifest,
+  AcceptanceCriticalVerificationPlan,
   AcceptanceRepairRecord,
   AppliedAttemptEvent,
   Attempt,
@@ -70,6 +71,9 @@ import type {
 } from './worker-contracts.js';
 
 export type { CommandTarget } from './contracts.js';
+
+export type ExternalFailureCodeView =
+  ExternalExecutionAbandonReasonCode | ExternalWorkerFailureCode;
 
 export interface Clock {
   now(): IsoTimestamp;
@@ -271,6 +275,7 @@ export interface GoalStatusAuthoritySnapshot extends GoalWorkflowView {
   };
   readonly closeout?: CloseoutRecord;
   readonly latestRecoveryReconciliation?: RecoveryReconciliationRecord;
+  readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
 }
 
 export interface WorkflowDriverAuthoritySnapshot extends GoalStatusAuthoritySnapshot {
@@ -315,8 +320,15 @@ export const RecoverableBlockerKind = {
 export type RecoverableBlockerKind =
   (typeof RecoverableBlockerKind)[keyof typeof RecoverableBlockerKind];
 
+export const RecoveryContinuityBarrier = {
+  LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE: 'LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE',
+} as const;
+export type RecoveryContinuityBarrier =
+  (typeof RecoveryContinuityBarrier)[keyof typeof RecoveryContinuityBarrier];
+
 export interface RecoveryCatalogEntry extends GoalWorkflowView {
   readonly blockerKind: RecoverableBlockerKind;
+  readonly continuityBarrier?: RecoveryContinuityBarrier;
   readonly sourceAttempt: Attempt;
   readonly contextManifest?: ContextManifest;
   readonly policyBinding: WorkflowPolicyBinding;
@@ -382,6 +394,8 @@ export interface CommitContextBoundAttemptStart extends CommitAttemptEvent {
   readonly policyBindingAuditEventId?: AuditEventId;
   readonly executionProfileBinding: ExecutionProfileBinding;
   readonly executionProfileBindingAuditEventId?: AuditEventId;
+  readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
+  readonly acceptanceCriticalVerificationPlanAuditEventId?: AuditEventId;
 }
 
 export interface CommittedContextAttempt {
@@ -390,6 +404,7 @@ export interface CommittedContextAttempt {
   readonly contextManifest: ContextManifest;
   readonly policyBinding: WorkflowPolicyBinding;
   readonly executionProfileBinding: ExecutionProfileBinding;
+  readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
 }
 
 export interface CandidateAuthorityView {
@@ -445,6 +460,7 @@ export interface AcceptanceAuthorityView {
   readonly retainedFactCount: number;
   readonly retainedDecisionCount: number;
   readonly policyBundle: PolicyBundle;
+  readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
 }
 
 export interface CommitAcceptanceEvaluation {
@@ -770,6 +786,9 @@ export interface WorkerControlStore extends WorkflowControlStore {
   ): InstalledExecutionProfile | undefined;
   getExecutionProfileBinding(workflowId: WorkflowId): ExecutionProfileBinding | undefined;
   getWorkflowPolicyBinding(workflowId: WorkflowId): WorkflowPolicyBinding | undefined;
+  getAcceptanceCriticalVerificationPlan?(
+    workflowId: WorkflowId,
+  ): AcceptanceCriticalVerificationPlan | undefined;
   installPolicyBundle(input: InstallPolicyBundle): PolicyInstallResult;
   installExecutionProfile(input: InstallExecutionProfile): ExecutionProfileInstallResult;
   claimWorkerDispatch(input: ClaimWorkerDispatch): WorkerDispatchClaimResult;

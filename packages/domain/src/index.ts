@@ -14,6 +14,7 @@ export * from './identifiers.js';
 export * from './model.js';
 export * from './policy-binding-codecs.js';
 export * from './policy.js';
+export * from './protected-verification.js';
 export * from './recovery-codecs.js';
 export * from './recovery.js';
 export * from './workflow.js';

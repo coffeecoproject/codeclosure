@@ -1,5 +1,6 @@
 import {
   aggregateVersion,
+  acceptanceCriticalVerificationPlanId,
   attemptId,
   candidateGenerationId,
   checkSpecificationId,
@@ -14,6 +15,7 @@ import {
   verificationObligationId,
   workflowId,
   type AggregateVersion,
+  type AcceptanceCriticalVerificationPlanId,
   type AttemptId,
   type CandidateGenerationId,
   type CheckSpecificationId,
@@ -134,8 +136,7 @@ export const LocalCommandDiagnosticCode = {
 export type LocalCommandDiagnosticCode =
   (typeof LocalCommandDiagnosticCode)[keyof typeof LocalCommandDiagnosticCode];
 
-export interface LocalCommandCheckSpecification {
-  readonly schemaVersion: 2;
+interface LocalCommandCheckSpecificationBase {
   readonly id: CheckSpecificationId;
   readonly version: string;
   readonly kind: typeof CheckSpecificationKind.LOCAL_COMMAND;
@@ -176,6 +177,21 @@ export interface LocalCommandCheckSpecification {
   readonly payloadRetentionLimitBytes: number;
   readonly acceptedExitCodes: readonly number[];
 }
+
+export interface LocalCommandCheckSpecificationV2 extends LocalCommandCheckSpecificationBase {
+  readonly schemaVersion: 2;
+}
+
+export interface ProtectedLocalCommandCheckSpecification extends LocalCommandCheckSpecificationBase {
+  readonly schemaVersion: 3;
+  readonly acceptanceCriticalVerificationPlanId: AcceptanceCriticalVerificationPlanId;
+  readonly acceptanceCriticalVerificationPlanDigest: Sha256Digest;
+  readonly protectedAssetManifestDigest: Sha256Digest;
+  readonly protectedAssetReadLeaseDigest: Sha256Digest;
+}
+
+export type LocalCommandCheckSpecification =
+  LocalCommandCheckSpecificationV2 | ProtectedLocalCommandCheckSpecification;
 
 export type CheckSpecification = M1CheckSpecification | LocalCommandCheckSpecification;
 
@@ -248,7 +264,7 @@ export interface LocalCommandEnvironmentIdentity {
 
 interface EvidenceRecordBase {
   readonly id: EvidenceId;
-  readonly schemaVersion: 1 | 2;
+  readonly schemaVersion: 1 | 2 | 3;
   readonly producerIdentity: string;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
@@ -303,8 +319,7 @@ export interface EvidencePayloadReference {
   readonly byteLength: number;
 }
 
-export interface LocalCommandTestResultEvidenceRecord extends EvidenceRecordBase {
-  readonly schemaVersion: 2;
+interface LocalCommandTestResultEvidenceRecordBase extends EvidenceRecordBase {
   readonly kind: typeof EvidenceKind.LOCAL_COMMAND_TEST_RESULT;
   readonly producerType: typeof EvidenceProducerType.VERIFICATION_RUNNER;
   readonly verificationObligationId: VerificationObligationId;
@@ -317,6 +332,23 @@ export interface LocalCommandTestResultEvidenceRecord extends EvidenceRecordBase
   readonly resultStatus: Exclude<EvidenceResultStatus, typeof EvidenceResultStatus.OBSERVED>;
   readonly checkSpec: LocalCommandCheckSpecification;
 }
+
+export interface LocalCommandTestResultEvidenceRecordV2 extends LocalCommandTestResultEvidenceRecordBase {
+  readonly schemaVersion: 2;
+  readonly checkSpec: LocalCommandCheckSpecificationV2;
+}
+
+export interface ProtectedLocalCommandTestResultEvidenceRecord extends LocalCommandTestResultEvidenceRecordBase {
+  readonly schemaVersion: 3;
+  readonly checkSpec: ProtectedLocalCommandCheckSpecification;
+  readonly acceptanceCriticalVerificationPlanId: AcceptanceCriticalVerificationPlanId;
+  readonly acceptanceCriticalVerificationPlanDigest: Sha256Digest;
+  readonly protectedAssetManifestDigest: Sha256Digest;
+  readonly protectedAssetReadLeaseDigest: Sha256Digest;
+}
+
+export type LocalCommandTestResultEvidenceRecord =
+  LocalCommandTestResultEvidenceRecordV2 | ProtectedLocalCommandTestResultEvidenceRecord;
 
 export type EvidenceRecord =
   CandidateFreezeEvidenceRecord | TestResultEvidenceRecord | LocalCommandTestResultEvidenceRecord;
@@ -501,6 +533,12 @@ export function assertCheckSpecificationInvariant(checkSpec: CheckSpecification)
     checkSpec.executablePath !== checkSpec.executablePath.normalize('NFC')
   ) {
     throw new DomainInvariantError('Local command executable path must be absolute and normalized');
+  }
+  if (checkSpec.schemaVersion === 3) {
+    acceptanceCriticalVerificationPlanId(checkSpec.acceptanceCriticalVerificationPlanId);
+    sha256Digest(checkSpec.acceptanceCriticalVerificationPlanDigest);
+    sha256Digest(checkSpec.protectedAssetManifestDigest);
+    sha256Digest(checkSpec.protectedAssetReadLeaseDigest);
   }
   assertPortableCwd(checkSpec.cwd);
   if (checkSpec.argv.length > 1_024) {
@@ -804,6 +842,22 @@ export function assertEvidenceRecordInvariant(record: EvidenceRecord): void {
   ) {
     throw new DomainInvariantError('Local command Evidence has an invalid verification binding');
   }
+  if (record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT) {
+    if (record.schemaVersion !== record.checkSpec.schemaVersion) {
+      throw new DomainInvariantError('Local command Evidence and Check schema versions differ');
+    }
+    if (
+      record.schemaVersion === 3 &&
+      (record.acceptanceCriticalVerificationPlanId !==
+        record.checkSpec.acceptanceCriticalVerificationPlanId ||
+        record.acceptanceCriticalVerificationPlanDigest !==
+          record.checkSpec.acceptanceCriticalVerificationPlanDigest ||
+        record.protectedAssetManifestDigest !== record.checkSpec.protectedAssetManifestDigest ||
+        record.protectedAssetReadLeaseDigest !== record.checkSpec.protectedAssetReadLeaseDigest)
+    ) {
+      throw new DomainInvariantError('Protected Evidence does not repeat its exact Plan and lease');
+    }
+  }
 }
 
 export function assertEvidenceEligibilityInvariant(eligibility: EvidenceEligibility): void {
@@ -915,6 +969,7 @@ export function evidenceObservationDigestProjection(observation: EvidenceObserva
 export function evidenceRecordDigestProjection(
   record: Omit<EvidenceRecord, 'id' | 'recordedAt' | 'recordDigest'>,
 ): unknown {
+  const protectedBindings = protectedEvidenceDigestBindings(record);
   return {
     schemaVersion: record.schemaVersion,
     kind: record.kind,
@@ -941,12 +996,40 @@ export function evidenceRecordDigestProjection(
           workspaceLeaseDigest: record.workspaceLeaseDigest,
         }
       : {}),
+    ...protectedBindings,
     startedAt: record.startedAt,
     endedAt: record.endedAt,
     observationDigest: record.observationDigest,
     payloadRefs: record.payloadRefs,
     resultStatus: record.resultStatus,
   };
+}
+
+function protectedEvidenceDigestBindings(
+  record: Omit<EvidenceRecord, 'id' | 'recordedAt' | 'recordDigest'>,
+):
+  | Readonly<Record<string, never>>
+  | Pick<
+      ProtectedLocalCommandTestResultEvidenceRecord,
+      | 'acceptanceCriticalVerificationPlanId'
+      | 'acceptanceCriticalVerificationPlanDigest'
+      | 'protectedAssetManifestDigest'
+      | 'protectedAssetReadLeaseDigest'
+    > {
+  if (
+    record.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT ||
+    record.schemaVersion !== 3 ||
+    record.checkSpec.schemaVersion !== 3
+  ) {
+    return Object.freeze({});
+  }
+  return Object.freeze({
+    acceptanceCriticalVerificationPlanId: record.checkSpec.acceptanceCriticalVerificationPlanId,
+    acceptanceCriticalVerificationPlanDigest:
+      record.checkSpec.acceptanceCriticalVerificationPlanDigest,
+    protectedAssetManifestDigest: record.checkSpec.protectedAssetManifestDigest,
+    protectedAssetReadLeaseDigest: record.checkSpec.protectedAssetReadLeaseDigest,
+  });
 }
 
 export function evidenceSetDigestProjection(set: Omit<EvidenceSet, 'digest'>): unknown {

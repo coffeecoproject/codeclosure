@@ -7,12 +7,14 @@ import {
   RunStatus,
   WorkflowPhase,
   acceptanceDecisionProjection,
+  acceptanceCriticalVerificationPlanProjection,
   acceptanceInputManifestProjection,
   auditEventId,
   commandId,
   createGoal,
   createWorkflow,
   decodeAcceptanceDecision,
+  decodeAcceptanceCriticalVerificationPlan,
   decodeAcceptanceInputManifest,
   decodeAttemptSnapshot,
   decodeCandidate,
@@ -35,6 +37,7 @@ import {
   workflowId,
   workflowPolicyBindingProjection,
   type AcceptanceDecision,
+  type AcceptanceCriticalVerificationPlan,
   type Attempt,
   type AuditEventId,
   type Candidate,
@@ -137,6 +140,7 @@ const statusAuthoritySchema = z
       .optional(),
     closeout: z.unknown().optional(),
     latestRecoveryReconciliation: z.unknown().optional(),
+    acceptanceCriticalVerificationPlan: z.unknown().optional(),
   })
   .strict();
 
@@ -234,6 +238,11 @@ export interface GoalStatusView {
     readonly version: string;
     readonly digest: Sha256Digest;
   };
+  readonly protectedVerificationPlanRef?: {
+    readonly id: AcceptanceCriticalVerificationPlan['id'];
+    readonly digest: Sha256Digest;
+    readonly protectedAssetManifestDigest: Sha256Digest;
+  };
   readonly activeAttemptRef?: {
     readonly id: Attempt['id'];
     readonly sequence: number;
@@ -312,6 +321,7 @@ export interface DecodedStatusAuthority extends GoalWorkflowView {
   };
   readonly closeout?: ReturnType<typeof decodeCloseoutRecord>;
   readonly latestRecoveryReconciliation?: RecoveryReconciliationRecord;
+  readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
 }
 
 class ApplicationOperationFailure extends Error {
@@ -479,6 +489,34 @@ export function decodeStatusAuthority(
     throw new TypeError('Goal status has only one half of its Policy/Profile start authority');
   }
 
+  const acceptanceCriticalVerificationPlan =
+    parsed.acceptanceCriticalVerificationPlan === undefined
+      ? undefined
+      : decodeAcceptanceCriticalVerificationPlan(parsed.acceptanceCriticalVerificationPlan);
+  if (acceptanceCriticalVerificationPlan !== undefined) {
+    if (
+      policyBinding === undefined ||
+      executionProfileBinding === undefined ||
+      acceptanceCriticalVerificationPlan.goalId !== goal.id ||
+      acceptanceCriticalVerificationPlan.goalRevision !== goal.revision ||
+      acceptanceCriticalVerificationPlan.workflowId !== workflow.id ||
+      acceptanceCriticalVerificationPlan.workflowVersionAtLock > workflow.version ||
+      acceptanceCriticalVerificationPlan.policyBundleId !== policyBinding.policyBundleId ||
+      acceptanceCriticalVerificationPlan.policyBundleDigest !== policyBinding.policyBundleDigest ||
+      acceptanceCriticalVerificationPlan.executionProfileId !== executionProfileBinding.profileId ||
+      acceptanceCriticalVerificationPlan.executionProfileDigest !==
+        executionProfileBinding.profileDigest ||
+      acceptanceCriticalVerificationPlan.planDigest !==
+        sha256Digest(
+          digests.digest(
+            acceptanceCriticalVerificationPlanProjection(acceptanceCriticalVerificationPlan),
+          ),
+        )
+    ) {
+      throw new TypeError('Goal status protected Verification Plan has stale authority');
+    }
+  }
+
   const activeAttempt =
     parsed.activeAttempt === undefined ? undefined : decodeAttemptSnapshot(parsed.activeAttempt);
   if (!hasExactWorkflowActiveAttemptAuthority(workflow, activeAttempt)) {
@@ -560,6 +598,19 @@ export function decodeStatusAuthority(
   ) {
     throw new TypeError('Goal status Acceptance does not bind current authority');
   }
+  if (
+    acceptanceAuthority !== undefined &&
+    ((acceptanceCriticalVerificationPlan === undefined) !==
+      (acceptanceAuthority.manifest.schemaVersion === 1) ||
+      (acceptanceCriticalVerificationPlan !== undefined &&
+        acceptanceAuthority.manifest.schemaVersion === 2 &&
+        (acceptanceAuthority.manifest.acceptanceCriticalVerificationPlanId !==
+          acceptanceCriticalVerificationPlan.id ||
+          acceptanceAuthority.manifest.acceptanceCriticalVerificationPlanDigest !==
+            acceptanceCriticalVerificationPlan.planDigest)))
+  ) {
+    throw new TypeError('Goal status Acceptance changed protected Plan authority');
+  }
 
   const shouldHaveCloseout =
     workflow.phase === WorkflowPhase.CLOSEOUT && workflow.runStatus === RunStatus.CLOSED;
@@ -609,6 +660,9 @@ export function decodeStatusAuthority(
     ...(acceptanceAuthority === undefined ? {} : { acceptanceAuthority }),
     ...(closeout === undefined ? {} : { closeout }),
     ...(latestRecoveryReconciliation === undefined ? {} : { latestRecoveryReconciliation }),
+    ...(acceptanceCriticalVerificationPlan === undefined
+      ? {}
+      : { acceptanceCriticalVerificationPlan }),
   });
 }
 
@@ -759,6 +813,16 @@ function compileGoalStatusView(
             id: decoded.executionProfileBinding.profileId,
             version: decoded.executionProfileBinding.profileVersion,
             digest: decoded.executionProfileBinding.profileDigest,
+          }),
+        }),
+    ...(decoded.acceptanceCriticalVerificationPlan === undefined
+      ? {}
+      : {
+          protectedVerificationPlanRef: Object.freeze({
+            id: decoded.acceptanceCriticalVerificationPlan.id,
+            digest: decoded.acceptanceCriticalVerificationPlan.planDigest,
+            protectedAssetManifestDigest:
+              decoded.acceptanceCriticalVerificationPlan.protectedAssetManifestDigest,
           }),
         }),
     ...(decoded.activeAttempt === undefined

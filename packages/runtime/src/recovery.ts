@@ -78,6 +78,7 @@ import type {
 import {
   ExternalProcessReconciliationDisposition as RuntimeExternalProcessReconciliationDisposition,
   RecoverableBlockerKind,
+  RecoveryContinuityBarrier,
 } from './ports.js';
 import {
   RecoveryInspectionAvailability,
@@ -124,6 +125,7 @@ const recoveryCatalogSchema = z
     goal: z.unknown(),
     workflow: z.unknown(),
     blockerKind: z.enum(Object.values(RecoverableBlockerKind)),
+    continuityBarrier: z.enum(Object.values(RecoveryContinuityBarrier)).optional(),
     sourceAttempt: z.unknown(),
     contextManifest: z.unknown().optional(),
     policyBinding: z.unknown(),
@@ -321,6 +323,9 @@ function decodeRecoveryCatalog(value: unknown, digests: DigestProvider): Decoded
   const catalog: DecodedRecoveryCatalog = Object.freeze({
     ...owner,
     blockerKind: parsed.blockerKind,
+    ...(parsed.continuityBarrier === undefined
+      ? {}
+      : { continuityBarrier: parsed.continuityBarrier }),
     sourceAttempt,
     ...(contextManifest === undefined ? {} : { contextManifest }),
     policyBinding,
@@ -378,6 +383,11 @@ function decodeRecoveryCatalog(value: unknown, digests: DigestProvider): Decoded
           sha256Digest(digests.digest(workerDispatchClaimProjection(dispatchClaim))))) ||
     (externalMaintenance !== undefined &&
       externalExecution?.id !== externalMaintenance.externalExecutionId) ||
+    (parsed.continuityBarrier !== undefined &&
+      (sourceAttempt.phase !== WorkflowPhase.EVIDENCE_BUILD ||
+        candidateAuthority === undefined ||
+        dispatchClaim !== undefined ||
+        externalExecution !== undefined)) ||
     (latestReconciliation !== undefined &&
       (latestReconciliation.workflowId !== owner.workflow.id ||
         latestReconciliation.goalId !== owner.goal.id ||
@@ -791,7 +801,11 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
     });
     const processReconciliation = this.reconcileExternalProcess(catalog);
     const inspection = this.inspectClosed(request);
-    const inspectedDisposition = this.decideDisposition(request, inspection);
+    const inspectedDisposition = this.decideDisposition(
+      request,
+      inspection,
+      catalog.continuityBarrier,
+    );
     const disposition =
       processReconciliation?.safe === false
         ? Object.freeze({
@@ -862,6 +876,9 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
         ...new Set([
           ...inspection.observationRefs,
           ...(processReconciliation === undefined ? [] : [processReconciliation.observationRef]),
+          ...(catalog.continuityBarrier === undefined
+            ? []
+            : [`local-verification-session:${catalog.sourceAttempt.id}:unavailable-after-restart`]),
         ]),
       ]),
       inspectorVersion: this.#inspectorVersion,
@@ -979,6 +996,7 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
   private decideDisposition(
     request: RecoveryInspectionRequest,
     inspection: RecoveryInspectionResult,
+    continuityBarrier: RecoveryCatalogEntry['continuityBarrier'],
   ): {
     readonly disposition: RecoveryReconciliationDisposition;
     readonly reasonCode: RecoveryReasonCode;
@@ -1042,6 +1060,14 @@ class RuntimeRecoveryCoordinator implements RecoveryCoordinator {
           inspection.observedCandidateDigest,
         );
       }
+    }
+    if (
+      continuityBarrier === RecoveryContinuityBarrier.LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE
+    ) {
+      return blocked(
+        RecoveryReasonCode.LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE,
+        inspection.observedCandidateDigest,
+      );
     }
     return Object.freeze({
       disposition: RecoveryReconciliationDisposition.SAFE_SAME_PHASE,

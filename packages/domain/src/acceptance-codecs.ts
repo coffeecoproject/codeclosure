@@ -26,6 +26,7 @@ import {
 import {
   aggregateVersion,
   acceptanceDecisionId,
+  acceptanceCriticalVerificationPlanId,
   candidateGenerationId,
   checkSpecificationId,
   goalId,
@@ -106,32 +107,39 @@ export function decodePendingIssueSet(value: unknown): PendingIssueSet {
   return set;
 }
 
-const manifestSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    goalId: z.string(),
-    goalRevision: z.number().int().positive(),
-    workflowId: z.string(),
-    workflowVersion: z.number().int().positive(),
-    phase: z.literal(WorkflowPhase.FINAL_VERIFY),
-    factSnapshotDigest: z.string(),
-    decisionSetDigest: z.string(),
-    scenarioSetDigest: z.string(),
-    candidateGenerationId: z.string(),
-    candidateDigest: z.string(),
-    evidenceSetDigest: z.string(),
-    pendingIssueSetDigest: z.string(),
-    policyBundleId: z.string(),
-    policyBundleDigest: z.string(),
-    createdAt: z.string(),
-    manifestDigest: z.string(),
-  })
-  .strict();
+const manifestBaseShape = {
+  goalId: z.string(),
+  goalRevision: z.number().int().positive(),
+  workflowId: z.string(),
+  workflowVersion: z.number().int().positive(),
+  phase: z.literal(WorkflowPhase.FINAL_VERIFY),
+  factSnapshotDigest: z.string(),
+  decisionSetDigest: z.string(),
+  scenarioSetDigest: z.string(),
+  candidateGenerationId: z.string(),
+  candidateDigest: z.string(),
+  evidenceSetDigest: z.string(),
+  pendingIssueSetDigest: z.string(),
+  policyBundleId: z.string(),
+  policyBundleDigest: z.string(),
+  createdAt: z.string(),
+  manifestDigest: z.string(),
+} as const;
+const manifestSchema = z.union([
+  z.object({ schemaVersion: z.literal(1), ...manifestBaseShape }).strict(),
+  z
+    .object({
+      schemaVersion: z.literal(2),
+      ...manifestBaseShape,
+      acceptanceCriticalVerificationPlanId: z.string(),
+      acceptanceCriticalVerificationPlanDigest: z.string(),
+    })
+    .strict(),
+]);
 
 export function decodeAcceptanceInputManifest(value: unknown): AcceptanceInputManifest {
   const parsed = manifestSchema.parse(value);
-  const manifest: AcceptanceInputManifest = Object.freeze({
-    schemaVersion: parsed.schemaVersion,
+  const base = {
     goalId: goalId(parsed.goalId),
     goalRevision: goalRevision(parsed.goalRevision),
     workflowId: workflowId(parsed.workflowId),
@@ -148,7 +156,20 @@ export function decodeAcceptanceInputManifest(value: unknown): AcceptanceInputMa
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
     createdAt: isoTimestamp(parsed.createdAt),
     manifestDigest: sha256Digest(parsed.manifestDigest),
-  });
+  } as const;
+  const manifest: AcceptanceInputManifest =
+    parsed.schemaVersion === 1
+      ? Object.freeze({ ...base, schemaVersion: parsed.schemaVersion })
+      : Object.freeze({
+          ...base,
+          schemaVersion: parsed.schemaVersion,
+          acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+            parsed.acceptanceCriticalVerificationPlanId,
+          ),
+          acceptanceCriticalVerificationPlanDigest: sha256Digest(
+            parsed.acceptanceCriticalVerificationPlanDigest,
+          ),
+        });
   assertAcceptanceInputManifestInvariant(manifest);
   return manifest;
 }

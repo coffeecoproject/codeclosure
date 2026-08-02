@@ -11,6 +11,7 @@ import {
 import {
   codexFinalPayloadBinding,
   digestCanonical,
+  type CodexItemRejectionCode,
   type CodexWorkerDirective,
 } from './contracts.js';
 
@@ -23,6 +24,8 @@ export interface EffectiveThread {
   readonly modelProvider: string;
   readonly reasoningEffort: string | null;
   readonly sandbox: Readonly<{
+    readonly excludeSlashTmp: boolean;
+    readonly excludeTmpdirEnvVar: boolean;
     readonly networkAccess: boolean;
     readonly type: string;
     readonly writableRoots: readonly string[];
@@ -47,10 +50,25 @@ export interface TerminalTurn {
 export type CodexThreadItemDisposition =
   'ALLOWED' | 'COMPACTION_POLICY_VIOLATION' | 'UNSUPPORTED_BACKEND_ACTIVITY';
 
+export type CodexThreadItemEvaluation =
+  | Readonly<{
+      disposition: 'ALLOWED' | 'COMPACTION_POLICY_VIOLATION';
+      rejectionCode?: never;
+    }>
+  | Readonly<{
+      disposition: 'UNSUPPORTED_BACKEND_ACTIVITY';
+      rejectionCode: CodexItemRejectionCode;
+    }>;
+
 export type CodexThreadItemLocation = 'COMPLETED' | 'STARTED' | 'TERMINAL';
 
 export interface CodexThreadItemPolicy {
   readonly expectedUserMessageDigest: string;
+}
+
+export interface CompletedAgentMessageObservation {
+  readonly digest: string;
+  readonly phase: JsonValue | undefined;
 }
 
 export interface FinalCompletionRequest {
@@ -218,45 +236,90 @@ function validateTerminalStatus(
   }
 }
 
+class ItemValidationFailure extends TypeError {
+  public readonly itemRejectionCode: CodexItemRejectionCode;
+
+  public constructor(code: CodexItemRejectionCode) {
+    super(code);
+    this.name = 'ItemValidationFailure';
+    this.itemRejectionCode = code;
+  }
+}
+
+function itemValidationFailure(code: CodexItemRejectionCode): ItemValidationFailure {
+  return new ItemValidationFailure(code);
+}
+
+function validateItemStep(code: CodexItemRejectionCode, operation: () => void): void {
+  try {
+    operation();
+  } catch {
+    throw itemValidationFailure(code);
+  }
+}
+
 function validateCommandExecution(item: JsonObject, location: CodexThreadItemLocation): void {
-  exactKeys(
-    item,
-    [
-      'aggregatedOutput',
-      'command',
-      'commandActions',
-      'cwd',
-      'durationMs',
-      'exitCode',
-      'id',
-      'pluginId',
-      'processId',
-      'scriptPath',
-      'source',
-      'status',
-      'type',
-    ],
-    'commandExecution Item',
+  validateItemStep('COMMAND_FIELD_SET', () =>
+    exactKeys(
+      item,
+      [
+        'aggregatedOutput',
+        'command',
+        'commandActions',
+        'cwd',
+        'durationMs',
+        'exitCode',
+        'id',
+        'pluginId',
+        'processId',
+        'scriptPath',
+        'source',
+        'status',
+        'type',
+      ],
+      'commandExecution Item',
+    ),
   );
-  boundedString(item['id'], 'commandExecution Item id', 1_024);
+  validateItemStep('COMMAND_ID', () => {
+    boundedString(item['id'], 'commandExecution Item id', 1_024);
+  });
   if (item['pluginId'] !== null || item['scriptPath'] !== null) {
-    throw new TypeError('plugin-backed command execution is not selected');
+    throw itemValidationFailure('COMMAND_PLUGIN_BINDING');
   }
-  boundedString(item['command'], 'commandExecution Item command', 1_048_576);
-  boundedString(item['cwd'], 'commandExecution Item cwd');
-  stringOrNull(item['processId'], 'commandExecution Item process id', 1_024);
-  if (item['source'] !== 'agent') {
-    throw new TypeError('commandExecution Item source is unsupported');
+  validateItemStep('COMMAND_TEXT', () => {
+    boundedString(item['command'], 'commandExecution Item command', 1_048_576);
+  });
+  validateItemStep('COMMAND_CWD', () => {
+    boundedString(item['cwd'], 'commandExecution Item cwd');
+  });
+  validateItemStep('COMMAND_PROCESS_ID', () => {
+    stringOrNull(item['processId'], 'commandExecution Item process id', 1_024);
+  });
+  // App Server 0.146.0 emits unifiedExecStartup for the model-selected
+  // exec_command tool. userShell is an out-of-band ThreadShellCommand path,
+  // while unifiedExecInteraction has no selected production emitter in M2.
+  if (item['source'] !== 'agent' && item['source'] !== 'unifiedExecStartup') {
+    throw itemValidationFailure('COMMAND_SOURCE');
   }
-  validateTerminalStatus(item['status'], 'commandExecution Item status', location);
-  boundedArray(item['commandActions'], 'commandExecution Item actions', 256).forEach(
-    validateCommandAction,
-  );
-  if (item['aggregatedOutput'] !== null) {
-    boundedText(item['aggregatedOutput'], 'commandExecution Item aggregated output');
-  }
-  safeIntegerOrNull(item['exitCode'], 'commandExecution Item exit code', -2_147_483_648);
-  safeIntegerOrNull(item['durationMs'], 'commandExecution Item duration', 0);
+  validateItemStep('COMMAND_STATUS', () => {
+    validateTerminalStatus(item['status'], 'commandExecution Item status', location);
+  });
+  validateItemStep('COMMAND_ACTIONS', () => {
+    boundedArray(item['commandActions'], 'commandExecution Item actions', 256).forEach(
+      validateCommandAction,
+    );
+  });
+  validateItemStep('COMMAND_OUTPUT', () => {
+    if (item['aggregatedOutput'] !== null) {
+      boundedText(item['aggregatedOutput'], 'commandExecution Item aggregated output');
+    }
+  });
+  validateItemStep('COMMAND_EXIT_CODE', () => {
+    safeIntegerOrNull(item['exitCode'], 'commandExecution Item exit code', -2_147_483_648);
+  });
+  validateItemStep('COMMAND_DURATION', () => {
+    safeIntegerOrNull(item['durationMs'], 'commandExecution Item duration', 0);
+  });
 }
 
 function validatePatchKind(value: JsonValue | undefined, index: number): void {
@@ -336,7 +399,28 @@ function validateAllowedThreadItem(
       validateUserMessage(item, policy);
       return;
     default:
-      throw new TypeError('Thread Item type is unsupported');
+      throw itemValidationFailure('UNSELECTED_ITEM_TYPE');
+  }
+}
+
+export function evaluateCodexThreadItem(
+  item: JsonObject,
+  location: CodexThreadItemLocation,
+  policy: CodexThreadItemPolicy,
+): CodexThreadItemEvaluation {
+  if (item['type'] === 'contextCompaction') {
+    return Object.freeze({ disposition: 'COMPACTION_POLICY_VIOLATION' });
+  }
+  try {
+    validateAllowedThreadItem(item, location, policy);
+    return Object.freeze({ disposition: 'ALLOWED' });
+  } catch (error) {
+    const rejectionCode =
+      error instanceof ItemValidationFailure ? error.itemRejectionCode : 'ITEM_SCHEMA';
+    return Object.freeze({
+      disposition: 'UNSUPPORTED_BACKEND_ACTIVITY',
+      rejectionCode,
+    });
   }
 }
 
@@ -345,15 +429,7 @@ export function codexThreadItemDisposition(
   location: CodexThreadItemLocation,
   policy: CodexThreadItemPolicy,
 ): CodexThreadItemDisposition {
-  if (item['type'] === 'contextCompaction') {
-    return 'COMPACTION_POLICY_VIOLATION';
-  }
-  try {
-    validateAllowedThreadItem(item, location, policy);
-    return 'ALLOWED';
-  } catch {
-    return 'UNSUPPORTED_BACKEND_ACTIVITY';
-  }
+  return evaluateCodexThreadItem(item, location, policy).disposition;
 }
 
 export function decodeJsonObject(value: JsonValue): JsonObject {
@@ -380,6 +456,18 @@ export function decodeEffectiveThread(value: JsonValue): EffectiveThread {
         ? null
         : boundedString(result['reasoningEffort'], 'Thread reasoning effort'),
     sandbox: Object.freeze({
+      excludeSlashTmp:
+        typeof sandbox['excludeSlashTmp'] === 'boolean'
+          ? sandbox['excludeSlashTmp']
+          : (() => {
+              throw new TypeError('Thread slash-tmp exclusion policy is invalid');
+            })(),
+      excludeTmpdirEnvVar:
+        typeof sandbox['excludeTmpdirEnvVar'] === 'boolean'
+          ? sandbox['excludeTmpdirEnvVar']
+          : (() => {
+              throw new TypeError('Thread TMPDIR exclusion policy is invalid');
+            })(),
       networkAccess:
         typeof sandbox['networkAccess'] === 'boolean'
           ? sandbox['networkAccess']
@@ -487,36 +575,45 @@ export function decodeFinalCompletionRequest(
 export function selectFinalAgentMessage(
   terminal: TerminalTurn,
   policy: CodexThreadItemPolicy,
+  completedAgentMessages: readonly CompletedAgentMessageObservation[],
 ): string {
-  if (terminal.itemsView !== 'full') {
-    throw new TypeError('terminal Turn does not contain the full Item set');
+  if (terminal.itemsView !== 'summary' || terminal.items.length !== 1) {
+    throw new TypeError('terminal Turn does not contain one summary Item');
   }
-  const messages: Readonly<{ phase: JsonValue | undefined; text: string }>[] = [];
-  for (const itemValue of terminal.items) {
-    const item = object(itemValue, 'terminal Turn item');
-    const disposition = codexThreadItemDisposition(item, 'TERMINAL', policy);
-    if (disposition === 'UNSUPPORTED_BACKEND_ACTIVITY') {
-      throw new TypeError('terminal Turn contains an unsupported integration Item');
-    }
-    if (disposition === 'COMPACTION_POLICY_VIOLATION') {
-      throw new TypeError('terminal Turn contains an unauthorized compaction Item');
-    }
-    const type = item['type'];
-    if (type === 'agentMessage') {
-      messages.push({
-        phase: item['phase'],
-        text: boundedString(item['text'], 'agent message', 1_048_576),
-      });
-    }
+  const item = object(terminal.items[0], 'terminal Turn summary Item');
+  const disposition = codexThreadItemDisposition(item, 'TERMINAL', policy);
+  if (disposition === 'UNSUPPORTED_BACKEND_ACTIVITY') {
+    throw new TypeError('terminal Turn contains an unsupported integration Item');
   }
-  const finalMessages = messages.filter((message) => message.phase === 'final_answer');
-  if (finalMessages.length === 1) {
-    return finalMessages[0]?.text ?? '';
+  if (disposition === 'COMPACTION_POLICY_VIOLATION') {
+    throw new TypeError('terminal Turn contains an unauthorized compaction Item');
   }
-  if (finalMessages.length === 0 && messages.length === 1 && messages[0]?.phase === null) {
-    return messages[0].text;
+  if (item['type'] !== 'agentMessage') {
+    throw new TypeError('terminal Turn summary is not an agent message');
   }
-  throw new TypeError('terminal Turn does not contain exactly one final agent message');
+  const terminalDigest = digestCanonical(item);
+  const terminalPhase = item['phase'];
+  const terminalText = boundedString(item['text'], 'agent message', 1_048_576);
+  const finalMessages = completedAgentMessages.filter(
+    (message) => message.phase === 'final_answer',
+  );
+  if (
+    terminalPhase === 'final_answer' &&
+    finalMessages.length === 1 &&
+    finalMessages[0]?.digest === terminalDigest
+  ) {
+    return terminalText;
+  }
+  if (
+    terminalPhase === null &&
+    finalMessages.length === 0 &&
+    completedAgentMessages.length === 1 &&
+    completedAgentMessages[0]?.phase === null &&
+    completedAgentMessages[0].digest === terminalDigest
+  ) {
+    return terminalText;
+  }
+  throw new TypeError('terminal Turn summary does not bind exactly one completed final message');
 }
 
 export function digestProtocolValue(value: JsonValue): string {

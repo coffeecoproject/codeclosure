@@ -9,7 +9,23 @@ import {
   CliExitCode,
   type CliEnvelope,
   type CliExitCode as CliExitCodeType,
+  type CliM2DemoDetail,
+  type CliExternalDiagnostic,
 } from './contracts.js';
+
+function renderExternalDiagnostic(diagnostic: CliExternalDiagnostic): string {
+  switch (diagnostic.kind) {
+    case 'NOTIFICATION_LIMIT':
+      return diagnostic.kind;
+    case 'UNSUPPORTED_NOTIFICATION':
+      return `${diagnostic.kind}:${diagnostic.method}`;
+    case 'MALFORMED_ITEM':
+    case 'ITEM_POLICY_UNAVAILABLE':
+      return `${diagnostic.kind}:${diagnostic.location}`;
+    case 'UNSUPPORTED_ITEM':
+      return `${diagnostic.kind}:${diagnostic.itemType}:${diagnostic.location}:${diagnostic.reasonCode}`;
+  }
+}
 
 function commandFailureExit(code: string): CliExitCodeType {
   switch (code) {
@@ -71,7 +87,7 @@ export function exitCodeForCliEnvelope(envelope: CliEnvelope): CliExitCodeType {
     case 'GOAL_AUDIT':
       return envelope.result.status === 'FOUND' ? CliExitCode.SUCCESS : CliExitCode.REJECTED;
     case 'DEMO_RESULT':
-      return CliExitCode.SUCCESS;
+      return envelope.result.passed ? CliExitCode.SUCCESS : CliExitCode.GOVERNED_STOP;
     case 'CLI_ERROR':
       switch (envelope.error.code) {
         case CliErrorCode.USAGE:
@@ -243,10 +259,99 @@ function renderGoalAudit(envelope: Extract<CliEnvelope, { readonly kind: 'GOAL_A
   return lines.join('\n');
 }
 
+function renderM2DemoDetail(m2: CliM2DemoDetail): string[] {
+  const lines = [
+    `M2 branch: ${m2.branch}`,
+    `Protected plan: ${m2.planId}`,
+    `Protected plan digest: ${m2.planDigest}`,
+    `Candidate generations: ${String(m2.generationCount)}`,
+    `Source tree digest: ${m2.sourceIdentity.sourceTreeDigest}`,
+    `Source Git metadata digest: ${m2.sourceIdentity.sourceGitMetadataDigest}`,
+    'Source unchanged: yes',
+  ];
+  if (m2.externalFailureCode !== undefined) {
+    lines.push(`External failure: ${m2.externalFailureCode}`);
+  }
+  for (const evidence of m2.evidence) {
+    lines.push(
+      `M2 evidence: ${evidence.result} ${evidence.evidenceDigest}`,
+      `  Candidate: ${evidence.candidateGenerationId} ${evidence.candidateDigest}`,
+      `  Check: ${evidence.checkId}`,
+    );
+  }
+  return lines;
+}
+
 function renderDemoResult(
   envelope: Extract<CliEnvelope, { readonly kind: 'DEMO_RESULT' }>,
 ): string {
   const proof = envelope.result;
+  if (!proof.passed) {
+    if (proof.outcome === 'FAILED') {
+      const lines = [
+        `Demo: ${proof.scenario}`,
+        'Expected proof: failed',
+        `Failure: ${proof.failureCode}`,
+        `Message: ${proof.message}`,
+        `Goal: ${proof.goalId}`,
+        `Drive stop: ${proof.finalDrive.stopReason}`,
+        `Final phase: ${proof.finalStatus.phase}`,
+        `Final run status: ${proof.finalStatus.runStatus}`,
+        `Technical closeout: ${proof.finalStatus.technicalCloseout ? 'yes' : 'no'}`,
+        `Audit through sequence: ${String(proof.audit.throughSequence)}`,
+        'Strict reopen: matched',
+      ];
+      if (proof.finalStatus.acceptanceSummary !== undefined) {
+        lines.push(
+          `Acceptance: ${proof.finalStatus.acceptanceSummary.outcome} (${proof.finalStatus.acceptanceSummary.dominantReasonCode})`,
+        );
+      }
+      lines.push(...renderM2DemoDetail(proof.m2));
+      return lines.join('\n');
+    }
+    const lines = [
+      `Demo: ${proof.scenario}`,
+      'Expected proof: blocked',
+      `Blocker: ${proof.blockerCode}`,
+      `Message: ${proof.message}`,
+    ];
+    if (proof.externalFailureCode !== undefined) {
+      lines.push(`External failure: ${proof.externalFailureCode}`);
+    }
+    if ('externalDiagnostic' in proof) {
+      lines.push(`External diagnostic: ${renderExternalDiagnostic(proof.externalDiagnostic)}`);
+    }
+    if ('runtimeStop' in proof) {
+      lines.push(
+        `Runtime stage: ${proof.runtimeStop.stage}`,
+        `Command status: ${proof.runtimeStop.commandStatus}`,
+      );
+      if (proof.runtimeStop.drive === null) {
+        lines.push('Drive stop: unavailable');
+      } else {
+        lines.push(
+          `Drive stop: ${proof.runtimeStop.drive.stopReason}`,
+          `Drive detail: ${proof.runtimeStop.drive.detailCode}`,
+          `Drive operations: ${String(proof.runtimeStop.drive.operationCount)}`,
+        );
+      }
+      if (proof.runtimeStop.externalExecution === null) {
+        lines.push('External execution: not authorized');
+      } else {
+        lines.push(
+          `External execution: ${proof.runtimeStop.externalExecution.id}`,
+          `External attempt: ${proof.runtimeStop.externalExecution.attemptId}`,
+          `External state: ${proof.runtimeStop.externalExecution.state}`,
+        );
+        if (proof.runtimeStop.externalExecution.failureCode !== null) {
+          lines.push(
+            `External execution failure: ${proof.runtimeStop.externalExecution.failureCode}`,
+          );
+        }
+      }
+    }
+    return lines.join('\n');
+  }
   const lines = [
     `Demo: ${proof.scenario}`,
     `Expected proof: passed`,
@@ -277,6 +382,9 @@ function renderDemoResult(
   }
   if (proof.startupRecovery !== undefined) {
     lines.push(`Startup reconciled: ${String(proof.startupRecovery.reconciledCount)}`);
+  }
+  if (proof.m2 !== undefined) {
+    lines.push(...renderM2DemoDetail(proof.m2));
   }
   return lines.join('\n');
 }

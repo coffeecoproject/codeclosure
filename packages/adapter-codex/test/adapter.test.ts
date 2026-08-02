@@ -6,14 +6,17 @@ import process from 'node:process';
 import test, { type TestContext } from 'node:test';
 
 import {
+  CODEX_WORKER_CANDIDATE_TRUST_POLICY,
+  CODEX_WORKER_DISABLED_FEATURES,
   CODEX_WORKER_PROMPT_PROFILE,
   CODEX_WORKER_PROMPT_TEMPLATE_DIGEST,
   CodexWorkerAdapter,
   candidateWorkspaceLeaseProjection,
-  codexExternalExecutionIntentProjection,
+  codexWorkerDirectiveProjection,
   decodeCodexWorkerDirective,
   digestCanonical,
   type CandidateWorkspaceLease,
+  type CodexAdapterDiagnosticEvent,
   type CodexExecutionProfileDirective,
   type CodexWorkerDirective,
   type CodexWorkerRequestBinding,
@@ -46,6 +49,7 @@ function lifecycleKinds(events: readonly unknown[]): readonly unknown[] {
 
 interface Harness {
   readonly adapter: CodexWorkerAdapter;
+  readonly diagnostics: readonly CodexAdapterDiagnosticEvent[];
   readonly directive: CodexWorkerDirective;
   readonly launch: ReturnType<typeof createFixtureAppServerLaunch>;
   readonly lifecycleEvents: readonly unknown[];
@@ -172,7 +176,9 @@ function workspaceLease(
   request: WorkerRequest,
   candidate: string,
   codexHome: string,
+  processHome: string,
   source: string,
+  temporaryDirectory: string,
   workspaceRoot: string,
 ): CandidateWorkspaceLease {
   const binding = requestBinding(request);
@@ -186,7 +192,14 @@ function workspaceLease(
     candidateDigest: binding.candidateDigest,
     candidateGenerationId: binding.candidateGenerationId,
     candidateGenerationVersion: 1,
-    forbiddenRoots: Object.freeze([realpathSync(codexHome), realpathSync(source)].sort()),
+    forbiddenRoots: Object.freeze(
+      [
+        realpathSync(codexHome),
+        realpathSync(processHome),
+        realpathSync(source),
+        realpathSync(temporaryDirectory),
+      ].sort(),
+    ),
     generationSequence: 1,
     goalId: binding.goalId,
     goalRevision: binding.goalRevision,
@@ -216,14 +229,44 @@ function workspaceLease(
 const managedRequirements = Object.freeze({
   requirements: Object.freeze({ managed: true, profile: 'fixture' }),
 });
+const disabledFeatureConfiguration = Object.freeze(
+  Object.fromEntries(CODEX_WORKER_DISABLED_FEATURES.map((feature) => [feature, false])),
+);
+const effectiveConfigBody = Object.freeze({
+  approval_policy: 'never',
+  default_permissions: 'codeclosure-m2',
+  features: disabledFeatureConfiguration,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  mcp_servers: Object.freeze({}),
+  model: 'gpt-fixture',
+  model_provider: 'openai',
+  model_reasoning_effort: 'low',
+  orchestrator: Object.freeze({
+    mcp: Object.freeze({ enabled: false }),
+    skills: Object.freeze({ enabled: false }),
+  }),
+  skills: Object.freeze({
+    bundled: Object.freeze({ enabled: false }),
+    include_instructions: false,
+  }),
+  web_search: 'disabled',
+});
 const effectiveConfig = Object.freeze({
+  config: effectiveConfigBody,
+  layers: Object.freeze([]),
+});
+const profileBoundPluginEnabledConfig = Object.freeze({
   config: Object.freeze({
-    approval_policy: 'never',
-    default_permissions: 'codeclosure-m2',
-    model: 'gpt-fixture',
-    model_provider: 'openai',
-    model_reasoning_effort: 'low',
-    web_search: 'disabled',
+    ...effectiveConfigBody,
+    features: Object.freeze({ ...disabledFeatureConfiguration, plugins: true }),
+  }),
+  layers: Object.freeze([]),
+});
+const profileBoundMcpConfiguredConfig = Object.freeze({
+  config: Object.freeze({
+    ...effectiveConfigBody,
+    mcp_servers: Object.freeze({ fixture: Object.freeze({ enabled: true }) }),
   }),
   layers: Object.freeze([]),
 });
@@ -237,14 +280,16 @@ function profileDirective(
   launch: ReturnType<typeof createFixtureAppServerLaunch>,
   thread: CodexExecutionProfileDirective['thread'] = Object.freeze({ kind: 'FRESH' }),
   compactionPolicy: CodexExecutionProfileDirective['compactionPolicy'] = 'FAIL_ON_OBSERVATION',
+  configRead: Parameters<typeof digestCanonical>[0] = effectiveConfig,
 ): CodexExecutionProfileDirective {
   const instructionSources = Object.freeze([]);
   return Object.freeze({
     approvalPolicy: 'never',
     approvalsReviewer: 'user',
+    candidateTrustPolicy: CODEX_WORKER_CANDIDATE_TRUST_POLICY,
     codexVersion: launch.summary.codexVersion,
     compactionPolicy,
-    configReadDigest: digestCanonical(effectiveConfig),
+    configReadDigest: digestCanonical(configRead),
     controlledStateRootIdentity: launch.summary.codexHome,
     delegatedExecutableDigest: launch.summary.delegatedExecutableDigest,
     disabledIntegrations: Object.freeze([
@@ -276,7 +321,7 @@ function profileDirective(
     reasoningEffort: 'low',
     retentionPolicy: 'CONTROLLED',
     secretEnvironmentNames: launch.summary.secretEnvironmentNames,
-    serviceTier: null,
+    serviceTier: 'default',
     terminalTimeoutMilliseconds: 150,
     thread,
   });
@@ -287,16 +332,17 @@ function directive(
   lease: CandidateWorkspaceLease,
   profile: CodexExecutionProfileDirective,
 ): CodexWorkerDirective {
-  const base: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'> = Object.freeze({
+  const base: Omit<CodexWorkerDirective, 'directiveDigest'> = Object.freeze({
+    externalExecutionIntentDigest: hash('8'),
     processLaunchNonce: hash('9'),
     profile,
     request: requestBinding(request),
-    schemaVersion: 1,
+    schemaVersion: 2,
     workspaceLease: lease,
   });
   return decodeCodexWorkerDirective({
     ...base,
-    externalExecutionIntentDigest: digestCanonical(codexExternalExecutionIntentProjection(base)),
+    directiveDigest: digestCanonical(codexWorkerDirectiveProjection(base)),
   });
 }
 
@@ -305,6 +351,7 @@ function createHarness(
   scenario: string,
   thread?: CodexExecutionProfileDirective['thread'],
   compactionPolicy?: CodexExecutionProfileDirective['compactionPolicy'],
+  configRead?: Parameters<typeof digestCanonical>[0],
 ): Harness {
   const directories = fixtureDirectories(t);
   const launch = createFixtureAppServerLaunch({
@@ -321,14 +368,17 @@ function createHarness(
     request,
     directories.candidate,
     directories.codexHome,
+    directories.processHome,
     directories.source,
+    directories.temporaryDirectory,
     directories.workspaceRoot,
   );
   const selectedDirective = directive(
     request,
     lease,
-    profileDirective(launch, thread, compactionPolicy),
+    profileDirective(launch, thread, compactionPolicy, configRead),
   );
+  const diagnostics: CodexAdapterDiagnosticEvent[] = [];
   const lifecycleEvents: unknown[] = [];
   return Object.freeze({
     adapter: new CodexWorkerAdapter({
@@ -339,9 +389,11 @@ function createHarness(
       },
       directive: selectedDirective,
       launch,
+      onDiagnosticEvent: (event) => diagnostics.push(event),
       onLifecycleEvent: (event) => lifecycleEvents.push(event),
       observedAt: () => fixedObservedAt,
     }),
+    diagnostics,
     directive: selectedDirective,
     launch,
     lifecycleEvents,
@@ -395,6 +447,19 @@ void test('[I-004][I-019] one exact structured IMPLEMENT payload becomes one bou
   assert.equal(observation.turnRequestCount, 1);
   assert.equal(observation.backendSessionRef, 'thread-fixture');
   assert.equal(observation.backendOperationRef, 'turn-fixture');
+  assert.deepEqual(harness.adapter.runtimeObservation(), {
+    schemaVersion: 1,
+    externalExecutionIntentDigest: harness.directive.externalExecutionIntentDigest,
+    requestAttemptId: harness.request.attemptId,
+    requestWorkerSessionId: harness.request.workerSessionId,
+    state: 'COMPLETED',
+    processLaunchCount: 1,
+    backendSessionRef: 'thread-fixture',
+    backendOperationRef: 'turn-fixture',
+    compactionCount: 0,
+    turnInterruptCount: 0,
+    resultEventId: event.id,
+  });
   assert.equal(JSON.stringify(event).includes('thread-fixture'), false);
   assert.equal(JSON.stringify(event).includes('ACCEPT'), false);
 });
@@ -450,6 +515,25 @@ void test('[I-004] plan, command, diff, reasoning, and passing-looking diagnosti
   assert.equal(harness.adapter.observation().notificationCount, 15);
 });
 
+void test('[I-019][I-027] model-selected unified exec startup remains bounded observation', async (t) => {
+  const harness = createHarness(t, 'unified-exec-startup');
+  const events = await collect(harness.adapter, harness.request);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, 'WORKER_RESULT');
+  assert.deepEqual(harness.diagnostics, []);
+  assert.equal(harness.adapter.observation().failureCode, undefined);
+});
+
+void test('[I-027] a disabled remote-control status broadcast does not activate a capability', async (t) => {
+  const harness = createHarness(t, 'remote-control-disabled');
+  const events = await collect(harness.adapter, harness.request);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, 'WORKER_RESULT');
+  const observation = harness.adapter.observation();
+  assert.equal(observation.notificationCount, 6);
+  assert.equal(observation.failureCode, undefined);
+});
+
 for (const scenario of [
   'free-form-done',
   'fabricated-accept',
@@ -475,24 +559,49 @@ for (const scenario of ['config-drift', 'requirements-drift', 'profile-drift'] a
   });
 }
 
-void test('[I-019][I-027] an unexpected instruction source blocks before a Codex Turn', async (t) => {
-  const harness = createHarness(t, 'instruction-extra');
-  assert.deepEqual(await collect(harness.adapter, harness.request), []);
-  const observation = harness.adapter.observation();
-  assert.equal(observation.failureCode, 'EFFECTIVE_INPUT_MISMATCH');
-  assert.equal(observation.threadRequestCount, 1);
-  assert.equal(observation.turnRequestCount, 0);
-});
+for (const [scenario, configRead] of [
+  ['profile-bound-plugin-enabled', profileBoundPluginEnabledConfig],
+  ['profile-bound-mcp-configured', profileBoundMcpConfiguredConfig],
+] as const) {
+  void test(`[I-019][I-027] ${scenario} blocks even when its config digest is bound`, async (t) => {
+    const harness = createHarness(t, scenario, undefined, undefined, configRead);
+    assert.deepEqual(await collect(harness.adapter, harness.request), []);
+    const observation = harness.adapter.observation();
+    assert.equal(observation.failureCode, 'EFFECTIVE_INPUT_MISMATCH');
+    assert.equal(observation.threadRequestCount, 0);
+    assert.equal(observation.turnRequestCount, 0);
+  });
+}
+
+for (const scenario of [
+  'instruction-extra',
+  'thread-config-writeback',
+  'thread-sandbox-drift',
+  'thread-service-tier-drift',
+] as const) {
+  void test(`[I-019][I-027] ${scenario} blocks before a Codex Turn`, async (t) => {
+    const harness = createHarness(t, scenario);
+    assert.deepEqual(await collect(harness.adapter, harness.request), []);
+    const observation = harness.adapter.observation();
+    assert.equal(observation.failureCode, 'EFFECTIVE_INPUT_MISMATCH');
+    assert.equal(observation.threadRequestCount, 1);
+    assert.equal(observation.turnRequestCount, 0);
+  });
+}
 
 for (const [scenario, code] of [
   ['wrong-thread', 'THREAD_BINDING_MISMATCH'],
   ['wrong-turn', 'TURN_BINDING_MISMATCH'],
   ['duplicate-terminal', 'TURN_BINDING_MISMATCH'],
   ['settings-drift', 'UNSUPPORTED_BACKEND_ACTIVITY'],
+  ['remote-control-connected', 'UNSUPPORTED_BACKEND_ACTIVITY'],
+  ['remote-control-disabled-environment', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['unsupported-item', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['unknown-item', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['terminal-only-unknown-item', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['plugin-command', 'UNSUPPORTED_BACKEND_ACTIVITY'],
+  ['user-shell-command', 'UNSUPPORTED_BACKEND_ACTIVITY'],
+  ['unified-exec-interaction', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['skill-user-message', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['mismatched-user-message', 'UNSUPPORTED_BACKEND_ACTIVITY'],
   ['malformed-agent-message', 'UNSUPPORTED_BACKEND_ACTIVITY'],
@@ -504,14 +613,59 @@ for (const [scenario, code] of [
     const harness = createHarness(t, scenario);
     assert.deepEqual(await collect(harness.adapter, harness.request), []);
     assert.equal(harness.adapter.observation().failureCode, code);
+    if (scenario === 'settings-drift') {
+      assert.deepEqual(harness.diagnostics, [
+        {
+          schemaVersion: 1,
+          kind: 'UNSUPPORTED_NOTIFICATION',
+          method: 'thread/settings/updated',
+        },
+      ]);
+    }
+    if (scenario === 'unknown-item') {
+      assert.deepEqual(harness.diagnostics, [
+        {
+          schemaVersion: 1,
+          kind: 'UNSUPPORTED_ITEM',
+          itemType: 'futureExternalEffect',
+          location: 'STARTED',
+          reasonCode: 'UNSELECTED_ITEM_TYPE',
+        },
+      ]);
+    }
+    if (scenario === 'user-shell-command' || scenario === 'unified-exec-interaction') {
+      assert.deepEqual(harness.diagnostics, [
+        {
+          schemaVersion: 1,
+          kind: 'UNSUPPORTED_ITEM',
+          itemType: 'commandExecution',
+          location: 'STARTED',
+          reasonCode: 'COMMAND_SOURCE',
+        },
+      ]);
+    }
   });
 }
 
-void test('[I-027] a terminal Turn without an explicit full Item view cannot emit a result', async (t) => {
+void test('[I-027] a terminal Turn without an explicit summary Item view cannot emit a result', async (t) => {
   const harness = createHarness(t, 'missing-items-view');
   assert.deepEqual(await collect(harness.adapter, harness.request), []);
   assert.equal(harness.adapter.observation().failureCode, 'INVALID_TERMINAL_PAYLOAD');
 });
+
+void test('[I-027] a terminal summary must match its completed Agent Item', async (t) => {
+  const harness = createHarness(t, 'terminal-summary-mismatch');
+  assert.deepEqual(await collect(harness.adapter, harness.request), []);
+  assert.equal(harness.adapter.observation().failureCode, 'INVALID_TERMINAL_PAYLOAD');
+});
+
+for (const scenario of ['terminal-summary-without-completed', 'terminal-full-view'] as const) {
+  void test(`[I-027] ${scenario} cannot substitute for the completed Agent Item contract`, async (t) => {
+    const harness = createHarness(t, scenario);
+    assert.deepEqual(await collect(harness.adapter, harness.request), []);
+    assert.equal(harness.adapter.observation().failureCode, 'INVALID_TERMINAL_PAYLOAD');
+  });
+}
 
 void test('[I-004] a backend-failed Turn maps only to the existing generic Worker failure', async (t) => {
   const harness = createHarness(t, 'backend-failed');
@@ -536,7 +690,9 @@ void test('[I-004] a backend-failed Turn maps only to the existing generic Worke
 void test('[I-027] no terminal notification ends as a typed adapter observation and no event', async (t) => {
   const harness = createHarness(t, 'no-terminal');
   assert.deepEqual(await collect(harness.adapter, harness.request), []);
-  assert.equal(harness.adapter.observation().failureCode, 'NO_TERMINAL_PAYLOAD');
+  const observation = harness.adapter.observation();
+  assert.equal(observation.failureCode, 'NO_TERMINAL_PAYLOAD');
+  assert.equal(observation.turnInterruptCount, 1);
 });
 
 void test('[I-027] host cancellation interrupts the known Turn once and cannot emit a late result', async (t) => {
@@ -633,7 +789,15 @@ void test('[I-027] stale lease state and launch/intent drift are rejected at com
         ...harness.directive,
         externalExecutionIntentDigest: hash('f'),
       }),
-    /intent digest/u,
+    /directive digest/u,
+  );
+  assert.throws(
+    () =>
+      decodeCodexWorkerDirective({
+        ...harness.directive,
+        profile: { ...harness.directive.profile, candidateTrustPolicy: 'TRUSTED' },
+      }),
+    /candidateTrustPolicy/u,
   );
   for (const profile of [
     {
@@ -647,16 +811,17 @@ void test('[I-027] stale lease state and launch/intent drift are rejected at com
       ),
     },
   ]) {
-    const base: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'> = {
+    const base: Omit<CodexWorkerDirective, 'directiveDigest'> = {
+      externalExecutionIntentDigest: harness.directive.externalExecutionIntentDigest,
       processLaunchNonce: harness.directive.processLaunchNonce,
       profile,
       request: harness.directive.request,
-      schemaVersion: 1,
+      schemaVersion: 2,
       workspaceLease: harness.directive.workspaceLease,
     };
     const rebound = decodeCodexWorkerDirective({
       ...base,
-      externalExecutionIntentDigest: digestCanonical(codexExternalExecutionIntentProjection(base)),
+      directiveDigest: digestCanonical(codexWorkerDirectiveProjection(base)),
     });
     assert.throws(
       () =>
@@ -736,20 +901,56 @@ void test('[I-019][I-027] controlled host roots cannot overlap Candidate or sour
       controlledStateRootIdentity: overlappingLaunch.summary.codexHome,
       nonSecretEnvironmentDigest: digestCanonical(overlappingLaunch.summary.nonSecretEnvironment),
     });
-    const base: Omit<CodexWorkerDirective, 'externalExecutionIntentDigest'> = Object.freeze({
+    const base: Omit<CodexWorkerDirective, 'directiveDigest'> = Object.freeze({
+      externalExecutionIntentDigest: harness.directive.externalExecutionIntentDigest,
       processLaunchNonce: harness.directive.processLaunchNonce,
       profile,
       request: harness.directive.request,
-      schemaVersion: 1,
+      schemaVersion: 2,
       workspaceLease: harness.directive.workspaceLease,
     });
     const rebound = decodeCodexWorkerDirective({
       ...base,
-      externalExecutionIntentDigest: digestCanonical(codexExternalExecutionIntentProjection(base)),
+      directiveDigest: digestCanonical(codexWorkerDirectiveProjection(base)),
     });
     const adapter = new CodexWorkerAdapter({
       directive: rebound,
       launch: overlappingLaunch,
+      onLifecycleEvent: () => undefined,
+      observedAt: () => fixedObservedAt,
+    });
+    assert.deepEqual(await collect(adapter, harness.request), []);
+    assert.equal(adapter.observation().failureCode, 'EFFECTIVE_INPUT_MISMATCH');
+    assert.equal(adapter.observation().processLaunchCount, 0);
+  }
+});
+
+void test('[I-019][I-027] process HOME and TMPDIR are exact forbidden lease identities', async (t) => {
+  const harness = createHarness(t, 'happy');
+  const environment = harness.launch.summary.nonSecretEnvironment;
+  const processHome = environment['HOME'];
+  const temporaryDirectory = environment['TMPDIR'];
+  assert.notEqual(processHome, undefined);
+  assert.notEqual(temporaryDirectory, undefined);
+
+  for (const omittedRoot of [processHome, temporaryDirectory]) {
+    if (omittedRoot === undefined) {
+      assert.fail('fixture launch omitted a controlled host root');
+    }
+    const leaseFields = Object.freeze({
+      ...harness.directive.workspaceLease,
+      forbiddenRoots: Object.freeze(
+        harness.directive.workspaceLease.forbiddenRoots.filter((root) => root !== omittedRoot),
+      ),
+    });
+    const alteredLease = Object.freeze({
+      ...leaseFields,
+      leaseDigest: digestCanonical(candidateWorkspaceLeaseProjection(leaseFields)),
+    });
+    const alteredDirective = directive(harness.request, alteredLease, harness.directive.profile);
+    const adapter = new CodexWorkerAdapter({
+      directive: alteredDirective,
+      launch: harness.launch,
       onLifecycleEvent: () => undefined,
       observedAt: () => fixedObservedAt,
     });

@@ -11,7 +11,16 @@ import { runM1DirectProfileProof } from './m1-profile-demo-proof.js';
 import { runM1RestartResumeProof } from './m1-restart-resume-proof.js';
 import { runM1StaleCloseoutProof } from './m1-stale-closeout-proof.js';
 
-export async function runM1DemoProof(scenario: CliDemoScenario): Promise<CliDemoProofResult> {
+export type M1DemoScenario = Exclude<
+  CliDemoScenario,
+  | 'm2-protected-repair'
+  | 'm2-protected-failed-repair'
+  | 'm2-adapter-failure'
+  | 'm2-live'
+  | 'm2-live-repair-handoff'
+>;
+
+export async function runM1DemoProof(scenario: M1DemoScenario): Promise<CliDemoProofResult> {
   switch (scenario) {
     case 'stale-closeout': {
       const projectRoot = mkdtempSync(join(tmpdir(), 'codeclosure-m1-stale-project-'));

@@ -471,7 +471,6 @@ export class AppServerClient {
           )
         );
       }
-      this.#initializationHandshakeCompleted = true;
       this.#ready = true;
     } catch (error) {
       const failure = errorFromUnknown(
@@ -844,6 +843,7 @@ export class AppServerClient {
         clientError(
           AppServerClientErrorCode.INITIALIZATION_FAILED,
           'App Server emitted traffic before the initialization handshake completed',
+          { method: safeString(message['method'], 256) ?? null },
         ),
       );
       return;
@@ -953,7 +953,11 @@ export class AppServerClient {
       return;
     }
     try {
-      pending.resolve(pending.decoder(message['result'] ?? null));
+      const decoded = pending.decoder(message['result'] ?? null);
+      if (pending.method === 'initialize') {
+        this.#initializationHandshakeCompleted = true;
+      }
+      pending.resolve(decoded);
     } catch {
       const error = clientError(
         AppServerClientErrorCode.MALFORMED_RESPONSE,

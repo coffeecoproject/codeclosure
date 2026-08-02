@@ -1,6 +1,7 @@
 import {
   aggregateVersion,
   acceptanceDecisionId,
+  acceptanceCriticalVerificationPlanId,
   candidateGenerationId,
   checkSpecificationId,
   goalId,
@@ -14,6 +15,7 @@ import {
   workflowVersion,
   type AggregateVersion,
   type AcceptanceDecisionId,
+  type AcceptanceCriticalVerificationPlanId,
   type CandidateGenerationId,
   type CheckSpecificationId,
   type GoalId,
@@ -106,8 +108,7 @@ export interface PendingIssueSet {
   readonly digest: Sha256Digest;
 }
 
-export interface AcceptanceInputManifest {
-  readonly schemaVersion: 1;
+interface AcceptanceInputManifestBase {
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
   readonly workflowId: WorkflowId;
@@ -125,6 +126,18 @@ export interface AcceptanceInputManifest {
   readonly createdAt: IsoTimestamp;
   readonly manifestDigest: Sha256Digest;
 }
+
+export interface AcceptanceInputManifestV1 extends AcceptanceInputManifestBase {
+  readonly schemaVersion: 1;
+}
+
+export interface ProtectedAcceptanceInputManifest extends AcceptanceInputManifestBase {
+  readonly schemaVersion: 2;
+  readonly acceptanceCriticalVerificationPlanId: AcceptanceCriticalVerificationPlanId;
+  readonly acceptanceCriticalVerificationPlanDigest: Sha256Digest;
+}
+
+export type AcceptanceInputManifest = AcceptanceInputManifestV1 | ProtectedAcceptanceInputManifest;
 
 export interface RuleResult {
   readonly ruleId: string;
@@ -283,9 +296,6 @@ export function assertPendingIssueSetInvariant(set: PendingIssueSet): void {
 }
 
 export function assertAcceptanceInputManifestInvariant(manifest: AcceptanceInputManifest): void {
-  if (!hasExactValue(manifest.schemaVersion, 1)) {
-    throw new DomainInvariantError('Acceptance Input Manifest schema version is unsupported');
-  }
   goalId(manifest.goalId);
   goalRevision(manifest.goalRevision);
   workflowId(manifest.workflowId);
@@ -304,6 +314,10 @@ export function assertAcceptanceInputManifestInvariant(manifest: AcceptanceInput
   sha256Digest(manifest.policyBundleDigest);
   isoTimestamp(manifest.createdAt);
   sha256Digest(manifest.manifestDigest);
+  if (manifest.schemaVersion === 2) {
+    acceptanceCriticalVerificationPlanId(manifest.acceptanceCriticalVerificationPlanId);
+    sha256Digest(manifest.acceptanceCriticalVerificationPlanDigest);
+  }
 }
 
 export function assertRuleResultInvariant(result: RuleResult): void {
@@ -517,10 +531,9 @@ export function acceptanceRepairRecordProjection(
   };
 }
 
-export type AcceptanceInputManifestSemanticFields = Omit<
-  AcceptanceInputManifest,
-  'createdAt' | 'manifestDigest'
->;
+export type AcceptanceInputManifestSemanticFields =
+  | Omit<AcceptanceInputManifestV1, 'createdAt' | 'manifestDigest'>
+  | Omit<ProtectedAcceptanceInputManifest, 'createdAt' | 'manifestDigest'>;
 
 export function acceptanceInputManifestProjection(
   manifest: AcceptanceInputManifestSemanticFields,
@@ -541,6 +554,13 @@ export function acceptanceInputManifestProjection(
     pendingIssueSetDigest: manifest.pendingIssueSetDigest,
     policyBundleId: manifest.policyBundleId,
     policyBundleDigest: manifest.policyBundleDigest,
+    ...(manifest.schemaVersion === 2
+      ? {
+          acceptanceCriticalVerificationPlanId: manifest.acceptanceCriticalVerificationPlanId,
+          acceptanceCriticalVerificationPlanDigest:
+            manifest.acceptanceCriticalVerificationPlanDigest,
+        }
+      : {}),
   };
 }
 

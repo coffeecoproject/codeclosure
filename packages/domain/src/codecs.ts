@@ -73,6 +73,7 @@ import {
 } from './evidence.js';
 import {
   acceptanceDecisionId,
+  acceptanceCriticalVerificationPlanId,
   aggregateVersion,
   attemptId,
   candidateGenerationId,
@@ -558,7 +559,7 @@ function materializePriorAttemptFeedback(
 
 const contextPackageSchema = z
   .object({
-    schemaVersion: z.union([z.literal(2), z.literal(3)]),
+    schemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]),
     goalId: z.string(),
     goalRevision: z.number().int().positive(),
     workflowId: z.string(),
@@ -589,6 +590,8 @@ const contextPackageSchema = z
     executionProfileDigest: z.string(),
     policyBundleId: z.string(),
     policyBundleDigest: z.string(),
+    acceptanceCriticalVerificationPlanId: z.string().optional(),
+    acceptanceCriticalVerificationPlanDigest: z.string().optional(),
     responseContract: z.unknown(),
   })
   .strict();
@@ -599,6 +602,8 @@ export function decodeContextPackage(value: unknown): ContextPackage {
     'candidateDigest',
     'repairContext',
     'priorAttemptFeedback',
+    'acceptanceCriticalVerificationPlanId',
+    'acceptanceCriticalVerificationPlanDigest',
   ]);
   const parsed = contextPackageSchema.parse(value);
   for (const entry of parsed.selectedEntries) {
@@ -650,6 +655,20 @@ export function decodeContextPackage(value: unknown): ContextPackage {
     executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     policyBundleId: policyBundleId(parsed.policyBundleId),
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
+    ...(parsed.acceptanceCriticalVerificationPlanId === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+            parsed.acceptanceCriticalVerificationPlanId,
+          ),
+        }),
+    ...(parsed.acceptanceCriticalVerificationPlanDigest === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlanDigest: sha256Digest(
+            parsed.acceptanceCriticalVerificationPlanDigest,
+          ),
+        }),
     responseContract: decodeWorkerResponseContract(parsed.responseContract),
   });
   assertContextPackageInvariant(contextPackage);
@@ -693,7 +712,7 @@ const contextOmissionDecisionSchema = z
 const contextManifestSchema = z
   .object({
     id: z.string(),
-    schemaVersion: z.union([z.literal(2), z.literal(3)]),
+    schemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]),
     compilerVersion: nonBlankStringSchema,
     createdAt: z.string(),
     goalId: z.string(),
@@ -708,6 +727,8 @@ const contextManifestSchema = z
     executionProfileDigest: z.string(),
     policyBundleId: z.string(),
     policyBundleDigest: z.string(),
+    acceptanceCriticalVerificationPlanId: z.string().optional(),
+    acceptanceCriticalVerificationPlanDigest: z.string().optional(),
     capabilityGrantDigest: z.string(),
     responseContractDigest: z.string(),
     repairContextDigest: z.string().optional(),
@@ -725,6 +746,8 @@ export function decodeContextManifest(value: unknown): ContextManifest {
     'candidateDigest',
     'repairContextDigest',
     'priorAttemptFeedbackDigest',
+    'acceptanceCriticalVerificationPlanId',
+    'acceptanceCriticalVerificationPlanDigest',
   ]);
   const parsed = contextManifestSchema.parse(value);
   for (const entry of parsed.entries) {
@@ -757,6 +780,20 @@ export function decodeContextManifest(value: unknown): ContextManifest {
     executionProfileDigest: sha256Digest(parsed.executionProfileDigest),
     policyBundleId: policyBundleId(parsed.policyBundleId),
     policyBundleDigest: sha256Digest(parsed.policyBundleDigest),
+    ...(parsed.acceptanceCriticalVerificationPlanId === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+            parsed.acceptanceCriticalVerificationPlanId,
+          ),
+        }),
+    ...(parsed.acceptanceCriticalVerificationPlanDigest === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlanDigest: sha256Digest(
+            parsed.acceptanceCriticalVerificationPlanDigest,
+          ),
+        }),
     capabilityGrantDigest: sha256Digest(parsed.capabilityGrantDigest),
     responseContractDigest: sha256Digest(parsed.responseContractDigest),
     ...(parsed.repairContextDigest === undefined
@@ -1137,54 +1174,65 @@ const m1CheckSpecificationSchema = z
   })
   .strict();
 
+const localCommandCheckSpecificationBaseShape = {
+  id: z.string(),
+  version: nonBlankStringSchema,
+  kind: z.literal(CheckSpecificationKind.LOCAL_COMMAND),
+  producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
+  producerIdentity: nonBlankStringSchema,
+  operation: nonBlankStringSchema,
+  cwdIdentity: nonBlankStringSchema,
+  inputRefs: z.tuple([z.string()]),
+  environmentPolicy: z.literal('LOCAL_COMMAND_EXPLICIT_V1'),
+  timeoutMilliseconds: z.number().int().positive(),
+  outputLimitBytes: z.number().int().positive(),
+  expectedObservationSchema: z.literal('LOCAL_COMMAND_OBSERVATION_V1'),
+  cleanupPolicy: z.literal('LOCAL_COMMAND_RUN_ROOT_V1'),
+  runnerIdentity: nonBlankStringSchema,
+  runnerVersion: nonBlankStringSchema,
+  executablePath: nonBlankStringSchema,
+  executableDigest: z.string(),
+  declaredToolVersion: nonBlankStringSchema,
+  argv: z.array(z.string()).max(1_024),
+  candidateGenerationId: z.string(),
+  candidateDigest: z.string(),
+  workspaceLeaseId: nonBlankStringSchema,
+  workspaceLeaseDigest: z.string(),
+  cwd: nonBlankStringSchema,
+  environmentInheritance: z.literal(LocalCommandEnvironmentInheritance.NONE),
+  allowedEnvironmentVariables: z.array(nonBlankStringSchema).max(1_024),
+  environmentDigest: z.string(),
+  isolationProfileId: nonBlankStringSchema,
+  isolationProfileDigest: z.string(),
+  candidateAccess: z.literal('READ_ONLY'),
+  authorityAccess: z.literal('NONE'),
+  credentialAccess: z.literal('NONE'),
+  networkAccess: z.literal('DISABLED'),
+  terminationGraceMilliseconds: z.number().int().positive(),
+  stdoutLimitBytes: z.number().int().positive(),
+  stderrLimitBytes: z.number().int().positive(),
+  totalOutputLimitBytes: z.number().int().positive(),
+  payloadRetentionLimitBytes: z.number().int().positive(),
+  acceptedExitCodes: z.array(z.number().int().min(0).max(255)).min(1).max(256),
+} as const;
 const localCommandCheckSpecificationSchema = z
+  .object({ schemaVersion: z.literal(2), ...localCommandCheckSpecificationBaseShape })
+  .strict();
+const protectedLocalCommandCheckSpecificationSchema = z
   .object({
-    schemaVersion: z.literal(2),
-    id: z.string(),
-    version: nonBlankStringSchema,
-    kind: z.literal(CheckSpecificationKind.LOCAL_COMMAND),
-    producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
-    producerIdentity: nonBlankStringSchema,
-    operation: nonBlankStringSchema,
-    cwdIdentity: nonBlankStringSchema,
-    inputRefs: z.tuple([z.string()]),
-    environmentPolicy: z.literal('LOCAL_COMMAND_EXPLICIT_V1'),
-    timeoutMilliseconds: z.number().int().positive(),
-    outputLimitBytes: z.number().int().positive(),
-    expectedObservationSchema: z.literal('LOCAL_COMMAND_OBSERVATION_V1'),
-    cleanupPolicy: z.literal('LOCAL_COMMAND_RUN_ROOT_V1'),
-    runnerIdentity: nonBlankStringSchema,
-    runnerVersion: nonBlankStringSchema,
-    executablePath: nonBlankStringSchema,
-    executableDigest: z.string(),
-    declaredToolVersion: nonBlankStringSchema,
-    argv: z.array(z.string()).max(1_024),
-    candidateGenerationId: z.string(),
-    candidateDigest: z.string(),
-    workspaceLeaseId: nonBlankStringSchema,
-    workspaceLeaseDigest: z.string(),
-    cwd: nonBlankStringSchema,
-    environmentInheritance: z.literal(LocalCommandEnvironmentInheritance.NONE),
-    allowedEnvironmentVariables: z.array(nonBlankStringSchema).max(1_024),
-    environmentDigest: z.string(),
-    isolationProfileId: nonBlankStringSchema,
-    isolationProfileDigest: z.string(),
-    candidateAccess: z.literal('READ_ONLY'),
-    authorityAccess: z.literal('NONE'),
-    credentialAccess: z.literal('NONE'),
-    networkAccess: z.literal('DISABLED'),
-    terminationGraceMilliseconds: z.number().int().positive(),
-    stdoutLimitBytes: z.number().int().positive(),
-    stderrLimitBytes: z.number().int().positive(),
-    totalOutputLimitBytes: z.number().int().positive(),
-    payloadRetentionLimitBytes: z.number().int().positive(),
-    acceptedExitCodes: z.array(z.number().int().min(0).max(255)).min(1).max(256),
+    schemaVersion: z.literal(3),
+    ...localCommandCheckSpecificationBaseShape,
+    acceptanceCriticalVerificationPlanId: z.string(),
+    acceptanceCriticalVerificationPlanDigest: z.string(),
+    protectedAssetManifestDigest: z.string(),
+    protectedAssetReadLeaseDigest: z.string(),
   })
   .strict();
 
 const checkSpecificationSchema = z.discriminatedUnion('schemaVersion', [
   m1CheckSpecificationSchema,
   localCommandCheckSpecificationSchema,
+  protectedLocalCommandCheckSpecificationSchema,
 ]);
 
 export function decodeCheckSpecification(value: unknown): CheckSpecification {
@@ -1210,7 +1258,7 @@ export function decodeCheckSpecification(value: unknown): CheckSpecification {
     assertCheckSpecificationInvariant(checkSpec);
     return checkSpec;
   }
-  const checkSpec: CheckSpecification = Object.freeze({
+  const localBase = {
     schemaVersion: parsed.schemaVersion,
     id: checkSpecificationId(parsed.id),
     version: parsed.version,
@@ -1251,7 +1299,22 @@ export function decodeCheckSpecification(value: unknown): CheckSpecification {
     totalOutputLimitBytes: parsed.totalOutputLimitBytes,
     payloadRetentionLimitBytes: parsed.payloadRetentionLimitBytes,
     acceptedExitCodes: Object.freeze([...parsed.acceptedExitCodes]),
-  });
+  } as const;
+  const checkSpec: CheckSpecification =
+    parsed.schemaVersion === 2
+      ? Object.freeze({ ...localBase, schemaVersion: parsed.schemaVersion })
+      : Object.freeze({
+          ...localBase,
+          schemaVersion: parsed.schemaVersion,
+          acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+            parsed.acceptanceCriticalVerificationPlanId,
+          ),
+          acceptanceCriticalVerificationPlanDigest: sha256Digest(
+            parsed.acceptanceCriticalVerificationPlanDigest,
+          ),
+          protectedAssetManifestDigest: sha256Digest(parsed.protectedAssetManifestDigest),
+          protectedAssetReadLeaseDigest: sha256Digest(parsed.protectedAssetReadLeaseDigest),
+        });
   assertCheckSpecificationInvariant(checkSpec);
   return checkSpec;
 }
@@ -1482,45 +1545,60 @@ const evidencePayloadReferenceSchema = z
     byteLength: z.number().int().nonnegative(),
   })
   .strict();
+const localCommandEvidenceBaseShape = {
+  id: z.string(),
+  kind: z.literal(EvidenceKind.LOCAL_COMMAND_TEST_RESULT),
+  producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
+  producerIdentity: nonBlankStringSchema,
+  goalId: z.string(),
+  goalRevision: z.number().int().positive(),
+  workflowId: z.string(),
+  attemptId: z.string(),
+  verificationObligationId: z.string(),
+  candidateGenerationId: z.string(),
+  candidateDigest: z.string(),
+  policyBundleId: z.string(),
+  policyBundleDigest: z.string(),
+  environmentIdentity: localCommandEnvironmentIdentitySchema,
+  workspaceLeaseId: nonBlankStringSchema,
+  workspaceLeaseDigest: z.string(),
+  startedAt: z.string(),
+  endedAt: z.string(),
+  observation: localCommandObservationSchema,
+  payloadRefs: z.tuple([evidencePayloadReferenceSchema, evidencePayloadReferenceSchema]),
+  observationDigest: z.string(),
+  resultStatus: z.enum([
+    EvidenceResultStatus.PASS,
+    EvidenceResultStatus.FAIL,
+    EvidenceResultStatus.RUNNER_ERROR,
+    EvidenceResultStatus.TIMEOUT,
+  ]),
+  recordedAt: z.string(),
+  recordDigest: z.string(),
+} as const;
 const localCommandTestResultEvidenceRecordSchema = z
   .object({
-    id: z.string(),
+    ...localCommandEvidenceBaseShape,
     schemaVersion: z.literal(2),
-    kind: z.literal(EvidenceKind.LOCAL_COMMAND_TEST_RESULT),
-    producerType: z.literal(EvidenceProducerType.VERIFICATION_RUNNER),
-    producerIdentity: nonBlankStringSchema,
-    goalId: z.string(),
-    goalRevision: z.number().int().positive(),
-    workflowId: z.string(),
-    attemptId: z.string(),
-    verificationObligationId: z.string(),
-    candidateGenerationId: z.string(),
-    candidateDigest: z.string(),
-    policyBundleId: z.string(),
-    policyBundleDigest: z.string(),
     checkSpec: localCommandCheckSpecificationSchema,
-    environmentIdentity: localCommandEnvironmentIdentitySchema,
-    workspaceLeaseId: nonBlankStringSchema,
-    workspaceLeaseDigest: z.string(),
-    startedAt: z.string(),
-    endedAt: z.string(),
-    observation: localCommandObservationSchema,
-    payloadRefs: z.tuple([evidencePayloadReferenceSchema, evidencePayloadReferenceSchema]),
-    observationDigest: z.string(),
-    resultStatus: z.enum([
-      EvidenceResultStatus.PASS,
-      EvidenceResultStatus.FAIL,
-      EvidenceResultStatus.RUNNER_ERROR,
-      EvidenceResultStatus.TIMEOUT,
-    ]),
-    recordedAt: z.string(),
-    recordDigest: z.string(),
   })
   .strict();
-const evidenceRecordSchema = z.discriminatedUnion('kind', [
+const protectedLocalCommandTestResultEvidenceRecordSchema = z
+  .object({
+    ...localCommandEvidenceBaseShape,
+    schemaVersion: z.literal(3),
+    checkSpec: protectedLocalCommandCheckSpecificationSchema,
+    acceptanceCriticalVerificationPlanId: z.string(),
+    acceptanceCriticalVerificationPlanDigest: z.string(),
+    protectedAssetManifestDigest: z.string(),
+    protectedAssetReadLeaseDigest: z.string(),
+  })
+  .strict();
+const evidenceRecordSchema = z.union([
   candidateFreezeEvidenceRecordSchema,
   testResultEvidenceRecordSchema,
   localCommandTestResultEvidenceRecordSchema,
+  protectedLocalCommandTestResultEvidenceRecordSchema,
 ]);
 
 export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
@@ -1600,13 +1678,11 @@ export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
     ) {
       throw new TypeError('Local command Evidence changed variant during decoding');
     }
-    record = Object.freeze({
+    const localBase = {
       ...common,
-      schemaVersion: parsed.schemaVersion,
       kind: parsed.kind,
       producerType: parsed.producerType,
       verificationObligationId: verificationObligationId(parsed.verificationObligationId),
-      checkSpec,
       environmentIdentity,
       workspaceLeaseId: parsed.workspaceLeaseId,
       workspaceLeaseDigest: sha256Digest(parsed.workspaceLeaseDigest),
@@ -1624,7 +1700,34 @@ export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
         }),
       ] as const),
       resultStatus: parsed.resultStatus,
-    });
+    } as const;
+    if (parsed.schemaVersion === 2) {
+      if (checkSpec.schemaVersion !== 2) {
+        throw new TypeError('Version-2 Evidence must bind a version-2 Check');
+      }
+      record = Object.freeze({
+        ...localBase,
+        schemaVersion: parsed.schemaVersion,
+        checkSpec,
+      });
+    } else {
+      if (checkSpec.schemaVersion !== 3) {
+        throw new TypeError('Protected Evidence must bind a protected Check');
+      }
+      record = Object.freeze({
+        ...localBase,
+        schemaVersion: parsed.schemaVersion,
+        checkSpec,
+        acceptanceCriticalVerificationPlanId: acceptanceCriticalVerificationPlanId(
+          parsed.acceptanceCriticalVerificationPlanId,
+        ),
+        acceptanceCriticalVerificationPlanDigest: sha256Digest(
+          parsed.acceptanceCriticalVerificationPlanDigest,
+        ),
+        protectedAssetManifestDigest: sha256Digest(parsed.protectedAssetManifestDigest),
+        protectedAssetReadLeaseDigest: sha256Digest(parsed.protectedAssetReadLeaseDigest),
+      });
+    }
   }
   assertEvidenceRecordInvariant(record);
   return record;

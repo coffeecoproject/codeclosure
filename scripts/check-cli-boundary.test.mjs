@@ -45,6 +45,15 @@ const proofReadFacadeFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/m1-proof-read-facade.ts',
 );
+const m2CodexInvocationFixturePath = resolve(
+  repositoryRoot,
+  'apps/cli/src/composition/m2-codex-worker-invocation.ts',
+);
+const m2ProtectedProofFixturePath = resolve(
+  repositoryRoot,
+  'apps/cli/src/composition/m2-protected-demo-proof.ts',
+);
+const demoProofFixturePath = resolve(repositoryRoot, 'apps/cli/src/composition/demo-proof.ts');
 const compositionRootFixturePath = resolve(repositoryRoot, 'apps/cli/src/composition/index.ts');
 const entryPointFixturePath = resolve(repositoryRoot, 'apps/cli/src/index.ts');
 const compileFixtureRoot = resolve(repositoryRoot, '.cli-boundary-virtual-fixture');
@@ -131,7 +140,7 @@ function typeScriptDiagnostics(source, filePath = compileFixturePath) {
 void test('CLI boundary accepts only narrow public Runtime capability imports', () => {
   assert.deepEqual(
     violations(
-      "import { RuntimeErrorCode, parseGoalIdentifier, type CodeClosureApplication } from '@codeclosure/runtime';",
+      "import { RuntimeErrorCode, parseGoalIdentifier, type CodeClosureApplication, type ExternalFailureCodeView } from '@codeclosure/runtime';",
     ),
     [],
   );
@@ -310,6 +319,88 @@ void test('only named composition owners may import their exact privileged packa
   for (const source of privilegedImports) {
     assert.equal(violations(source, compositionFixturePath).length, 1, source);
   }
+});
+
+void test('Slice 7 raw client, workspace, verifier, Store, and Runtime capabilities remain behind exact proof owners', () => {
+  assert.deepEqual(
+    violations(
+      "import { CODEX_WORKER_CANDIDATE_TRUST_POLICY } from '@codeclosure/adapter-codex';",
+      m2CodexInvocationFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations(
+      "import { CODEX_WORKER_CANDIDATE_TRUST_POLICY } from '@codeclosure/adapter-codex';",
+      m2ProtectedProofFixturePath,
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    violations(
+      "import { CODEX_WORKER_DISABLED_FEATURES } from '@codeclosure/adapter-codex';",
+      m2CodexInvocationFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations(
+      "import { CODEX_WORKER_DISABLED_FEATURES } from '@codeclosure/adapter-codex';",
+      m2ProtectedProofFixturePath,
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    violations(
+      "import { startAppServerClient } from '@codeclosure/codex-app-server-client';",
+      m2CodexInvocationFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      "import { createLocalCommandVerificationRunner } from '@codeclosure/verification-local';",
+      m2ProtectedProofFixturePath,
+    ),
+    [],
+  );
+  for (const source of [
+    "import { startAppServerClient } from '@codeclosure/codex-app-server-client';",
+    "import { createLocalCandidateWorkspace } from '@codeclosure/workspace-local';",
+    "import { createLocalCommandVerificationRunner } from '@codeclosure/verification-local';",
+    "import { openSqliteControlStore } from '@codeclosure/store-sqlite';",
+    "import { createProtectedM2WorkflowDriver } from '@codeclosure/runtime/composition';",
+  ]) {
+    assert.equal(violations(source, demoProofFixturePath).length, 1, source);
+  }
+  assert.deepEqual(
+    violations(
+      "import { createTrustedCodexInvocation, type M2CodexAdapterDiagnostic } from './m2-codex-worker-invocation.js';",
+      m2ProtectedProofFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations(
+      "import { createTrustedCodexInvocation, type M2CodexAdapterDiagnostic } from './m2-codex-worker-invocation.js';",
+      demoProofFixturePath,
+    ).length,
+    1,
+  );
+  assert.equal(
+    violations(
+      "import type { M2CodexAdapterDiagnostic } from './m2-codex-worker-invocation.js';",
+      demoProofFixturePath,
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    violations(
+      "import { runM2ProtectedDemoProof } from './m2-protected-demo-proof.js';",
+      demoProofFixturePath,
+    ),
+    [],
+  );
 });
 
 void test('trusted production composition rejects raw or alternate Store open paths', () => {

@@ -192,6 +192,26 @@ void test('initialization, Thread/Turn, manual compaction, and later continuatio
   assert.equal(close.requestedShutdown, true);
 });
 
+void test('a notification emitted immediately after initialized is post-handshake traffic', async (t) => {
+  const notifications: string[] = [];
+  const { client } = await startFixture(t, 'immediate-post-initialization-notification', {
+    onNotification: (notification) => notifications.push(notification.method),
+  });
+
+  assert.equal(await client.request('thread/start', {}, decodeThread), 'thread-fixture');
+  assert.equal(notifications[0], 'warning');
+});
+
+void test('a notification batched after the initialize response is post-response traffic', async (t) => {
+  const notifications: string[] = [];
+  const { client } = await startFixture(t, 'batched-post-initialization-notification', {
+    onNotification: (notification) => notifications.push(notification.method),
+  });
+
+  assert.equal(client.initialization.platformFamily, 'fixture');
+  assert.deepEqual(notifications, ['warning']);
+});
+
 void test('controlled launch ignores poisoned ambient environment and redacts secret values', async (t) => {
   const previousHome = process.env['HOME'];
   const previousPoison = process.env['CODECLOSURE_POISON_VALUE'];
@@ -511,14 +531,9 @@ void test('host cancellation terminates the in-flight request without sending a 
 void test('turn interruption sends only turn/interrupt and does not infer success', async (t) => {
   let trace: string[] = [];
   let resolveTrace!: () => void;
-  let rejectTrace!: (error: Error) => void;
-  const traceReady = new Promise<void>((resolve, reject) => {
+  const traceReady = new Promise<void>((resolve) => {
     resolveTrace = resolve;
-    rejectTrace = reject;
   });
-  const traceTimer = setTimeout(() => rejectTrace(new Error('fixture trace timed out')), 1_000);
-  traceTimer.unref();
-  t.after(() => clearTimeout(traceTimer));
   const { client } = await startFixture(t, 'interrupt', {
     onNotification: (notification) => {
       if (notification.method === 'warning') {
@@ -533,8 +548,18 @@ void test('turn interruption sends only turn/interrupt and does not infer succes
   const threadId = await client.request('thread/start', {}, decodeThread);
   const turnId = await client.request('turn/start', { input: [], threadId }, decodeTurn);
   await client.interruptTurn({ threadId, turnId });
-  await traceReady;
-  clearTimeout(traceTimer);
+  let traceTimer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      traceReady,
+      new Promise<never>((_, reject) => {
+        traceTimer = setTimeout(() => reject(new Error('fixture trace timed out')), 1_000);
+        traceTimer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(traceTimer);
+  }
   assert.deepEqual(trace, ['thread/start', 'turn/start', 'turn/interrupt']);
 });
 

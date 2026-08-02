@@ -100,9 +100,14 @@ void test('the current manifest, lockfile, and actual source dependency graph ar
     '@codeclosure/runtime',
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/cli'), [
+    '@codeclosure/adapter-codex',
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/domain',
     '@codeclosure/runtime',
     '@codeclosure/store-sqlite',
     '@codeclosure/testing',
+    '@codeclosure/verification-local',
+    '@codeclosure/workspace-local',
     'zod',
   ]);
 });
@@ -195,6 +200,7 @@ void test('the local verification adapter depends only on public Runtime verific
     resolve(packageRoot, 'src/errors.ts'),
     resolve(packageRoot, 'src/index.ts'),
     resolve(packageRoot, 'src/local-command-runner.ts'),
+    resolve(packageRoot, 'src/protected-assets.ts'),
     resolve(packageRoot, 'src/seatbelt-isolation.ts'),
   ];
   const available = new Set(['@codeclosure/runtime', '@codeclosure/verification-local']);

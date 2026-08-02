@@ -3728,7 +3728,7 @@ void test('[I-005][I-006][I-009] reopen recomputes Context from authoritative M1
 
   assert.throws(
     () => openSqliteControlStore({ filename, now: () => createdAt }),
-    /does not match its authoritative sources/,
+    /entries do not match its authoritative sources/,
   );
 });
 
@@ -4006,6 +4006,67 @@ void test('[I-006][I-008][I-009] startup recovery blocks the old dispatch and Re
   t.after(() => reopened.close());
   assert.equal(reopened.getWorkflow(authority.workflow.id)?.runStatus, RunStatus.READY);
   assert.equal(reopened.getRecoveryReconciliation(startupRecoveryId)?.id, startupRecord.id);
+});
+
+void test('[I-006][I-009] migration 0025 preserves existing Recovery reconciliation authority', async (t) => {
+  const filename = temporaryDatabase(t, 'local-verification-recovery-migration.sqlite');
+  const migrationsDirectory = mkdtempSync(
+    join(tmpdir(), 'codeclosure-local-verification-recovery-migration-'),
+  );
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const sourceDirectory = defaultMigrationsDirectory();
+  for (const name of readdirSync(sourceDirectory).filter(
+    (candidate) =>
+      candidate.endsWith('.sql') && candidate < '0025_local_verification_recovery_barrier.sql',
+  )) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+
+  const oldStore = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  const authority = seedAuthority(oldStore, 'recoverymigration');
+  const worker = new FakeWorker({ fixture: FakeWorkerFixture.DELAYED_RESULT });
+  const pendingExecution = createWorkerExecutionApplication(
+    runtimeDependencies(oldStore, worker, authority, 'recoverymigration'),
+  ).startGoal(startRequest(authority, 'recoverymigration'));
+  await worker.waitUntilStarted();
+
+  const recovery = createRecoveryCoordinator({
+    store: oldStore,
+    clock: sequenceClock(isoTimestamp('2026-07-27T00:00:00.200Z')),
+    ids: new DeterministicIds('recovery-migration-control'),
+    digests,
+    policyBundleId: authority.policy.id,
+    policyBundleDigest: authority.policy.digest,
+    inspector: new FakeRecoveryInspector([FakeRecoveryInspectionMode.EXACT]),
+    inspectorVersion: 'fake-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm1-exact-same-phase-v1',
+  });
+  const startup = recovery.recoverOnStartup();
+  assert.equal(startup.reconciledCount, 1);
+  const recoveryId = startup.recoveryIds[0];
+  assert.ok(recoveryId);
+  const retainedRecord = oldStore.getRecoveryReconciliation(recoveryId);
+  assert.ok(retainedRecord);
+  assert.equal(retainedRecord.reasonCode, RecoveryReasonCode.EXACT_AUTHORITY_MATCH);
+
+  worker.release();
+  await pendingExecution;
+  oldStore.close();
+
+  const migrationName = '0025_local_verification_recovery_barrier.sql';
+  copyFileSync(join(sourceDirectory, migrationName), join(migrationsDirectory, migrationName));
+  const reopened = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  t.after(() => reopened.close());
+  assert.equal(reopened.appliedMigrations().at(-1)?.name, migrationName);
+  assert.deepEqual(reopened.getRecoveryReconciliation(recoveryId), retainedRecord);
 });
 
 void test('[I-006][I-009] startup recovery refuses a malformed Store outcome after the atomic reconciliation', async (t) => {

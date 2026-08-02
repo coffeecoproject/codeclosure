@@ -7,6 +7,8 @@ export const VerificationLocalFailureCode = {
   WORKSPACE_LEASE_STALE: 'WORKSPACE_LEASE_STALE',
   REQUEST_INVALID: 'REQUEST_INVALID',
   RUN_ROOT_INVALID: 'RUN_ROOT_INVALID',
+  PROTECTED_ASSET_AUTHORITY_UNAVAILABLE: 'PROTECTED_ASSET_AUTHORITY_UNAVAILABLE',
+  PROTECTED_ASSET_IDENTITY_MISMATCH: 'PROTECTED_ASSET_IDENTITY_MISMATCH',
 } as const;
 export type VerificationLocalFailureCode =
   (typeof VerificationLocalFailureCode)[keyof typeof VerificationLocalFailureCode];

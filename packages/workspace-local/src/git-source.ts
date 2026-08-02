@@ -5,9 +5,11 @@ import { resolve } from 'node:path';
 import { digestCandidateWorkspaceValue } from '@codeclosure/runtime';
 
 import {
+  DEFAULT_CANDIDATE_WORKSPACE_BOUNDS,
   LocalCandidateWorkspaceError,
   LocalCandidateWorkspaceFailureCode,
   type CandidateWorkspaceBounds,
+  type LocalCandidateSourceIdentity,
 } from './contracts.js';
 import {
   assertPortablePathSet,
@@ -269,5 +271,19 @@ export function captureSourceSnapshot(
   return Object.freeze({
     tree,
     git: gitMetadata(sourceRoot, paths, maximumGitBytes),
+  });
+}
+
+export function observeLocalCandidateSourceIdentity(
+  projectPath: string,
+): LocalCandidateSourceIdentity {
+  const snapshot = captureSourceSnapshot(
+    resolveSourceRoot(projectPath),
+    DEFAULT_CANDIDATE_WORKSPACE_BOUNDS,
+  );
+  return Object.freeze({
+    schemaVersion: 1,
+    sourceGitMetadataDigest: snapshot.git.digest,
+    sourceTreeDigest: snapshot.tree.digest,
   });
 }

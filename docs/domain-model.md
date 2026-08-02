@@ -103,7 +103,7 @@ At minimum, M1 uses distinct opaque identifiers for:
 Implementations must not interchange these as untyped strings inside the
 domain.
 
-The planned M2 Slice 7 protected-verification extension adds a distinct
+The M2 Slice 7 protected-verification extension adds a distinct
 `AcceptanceCriticalVerificationPlanId`. It MUST NOT be interchanged with a
 Check Specification, Verification Obligation, Evidence, Policy, or Execution
 Profile identity.
@@ -1164,7 +1164,7 @@ accepted exit codes, payload policy, runner identity, and
 `LOCAL_COMMAND_OBSERVATION_V1`. M1 specifications retain their current version
 and digest meaning.
 
-## Acceptance-Critical Verification Plan — planned M2 Slice 7
+## Acceptance-Critical Verification Plan — implemented M2 Slice 7
 
 ```text
 AcceptanceCriticalVerificationPlan
@@ -1225,7 +1225,7 @@ version-3 local verification request; that request and matching Evidence bind
 Attempt and Obligation causality separately. Check and Evidence retain the
 recomputable lease digest. M2 adds no separately mutable lease aggregate.
 
-## Protected Asset Read Lease — planned M2 Slice 7
+## Protected Asset Read Lease — implemented M2 Slice 7
 
 ```text
 ProtectedAssetReadLease
@@ -1357,7 +1357,7 @@ effects, audit, and command outcome. The additive migration must preserve every
 M1 version-1 record and digest. See
 [ADR 0030](adr/0030-real-local-verification-contract.md).
 
-The planned ADR 0031 version-3 local Evidence additionally binds the immutable
+The ADR 0031 version-3 local Evidence additionally binds the immutable
 acceptance-critical Verification Plan, protected-asset manifest, and read-only
 asset lease. Under ADR 0032, Worker-authored tests may be independently executed
 under a separate supplementary obligation, but that Evidence remains outside
@@ -1508,7 +1508,7 @@ describes.
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
-| Acceptance-critical Verification Plan and protected-asset manifest — planned M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
+| Acceptance-critical Verification Plan and protected-asset manifest — implemented M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |
 | Evidence eligibility | integrity observation / runtime command | Evidence policy | Evidence Store through an audited monotonic transition |

@@ -1,16 +1,16 @@
 import {
   CliOperation,
-  type CliDemoProofResult,
+  type CliDemoResult,
   type CliDemoResultEnvelope,
   type CliDemoScenario,
 } from '../cli/contracts.js';
 
-export interface M1DemoProofCapability {
-  run(scenario: CliDemoScenario): Promise<CliDemoProofResult>;
+export interface DemoProofCapability {
+  run(scenario: CliDemoScenario): Promise<CliDemoResult>;
 }
 
 export async function executeDemoRun(
-  capability: M1DemoProofCapability,
+  capability: DemoProofCapability,
   scenario: CliDemoScenario,
 ): Promise<CliDemoResultEnvelope> {
   return Object.freeze({

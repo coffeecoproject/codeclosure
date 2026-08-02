@@ -13,6 +13,7 @@ import {
   ExternalProcessGroupKind,
   ExternalRetentionPolicy,
   ExternalThreadPolicy,
+  ExternalWorkerDispatchPolicy,
   assertExternalBackendCapabilityRecordInvariant,
   assertExternalExecutionIntentInvariant,
   assertExternalExecutionObservationInvariant,
@@ -113,37 +114,45 @@ const capabilityRecordSchema = z
   })
   .strict();
 
-const externalExecutionProfileSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    backendKind: boundedNonBlankStringSchema,
-    capabilityRecordDigest: digestSchema,
-    selectedCapabilities: z.array(backendCapabilitySchema),
-    workerPhases: z.array(workerPhaseSchema),
-    binaryIdentityDigest: digestSchema,
-    protocolSchemaDigest: digestSchema,
-    configurationProfileDigest: digestSchema,
-    executionConfigDigest: digestSchema,
-    managedRequirementsDigest: digestSchema,
-    instructionSourceManifestDigest: digestSchema,
-    controlledStateRootIdentity: boundedNonBlankStringSchema,
-    environmentProjectionDigest: digestSchema,
-    permissionProfileId: boundedNonBlankStringSchema,
-    permissionProfileDigest: digestSchema,
-    model: boundedNonBlankStringSchema,
-    modelProvider: boundedNonBlankStringSchema,
-    serviceTier: boundedNonBlankStringSchema.nullable(),
-    reasoningEffort: boundedNonBlankStringSchema,
-    responseSchemaPolicy: boundedNonBlankStringSchema,
-    disabledIntegrationsDigest: digestSchema,
-    defaultThreadPolicy: z.literal(ExternalThreadPolicy.FRESH),
-    continuityPolicy: continuityPolicySchema,
-    compactionPolicy: compactionPolicySchema,
-    retentionPolicy: retentionPolicySchema,
-    fallbackPolicy: fallbackPolicySchema,
-    interruptionPolicy: interruptionPolicySchema,
-  })
-  .strict();
+const externalExecutionProfileFields = {
+  backendKind: boundedNonBlankStringSchema,
+  capabilityRecordDigest: digestSchema,
+  selectedCapabilities: z.array(backendCapabilitySchema),
+  workerPhases: z.array(workerPhaseSchema),
+  binaryIdentityDigest: digestSchema,
+  protocolSchemaDigest: digestSchema,
+  configurationProfileDigest: digestSchema,
+  executionConfigDigest: digestSchema,
+  managedRequirementsDigest: digestSchema,
+  instructionSourceManifestDigest: digestSchema,
+  controlledStateRootIdentity: boundedNonBlankStringSchema,
+  environmentProjectionDigest: digestSchema,
+  permissionProfileId: boundedNonBlankStringSchema,
+  permissionProfileDigest: digestSchema,
+  model: boundedNonBlankStringSchema,
+  modelProvider: boundedNonBlankStringSchema,
+  serviceTier: boundedNonBlankStringSchema.nullable(),
+  reasoningEffort: boundedNonBlankStringSchema,
+  responseSchemaPolicy: boundedNonBlankStringSchema,
+  disabledIntegrationsDigest: digestSchema,
+  defaultThreadPolicy: z.literal(ExternalThreadPolicy.FRESH),
+  continuityPolicy: continuityPolicySchema,
+  compactionPolicy: compactionPolicySchema,
+  retentionPolicy: retentionPolicySchema,
+  fallbackPolicy: fallbackPolicySchema,
+  interruptionPolicy: interruptionPolicySchema,
+} as const;
+
+const externalExecutionProfileSchema = z.discriminatedUnion('schemaVersion', [
+  z.object({ schemaVersion: z.literal(1), ...externalExecutionProfileFields }).strict(),
+  z
+    .object({
+      schemaVersion: z.literal(2),
+      ...externalExecutionProfileFields,
+      workerDispatchPolicy: z.enum(ExternalWorkerDispatchPolicy),
+    })
+    .strict(),
+]);
 
 const externalExecutionIntentSchema = z
   .object({

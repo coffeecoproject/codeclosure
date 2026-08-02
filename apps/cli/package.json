@@ -21,13 +21,18 @@
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
     "test": "pnpm run test:integration",
-    "test:integration": "pnpm run build && node ../../scripts/run-node-tests.mjs test/*.test.ts",
+    "test:integration": "pnpm run build && node ../../scripts/run-node-tests.mjs --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@codeclosure/adapter-codex": "workspace:*",
+    "@codeclosure/codex-app-server-client": "workspace:*",
+    "@codeclosure/domain": "workspace:*",
     "@codeclosure/runtime": "workspace:*",
     "@codeclosure/store-sqlite": "workspace:*",
     "@codeclosure/testing": "workspace:*",
+    "@codeclosure/verification-local": "workspace:*",
+    "@codeclosure/workspace-local": "workspace:*",
     "zod": "4.4.3"
   }
 }

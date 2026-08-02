@@ -62,11 +62,23 @@ void test('lifecycle and audit parsing keep fixture selection limited to goal st
   }
 });
 
-void test('demo parsing accepts only the eight closed M1 proof scenarios', () => {
+void test('demo parsing accepts the closed M1 and bounded M2 Slice 7 proof scenarios', () => {
   const invocation = parseCliInvocation(['demo', 'run', 'restart-resume', '--json']);
   assert.equal(invocation.operation, CliOperation.DEMO_RUN);
   assert.equal(invocation.scenario, 'restart-resume');
   assert.equal(invocation.json, true);
+
+  for (const scenario of [
+    'm2-protected-repair',
+    'm2-protected-failed-repair',
+    'm2-adapter-failure',
+    'm2-live',
+    'm2-live-repair-handoff',
+  ] as const) {
+    const parsed = parseCliInvocation(['demo', 'run', scenario]);
+    assert.equal(parsed.operation, CliOperation.DEMO_RUN);
+    assert.equal(parsed.scenario, scenario);
+  }
 
   assert.throws(() => parseCliInvocation(['demo', 'run', 'unknown-scenario']), CliUsageError);
   assert.throws(

@@ -26,6 +26,10 @@ export type WorkerEventId = Brand<string, 'WorkerEventId'>;
 export type ExternalExecutionId = Brand<string, 'ExternalExecutionId'>;
 export type ExternalExecutionObservationId = Brand<string, 'ExternalExecutionObservationId'>;
 export type ExternalMaintenanceIntentId = Brand<string, 'ExternalMaintenanceIntentId'>;
+export type AcceptanceCriticalVerificationPlanId = Brand<
+  string,
+  'AcceptanceCriticalVerificationPlanId'
+>;
 
 export type GoalRevision = Brand<number, 'GoalRevision'>;
 export type WorkflowVersion = Brand<number, 'WorkflowVersion'>;
@@ -106,6 +110,10 @@ export const externalExecutionObservationId = (value: string): ExternalExecution
   parseIdentifier('external-observation', value, 'ExternalExecutionObservationId');
 export const externalMaintenanceIntentId = (value: string): ExternalMaintenanceIntentId =>
   parseIdentifier('maintenance', value, 'ExternalMaintenanceIntentId');
+export const acceptanceCriticalVerificationPlanId = (
+  value: string,
+): AcceptanceCriticalVerificationPlanId =>
+  parseIdentifier('verification-plan', value, 'AcceptanceCriticalVerificationPlanId');
 
 export const goalRevision = (value: number): GoalRevision =>
   parsePositiveInteger(value, 'GoalRevision');

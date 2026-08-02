@@ -262,8 +262,7 @@ export function createLocalCommandTestResultEvidenceRecord(
   const observationDigest = sha256Digest(
     digests.digest(evidenceObservationDigestProjection(observation)),
   );
-  const withoutEnvelope = {
-    schemaVersion: 2 as const,
+  const commonEnvelope = {
     kind: EvidenceKind.LOCAL_COMMAND_TEST_RESULT,
     producerType: EvidenceProducerType.VERIFICATION_RUNNER,
     producerIdentity: checkSpec.producerIdentity,
@@ -290,6 +289,19 @@ export function createLocalCommandTestResultEvidenceRecord(
     observationDigest,
     resultStatus: localCommandEvidenceStatusForObservation(checkSpec, observation),
   };
+  const withoutEnvelope =
+    checkSpec.schemaVersion === 3
+      ? {
+          ...commonEnvelope,
+          schemaVersion: 3 as const,
+          checkSpec,
+          acceptanceCriticalVerificationPlanId: checkSpec.acceptanceCriticalVerificationPlanId,
+          acceptanceCriticalVerificationPlanDigest:
+            checkSpec.acceptanceCriticalVerificationPlanDigest,
+          protectedAssetManifestDigest: checkSpec.protectedAssetManifestDigest,
+          protectedAssetReadLeaseDigest: checkSpec.protectedAssetReadLeaseDigest,
+        }
+      : { ...commonEnvelope, schemaVersion: 2 as const, checkSpec };
   const record = finalizeEvidenceRecord(rawInput.id, rawInput.recordedAt, withoutEnvelope, digests);
   if (record.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT) {
     throw new TypeError('Local command Evidence changed kind during construction');

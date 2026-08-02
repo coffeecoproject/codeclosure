@@ -30,6 +30,12 @@ export interface LocalCandidateWorkspaceOptions {
   readonly workspaceRoot: string;
 }
 
+export interface LocalCandidateSourceIdentity {
+  readonly schemaVersion: 1;
+  readonly sourceGitMetadataDigest: string;
+  readonly sourceTreeDigest: string;
+}
+
 export const WorkspaceReconciliationClassification = {
   OWNED_CURRENT: 'OWNED_CURRENT',
   OWNED_ORPHANED: 'OWNED_ORPHANED',

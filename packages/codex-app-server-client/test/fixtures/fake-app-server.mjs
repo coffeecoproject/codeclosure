@@ -23,7 +23,7 @@ function sendRaw(value) {
   process.stdout.write(value);
 }
 
-function initializeResult(id, partial = false) {
+function initializeResponse(id) {
   const observation = {
     appServerArguments,
     environmentNames: Object.keys(process.env).sort(),
@@ -31,7 +31,7 @@ function initializeResult(id, partial = false) {
     poisonPresent: Object.keys(process.env).some((name) => name.startsWith('CODECLOSURE_POISON')),
     secretPresent: process.env.OPENAI_API_KEY !== undefined,
   };
-  const message = `${JSON.stringify({
+  return {
     id,
     result: {
       codexHome: process.env.CODEX_HOME,
@@ -39,7 +39,11 @@ function initializeResult(id, partial = false) {
       platformOs: process.platform,
       userAgent: JSON.stringify(observation),
     },
-  })}\n`;
+  };
+}
+
+function initializeResult(id, partial = false) {
+  const message = `${JSON.stringify(initializeResponse(id))}\n`;
   if (!partial) {
     sendRaw(message);
     return;
@@ -62,6 +66,15 @@ function respondToThreadStart(id) {
 function handleInitialize(message) {
   if (scenario === 'pre-initialization-notification') {
     send({ method: 'warning', params: { message: 'too early' } });
+    return;
+  }
+  if (scenario === 'batched-post-initialization-notification') {
+    sendRaw(
+      `${JSON.stringify(initializeResponse(message.id))}\n${JSON.stringify({
+        method: 'warning',
+        params: { message: 'batched after initialize response' },
+      })}\n`,
+    );
     return;
   }
   if (scenario === 'prototype-injection') {
@@ -297,6 +310,9 @@ lines.on('line', (line) => {
     return;
   }
   if (message.method === 'initialized') {
+    if (scenario === 'immediate-post-initialization-notification') {
+      send({ method: 'warning', params: { message: 'initialized acknowledgement observed' } });
+    }
     return;
   }
   if (message.method !== undefined) {

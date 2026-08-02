@@ -14,6 +14,9 @@ import {
   CanonicalJsonSha256DigestProvider,
   LocalCommandDiagnosticCode,
   LocalCommandTerminationKind,
+  decodeProtectedAssetReadLease,
+  protectedAssetReadLeaseProjection,
+  sha256Digest,
   type Sha256Digest,
   type VerificationIsolationPort,
   type VerificationIsolationRequest,
@@ -23,6 +26,7 @@ import { DarwinSeatbeltIsolationError, VerificationLocalFailureCode } from './er
 
 export const DARWIN_SEATBELT_PROFILE_ID = 'codeclosure.darwin-seatbelt.local-command';
 export const DARWIN_SEATBELT_PROFILE_VERSION = '1';
+export const DARWIN_SEATBELT_PROTECTED_PROFILE_VERSION = '2';
 const environmentLauncherPath = '/usr/bin/env';
 
 export interface DarwinSeatbeltIsolationOptions {
@@ -47,6 +51,25 @@ export function darwinSeatbeltProfileDigest(): Sha256Digest {
     networkAccess: 'DISABLED',
     processLaunch: 'EXACT_EXECUTABLE_ONLY',
     environmentLauncher: environmentLauncherPath,
+  });
+}
+
+export function darwinSeatbeltProtectedProfileDigest(): Sha256Digest {
+  return profileDigestProvider.digest({
+    schemaVersion: 1,
+    id: DARWIN_SEATBELT_PROFILE_ID,
+    version: DARWIN_SEATBELT_PROTECTED_PROFILE_VERSION,
+    default: 'DENY',
+    candidateAccess: 'READ_ONLY',
+    runRootAccess: 'READ_WRITE',
+    authorityAccess: 'NONE',
+    credentialAccess: 'NONE',
+    networkAccess: 'DISABLED',
+    processLaunch: 'EXACT_EXECUTABLE_ONLY',
+    environmentLauncher: environmentLauncherPath,
+    protectedAssetAccess: 'EXACT_READ_ONLY_LEASE',
+    protectedAssetReadLeaseSchemaVersion: 1,
+    protectedRootAccess: 'DENY_EXCEPT_EXACT_REGULAR_FILE_REALPATHS',
   });
 }
 
@@ -95,6 +118,37 @@ function seatbeltProfile(
   runRoot: string,
   forbiddenRoots: readonly string[],
 ): string {
+  const protectedAssets =
+    request.schemaVersion === 2 ? request.protectedAssetReadLease.assets : Object.freeze([]);
+  const protectedRoots = Object.freeze(
+    [
+      ...new Set(
+        protectedAssets.map(
+          ({ registeredProtectedRootIdentity }) => registeredProtectedRootIdentity,
+        ),
+      ),
+    ].sort(),
+  );
+  const ordinaryForbiddenRoots = forbiddenRoots.filter((root) => !protectedRoots.includes(root));
+  const protectedRootClauses = protectedRoots.flatMap((root) => {
+    const exactAssets = protectedAssets
+      .filter(({ registeredProtectedRootIdentity }) => registeredProtectedRootIdentity === root)
+      .map(({ executionPath }) => executionPath);
+    const onlyAsset = exactAssets[0];
+    if (onlyAsset === undefined) {
+      throw new TypeError('Protected root has no exact registered asset');
+    }
+    const allowedPredicate =
+      exactAssets.length === 1
+        ? `(literal ${seatbeltString(onlyAsset)})`
+        : `(require-any ${exactAssets
+            .map((path) => `(literal ${seatbeltString(path)})`)
+            .join(' ')})`;
+    return [
+      `(deny file-read* (require-all (subpath ${seatbeltString(root)}) (require-not ${allowedPredicate})))`,
+      ...exactAssets.map((path) => `(allow file-read* (literal ${seatbeltString(path)}))`),
+    ];
+  });
   const clauses = [
     '(version 1)',
     '(deny default)',
@@ -104,7 +158,8 @@ function seatbeltProfile(
     '(allow sysctl-read)',
     '(allow mach-lookup)',
     '(allow file-read*)',
-    ...forbiddenRoots.map((root) => `(deny file-read* (subpath ${seatbeltString(root)}))`),
+    ...ordinaryForbiddenRoots.map((root) => `(deny file-read* (subpath ${seatbeltString(root)}))`),
+    ...protectedRootClauses,
     `(allow file-write* (subpath ${seatbeltString(runRoot)}))`,
   ];
   return clauses.join('\n');
@@ -207,14 +262,37 @@ export function createDarwinSeatbeltIsolation(
   return Object.freeze({
     async run(rawRequest: VerificationIsolationRequest): Promise<unknown> {
       const request = rawRequest;
+      const expectedProfileDigest =
+        request.schemaVersion === 2
+          ? darwinSeatbeltProtectedProfileDigest()
+          : darwinSeatbeltProfileDigest();
       if (
         request.isolationProfileId !== DARWIN_SEATBELT_PROFILE_ID ||
-        request.isolationProfileDigest !== darwinSeatbeltProfileDigest()
+        request.isolationProfileDigest !== expectedProfileDigest
       ) {
         throw new DarwinSeatbeltIsolationError(
           VerificationLocalFailureCode.ISOLATION_PROFILE_MISMATCH,
           'Verification request does not bind the selected Seatbelt profile',
         );
+      }
+      if (request.schemaVersion === 2) {
+        const protectedLease = decodeProtectedAssetReadLease(request.protectedAssetReadLease);
+        if (
+          sha256Digest(
+            profileDigestProvider.digest(protectedAssetReadLeaseProjection(protectedLease)),
+          ) !== protectedLease.leaseDigest ||
+          protectedLease.isolationProfileId !== request.isolationProfileId ||
+          protectedLease.isolationProfileDigest !== request.isolationProfileDigest ||
+          protectedLease.assets.some(
+            ({ registeredProtectedRootIdentity }) =>
+              !request.forbiddenRoots.includes(registeredProtectedRootIdentity),
+          )
+        ) {
+          throw new DarwinSeatbeltIsolationError(
+            VerificationLocalFailureCode.ISOLATION_PROFILE_MISMATCH,
+            'Protected lease does not bind the selected Seatbelt profile and roots',
+          );
+        }
       }
       const candidateRoot = realpathSync(request.candidateRoot);
       const cwd = realpathSync(request.cwd);

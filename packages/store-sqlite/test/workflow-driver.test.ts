@@ -19,6 +19,7 @@ import {
   ExternalMaintenanceState,
   ExternalRetentionPolicy,
   ExternalThreadPolicy,
+  ExternalWorkerDispatchPolicy,
   GoalStatus,
   GuardOutcome,
   RecoveryReasonCode,
@@ -159,10 +160,12 @@ interface DriverHarness {
   };
 }
 
-type ExternalFixtureMode = 'NONE' | 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION';
+type ExternalFixtureMode =
+  'NONE' | 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION' | 'REPAIR_ONLY';
 
 class CountingWorker implements WorkerPort {
   readonly #delegate: FakeWorker;
+  readonly #requests: WorkerRequest[] = [];
   #runCount = 0;
 
   public constructor() {
@@ -173,11 +176,16 @@ class CountingWorker implements WorkerPort {
     return this.#runCount;
   }
 
+  public get requests(): readonly WorkerRequest[] {
+    return Object.freeze([...this.#requests]);
+  }
+
   public run(
     request: Parameters<WorkerPort['run']>[0],
     signal: AbortSignal,
   ): AsyncIterable<unknown> {
     this.#runCount += 1;
+    this.#requests.push(request);
     return this.#delegate.run(request, signal);
   }
 }
@@ -662,8 +670,7 @@ function externalProfileAuthority(
       externalBackendCapabilityRecordProjection(capabilityWithoutDigest),
     ),
   });
-  const externalExecution: ExternalExecutionProfileDefinition = Object.freeze({
-    schemaVersion: 1,
+  const externalExecutionBase = {
     backendKind: capability.backendKind,
     capabilityRecordDigest: capability.recordDigest,
     selectedCapabilities: Object.freeze(selectedCapabilities),
@@ -693,7 +700,15 @@ function externalProfileAuthority(
     retentionPolicy: ExternalRetentionPolicy.CONTROLLED,
     fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
     interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
-  });
+  };
+  const externalExecution: ExternalExecutionProfileDefinition =
+    mode === 'REPAIR_ONLY'
+      ? Object.freeze({
+          schemaVersion: 2,
+          ...externalExecutionBase,
+          workerDispatchPolicy: ExternalWorkerDispatchPolicy.ACCEPTANCE_REPAIR_ONLY,
+        })
+      : Object.freeze({ schemaVersion: 1, ...externalExecutionBase });
   const base = testExecutionProfileDefinition(namespace);
   return Object.freeze({
     capability,
@@ -1494,6 +1509,107 @@ void test('[I-004][I-008][M2-F10][M2-G14][M2-G15] repair uses a fresh external S
       (item) => item.sourceRefs.length > 0 && item.sourceRefs.length === item.sourceDigests.length,
     ),
     true,
+  );
+});
+
+void test('[I-004][I-008][M2-G14][M2-G15] repair-only dispatch keeps the initial Attempt local and admits exactly one externally audited repair', async (t) => {
+  const harness = createHarness(t, 'driver-external-repair-only', 'REPAIR_ONLY');
+  const localWorker = new CountingWorker();
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'REPAIR_ONLY');
+  const verification = new SequencedLocalCommandRunner([1, 0]);
+  const profile = Object.freeze({
+    ...externalRuntimeProfile(harness, externalWorker, verification),
+    worker: localWorker,
+  });
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('ResumeGoal is not exercised by the repair-only fixture');
+      },
+    }),
+  );
+
+  const first = await execution.startGoal(startRequest(harness));
+  assert.equal(first.drive?.stopReason, WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED);
+  assert.deepEqual(
+    localWorker.requests.map(({ contextPackage }) => contextPackage.phase),
+    [WorkflowPhase.DISCOVERY, WorkflowPhase.PLAN, WorkflowPhase.IMPLEMENT],
+  );
+  assert.equal(externalWorker.prepareCount, 0);
+  assert.equal(externalWorker.createCount, 0);
+  assert.equal(externalWorker.runCount, 0);
+  assert.equal(externalWorker.intents.length, 0);
+  assert.equal(
+    harness.store
+      .getGoalAuditAuthority(harness.goal.id)
+      ?.events.some(({ eventType }) => eventType.startsWith('EXTERNAL_')),
+    false,
+  );
+
+  const rejected = harness.store.getWorkflowDriverAuthority(harness.goal.id);
+  assert.ok(rejected?.acceptanceAuthority);
+  const rejection = rejected.acceptanceAuthority;
+  const repaired = await execution.repairGoal({
+    commandId: commandId('command_driver-external-repair-only-authorize'),
+    goalId: harness.goal.id,
+    expectedGoalRevision: harness.goal.revision,
+    expectedWorkflowVersion: rejected.workflow.version,
+    acceptanceDecisionId: rejection.decision.id,
+    acceptanceDecisionDigest: rejection.decision.decisionDigest,
+    inputManifestDigest: rejection.manifest.manifestDigest,
+    candidateDigest: rejection.manifest.candidateDigest,
+    reason: 'one profile-bound external repair handoff',
+  });
+  assert.equal(repaired.command.status, 'APPLIED');
+  assert.equal(
+    repaired.drive?.stopReason,
+    WorkflowDriveStopReason.CLOSED,
+    JSON.stringify(repaired),
+  );
+  assert.equal(localWorker.runCount, 3);
+  assert.equal(externalWorker.prepareCount, 1);
+  assert.equal(externalWorker.createCount, 1);
+  assert.equal(externalWorker.runCount, 1);
+  assert.equal(externalWorker.releaseCount, 1);
+  assert.equal(externalWorker.intents.length, 1);
+  assert.equal(externalWorker.requests.length, 1);
+  const repairRequest = externalWorker.requests[0];
+  assert.ok(repairRequest?.contextPackage.repairContext);
+  assert.equal(repairRequest.contextPackage.schemaVersion, 3);
+  assert.equal(externalWorker.intents[0]?.thread.kind, ExternalThreadPolicy.FRESH);
+
+  const application = createCodeClosureApplication({
+    store: harness.store,
+    clock: harness.clock,
+    creationIds: harness.ids,
+    digests,
+    projectPaths: Object.freeze({ parseNormalizedAbsolute: (path: string) => path }),
+    execution,
+  });
+  const audit = application.getGoalAudit(harness.goal.id);
+  assert.equal(audit.status, 'FOUND');
+  const externalEventTypes = audit.view.events
+    .map(({ eventType }) => eventType)
+    .filter((eventType) => eventType.startsWith('EXTERNAL_'));
+  assert.deepEqual(externalEventTypes, [
+    'EXTERNAL_EXECUTION_AUTHORIZED',
+    'EXTERNAL_EXECUTION_OBSERVED',
+    'EXTERNAL_EXECUTION_STATE_CHANGED',
+    'EXTERNAL_EXECUTION_OBSERVED',
+    'EXTERNAL_EXECUTION_STATE_CHANGED',
+    'EXTERNAL_EXECUTION_OBSERVED',
+    'EXTERNAL_EXECUTION_STATE_CHANGED',
+    'EXTERNAL_EXECUTION_OBSERVED',
+    'EXTERNAL_EXECUTION_STATE_CHANGED',
+  ]);
+
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assert.deepEqual(
+    reopened.getGoalAuditAuthority(harness.goal.id),
+    harness.store.getGoalAuditAuthority(harness.goal.id),
   );
 });
 

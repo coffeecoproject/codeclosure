@@ -22,6 +22,7 @@ import {
   type LocalCommandVerificationRequest,
 } from './local-command-verification-contracts.js';
 import type { Clock, DigestProvider, EvidencePayload } from './ports.js';
+import type { ProtectedAssetReadLeaseAuthorityPort } from './protected-verification.js';
 
 export const LocalCommandVerificationFailureCode = {
   PRE_RUN_SOURCE_OBSERVATION_FAILED: 'PRE_RUN_SOURCE_OBSERVATION_FAILED',
@@ -29,6 +30,8 @@ export const LocalCommandVerificationFailureCode = {
   CANDIDATE_SOURCE_DRIFT: 'CANDIDATE_SOURCE_DRIFT',
   RUNNER_INVOCATION_FAILED: 'RUNNER_INVOCATION_FAILED',
   RUNNER_OUTPUT_MALFORMED: 'RUNNER_OUTPUT_MALFORMED',
+  PROTECTED_ASSET_AUTHORITY_UNAVAILABLE: 'PROTECTED_ASSET_AUTHORITY_UNAVAILABLE',
+  PROTECTED_ASSET_DRIFT: 'PROTECTED_ASSET_DRIFT',
 } as const;
 export type LocalCommandVerificationFailureCode =
   (typeof LocalCommandVerificationFailureCode)[keyof typeof LocalCommandVerificationFailureCode];
@@ -38,6 +41,7 @@ export interface LocalCommandVerificationRuntimeDependencies {
   readonly runner: LocalCommandVerificationPort;
   readonly clock: Clock;
   readonly digests: DigestProvider;
+  readonly protectedAssets?: ProtectedAssetReadLeaseAuthorityPort;
 }
 
 export type LocalCommandVerificationExecution =
@@ -116,6 +120,22 @@ export async function executeLocalCommandVerification(
       beforeDigest,
     );
   }
+  if (request.schemaVersion === 3) {
+    if (dependencies.protectedAssets === undefined) {
+      return failure(
+        LocalCommandVerificationFailureCode.PROTECTED_ASSET_AUTHORITY_UNAVAILABLE,
+        expectedCandidateDigest,
+      );
+    }
+    try {
+      dependencies.protectedAssets.assertLeaseCurrent(request.protectedAssetReadLease);
+    } catch {
+      return failure(
+        LocalCommandVerificationFailureCode.PROTECTED_ASSET_DRIFT,
+        expectedCandidateDigest,
+      );
+    }
+  }
 
   const startedAt = dependencies.clock.now();
   let rawResult: unknown;
@@ -126,6 +146,17 @@ export async function executeLocalCommandVerification(
     invocationFailed = true;
   }
   const endedAt = dependencies.clock.now();
+
+  if (request.schemaVersion === 3) {
+    try {
+      dependencies.protectedAssets?.assertLeaseCurrent(request.protectedAssetReadLease);
+    } catch {
+      return failure(
+        LocalCommandVerificationFailureCode.PROTECTED_ASSET_DRIFT,
+        expectedCandidateDigest,
+      );
+    }
+  }
 
   let afterDigest: Sha256Digest;
   try {

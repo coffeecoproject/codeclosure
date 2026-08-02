@@ -19,11 +19,16 @@ import test, { type TestContext } from 'node:test';
 
 import {
   AcceptanceOutcome,
+  AttemptStatus,
   CandidateGenerationState,
   EvidenceKind,
   EvidenceResultStatus,
   GoalStatus,
   GuardOutcome,
+  RecoveryReasonCode,
+  RecoveryReconciliationDisposition,
+  RecoveryReconciliationPurpose,
+  RunStatus,
   WorkflowPhase,
   acceptanceDecisionId,
   commandId,
@@ -49,17 +54,22 @@ import {
   M1_ACCEPTANCE_RULES,
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
+  RecoveryContinuityBarrier,
   WorkflowDriveStopReason,
   createExecutionProfileInstaller,
   createM1AcceptanceCheckerIdentity,
   createPolicyInstaller,
   type Clock,
+  type LocalCommandVerificationPort,
+  type RecoveryCommandCapability,
   type VerificationPort,
   type WorkerPort,
 } from '@codeclosure/runtime';
 import {
   createCandidateLeasedWorker,
   createM2WorkflowDriver,
+  createProtectedM2WorkflowDriver,
+  createRecoveryCoordinator,
   type CandidateLeasedWorkerFactory,
   type RuntimeExecutionProfile,
 } from '@codeclosure/runtime/composition';
@@ -68,15 +78,30 @@ import {
   type AttemptContextCompilationRequest,
   type PhaseGuardEvaluator,
 } from '@codeclosure/runtime/testing/workflow-runtime';
-import { openSqliteControlStore, type SqliteControlStore } from '@codeclosure/store-sqlite';
-import { DeterministicIds, FakeWorker, FakeWorkerFixture } from '@codeclosure/testing';
+import {
+  CandidateEvidenceTransactionStep,
+  WorkerTransactionStep,
+  openSqliteControlStore,
+  type SqliteControlStore,
+} from '@codeclosure/store-sqlite';
+import {
+  DeterministicIds,
+  FakeRecoveryInspectionMode,
+  FakeRecoveryInspector,
+  FakeWorker,
+  FakeWorkerFixture,
+} from '@codeclosure/testing';
 import {
   DARWIN_SEATBELT_PROFILE_ID,
   LOCAL_COMMAND_RUNNER_IDENTITY,
   LOCAL_COMMAND_RUNNER_VERSION,
+  createProtectedAssetReadLeaseAuthority,
   createDarwinSeatbeltIsolation,
   createLocalCommandVerificationRunner,
   darwinSeatbeltProfileDigest,
+  darwinSeatbeltProtectedProfileDigest,
+  inspectProtectedVerificationAsset,
+  protectedVerificationAssetManifestDigest,
 } from '@codeclosure/verification-local';
 import { createLocalCandidateWorkspace } from '@codeclosure/workspace-local';
 
@@ -166,6 +191,22 @@ function executableDigest(path: string): ReturnType<typeof sha256Digest> {
   return sha256Digest(`sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`);
 }
 
+function localCommandObservation(exitCode: number): unknown {
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    kind: 'LOCAL_COMMAND_OBSERVATION_V1' as const,
+    terminationKind: 'EXITED' as const,
+    exitCode,
+    stdoutBytes: new Uint8Array(),
+    stdoutObservedByteCount: 0,
+    stdoutTruncated: false,
+    stderrBytes: new Uint8Array(),
+    stderrObservedByteCount: 0,
+    stderrTruncated: false,
+    diagnosticCode: 'NONE' as const,
+  });
+}
+
 function policyDefinition(namespace: string): PolicyBundleDefinition {
   return Object.freeze({
     id: policyBundleId(`policy_${namespace}`),
@@ -201,20 +242,31 @@ interface OrchestrationFixture {
   readonly clock: Clock;
   readonly filename: string;
   readonly generationRoots: ReadonlyMap<number, string>;
+  readonly getDispatchedRequests: () => readonly Parameters<WorkerPort['run']>[0][];
   readonly getBootstrapVerificationCalls: () => number;
+  readonly getLocalVerificationCalls: () => number;
   readonly goal: ReturnType<typeof createGoal>;
   readonly ids: DeterministicIds;
   readonly policy: PolicyBundle;
   readonly profile: ExecutionProfile;
   readonly runtimeProfile: RuntimeExecutionProfile;
   readonly sourceRoot: string;
+  readonly protectedRoot?: string;
   readonly store: SqliteControlStore;
   readonly workflow: ReturnType<typeof createWorkflow>;
 }
 
 function createFixture(
   t: TestContext,
-  options: { readonly requireOperationalIsolation?: boolean } = {},
+  options: {
+    readonly requireOperationalIsolation?: boolean;
+    readonly protectedVerification?: boolean;
+    readonly localCommandRunner?: LocalCommandVerificationPort;
+    readonly transactionProbe?: NonNullable<
+      Parameters<typeof openSqliteControlStore>[0]['transactionProbe']
+    >;
+    readonly workerBehavior?: 'REPAIR' | 'CORRECT' | 'FAILED_REPAIR';
+  } = {},
 ): OrchestrationFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'codeclosure-m2-orchestration-')));
   t.after(() => removeFixtureRoot(root));
@@ -222,15 +274,24 @@ function createFixture(
   const workspaceRoot = join(root, 'workspaces');
   const authorityRoot = join(root, 'authority');
   const credentialRoot = join(root, 'credentials');
+  const protectedRoot = join(root, 'protected-verification');
   const runRoot = join(root, 'verification-runs');
-  for (const path of [sourceRoot, authorityRoot, credentialRoot, runRoot]) {
+  for (const path of [sourceRoot, authorityRoot, credentialRoot, protectedRoot, runRoot]) {
     mkdirSync(path, { mode: 0o700 });
   }
   initializeSource(sourceRoot);
   writeFileSync(join(credentialRoot, 'token'), 'fixture-only-secret\n', { mode: 0o600 });
+  const protectedExpectedPath = join(protectedRoot, 'expected-result.txt');
+  writeFileSync(protectedExpectedPath, 'complete\n', { mode: 0o400 });
 
   const filename = join(authorityRoot, 'state.sqlite');
-  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const store = openSqliteControlStore({
+    filename,
+    now: () => createdAt,
+    ...(options.transactionProbe === undefined
+      ? {}
+      : { transactionProbe: options.transactionProbe }),
+  });
   t.after(() => store.close());
   const ids = new DeterministicIds('m2-orchestration');
   const clock = monotonicClock();
@@ -282,16 +343,26 @@ function createFixture(
   assert.equal(creation.status, 'APPLIED');
 
   const forbiddenRoots = Object.freeze(
-    [realpathSync(authorityRoot), realpathSync(credentialRoot), realpathSync(sourceRoot)].sort(),
+    [
+      realpathSync(authorityRoot),
+      realpathSync(credentialRoot),
+      realpathSync(sourceRoot),
+      ...(options.protectedVerification === true ? [realpathSync(protectedRoot)] : []),
+    ].sort(),
   );
   const workspace = createLocalCandidateWorkspace({
     authorityRoots: Object.freeze(
-      [realpathSync(authorityRoot), realpathSync(credentialRoot)].sort(),
+      [
+        realpathSync(authorityRoot),
+        realpathSync(credentialRoot),
+        ...(options.protectedVerification === true ? [realpathSync(protectedRoot)] : []),
+      ].sort(),
     ),
     ownerId: 'm2-orchestration-owner',
     workspaceRoot,
   });
   const generationRoots = new Map<number, string>();
+  const dispatchedRequests: Parameters<WorkerPort['run']>[0][] = [];
   const nonCandidateWorker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
   const implementationWorker: CandidateLeasedWorkerFactory = Object.freeze({
     create: ({ lease }: Parameters<CandidateLeasedWorkerFactory['create']>[0]) => {
@@ -302,10 +373,21 @@ function createFixture(
           request: Parameters<WorkerPort['run']>[0],
           signal: AbortSignal,
         ): AsyncIterable<unknown> {
+          dispatchedRequests.push(request);
           writeFileSync(
             join(lease.root, 'src', 'result.txt'),
-            lease.generationSequence === 1 ? 'incomplete\n' : 'complete\n',
+            options.workerBehavior === 'CORRECT'
+              ? 'complete\n'
+              : options.workerBehavior === 'FAILED_REPAIR' || lease.generationSequence === 1
+                ? 'incomplete\n'
+                : 'complete\n',
           );
+          if (options.protectedVerification === true) {
+            writeFileSync(
+              join(lease.root, 'src', 'worker-test.mjs'),
+              'process.exit(0); // Worker-writable supplementary test intentionally weakened\n',
+            );
+          }
           yield* delegate.run(request, signal);
         },
       });
@@ -327,45 +409,74 @@ function createFixture(
       throw new Error('M1 fake verification must not run in the M2 profile');
     },
   });
-  const executablePath = realpathSync('/usr/bin/grep');
+  const executablePath = realpathSync(
+    options.protectedVerification === true ? '/usr/bin/cmp' : '/usr/bin/grep',
+  );
+  const protectedAsset = inspectProtectedVerificationAsset({
+    logicalAssetId: 'm2.expected-result',
+    registeredProtectedRootIdentity: realpathSync(protectedRoot),
+    executionPath: realpathSync(protectedExpectedPath),
+  });
+  const semanticCheck = Object.freeze({
+    version: 'm2.local-command.1',
+    producerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
+    operation: 'local-command.execute',
+    runnerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
+    runnerVersion: LOCAL_COMMAND_RUNNER_VERSION,
+    executablePath,
+    executableDigest: executableDigest(executablePath),
+    declaredToolVersion: options.protectedVerification === true ? 'darwin-cmp' : 'darwin-grep',
+    argv: Object.freeze(
+      options.protectedVerification === true
+        ? ['-s', protectedAsset.executionPath, 'src/result.txt']
+        : ['^complete$', 'src/result.txt'],
+    ),
+    cwd: '.',
+    environmentVariables: Object.freeze([]),
+    isolationProfileId: DARWIN_SEATBELT_PROFILE_ID,
+    isolationProfileDigest:
+      options.protectedVerification === true
+        ? darwinSeatbeltProtectedProfileDigest()
+        : darwinSeatbeltProfileDigest(),
+    timeoutMilliseconds: 2_000,
+    terminationGraceMilliseconds: 100,
+    stdoutLimitBytes: 4_096,
+    stderrLimitBytes: 4_096,
+    totalOutputLimitBytes: 8_192,
+    payloadRetentionLimitBytes: 8_192,
+    acceptedExitCodes: Object.freeze([0]),
+  });
+  const protectedAssetAuthority = createProtectedAssetReadLeaseAuthority({
+    protectedRoots: Object.freeze([realpathSync(protectedRoot)]),
+  });
+  const configuredLocalCommandRunner =
+    options.localCommandRunner ??
+    (options.requireOperationalIsolation === false
+      ? Object.freeze({
+          run: () => Promise.reject(new Error('Profile-only fixture runner must not execute')),
+        })
+      : createLocalCommandVerificationRunner({
+          workspaceLeases: workspace,
+          ...(options.protectedVerification === true
+            ? { protectedAssets: protectedAssetAuthority }
+            : {}),
+          isolation: createDarwinSeatbeltIsolation({
+            runRootBase: runRoot,
+            credentialRoots: [credentialRoot],
+          }),
+        }));
+  let localVerificationCalls = 0;
   const localCommandVerification = Object.freeze({
     workspace,
-    runner:
-      options.requireOperationalIsolation === false
-        ? Object.freeze({
-            run: () => Promise.reject(new Error('Profile-only fixture runner must not execute')),
-          })
-        : createLocalCommandVerificationRunner({
-            workspaceLeases: workspace,
-            isolation: createDarwinSeatbeltIsolation({
-              runRootBase: runRoot,
-              credentialRoots: [credentialRoot],
-            }),
-          }),
+    runner: Object.freeze({
+      run: (request: Parameters<LocalCommandVerificationPort['run']>[0]) => {
+        localVerificationCalls += 1;
+        return configuredLocalCommandRunner.run(request);
+      },
+    }),
     profile: Object.freeze({
       forbiddenRoots,
-      check: Object.freeze({
-        version: 'm2.local-command.1',
-        producerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
-        operation: 'local-command.execute',
-        runnerIdentity: LOCAL_COMMAND_RUNNER_IDENTITY,
-        runnerVersion: LOCAL_COMMAND_RUNNER_VERSION,
-        executablePath,
-        executableDigest: executableDigest(executablePath),
-        declaredToolVersion: 'darwin-grep',
-        argv: Object.freeze(['^complete$', 'src/result.txt']),
-        cwd: '.',
-        environmentVariables: Object.freeze([]),
-        isolationProfileId: DARWIN_SEATBELT_PROFILE_ID,
-        isolationProfileDigest: darwinSeatbeltProfileDigest(),
-        timeoutMilliseconds: 2_000,
-        terminationGraceMilliseconds: 100,
-        stdoutLimitBytes: 4_096,
-        stderrLimitBytes: 4_096,
-        totalOutputLimitBytes: 8_192,
-        payloadRetentionLimitBytes: 8_192,
-        acceptedExitCodes: Object.freeze([0]),
-      }),
+      check: semanticCheck,
     }),
   });
   const runtimeProfile: RuntimeExecutionProfile = Object.freeze({
@@ -377,19 +488,71 @@ function createFixture(
     candidateSource: workspace,
     verification: bootstrapVerification,
     localCommandVerification,
+    ...(options.protectedVerification === true
+      ? {
+          protectedVerification: Object.freeze({
+            identities: ids,
+            proposal: Object.freeze({
+              acceptanceCriticalCriterionIds: Object.freeze(
+                goal.successCriteria
+                  .filter(({ required }) => required)
+                  .map(({ id }) => id)
+                  .sort(),
+              ),
+              acceptanceRuleIds: Object.freeze(
+                [...policyInstall.value.bundle.acceptanceRules].sort(),
+              ),
+              semanticCheckTemplate: Object.freeze({
+                schemaVersion: 1 as const,
+                checkVersion: semanticCheck.version,
+                producerIdentity: semanticCheck.producerIdentity,
+                operation: semanticCheck.operation,
+                runnerIdentity: semanticCheck.runnerIdentity,
+                runnerVersion: semanticCheck.runnerVersion,
+                executablePath: semanticCheck.executablePath,
+                executableDigest: semanticCheck.executableDigest,
+                declaredToolVersion: semanticCheck.declaredToolVersion,
+                argv: semanticCheck.argv,
+                cwd: semanticCheck.cwd,
+                environmentVariables: semanticCheck.environmentVariables,
+                isolationProfileId: semanticCheck.isolationProfileId,
+                isolationProfileDigest: semanticCheck.isolationProfileDigest,
+                timeoutMilliseconds: semanticCheck.timeoutMilliseconds,
+                terminationGraceMilliseconds: semanticCheck.terminationGraceMilliseconds,
+                stdoutLimitBytes: semanticCheck.stdoutLimitBytes,
+                stderrLimitBytes: semanticCheck.stderrLimitBytes,
+                totalOutputLimitBytes: semanticCheck.totalOutputLimitBytes,
+                payloadRetentionLimitBytes: semanticCheck.payloadRetentionLimitBytes,
+                acceptedExitCodes: semanticCheck.acceptedExitCodes,
+              }),
+              protectedAssets: Object.freeze([protectedAsset]),
+              protectedAssetManifestDigest: protectedVerificationAssetManifestDigest([
+                protectedAsset,
+              ]),
+              protectedAssetReadLeasePolicy: 'EXACT_READ_ONLY_SINGLE_INVOCATION' as const,
+              derivationRule: 'BOUNDED_M2_ONE_PROTECTED_LOCAL_COMMAND_FAMILY_V1' as const,
+              authoritySource: 'TRUSTED_RUNTIME_COMPOSITION' as const,
+            }),
+            assets: protectedAssetAuthority,
+          }),
+        }
+      : {}),
   });
   return Object.freeze({
     authorityRoot,
     clock,
     filename,
     generationRoots,
+    getDispatchedRequests: () => Object.freeze([...dispatchedRequests]),
     getBootstrapVerificationCalls: () => bootstrapVerificationCalls,
+    getLocalVerificationCalls: () => localVerificationCalls,
     goal,
     ids,
     policy: policyInstall.value.bundle,
     profile: profileInstall.value.profile,
     runtimeProfile,
     sourceRoot,
+    ...(options.protectedVerification === true ? { protectedRoot } : {}),
     store,
     workflow,
   });
@@ -401,6 +564,7 @@ function orchestrationDriver(
   options: {
     readonly maxOperations?: number;
     readonly onRecoveryResume?: () => void;
+    readonly recovery?: RecoveryCommandCapability;
     readonly resolvedProfile?: RuntimeExecutionProfile;
   } = {},
 ) {
@@ -410,7 +574,7 @@ function orchestrationDriver(
     canonicalizer: new Rfc8785Canonicalizer(),
     digests,
   });
-  return createM2WorkflowDriver({
+  const dependencies = {
     store: fixture.store,
     clock: fixture.clock,
     ids: fixture.ids,
@@ -421,12 +585,14 @@ function orchestrationDriver(
     policyBundleId: fixture.policy.id,
     policyBundleDigest: fixture.policy.digest,
     phaseGuards: genericGuards,
-    recovery: Object.freeze({
-      resumeGoal: () => {
-        options.onRecoveryResume?.();
-        throw new Error('The in-process Slice 5 fixture does not use restart recovery');
-      },
-    }),
+    recovery:
+      options.recovery ??
+      Object.freeze({
+        resumeGoal: () => {
+          options.onRecoveryResume?.();
+          throw new Error('The in-process Slice 5 fixture does not use restart recovery');
+        },
+      }),
     startProfile,
     ...(options.maxOperations === undefined ? {} : { maxOperations: options.maxOperations }),
     profiles: Object.freeze({
@@ -436,7 +602,10 @@ function orchestrationDriver(
         return options.resolvedProfile ?? startProfile;
       },
     }),
-  });
+  };
+  return startProfile.protectedVerification === undefined
+    ? createM2WorkflowDriver(dependencies)
+    : createProtectedM2WorkflowDriver(dependencies);
 }
 
 function withoutLocalCommandVerification(
@@ -469,7 +638,7 @@ void test('[I-001][I-005][I-008][M2-F01][M2-F02][M2-F03] real Candidate and veri
     expectedGoalRevision: fixture.goal.revision,
     expectedWorkflowVersion: fixture.workflow.version,
   });
-  assert.equal(first.command.status, 'APPLIED');
+  assert.equal(first.command.status, 'APPLIED', JSON.stringify(first));
   assert.equal(
     first.drive?.stopReason,
     WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED,
@@ -512,7 +681,11 @@ void test('[I-001][I-005][I-008][M2-F01][M2-F02][M2-F03] real Candidate and veri
     reason: 'repair only in a child Candidate generation',
   });
   assert.equal(repaired.command.status, 'APPLIED');
-  assert.equal(repaired.drive?.stopReason, WorkflowDriveStopReason.CLOSED);
+  assert.equal(
+    repaired.drive?.stopReason,
+    WorkflowDriveStopReason.CLOSED,
+    JSON.stringify(repaired),
+  );
 
   const finalAuthority = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
   assert.ok(finalAuthority?.candidateAuthority);
@@ -594,6 +767,392 @@ void test('[I-001][I-005][I-008][M2-F01][M2-F02][M2-F03] real Candidate and veri
   t.after(() => reopened.close());
   assert.deepEqual(reopened.getWorkflowDriverAuthority(fixture.goal.id), finalAuthority);
 });
+
+void test('[I-004][I-008][M2-E10][M2-E11][M2-E12][M2-E13][M2-E15][M2-F09] protected Oracle defeats Worker self-certification and the same Plan accepts the repair', async (t) => {
+  const fixture = createFixture(t, { protectedVerification: true });
+  const driver = orchestrationDriver(fixture);
+  const startCommandId = commandId('command_m2-protected-self-certification-start');
+  assert.equal(fixture.store.getAcceptanceCriticalVerificationPlan(fixture.workflow.id), undefined);
+
+  const first = await driver.startGoal({
+    commandId: startCommandId,
+    goalId: fixture.goal.id,
+    expectedGoalRevision: fixture.goal.revision,
+    expectedWorkflowVersion: fixture.workflow.version,
+  });
+  assert.equal(first.command.status, 'APPLIED', JSON.stringify(first));
+  assert.equal(
+    first.drive?.stopReason,
+    WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED,
+    JSON.stringify(first),
+  );
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+
+  const rejected = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(rejected?.acceptanceAuthority);
+  assert.ok(rejected.candidateAuthority);
+  assert.equal(rejected.acceptanceAuthority.decision.outcome, AcceptanceOutcome.REJECT_REPAIRABLE);
+  assert.equal(rejected.closeout, undefined);
+  const plan = fixture.store.getAcceptanceCriticalVerificationPlan(fixture.workflow.id);
+  assert.ok(plan);
+  assert.equal(rejected.acceptanceCriticalVerificationPlan?.planDigest, plan.planDigest);
+  const planAudits = fixture.store.listAuditEvents(
+    'ACCEPTANCE_CRITICAL_VERIFICATION_PLAN',
+    plan.id,
+  );
+  assert.equal(planAudits.length, 1);
+  const planAudit = planAudits[0];
+  assert.ok(planAudit);
+  assert.equal(planAudit.eventType, 'ACCEPTANCE_CRITICAL_VERIFICATION_PLAN_CREATED');
+  assert.equal(planAudit.commandId, startCommandId);
+
+  const generationOneRoot = fixture.generationRoots.get(1);
+  assert.ok(generationOneRoot);
+  execFileSync(process.execPath, [join(generationOneRoot, 'src', 'worker-test.mjs')], {
+    cwd: generationOneRoot,
+    stdio: 'ignore',
+  });
+  const firstEvidence = fixture.store
+    .listEvidenceForGeneration(rejected.candidateAuthority.generation.id)
+    .find(({ record }) => record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT);
+  assert.ok(firstEvidence);
+  assert.equal(firstEvidence.record.schemaVersion, 3);
+  assert.equal(firstEvidence.record.resultStatus, EvidenceResultStatus.FAIL);
+  assert.equal(firstEvidence.record.acceptanceCriticalVerificationPlanId, plan.id);
+  assert.equal(firstEvidence.record.acceptanceCriticalVerificationPlanDigest, plan.planDigest);
+  assert.equal(rejected.acceptanceAuthority.manifest.schemaVersion, 2);
+  assert.equal(
+    rejected.acceptanceAuthority.manifest.acceptanceCriticalVerificationPlanDigest,
+    plan.planDigest,
+  );
+
+  for (const request of fixture.getDispatchedRequests()) {
+    const manifest = fixture.store.getContextManifest(request.contextManifestId);
+    assert.ok(manifest);
+    assert.equal(request.contextPackage.schemaVersion, 4);
+    assert.equal(manifest.schemaVersion, 4);
+    assert.equal(request.contextPackage.acceptanceCriticalVerificationPlanId, plan.id);
+    assert.equal(request.contextPackage.acceptanceCriticalVerificationPlanDigest, plan.planDigest);
+    assert.equal(manifest.acceptanceCriticalVerificationPlanId, plan.id);
+    assert.equal(manifest.acceptanceCriticalVerificationPlanDigest, plan.planDigest);
+    const claim = fixture.store.getWorkerDispatchClaim(request.attemptId);
+    assert.ok(claim);
+    assert.equal(claim.contextManifestId, request.contextManifestId);
+    assert.equal(claim.contextManifestDigest, request.contextManifestDigest);
+  }
+
+  const rejection = rejected.acceptanceAuthority;
+  const repairRequest = Object.freeze({
+    commandId: commandId('command_m2-protected-self-certification-repair'),
+    goalId: fixture.goal.id,
+    expectedGoalRevision: fixture.goal.revision,
+    expectedWorkflowVersion: rejected.workflow.version,
+    acceptanceDecisionId: rejection.decision.id,
+    acceptanceDecisionDigest: rejection.decision.decisionDigest,
+    inputManifestDigest: rejection.manifest.manifestDigest,
+    candidateDigest: rejection.manifest.candidateDigest,
+    reason: 'repair the implementation without replacing the protected Oracle',
+  });
+  const repaired = await driver.repairGoal(repairRequest);
+  assert.equal(repaired.command.status, 'APPLIED');
+  assert.equal(
+    repaired.drive?.stopReason,
+    WorkflowDriveStopReason.CLOSED,
+    JSON.stringify(repaired),
+  );
+  assert.equal(fixture.getLocalVerificationCalls(), 2);
+
+  const accepted = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(accepted?.acceptanceAuthority);
+  assert.ok(accepted.candidateAuthority);
+  assert.ok(accepted.closeout);
+  assert.equal(accepted.acceptanceAuthority.decision.outcome, AcceptanceOutcome.ACCEPT);
+  assert.deepEqual(fixture.store.getAcceptanceCriticalVerificationPlan(fixture.workflow.id), plan);
+  const secondEvidence = fixture.store
+    .listEvidenceForGeneration(accepted.candidateAuthority.generation.id)
+    .find(({ record }) => record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT);
+  assert.ok(secondEvidence);
+  assert.equal(secondEvidence.record.schemaVersion, 3);
+  assert.equal(secondEvidence.record.resultStatus, EvidenceResultStatus.PASS);
+  assert.equal(secondEvidence.record.acceptanceCriticalVerificationPlanId, plan.id);
+  assert.equal(secondEvidence.record.acceptanceCriticalVerificationPlanDigest, plan.planDigest);
+  assert.notEqual(secondEvidence.record.checkSpec.id, firstEvidence.record.checkSpec.id);
+
+  const replayedRepair = await driver.repairGoal(repairRequest);
+  assert.equal(replayedRepair.command.status, 'REPLAYED');
+  assert.ok(replayedRepair.drive);
+  assert.equal(replayedRepair.drive.operationCount, 0);
+  assert.equal(replayedRepair.drive.stopReason, WorkflowDriveStopReason.CLOSED);
+  assert.equal(fixture.getLocalVerificationCalls(), 2);
+  assert.deepEqual(fixture.store.getWorkflowDriverAuthority(fixture.goal.id), accepted);
+
+  fixture.store.close();
+  const reopened = openSqliteControlStore({ filename: fixture.filename });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.getWorkflowDriverAuthority(fixture.goal.id), accepted);
+  assert.deepEqual(reopened.getAcceptanceCriticalVerificationPlan(fixture.workflow.id), plan);
+});
+
+void test('[I-008][M2-E11] protected verification session admits one Runner invocation across concurrent and exact command replay', async (t) => {
+  let releaseRunner: (() => void) | undefined;
+  const runnerReleased = new Promise<void>((resolve) => {
+    releaseRunner = resolve;
+  });
+  let markRunnerStarted: (() => void) | undefined;
+  const runnerStarted = new Promise<void>((resolve) => {
+    markRunnerStarted = resolve;
+  });
+  const fixture = createFixture(t, {
+    protectedVerification: true,
+    localCommandRunner: Object.freeze({
+      run: async () => {
+        markRunnerStarted?.();
+        await runnerReleased;
+        return localCommandObservation(1);
+      },
+    }),
+  });
+  const driver = orchestrationDriver(fixture);
+  const startRequest = Object.freeze({
+    commandId: commandId('command_m2-protected-single-consumer-start'),
+    goalId: fixture.goal.id,
+    expectedGoalRevision: fixture.goal.revision,
+    expectedWorkflowVersion: fixture.workflow.version,
+  });
+
+  const firstRun = driver.startGoal(startRequest);
+  await runnerStarted;
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+
+  const concurrentReplay = await driver.startGoal(startRequest);
+  const current = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(current);
+  const distinctStart = await driver.startGoal({
+    ...startRequest,
+    commandId: commandId('command_m2-protected-single-consumer-distinct-start'),
+    expectedWorkflowVersion: current.workflow.version,
+  });
+  releaseRunner?.();
+
+  const completed = await firstRun;
+  assert.equal(completed.command.status, 'APPLIED');
+  assert.equal(completed.drive?.stopReason, WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED);
+  assert.equal(concurrentReplay.command.status, 'REPLAYED');
+  assert.equal(concurrentReplay.drive?.stopReason, WorkflowDriveStopReason.ACTIVE_ATTEMPT);
+  assert.equal(distinctStart.command.status, 'REJECTED');
+  assert.equal(distinctStart.drive, undefined);
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+
+  const completedReplay = await driver.startGoal(startRequest);
+  assert.equal(completedReplay.command.status, 'REPLAYED');
+  assert.ok(completedReplay.drive);
+  assert.equal(completedReplay.drive.operationCount, 0);
+  assert.equal(
+    completedReplay.drive.stopReason,
+    WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED,
+  );
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+  const authority = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(authority?.candidateAuthority);
+  assert.equal(
+    fixture.store
+      .listEvidenceForGeneration(authority.candidateAuthority.generation.id)
+      .filter(({ record }) => record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT).length,
+    1,
+  );
+});
+
+void test('[I-007][I-008][M2-E11] protected verification session remains consumed when Evidence admission rolls back', async (t) => {
+  let failEvidenceCommit = false;
+  const fixture = createFixture(t, {
+    protectedVerification: true,
+    localCommandRunner: Object.freeze({
+      run: () => {
+        failEvidenceCommit = true;
+        return Promise.resolve(localCommandObservation(1));
+      },
+    }),
+    transactionProbe: (step) => {
+      if (failEvidenceCommit && step === CandidateEvidenceTransactionStep.AFTER_EVIDENCE_WRITE) {
+        throw new Error('fault:protected-session-evidence-admission');
+      }
+    },
+  });
+  const driver = orchestrationDriver(fixture);
+  const startRequest = Object.freeze({
+    commandId: commandId('command_m2-protected-consumed-after-rollback-start'),
+    goalId: fixture.goal.id,
+    expectedGoalRevision: fixture.goal.revision,
+    expectedWorkflowVersion: fixture.workflow.version,
+  });
+
+  const first = await driver.startGoal(startRequest);
+  assert.equal(first.command.status, 'APPLIED');
+  assert.equal(first.drive?.stopReason, WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED);
+  assert.equal(first.drive.detailCode, 'COMMAND_COMMIT_FAILURE');
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+  const authorityAfterFailure = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(authorityAfterFailure?.candidateAuthority);
+  assert.ok(authorityAfterFailure.latestPhaseAttempt);
+  assert.equal(authorityAfterFailure.latestPhaseAttempt.status, 'RUNNING');
+  assert.equal(
+    fixture.store
+      .listEvidenceForGeneration(authorityAfterFailure.candidateAuthority.generation.id)
+      .filter(({ record }) => record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT).length,
+    0,
+  );
+
+  failEvidenceCommit = false;
+  const replay = await driver.startGoal(startRequest);
+  assert.equal(replay.command.status, 'REPLAYED');
+  assert.ok(replay.drive);
+  assert.equal(replay.drive.operationCount, 0);
+  assert.equal(replay.drive.stopReason, WorkflowDriveStopReason.ACTIVE_ATTEMPT);
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+  assert.deepEqual(
+    fixture.store.getWorkflowDriverAuthority(fixture.goal.id),
+    authorityAfterFailure,
+  );
+
+  fixture.store.close();
+  const reopened = openSqliteControlStore({ filename: fixture.filename });
+  t.after(() => reopened.close());
+  const startupCatalog = reopened.getRecoveryCatalogForGoal(fixture.goal.id);
+  assert.ok(startupCatalog);
+  assert.equal(
+    startupCatalog.continuityBarrier,
+    RecoveryContinuityBarrier.LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE,
+  );
+
+  const recoveryIds = new DeterministicIds('m2-protected-consumed-recovery');
+  const inspector = new FakeRecoveryInspector([
+    FakeRecoveryInspectionMode.EXACT,
+    FakeRecoveryInspectionMode.EXACT,
+  ]);
+  const recovery = createRecoveryCoordinator({
+    store: reopened,
+    clock: fixture.clock,
+    ids: recoveryIds,
+    digests,
+    policyBundleId: fixture.policy.id,
+    policyBundleDigest: fixture.policy.digest,
+    inspector,
+    inspectorVersion: 'm2-protected-consumed-recovery-inspector-v1',
+    recoveryPolicyVersion: 'm2-local-verification-fail-closed-v1',
+  });
+  const startup = recovery.recoverOnStartup();
+  assert.equal(startup.scannedCount, 1);
+  assert.equal(startup.reconciledCount, 1);
+  const startupRecoveryId = startup.recoveryIds[0];
+  assert.ok(startupRecoveryId);
+  const startupRecord = reopened.getRecoveryReconciliation(startupRecoveryId);
+  assert.ok(startupRecord);
+  assert.equal(startupRecord.purpose, RecoveryReconciliationPurpose.STARTUP);
+  assert.equal(startupRecord.disposition, RecoveryReconciliationDisposition.BLOCKED);
+  assert.equal(
+    startupRecord.reasonCode,
+    RecoveryReasonCode.LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE,
+  );
+  assert.equal(
+    reopened.getAttempt(authorityAfterFailure.latestPhaseAttempt.id)?.status,
+    AttemptStatus.INTERRUPTED,
+  );
+  const startupBlocked = reopened.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(startupBlocked);
+  assert.equal(startupBlocked.workflow.runStatus, RunStatus.BLOCKED);
+  assert.equal(startupBlocked.activeAttempt, undefined);
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+
+  const restartedFixture: OrchestrationFixture = Object.freeze({
+    ...fixture,
+    ids: new DeterministicIds('m2-protected-consumed-restarted-driver'),
+    store: reopened,
+  });
+  const restartedDriver = orchestrationDriver(restartedFixture, fixture.runtimeProfile, {
+    recovery,
+  });
+  const resumed = await restartedDriver.resumeGoal({
+    commandId: commandId('command_m2-protected-consumed-resume'),
+    goalId: fixture.goal.id,
+    expectedGoalRevision: fixture.goal.revision,
+    expectedWorkflowVersion: startupBlocked.workflow.version,
+  });
+  assert.equal(resumed.command.status, 'APPLIED');
+  assert.equal(resumed.drive?.stopReason, WorkflowDriveStopReason.BLOCKED);
+  const resumeRecord = reopened.getLatestRecoveryReconciliation(fixture.workflow.id);
+  assert.ok(resumeRecord);
+  assert.equal(resumeRecord.purpose, RecoveryReconciliationPurpose.RESUME);
+  assert.equal(resumeRecord.disposition, RecoveryReconciliationDisposition.BLOCKED);
+  assert.equal(
+    resumeRecord.reasonCode,
+    RecoveryReasonCode.LOCAL_COMMAND_VERIFICATION_SESSION_UNAVAILABLE,
+  );
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+  assert.equal(
+    reopened
+      .listEvidenceForGeneration(authorityAfterFailure.candidateAuthority.generation.id)
+      .filter(({ record }) => record.kind === EvidenceKind.LOCAL_COMMAND_TEST_RESULT).length,
+    0,
+  );
+
+  const resumedBlocked = reopened.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(resumedBlocked);
+  assert.equal(resumedBlocked.workflow.runStatus, RunStatus.BLOCKED);
+  const cancelled = restartedDriver.cancelGoal({
+    commandId: commandId('command_m2-protected-consumed-cancel'),
+    goalId: fixture.goal.id,
+    expectedGoalRevision: fixture.goal.revision,
+    expectedWorkflowVersion: resumedBlocked.workflow.version,
+    reason: 'cancel the non-replayable local verification boundary',
+  });
+  assert.equal(cancelled.status, 'APPLIED');
+  assert.equal(cancelled.output.runStatus, RunStatus.CANCELLED);
+  assert.equal(fixture.getLocalVerificationCalls(), 1);
+  const cancelledAuthority = reopened.getWorkflowDriverAuthority(fixture.goal.id);
+  assert.ok(cancelledAuthority);
+  assert.equal(cancelledAuthority.workflow.runStatus, RunStatus.CANCELLED);
+
+  reopened.close();
+  const finalReopen = openSqliteControlStore({ filename: fixture.filename });
+  t.after(() => finalReopen.close());
+  assert.deepEqual(finalReopen.getWorkflowDriverAuthority(fixture.goal.id), cancelledAuthority);
+  assert.deepEqual(finalReopen.getLatestRecoveryReconciliation(fixture.workflow.id), resumeRecord);
+});
+
+for (const failureStep of [
+  WorkerTransactionStep.AFTER_PROTECTED_VERIFICATION_PLAN_AUDIT_WRITE,
+  WorkerTransactionStep.AFTER_PROTECTED_VERIFICATION_PLAN_WRITE,
+] as const) {
+  void test(`[I-007][M2-E10] protected first Start rolls back atomically at ${failureStep}`, async (t) => {
+    const fixture = createFixture(t, {
+      protectedVerification: true,
+      requireOperationalIsolation: false,
+      transactionProbe: (step) => {
+        if (step === failureStep) {
+          throw new Error(`fault:${failureStep}`);
+        }
+      },
+    });
+    const before = fixture.store.getWorkflowDriverAuthority(fixture.goal.id);
+    const result = await orchestrationDriver(fixture).startGoal({
+      commandId: commandId(
+        `command_m2-protected-${failureStep.toLowerCase().replaceAll('_', '-')}`,
+      ),
+      goalId: fixture.goal.id,
+      expectedGoalRevision: fixture.goal.revision,
+      expectedWorkflowVersion: fixture.workflow.version,
+    });
+
+    assert.equal(result.command.status, 'REJECTED');
+    assert.equal(result.command.output.ok, false);
+    assert.equal(result.command.output.error.detailCode, 'COMMAND_COMMIT_FAILURE');
+    assert.deepEqual(fixture.store.getWorkflowDriverAuthority(fixture.goal.id), before);
+    assert.equal(
+      fixture.store.getAcceptanceCriticalVerificationPlan(fixture.workflow.id),
+      undefined,
+    );
+  });
+}
 
 void test('[I-004][I-008][M2-F01] StartGoal rejects a local runner outside the installed Execution Profile before mutation', async (t) => {
   const fixture = createFixture(t, { requireOperationalIsolation: false });

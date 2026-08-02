@@ -2,6 +2,7 @@ import {
   CandidateGenerationState,
   CheckSpecificationKind,
   EvidenceEligibilityState,
+  EvidenceKind,
   EvidenceResultStatus,
   PendingIssueRepairability,
   PendingIssueSeverity,
@@ -19,6 +20,7 @@ import {
   pendingIssueSetProjection,
   sha256Digest,
   type AcceptanceInputManifest,
+  type AcceptanceCriticalVerificationPlan,
   type CandidateGeneration,
   type CheckSpecification,
   type EvidenceEligibility,
@@ -38,6 +40,10 @@ import {
 import { validateAcceptanceCandidateEvidencePolicy } from './candidate-evidence-policy.js';
 import { verifyEvidenceSetAuthority } from './evidence-factory.js';
 import type { DigestProvider } from './ports.js';
+import {
+  assertProtectedLocalCommandCheckMatchesPlan,
+  createProtectedAssetReadLease,
+} from './protected-verification.js';
 
 export const M1AcceptanceRuleId = {
   WORKFLOW_FINAL_VERIFY: 'm1.workflow-final-verify.v1',
@@ -84,6 +90,7 @@ export interface M1AcceptanceAuthority {
   readonly retainedFactCount: number;
   readonly retainedDecisionCount: number;
   readonly policyBundle: PolicyBundle;
+  readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
 }
 
 export interface CompiledM1AcceptanceInput {
@@ -213,6 +220,9 @@ export function compileM1AcceptanceInput(
       issue.createdAt,
       ...(issue.resolvedAt === undefined ? [] : [issue.resolvedAt]),
     ]),
+    ...(authority.acceptanceCriticalVerificationPlan === undefined
+      ? []
+      : [authority.acceptanceCriticalVerificationPlan.createdAt]),
   ];
   if (causalFloors.some((floor) => createdAt < floor)) {
     throw new TypeError('Acceptance Input Manifest cannot predate its retained authority');
@@ -254,6 +264,66 @@ export function compileM1AcceptanceInput(
     authority.currentEvidence,
     digests,
   );
+  const protectedPlan = authority.acceptanceCriticalVerificationPlan;
+  if (protectedPlan !== undefined) {
+    const requiredCriteria = authority.goal.successCriteria
+      .filter(({ required }) => required)
+      .map(({ id }) => id)
+      .sort();
+    const acceptanceRules = [...authority.policyBundle.acceptanceRules].sort();
+    const protectedCheck = candidatePolicy.verification;
+    if (
+      protectedPlan.goalId !== authority.goal.id ||
+      protectedPlan.goalRevision !== authority.goal.revision ||
+      protectedPlan.workflowId !== authority.workflow.id ||
+      protectedPlan.workflowVersionAtLock > authority.workflow.version ||
+      protectedPlan.policyBundleId !== authority.policyBundle.id ||
+      protectedPlan.policyBundleDigest !== authority.policyBundle.digest ||
+      !exactValues(protectedPlan.acceptanceCriticalCriterionIds, requiredCriteria) ||
+      !exactValues(protectedPlan.acceptanceRuleIds, acceptanceRules) ||
+      protectedCheck.kind !== CheckSpecificationKind.LOCAL_COMMAND ||
+      protectedCheck.schemaVersion !== 3
+    ) {
+      throw new TypeError('Protected Acceptance authority does not bind its immutable Plan');
+    }
+    const staticLease = createProtectedAssetReadLease(
+      {
+        plan: protectedPlan,
+        goal: authority.goal,
+        workflow: authority.workflow,
+        generation: authority.generation,
+        checkSpecificationId: protectedCheck.id,
+        checkSpecificationVersion: protectedCheck.version,
+      },
+      digests,
+    );
+    assertProtectedLocalCommandCheckMatchesPlan(
+      protectedCheck,
+      protectedPlan,
+      staticLease,
+      digests,
+    );
+    const evidenceById = new Map(
+      authority.currentEvidence.map(({ record }) => [record.id, record] as const),
+    );
+    for (const reference of evidenceSet.evidenceRefs) {
+      const record = evidenceById.get(reference.evidenceId);
+      if (
+        record?.kind !== EvidenceKind.LOCAL_COMMAND_TEST_RESULT ||
+        record.schemaVersion !== 3 ||
+        record.checkSpec.id !== protectedCheck.id ||
+        record.checkSpec.version !== protectedCheck.version ||
+        record.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+        record.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+        record.protectedAssetManifestDigest !== protectedPlan.protectedAssetManifestDigest ||
+        record.protectedAssetReadLeaseDigest !== staticLease.leaseDigest
+      ) {
+        throw new TypeError(
+          'Protected Acceptance Evidence Set contains a non-decisive Check family',
+        );
+      }
+    }
+  }
   const normalizedAuthority = Object.freeze({
     ...authority,
     freezeCheck: candidatePolicy.freeze,
@@ -286,8 +356,7 @@ export function compileM1AcceptanceInput(
       ),
     ),
   );
-  const manifestBase = Object.freeze({
-    schemaVersion: 1 as const,
+  const manifestCommon = Object.freeze({
     goalId: normalizedAuthority.goal.id,
     goalRevision: normalizedAuthority.goal.revision,
     workflowId: normalizedAuthority.workflow.id,
@@ -304,6 +373,15 @@ export function compileM1AcceptanceInput(
     policyBundleDigest: normalizedAuthority.policyBundle.digest,
     createdAt,
   });
+  const manifestBase =
+    protectedPlan === undefined
+      ? Object.freeze({ ...manifestCommon, schemaVersion: 1 as const })
+      : Object.freeze({
+          ...manifestCommon,
+          schemaVersion: 2 as const,
+          acceptanceCriticalVerificationPlanId: protectedPlan.id,
+          acceptanceCriticalVerificationPlanDigest: protectedPlan.planDigest,
+        });
   const manifest = decodeAcceptanceInputManifest({
     ...manifestBase,
     manifestDigest: digests.digest(acceptanceInputManifestProjection(manifestBase)),

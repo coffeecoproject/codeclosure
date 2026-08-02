@@ -23,8 +23,8 @@ acceptance-critical Verification Plan and protected-asset authority, and ADR
 0032 closes its bounded plan, lease, isolation-profile, and Evidence-family
 composition. ADR 0033 aligns protected-plan creation with the first Start
 transaction and makes the lease a Check-configuration value that excludes
-later Attempt/Obligation identity. The additive Check/Evidence binding is not
-implemented; Slice 7 owns that work.
+later Attempt/Obligation identity. Slice 7 implements the additive protected
+Check/Evidence binding and decisive-family admission.
 Pre-Goal
 Intake observations are not part of the
 implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
@@ -209,7 +209,7 @@ derives those bindings and creates `LOCAL_COMMAND_TEST_RESULT` Evidence with a
 `LOCAL_COMMAND_ENVIRONMENT_V1` identity. See
 [ADR 0030](adr/0030-real-local-verification-contract.md).
 
-### M2 acceptance-critical plan binding — planned Slice 7
+### M2 acceptance-critical plan binding — implemented Slice 7
 
 [ADR 0031](adr/0031-protect-acceptance-critical-verification-from-worker-writable-assets.md)
 requires trusted composition and Runtime to persist an immutable
@@ -480,11 +480,11 @@ status and payload-reference derivation, and atomic SQLite payload persistence.
 Slice 5 reuses the existing deterministic Acceptance rules and repair/closeout
 transitions with that exact local family; it adds no second Acceptance issuer,
 general container runner, browser/device verifier, or arbitrary blob store.
-Slice 7 will add ADR 0031's pre-Worker plan, protected-asset manifest, and
+Slice 7 adds ADR 0031's pre-Worker plan, protected-asset manifest, and
 generation-specific decisive Evidence binding under ADR 0032's bounded
 single-plan, deterministic lease, version-2 isolation-profile, and one-family
 selection rules, aligned by ADR 0033 with the first Start transaction and
-Check-before-Attempt lease construction. That planned extension does not
+Check-before-Attempt lease construction. That extension does not
 rewrite the Slice 4/5 version-2 records or their historical review claims.
 
 The Evidence boundary does not interpret its own records as Goal acceptance.

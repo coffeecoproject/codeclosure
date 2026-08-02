@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -12,7 +12,17 @@ import { CryptographicIdentityGenerator } from '@codeclosure/runtime/composition
 import { openSqliteControlStore } from '@codeclosure/store-sqlite';
 
 import { ProtectedPathKind } from '../dist/composition/data-home.js';
+import {
+  createM2LiveBlockedCliResult,
+  createM2LiveCliResult,
+} from '../dist/composition/demo-proof.js';
 import { createCliComposition } from '../dist/composition/index.js';
+import {
+  runM2ProtectedDemoProof,
+  type M2LiveDemoProof,
+} from '../dist/composition/m2-protected-demo-proof.js';
+import { CliOperation, type CliDemoResultEnvelope } from '../dist/cli/contracts.js';
+import { exitCodeForCliEnvelope, renderCliEnvelopeHuman } from '../dist/cli/presentation.js';
 import {
   spawnM1ProofChildProcess,
   stopM1ProofChildProcess,
@@ -37,12 +47,18 @@ function runCli(
   options: {
     readonly cwd: string;
     readonly dataHomePath: string;
+    readonly environment?: Readonly<Record<string, string>>;
   },
 ): SpawnSyncReturns<string> {
+  const environment = {
+    ...process.env,
+    CODECLOSURE_HOME: options.dataHomePath,
+    ...options.environment,
+  };
   return spawnSync(process.execPath, [entryPoint, ...args], {
     cwd: options.cwd,
     encoding: 'utf8',
-    env: { ...process.env, CODECLOSURE_HOME: options.dataHomePath },
+    env: environment,
     maxBuffer: 1024 * 1024,
   });
 }
@@ -541,6 +557,349 @@ void test('all named demos prove exact isolated authority and return zero only o
   assert.match(human.stdout, /Technical closeout: no/);
   assert.equal(human.stdout.includes('\u001B['), false);
   assert.equal(existsSync(dataHomePath), false);
+});
+
+void test('[M2 Slice 7] protected repair, bounded failed repair, and real adapter failure are subprocess-visible proofs', (t) => {
+  const root = temporaryRoot(t);
+  const dataHomePath = join(root, 'ordinary-authority-must-remain-absent');
+  const authSource = join(root, 'non-secret-empty-auth.json');
+  writeFileSync(authSource, '{}\n', { mode: 0o600 });
+  const scenarios = [
+    {
+      name: 'm2-protected-repair',
+      proofCode: 'M2_PROTECTED_REPAIR_ACCEPTED',
+      branch: 'REPAIR_ACCEPTED',
+      finalRunStatus: 'CLOSED',
+      evidence: ['FAIL', 'PASS'],
+    },
+    {
+      name: 'm2-protected-failed-repair',
+      proofCode: 'M2_PROTECTED_FAILED_REPAIR_STOPPED',
+      branch: 'REPAIR_FAILED_STOP',
+      finalRunStatus: 'READY',
+      evidence: ['FAIL', 'FAIL'],
+    },
+    {
+      name: 'm2-adapter-failure',
+      proofCode: 'M2_ADAPTER_FAILURE_GOVERNED',
+      branch: 'ADAPTER_FAILURE',
+      finalRunStatus: 'FAILED',
+      evidence: [],
+    },
+  ] as const;
+
+  for (const expected of scenarios) {
+    const demo = runCli(['demo', 'run', expected.name, '--json'], {
+      cwd: root,
+      dataHomePath,
+      environment: { CODECLOSURE_M2_AUTH_SOURCE: authSource },
+    });
+    assert.equal(demo.error, undefined, expected.name);
+    assert.equal(demo.status, 0, `${expected.name}: ${demo.stderr}`);
+    assert.equal(demo.stderr, '');
+    const proof = field(parseSingleJsonDocument(demo.stdout), 'result');
+    assert.equal(field(proof, 'passed'), true);
+    assert.equal(field(proof, 'proofCode'), expected.proofCode);
+    assert.equal(field(field(proof, 'finalStatus'), 'runStatus'), expected.finalRunStatus);
+    assert.deepEqual(field(proof, 'reopenedStatus'), field(proof, 'finalStatus'));
+    const m2 = field(proof, 'm2');
+    assert.equal(field(m2, 'branch'), expected.branch);
+    assert.equal(field(m2, 'generationCount'), 2 - Number(expected.branch === 'ADAPTER_FAILURE'));
+    assert.equal(field(m2, 'sourceUnchanged'), true);
+    const sourceIdentity = field(m2, 'sourceIdentity');
+    assert.match(String(field(sourceIdentity, 'sourceTreeDigest')), /^sha256:[0-9a-f]{64}$/u);
+    assert.match(
+      String(field(sourceIdentity, 'sourceGitMetadataDigest')),
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    assert.equal(typeof field(m2, 'planId'), 'string');
+    assert.match(String(field(m2, 'planDigest')), /^sha256:[0-9a-f]{64}$/u);
+    const evidence = field(m2, 'evidence');
+    assert.ok(Array.isArray(evidence));
+    assert.deepEqual(
+      evidence.map((item) => field(item, 'result')),
+      expected.evidence,
+    );
+    for (const item of evidence) {
+      assert.match(String(field(item, 'candidateDigest')), /^sha256:[0-9a-f]{64}$/u);
+      assert.match(String(field(item, 'evidenceDigest')), /^sha256:[0-9a-f]{64}$/u);
+      assert.equal(typeof field(item, 'candidateGenerationId'), 'string');
+      assert.equal(typeof field(item, 'checkId'), 'string');
+    }
+    if (expected.branch === 'ADAPTER_FAILURE') {
+      assert.equal(field(m2, 'externalExecutionCount'), 1);
+      assert.equal(field(m2, 'externalFailureCode'), 'EFFECTIVE_INPUT_MISMATCH');
+      assert.equal(field(field(proof, 'finalDrive'), 'stopReason'), 'FAILED');
+      assert.equal(
+        field(field(proof, 'finalDrive'), 'detailCode'),
+        'WORKER_STREAM_NO_TERMINAL_EVENT',
+      );
+    } else {
+      assert.equal(field(m2, 'workerWritableTestPassed'), true);
+      assert.equal(field(m2, 'initialDriveStop'), 'ACCEPTANCE_REPAIR_REQUIRED');
+    }
+  }
+  assert.equal(existsSync(dataHomePath), false);
+});
+
+void test('[M2 Slice 7] unavailable configured live authentication is a typed governed stop', (t) => {
+  const root = temporaryRoot(t);
+  const dataHomePath = join(root, 'ordinary-authority-must-remain-absent');
+  const missingAuthSource = join(root, 'missing-auth.json');
+  const result = runCli(['demo', 'run', 'm2-live', '--json'], {
+    cwd: root,
+    dataHomePath,
+    environment: { CODECLOSURE_M2_AUTH_SOURCE: missingAuthSource },
+  });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 4, result.stderr);
+  assert.equal(result.stderr, '');
+  const envelope = parseSingleJsonDocument(result.stdout);
+  assert.equal(field(envelope, 'kind'), 'DEMO_RESULT');
+  const proof = field(envelope, 'result');
+  assert.equal(field(proof, 'schemaVersion'), 2);
+  assert.equal(field(proof, 'scenario'), 'm2-live');
+  assert.equal(field(proof, 'passed'), false);
+  assert.equal(field(proof, 'outcome'), 'BLOCKED');
+  assert.equal(field(proof, 'blockerCode'), 'AUTH_UNAVAILABLE');
+  assert.equal(existsSync(dataHomePath), false);
+});
+
+void test('[M2 Slice 7] a governed live blocker retains only its closed external failure code', () => {
+  const result = createM2LiveBlockedCliResult(
+    'm2-live',
+    'BACKEND_UNAVAILABLE',
+    'The bounded live Codex backend is unavailable.',
+    { externalFailureCode: 'EFFECTIVE_INPUT_MISMATCH' },
+  );
+  assert.equal(result.schemaVersion, 3);
+  assert.equal(result.externalFailureCode, 'EFFECTIVE_INPUT_MISMATCH');
+
+  const envelope: CliDemoResultEnvelope = Object.freeze({
+    schemaVersion: 1,
+    kind: 'DEMO_RESULT',
+    operation: CliOperation.DEMO_RUN,
+    result,
+  });
+  assert.equal(exitCodeForCliEnvelope(envelope), 4);
+  const human = renderCliEnvelopeHuman(envelope);
+  assert.match(human, /Blocker: BACKEND_UNAVAILABLE/u);
+  assert.match(human, /External failure: EFFECTIVE_INPUT_MISMATCH/u);
+
+  const diagnosed = createM2LiveBlockedCliResult(
+    'm2-live',
+    'BACKEND_UNAVAILABLE',
+    'The bounded live Codex backend is unavailable.',
+    {
+      externalFailureCode: 'UNSUPPORTED_BACKEND_ACTIVITY',
+      externalDiagnostic: Object.freeze({
+        schemaVersion: 1,
+        kind: 'UNSUPPORTED_NOTIFICATION',
+        method: 'thread/settings/updated',
+      }),
+    },
+  );
+  assert.equal(diagnosed.schemaVersion, 4);
+  assert.deepEqual(diagnosed.externalDiagnostic, {
+    schemaVersion: 1,
+    kind: 'UNSUPPORTED_NOTIFICATION',
+    method: 'thread/settings/updated',
+  });
+  assert.match(
+    renderCliEnvelopeHuman(
+      Object.freeze({
+        schemaVersion: 1,
+        kind: 'DEMO_RESULT',
+        operation: CliOperation.DEMO_RUN,
+        result: diagnosed,
+      }),
+    ),
+    /External diagnostic: UNSUPPORTED_NOTIFICATION:thread\/settings\/updated/u,
+  );
+
+  const diagnosedItem = createM2LiveBlockedCliResult(
+    'm2-live',
+    'BACKEND_UNAVAILABLE',
+    'The bounded live Codex backend is unavailable.',
+    {
+      externalFailureCode: 'UNSUPPORTED_BACKEND_ACTIVITY',
+      externalDiagnostic: Object.freeze({
+        schemaVersion: 1,
+        kind: 'UNSUPPORTED_ITEM',
+        itemType: 'commandExecution',
+        location: 'STARTED',
+        reasonCode: 'COMMAND_SOURCE',
+      }),
+    },
+  );
+  assert.equal(diagnosedItem.schemaVersion, 4);
+  assert.match(
+    renderCliEnvelopeHuman(
+      Object.freeze({
+        schemaVersion: 1,
+        kind: 'DEMO_RESULT',
+        operation: CliOperation.DEMO_RUN,
+        result: diagnosedItem,
+      }),
+    ),
+    /External diagnostic: UNSUPPORTED_ITEM:commandExecution:STARTED:COMMAND_SOURCE/u,
+  );
+
+  const runtimeBlocked = createM2LiveBlockedCliResult(
+    'm2-live',
+    'BACKEND_UNAVAILABLE',
+    'The bounded live Codex backend is unavailable.',
+    {
+      externalFailureCode: 'INVALID_TERMINAL_PAYLOAD',
+      runtimeStop: Object.freeze({
+        schemaVersion: 1,
+        stage: 'INITIAL_DRIVE',
+        commandStatus: 'APPLIED',
+        externalExecution: Object.freeze({
+          schemaVersion: 1,
+          id: 'external-execution_fixture',
+          attemptId: 'attempt_fixture',
+          state: 'FAILED',
+          failureCode: 'INVALID_TERMINAL_PAYLOAD',
+        }),
+        drive: Object.freeze({
+          schemaVersion: 1,
+          stopReason: 'BLOCKED',
+          detailCode: 'CANDIDATE_SOURCE_DRIFT',
+          operationCount: 9,
+        }),
+      }),
+    },
+  );
+  assert.equal(runtimeBlocked.schemaVersion, 5);
+  assert.deepEqual(runtimeBlocked.runtimeStop, {
+    schemaVersion: 1,
+    stage: 'INITIAL_DRIVE',
+    commandStatus: 'APPLIED',
+    externalExecution: {
+      schemaVersion: 1,
+      id: 'external-execution_fixture',
+      attemptId: 'attempt_fixture',
+      state: 'FAILED',
+      failureCode: 'INVALID_TERMINAL_PAYLOAD',
+    },
+    drive: {
+      schemaVersion: 1,
+      stopReason: 'BLOCKED',
+      detailCode: 'CANDIDATE_SOURCE_DRIFT',
+      operationCount: 9,
+    },
+  });
+  assert.match(
+    renderCliEnvelopeHuman(
+      Object.freeze({
+        schemaVersion: 1,
+        kind: 'DEMO_RESULT',
+        operation: CliOperation.DEMO_RUN,
+        result: runtimeBlocked,
+      }),
+    ),
+    /Runtime stage: INITIAL_DRIVE[\s\S]*Drive stop: BLOCKED[\s\S]*Drive detail: CANDIDATE_SOURCE_DRIFT[\s\S]*External state: FAILED[\s\S]*External execution failure: INVALID_TERMINAL_PAYLOAD/u,
+  );
+
+  const repairRuntimeBlocked = createM2LiveBlockedCliResult(
+    'm2-live',
+    'BACKEND_UNAVAILABLE',
+    'The bounded live Codex backend is unavailable.',
+    {
+      runtimeStop: Object.freeze({
+        schemaVersion: 1,
+        stage: 'REPAIR_DRIVE',
+        commandStatus: 'APPLIED',
+        externalExecution: null,
+        drive: Object.freeze({
+          schemaVersion: 1,
+          stopReason: 'FAILED',
+          detailCode: 'WORKER_BACKEND_FAILURE',
+          operationCount: 1,
+        }),
+      }),
+    },
+  );
+  assert.equal(repairRuntimeBlocked.schemaVersion, 5);
+  assert.equal(repairRuntimeBlocked.externalFailureCode, undefined);
+  assert.match(
+    renderCliEnvelopeHuman(
+      Object.freeze({
+        schemaVersion: 1,
+        kind: 'DEMO_RESULT',
+        operation: CliOperation.DEMO_RUN,
+        result: repairRuntimeBlocked,
+      }),
+    ),
+    /Runtime stage: REPAIR_DRIVE[\s\S]*Drive stop: FAILED[\s\S]*Drive detail: WORKER_BACKEND_FAILURE[\s\S]*External execution: not authorized/u,
+  );
+
+  assert.throws(
+    () =>
+      createM2LiveBlockedCliResult(
+        'm2-live',
+        'BACKEND_UNAVAILABLE',
+        'The bounded live Codex backend is unavailable.',
+        {
+          externalDiagnostic: Object.freeze({
+            schemaVersion: 1,
+            kind: 'NOTIFICATION_LIMIT',
+          }),
+        },
+      ),
+    /requires an external failure code/u,
+  );
+});
+
+void test('[M2 Slice 7] a failed live repair remains a structured auditable stop', async () => {
+  const deterministic = await runM2ProtectedDemoProof('REPAIR_FAILED_STOP');
+  const liveProof: M2LiveDemoProof = Object.freeze({
+    audit: deterministic.audit,
+    branch: 'LIVE_REPAIR_HANDOFF_FAILED_STOP',
+    evidence: deterministic.evidence,
+    externalExecutionCount: 1,
+    finalDrive: deterministic.finalDrive,
+    finalStatus: deterministic.finalStatus,
+    generationCount: 2,
+    goalId: deterministic.goalId,
+    initialDrive: deterministic.initialDrive,
+    planRef: deterministic.planRef,
+    reopenedStatus: deterministic.reopenedStatus,
+    sourceIdentity: deterministic.sourceIdentity,
+    sourceUnchanged: true,
+  });
+  const result = createM2LiveCliResult('m2-live-repair-handoff', liveProof);
+
+  assert.equal(result.passed, false);
+  if (result.outcome !== 'FAILED') {
+    assert.fail('Failed live repair did not retain its structured failure result');
+  }
+  assert.equal(result.schemaVersion, 3);
+  assert.equal(result.failureCode, 'LIVE_VERIFICATION_FAILED');
+  assert.equal(result.finalDrive.stopReason, 'ACCEPTANCE_REPAIR_REQUIRED');
+  assert.equal(result.finalStatus.technicalCloseout, false);
+  assert.deepEqual(result.reopenedStatus, result.finalStatus);
+  assert.deepEqual(
+    result.m2.evidence.map(({ result: evidenceResult }) => evidenceResult),
+    ['FAIL', 'FAIL'],
+  );
+  assert.equal(result.m2.generationCount, 2);
+  assert.equal(result.m2.externalExecutionCount, 1);
+
+  const envelope: CliDemoResultEnvelope = Object.freeze({
+    schemaVersion: 1,
+    kind: 'DEMO_RESULT',
+    operation: CliOperation.DEMO_RUN,
+    result,
+  });
+  assert.equal(exitCodeForCliEnvelope(envelope), 4);
+  const human = renderCliEnvelopeHuman(envelope);
+  assert.match(human, /Failure: LIVE_VERIFICATION_FAILED/u);
+  assert.match(human, /M2 branch: LIVE_REPAIR_HANDOFF_FAILED_STOP/u);
+  assert.match(human, /M2 evidence: FAIL sha256:/u);
+  assert.match(human, /Technical closeout: no/u);
 });
 
 void test('unknown demo scenario fails as usage before any proof authority opens', (t) => {

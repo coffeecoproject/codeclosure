@@ -11,6 +11,7 @@ import {
   type CandidateWorkspaceLeaseAuthorityPort,
   type LocalCommandVerificationPort,
   type LocalCommandVerificationRequest,
+  type ProtectedAssetReadLeaseAuthorityPort,
   type VerificationIsolationPort,
 } from '@codeclosure/runtime';
 
@@ -22,6 +23,7 @@ export const LOCAL_COMMAND_RUNNER_VERSION = '1';
 export interface LocalCommandVerificationRunnerOptions {
   readonly isolation: VerificationIsolationPort;
   readonly workspaceLeases: CandidateWorkspaceLeaseAuthorityPort;
+  readonly protectedAssets?: ProtectedAssetReadLeaseAuthorityPort;
   readonly runnerIdentity?: string;
   readonly runnerVersion?: string;
 }
@@ -77,7 +79,7 @@ export function createLocalCommandVerificationRunner(
   }
 
   return Object.freeze({
-    async run(rawRequest: LocalCommandVerificationRequest): Promise<unknown> {
+    async run(rawRequest: unknown): Promise<unknown> {
       let request: LocalCommandVerificationRequest;
       try {
         request = decodeLocalCommandVerificationRequest(rawRequest, digests);
@@ -95,6 +97,15 @@ export function createLocalCommandVerificationRunner(
         );
       }
       assertCurrentWorkspaceLease(request, options.workspaceLeases);
+      if (request.schemaVersion === 3) {
+        if (options.protectedAssets === undefined) {
+          throw new LocalCommandRunnerError(
+            VerificationLocalFailureCode.PROTECTED_ASSET_AUTHORITY_UNAVAILABLE,
+            'Protected local verification has no protected-asset authority',
+          );
+        }
+        options.protectedAssets.assertLeaseCurrent(request.protectedAssetReadLease);
+      }
       const executable = realpathSync(request.checkSpec.executablePath);
       const executableStat = lstatSync(executable);
       if (
@@ -116,8 +127,7 @@ export function createLocalCommandVerificationRunner(
           'Local command cwd escaped the read-only Candidate lease',
         );
       }
-      const rawResult = await options.isolation.run({
-        schemaVersion: 1,
+      const isolationRequestBase = {
         executablePath: executable,
         argv: request.checkSpec.argv,
         cwd,
@@ -132,8 +142,20 @@ export function createLocalCommandVerificationRunner(
         stderrLimitBytes: request.checkSpec.stderrLimitBytes,
         totalOutputLimitBytes: request.checkSpec.totalOutputLimitBytes,
         payloadRetentionLimitBytes: request.checkSpec.payloadRetentionLimitBytes,
-      });
+      } as const;
+      const rawResult = await options.isolation.run(
+        request.schemaVersion === 3
+          ? Object.freeze({
+              ...isolationRequestBase,
+              schemaVersion: 2 as const,
+              protectedAssetReadLease: request.protectedAssetReadLease,
+            })
+          : Object.freeze({ ...isolationRequestBase, schemaVersion: 1 as const }),
+      );
       assertCurrentWorkspaceLease(request, options.workspaceLeases);
+      if (request.schemaVersion === 3) {
+        options.protectedAssets?.assertLeaseCurrent(request.protectedAssetReadLease);
+      }
       return decodeLocalCommandVerificationResult(request, rawResult, digests);
     },
   });

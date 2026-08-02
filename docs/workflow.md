@@ -43,10 +43,12 @@ observations at their actual process/session/operation/terminal boundaries,
 interrupts governed cancellation, reconciles an active dispatch before fresh
 resume, compiles exact repair Context version 3 without old chat,
 and preserves a failed-repair stop across reopen, ordinary Resume, stale
-authority, replay, and late events. ADR 0031's protected acceptance-critical Verification Plan and
-schema-version-3 Check/Evidence family, closed for bounded composition by ADR
-0032 and aligned with the existing first-Start and Check-before-Attempt
-lifecycle by ADR 0033, remain Slice 7. Goal Intake is an accepted pre-Goal
+authority, replay, and late events. Slice 7 now implements ADR 0031's protected
+acceptance-critical Verification Plan and schema-version-3 Check/Evidence
+family, closed for bounded composition by ADR 0032 and aligned with the
+existing first-Start and Check-before-Attempt lifecycle by ADR 0033. Trusted
+CLI composition exercises both the natural live branch and the separate fresh
+repair-handoff branch without granting Codex Workflow authority. Goal Intake is an accepted pre-Goal
 target for M2.5; it is not implemented and does not add another Workflow phase.
 
 ## Purpose

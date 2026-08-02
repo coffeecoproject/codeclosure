@@ -11,11 +11,15 @@ import {
   ExternalMaintenanceKind,
   ExternalMaintenanceState,
   ExternalThreadPolicy,
+  ExternalWorkerDispatchPolicy,
   RunStatus,
   WorkflowPhase,
   attemptId,
+  acceptanceCriticalVerificationPlanId,
   commandId,
   decodeAttemptSnapshot,
+  decodeAcceptanceCriticalVerificationPlanProposal,
+  decodeProtectedAssetReadLease,
   decodeContextManifest,
   decodeEvidenceEligibility,
   decodeExternalExecutionIntent,
@@ -53,6 +57,7 @@ import {
   type ExternalProcessIdentity,
   type GoalId,
   type PolicyBundleId,
+  type ProtectedAssetReadLease,
   type Sha256Digest,
   type WorkflowInstance,
   type WorkflowVersion,
@@ -93,6 +98,10 @@ import {
   type PhaseGuardEvaluator,
   type StartGoalRequest,
 } from './workflow-runtime.js';
+import {
+  freezeAcceptanceCriticalVerificationPlanProposal,
+  type ProtectedVerificationRuntimeDependencies,
+} from './protected-verification.js';
 import {
   ExternalDispatchFailureReasonCode,
   ExternalExecutionAbandonReasonCode,
@@ -257,6 +266,7 @@ const driverAuthoritySchema = z
       .optional(),
     closeout: z.unknown().optional(),
     latestRecoveryReconciliation: z.unknown().optional(),
+    acceptanceCriticalVerificationPlan: z.unknown().optional(),
     installedPolicyBundle: installedPolicyBundleSchema.optional(),
     installedExecutionProfile: installedExecutionProfileSchema.optional(),
     latestPhaseAttempt: authorityObjectOrNullSchema,
@@ -326,6 +336,7 @@ interface RuntimeExecutionProfileBase {
   readonly candidateSource: CandidateSourcePort;
   readonly verification: VerificationPort;
   readonly localCommandVerification?: LocalCommandVerificationRuntimeDependencies;
+  readonly protectedVerification?: ProtectedVerificationRuntimeDependencies;
 }
 
 interface ExternalExecutionLifecycleSnapshot {
@@ -655,6 +666,52 @@ function decodeLocalCommandVerificationRuntimeDependencies(
   });
 }
 
+function decodeProtectedVerificationRuntimeDependencies(
+  value: unknown,
+): ProtectedVerificationRuntimeDependencies {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !exactOwnKeys(value, ['identities', 'proposal', 'assets'])
+  ) {
+    throw new TypeError('Protected verification must be one closed capability record');
+  }
+  const identities: unknown = Reflect.get(value, 'identities');
+  const assets: unknown = Reflect.get(value, 'assets');
+  const nextPlanId: unknown =
+    (typeof identities === 'object' || typeof identities === 'function') && identities !== null
+      ? Reflect.get(identities, 'nextAcceptanceCriticalVerificationPlanId')
+      : undefined;
+  const assertLeaseCurrent: unknown =
+    (typeof assets === 'object' || typeof assets === 'function') && assets !== null
+      ? Reflect.get(assets, 'assertLeaseCurrent')
+      : undefined;
+  if (typeof nextPlanId !== 'function' || typeof assertLeaseCurrent !== 'function') {
+    throw new TypeError('Protected verification contains malformed capabilities');
+  }
+  const nextPlanIdCapability = nextPlanId as (this: unknown) => unknown;
+  const assertLeaseCurrentCapability = assertLeaseCurrent as (
+    this: unknown,
+    lease: ProtectedAssetReadLease,
+  ) => unknown;
+  const proposal = freezeAcceptanceCriticalVerificationPlanProposal(
+    decodeAcceptanceCriticalVerificationPlanProposal(Reflect.get(value, 'proposal')),
+  );
+  return Object.freeze({
+    identities: Object.freeze({
+      nextAcceptanceCriticalVerificationPlanId: () =>
+        acceptanceCriticalVerificationPlanId(
+          z.string().parse(Reflect.apply(nextPlanIdCapability, identities, [])),
+        ),
+    }),
+    proposal,
+    assets: Object.freeze({
+      assertLeaseCurrent: (lease: ProtectedAssetReadLease) =>
+        decodeProtectedAssetReadLease(Reflect.apply(assertLeaseCurrentCapability, assets, [lease])),
+    }),
+  });
+}
+
 function decodeRuntimeExecutionProfile(
   value: unknown,
   expected?: ExecutionProfile,
@@ -673,6 +730,7 @@ function decodeRuntimeExecutionProfile(
     'candidateSource',
     'verification',
     ...(Reflect.has(value, 'localCommandVerification') ? ['localCommandVerification'] : []),
+    ...(Reflect.has(value, 'protectedVerification') ? ['protectedVerification'] : []),
     ...(schemaVersion === 2 ? ['externalWorker'] : []),
   ];
   if ((schemaVersion !== 1 && schemaVersion !== 2) || !exactOwnKeys(value, expectedKeys)) {
@@ -685,6 +743,7 @@ function decodeRuntimeExecutionProfile(
   const candidateSource: unknown = Reflect.get(value, 'candidateSource');
   const verification: unknown = Reflect.get(value, 'verification');
   const localCommandVerification: unknown = Reflect.get(value, 'localCommandVerification');
+  const protectedVerification: unknown = Reflect.get(value, 'protectedVerification');
   const externalWorker: unknown = Reflect.get(value, 'externalWorker');
   if (
     typeof rawProfileId !== 'string' ||
@@ -711,6 +770,13 @@ function decodeRuntimeExecutionProfile(
   if (requireLocalCommandVerification && decodedLocalCommandVerification === undefined) {
     throw new TypeError('M2 Runtime Execution Profile requires local command verification');
   }
+  const decodedProtectedVerification =
+    protectedVerification === undefined
+      ? undefined
+      : decodeProtectedVerificationRuntimeDependencies(protectedVerification);
+  if (decodedProtectedVerification !== undefined && decodedLocalCommandVerification === undefined) {
+    throw new TypeError('Protected verification requires local command verification');
+  }
   if (
     expected !== undefined &&
     (schemaVersion !== expected.schemaVersion ||
@@ -735,6 +801,9 @@ function decodeRuntimeExecutionProfile(
     ...(decodedLocalCommandVerification === undefined
       ? {}
       : { localCommandVerification: decodedLocalCommandVerification }),
+    ...(decodedProtectedVerification === undefined
+      ? {}
+      : { protectedVerification: decodedProtectedVerification }),
   };
   return schemaVersion === 1
     ? Object.freeze({ schemaVersion, ...common })
@@ -764,6 +833,11 @@ function statusAuthorityInput(parsed: z.infer<typeof driverAuthoritySchema>): un
     ...(parsed.latestRecoveryReconciliation === undefined
       ? {}
       : { latestRecoveryReconciliation: parsed.latestRecoveryReconciliation }),
+    ...(parsed.acceptanceCriticalVerificationPlan === undefined
+      ? {}
+      : {
+          acceptanceCriticalVerificationPlan: parsed.acceptanceCriticalVerificationPlan,
+        }),
   };
 }
 
@@ -1656,7 +1730,13 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       binding.profile.schemaVersion === 2 && installedProfile?.schemaVersion === 2
         ? installedProfile.externalExecution
         : undefined;
-    if (externalProfile?.workerPhases.includes(request.contextPackage.phase)) {
+    const externallyDispatched =
+      externalProfile?.workerPhases.includes(request.contextPackage.phase) === true &&
+      (externalProfile.schemaVersion === 1 ||
+        externalProfile.workerDispatchPolicy ===
+          ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS ||
+        request.contextPackage.repairContext !== undefined);
+    if (externallyDispatched) {
       await this.dispatchExternalOwnedAttempt(authority, binding, request, externalProfile);
       return;
     }
@@ -2759,6 +2839,9 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         ...(profile.localCommandVerification === undefined
           ? {}
           : { localCommandVerification: profile.localCommandVerification }),
+        ...(profile.protectedVerification === undefined
+          ? {}
+          : { protectedVerification: profile.protectedVerification }),
         acceptance: Object.freeze({
           identities: this.#ids,
           policyBundleId: this.#policyBundleId,
@@ -2786,6 +2869,8 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       profile.profileId !== installed.id ||
       profile.profileDigest !== installed.digest ||
       profile.driverVersion !== installed.driverVersion ||
+      (profile.protectedVerification !== undefined) !==
+        (authority.acceptanceCriticalVerificationPlan !== undefined) ||
       (profile.localCommandVerification !== undefined &&
         (profile.localCommandVerification.profile.check.runnerIdentity !==
           installed.verificationRunner ||
@@ -2893,6 +2978,23 @@ export function createWorkflowDriver(
 export function createM2WorkflowDriver(
   dependencies: WorkflowDriverDependencies,
 ): WorkflowDriverCapability {
+  const driver = new RuntimeWorkflowDriver(dependencies, true);
+  return Object.freeze({
+    startGoal: (input: StartGoalRequest) => driver.startGoal(input),
+    resumeGoal: (input: ResumeGoalRequest) => driver.resumeGoal(input),
+    repairGoal: (input: BeginAcceptanceRepairRequest) => driver.repairGoal(input),
+    cancelGoal: (input: CancelGoalRequest) => driver.cancelGoal(input),
+  });
+}
+
+/** Trusted bounded M2 profile; unlike the Slice 5 regression surface it requires Plan authority. */
+export function createProtectedM2WorkflowDriver(
+  dependencies: WorkflowDriverDependencies,
+): WorkflowDriverCapability {
+  const startProfile = decodeRuntimeExecutionProfile(dependencies.startProfile, undefined, true);
+  if (startProfile.protectedVerification === undefined) {
+    throw new TypeError('Bounded M2 Workflow Driver requires protected verification composition');
+  }
   const driver = new RuntimeWorkflowDriver(dependencies, true);
   return Object.freeze({
     startGoal: (input: StartGoalRequest) => driver.startGoal(input),

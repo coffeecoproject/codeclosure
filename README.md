@@ -23,12 +23,10 @@ Darwin local-command verification path, strict versioned contracts,
 Runtime-derived Evidence, and atomic SQLite payload persistence are now
 implemented and have passed their focused isolation and authority review.
 The bounded in-process reject/repair/accept orchestration is also implemented.
-The latest completed bounded step adds Runtime-authorized external execution and maintenance records,
-bounded Thread/Compact and interruption policy, restart reconciliation, a fresh
-repair Context compiled from exact retained failure authority, and a persisted
-stop after a failed repair. Protected acceptance-critical verification, trusted
-production CLI composition, the live Goal-bound Codex path, and the independent
-M2 exit audit remain later work. The
+The latest completed bounded step adds protected acceptance-critical
+verification and trusted CLI composition; its deterministic protected paths
+and both required live Codex demonstrations have passed bounded review. The
+independent M2 exit audit has not started. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.

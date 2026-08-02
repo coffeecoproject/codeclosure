@@ -671,6 +671,8 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0021_evidence_set_check_family_authority.sql',
       '0022_evidence_obligation_causal_time.sql',
       '0023_external_execution_and_repair_context.sql',
+      '0024_protected_verification_authority.sql',
+      '0025_local_verification_recovery_barrier.sql',
     ],
   );
   store.close();

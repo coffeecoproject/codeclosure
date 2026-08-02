@@ -1,6 +1,6 @@
 # M2 Codex Vertical Slice Implementation Plan
 
-- Status: In progress; Slices 0 through 6 are implemented and Slice 7 has not started
+- Status: In progress; Slices 0 through 7 are implemented and Slice 8 has not started
 - Plan date: 2026-07-30; authority boundary updated 2026-08-01
 - Milestone: M2
 - Real worker boundary: Codex App Server v2 over local stdio
@@ -92,7 +92,7 @@ From the user's point of view, M2 should behave plainly:
 | 4 | real Verification Runner | Implemented | [Slice 4 review](../reviews/m2-slice4-real-verification.md), runner isolation, v2 Evidence, payload, mutation, and limit tests |
 | 5 | reject, repair, and accept orchestration | Implemented | [Slice 5 review](../reviews/m2-slice5-reject-repair-accept.md), real Candidate/verifier orchestration, compound drift transaction, repair, Acceptance, and reopen tests |
 | 6 | Thread, Compact, interruption, and restart policy | Implemented | [Slice 6 review](../reviews/m2-slice6-thread-compact-restart.md), external lifecycle, fresh repair Context, cancellation, restart, and failed-repair stop tests |
-| 7 | trusted composition, CLI, and live demonstration | Not started | subprocess and bounded live proof |
+| 7 | trusted composition, CLI, and live demonstration | Implemented | [Slice 7 review](../reviews/m2-slice7-trusted-composition-cli-live.md), protected subprocess proofs, and two bounded live demonstrations |
 | 8 | milestone audit and acceptance harness | Not started | M2 acceptance run and dated review |
 
 A slice may be marked implemented only in the same change that records its
@@ -107,8 +107,9 @@ historical review is reinterpreted as proof of independently fixed
 verification semantics, fresh-Thread failure-context continuity, or the stop
 boundary after a failed repair. Slice 6 now owns and proves the Thread,
 external-execution, fresh repair-Context, restart, and failed-repair stop
-boundaries; Slices 7 and 8 own protected verification, trusted/live composition,
-and milestone exit.
+boundaries. Slice 7 now owns and proves the bounded protected-verification and
+trusted/live-composition paths; Slice 8 still owns the independent milestone
+exit audit.
 
 ## 3. Governing authority
 
@@ -1272,6 +1273,17 @@ Exit proof:
   and any bounded stop without hiding an additional retry; and
 - unavailable auth, network, model, binary, or protocol compatibility produces
   a typed blocked/failure result rather than a skipped success.
+
+Implementation record: the
+[Slice 7 review](../reviews/m2-slice7-trusted-composition-cli-live.md) records
+the exact source identity, focused and full-gate evidence, protected
+anti-self-certification and repair proofs, typed adapter-failure handling, and
+the two separately authorized bounded live demonstrations. The ordinary live
+path followed its natural first verification result and closed from a
+first-pass `PASS`; the repair-handoff path began with a controlled failed
+parent, dispatched Codex only to the fresh repair child, and closed from fresh
+passing Evidence. Both paths retained source-checkout isolation and strict
+SQLite reopen equality. Slice 8 milestone acceptance has not started.
 
 ### Slice 8 — Milestone audit and acceptance harness
 

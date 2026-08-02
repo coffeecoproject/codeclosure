@@ -31,12 +31,14 @@ import {
 
 import {
   CODEX_WORKER_DEVELOPER_INSTRUCTIONS,
+  CODEX_WORKER_DISABLED_FEATURES,
   assertDirectiveBindsWorkerRequest,
   assertLaunchBindsDirective,
   codexWorkerOutputSchema,
   decodeCodexWorkerDirective,
   digestCanonical,
   renderCodexWorkerPrompt,
+  type CodexAdapterDiagnosticEvent,
   type CodexAdapterFailureCode,
   type CodexAdapterObservation,
   type CodexWorkerDirective,
@@ -44,11 +46,12 @@ import {
 import {
   decodeEffectiveThread,
   decodeFinalCompletionRequest,
-  codexThreadItemDisposition,
+  evaluateCodexThreadItem,
   decodeStartedTurn,
   digestProtocolValue,
   projectTerminalTurn,
   selectFinalAgentMessage,
+  type CompletedAgentMessageObservation,
   type CodexThreadItemLocation,
   type CodexThreadItemPolicy,
   type EffectiveThread,
@@ -62,7 +65,6 @@ const forbiddenNotificationPrefixes = Object.freeze([
   'fuzzyFileSearch/',
   'hook/',
   'mcpServer/',
-  'remoteControl/',
   'skills/',
   'thread/environment/',
   'thread/realtime/',
@@ -80,6 +82,17 @@ const forbiddenNotificationMethods = new Set([
   'windows/worldWritableWarning',
   'windowsSandbox/setupCompleted',
 ]);
+
+function isDisabledRemoteControlStatus(notification: AppServerNotification): boolean {
+  const params = notification.params;
+  return (
+    notification.method === 'remoteControl/status/changed' &&
+    params['status'] === 'disabled' &&
+    params['environmentId'] === null &&
+    typeof params['serverName'] === 'string' &&
+    typeof params['installationId'] === 'string'
+  );
+}
 interface AdapterFailure extends Error {
   readonly adapterCode: CodexAdapterFailureCode;
 }
@@ -96,12 +109,17 @@ interface WaitResultTerminal {
 }
 
 type WaitResult =
-  WaitResultTerminal | Readonly<{ kind: 'ABORT' | 'CLOSED' | 'POLICY_FAILURE' | 'TIMEOUT' }>;
+  | WaitResultTerminal
+  | Readonly<{ kind: 'ABORT' }>
+  | Readonly<{ kind: 'CLOSED' }>
+  | Readonly<{ kind: 'POLICY_FAILURE' }>
+  | Readonly<{ kind: 'TIMEOUT' }>;
 
 export interface CodexWorkerAdapterInput {
   readonly clientLimits?: Partial<AppServerClientLimits>;
   readonly directive: unknown;
   readonly launch: AppServerProcessLaunch;
+  readonly onDiagnosticEvent?: (event: CodexAdapterDiagnosticEvent) => void;
   readonly onLifecycleEvent: (event: unknown) => void;
   readonly observedAt: () => string;
 }
@@ -121,6 +139,12 @@ function boundedString(value: JsonValue | undefined, field: string): string {
     throw new TypeError(`${field} is invalid`);
   }
   return value;
+}
+
+function diagnosticToken(value: JsonValue | undefined): string {
+  return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9/_-]{0,127}$/u.test(value)
+    ? value
+    : 'UNKNOWN';
 }
 
 function boundedStartedAt(value: JsonValue | undefined): number {
@@ -231,29 +255,23 @@ function repeatWorkspaceChecks(
   ) {
     throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
   }
-  const isolatedHostRoots = [
-    Object.freeze({
-      allowExactForbiddenIdentity: true,
-      root: directive.profile.controlledStateRootIdentity,
-    }),
-    Object.freeze({ allowExactForbiddenIdentity: false, root: processHome }),
-    Object.freeze({ allowExactForbiddenIdentity: false, root: temporaryDirectory }),
-  ];
+  const isolatedHostRoots = Object.freeze([
+    directive.profile.controlledStateRootIdentity,
+    processHome,
+    temporaryDirectory,
+  ]);
   for (let index = 0; index < isolatedHostRoots.length; index += 1) {
-    const isolatedRoot = isolatedHostRoots[index];
-    const root = isolatedRoot?.root;
+    const root = isolatedHostRoots[index];
     if (
-      isolatedRoot === undefined ||
       root === undefined ||
+      !lease.forbiddenRoots.includes(root) ||
       pathsOverlap(root, lease.root) ||
       pathsOverlap(root, lease.workspaceRootIdentity) ||
       pathsOverlap(root, lease.sourceProjectRoot) ||
       lease.forbiddenRoots.some(
-        (forbidden) =>
-          !(isolatedRoot.allowExactForbiddenIdentity && forbidden === root) &&
-          pathsOverlap(root, forbidden),
+        (forbidden) => forbidden !== root && pathsOverlap(root, forbidden),
       ) ||
-      isolatedHostRoots.slice(index + 1).some((otherRoot) => pathsOverlap(root, otherRoot.root))
+      isolatedHostRoots.slice(index + 1).some((otherRoot) => pathsOverlap(root, otherRoot))
     ) {
       throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
     }
@@ -294,12 +312,37 @@ function assertEffectiveThread(effective: EffectiveThread, directive: CodexWorke
     effective.reasoningEffort !== profile.reasoningEffort ||
     effective.sandbox.type !== 'workspaceWrite' ||
     effective.sandbox.networkAccess ||
-    effective.sandbox.writableRoots.length !== 1 ||
-    effective.sandbox.writableRoots[0] !== directive.workspaceLease.root ||
+    effective.sandbox.excludeSlashTmp ||
+    effective.sandbox.excludeTmpdirEnvVar ||
+    effective.sandbox.writableRoots.length !== 0 ||
     JSON.stringify(effective.instructionSources) !== JSON.stringify(expectedInstructions)
   ) {
     throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
   }
+}
+
+function candidateTurnSandboxPolicy(candidateRoot: string): {
+  excludeSlashTmp: boolean;
+  excludeTmpdirEnvVar: boolean;
+  networkAccess: boolean;
+  type: 'workspaceWrite';
+  writableRoots: string[];
+} {
+  return {
+    excludeSlashTmp: true,
+    excludeTmpdirEnvVar: true,
+    networkAccess: false,
+    type: 'workspaceWrite',
+    writableRoots: [candidateRoot],
+  };
+}
+
+function candidateThreadConfiguration(directive: CodexWorkerDirective) {
+  return Object.freeze({
+    projects: Object.freeze({
+      [directive.workspaceLease.root]: Object.freeze({ trust_level: 'untrusted' }),
+    }),
+  });
 }
 
 function assertEffectiveConfiguration(value: JsonValue, directive: CodexWorkerDirective): void {
@@ -311,13 +354,34 @@ function assertEffectiveConfiguration(value: JsonValue, directive: CodexWorkerDi
     throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
   }
   const profile = directive.profile;
+  const features = config['features'];
+  const orchestrator = config['orchestrator'];
+  const orchestratorMcp = isJsonObject(orchestrator) ? orchestrator['mcp'] : undefined;
+  const orchestratorSkills = isJsonObject(orchestrator) ? orchestrator['skills'] : undefined;
+  const skills = config['skills'];
+  const bundledSkills = isJsonObject(skills) ? skills['bundled'] : undefined;
+  const mcpServers = config['mcp_servers'];
   if (
     config['model'] !== profile.model ||
     config['model_provider'] !== profile.modelProvider ||
     config['model_reasoning_effort'] !== profile.reasoningEffort ||
     config['approval_policy'] !== profile.approvalPolicy ||
     config['default_permissions'] !== profile.permissionProfileId ||
-    config['web_search'] !== 'disabled'
+    config['web_search'] !== 'disabled' ||
+    config['include_apps_instructions'] !== false ||
+    config['include_collaboration_mode_instructions'] !== false ||
+    !isJsonObject(features) ||
+    CODEX_WORKER_DISABLED_FEATURES.some((feature) => features[feature] !== false) ||
+    !isJsonObject(orchestratorMcp) ||
+    orchestratorMcp['enabled'] !== false ||
+    !isJsonObject(orchestratorSkills) ||
+    orchestratorSkills['enabled'] !== false ||
+    !isJsonObject(skills) ||
+    skills['include_instructions'] !== false ||
+    !isJsonObject(bundledSkills) ||
+    bundledSkills['enabled'] !== false ||
+    !isJsonObject(mcpServers) ||
+    Object.keys(mcpServers).length !== 0
   ) {
     throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
   }
@@ -354,7 +418,9 @@ class InvocationObserver {
   #backendOperationRef?: string;
   #backendSessionRef?: string;
   #compactionCount = 0;
+  readonly #completedAgentMessages: CompletedAgentMessageObservation[] = [];
   readonly #directive: CodexWorkerDirective;
+  #diagnosticEmitted = false;
   #failureCode?: CodexAdapterFailureCode;
   readonly #failurePromise: Promise<void>;
   #failureResolve!: () => void;
@@ -371,6 +437,7 @@ class InvocationObserver {
   #maintenanceTurnRef?: string;
   #manualCompactionPending = false;
   #notificationCount = 0;
+  readonly #onDiagnosticEvent: ((event: CodexAdapterDiagnosticEvent) => void) | undefined;
   readonly #observedThreadRefs = new Set<string>();
   readonly #observedTurnRefs = new Set<string>();
   #processLaunchCount = 0;
@@ -383,8 +450,12 @@ class InvocationObserver {
   #turnInterruptCount = 0;
   #turnRequestCount = 0;
 
-  public constructor(directive: CodexWorkerDirective) {
+  public constructor(
+    directive: CodexWorkerDirective,
+    onDiagnosticEvent: ((event: CodexAdapterDiagnosticEvent) => void) | undefined,
+  ) {
     this.#directive = directive;
+    this.#onDiagnosticEvent = onDiagnosticEvent;
     this.#failurePromise = new Promise((resolve) => {
       this.#failureResolve = resolve;
     });
@@ -409,12 +480,28 @@ class InvocationObserver {
     return this.#backendOperationRef;
   }
 
+  public completedAgentMessages(): readonly CompletedAgentMessageObservation[] {
+    return Object.freeze([...this.#completedAgentMessages]);
+  }
+
   public fail(code: CodexAdapterFailureCode): void {
     if (this.#failureCode === undefined) {
       this.#failureCode = code;
       this.#state = code === 'HOST_CANCELLED' ? 'INTERRUPTED' : 'FAILED';
       this.#failureResolve();
     }
+  }
+
+  public diagnoseUnsupported(event: CodexAdapterDiagnosticEvent): void {
+    if (!this.#diagnosticEmitted) {
+      this.#diagnosticEmitted = true;
+      try {
+        this.#onDiagnosticEvent?.(event);
+      } catch {
+        // Diagnostics cannot change Worker control or failure authority.
+      }
+    }
+    this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
   }
 
   public cancel(): void {
@@ -565,14 +652,22 @@ class InvocationObserver {
   public recordNotification(notification: AppServerNotification): void {
     this.#notificationCount += 1;
     if (this.#notificationCount > 10_000) {
-      this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+      this.diagnoseUnsupported(Object.freeze({ schemaVersion: 1, kind: 'NOTIFICATION_LIMIT' }));
       return;
     }
     if (
       forbiddenNotificationMethods.has(notification.method) ||
-      forbiddenNotificationPrefixes.some((prefix) => notification.method.startsWith(prefix))
+      forbiddenNotificationPrefixes.some((prefix) => notification.method.startsWith(prefix)) ||
+      (notification.method.startsWith('remoteControl/') &&
+        !isDisabledRemoteControlStatus(notification))
     ) {
-      this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+      this.diagnoseUnsupported(
+        Object.freeze({
+          schemaVersion: 1,
+          kind: 'UNSUPPORTED_NOTIFICATION',
+          method: diagnosticToken(notification.method),
+        }),
+      );
     }
     const params = notification.params;
     const threadId = params['threadId'];
@@ -612,7 +707,13 @@ class InvocationObserver {
     if (notification.method === 'item/started' || notification.method === 'item/completed') {
       const item = params['item'];
       if (!isJsonObject(item)) {
-        this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+        this.diagnoseUnsupported(
+          Object.freeze({
+            schemaVersion: 1,
+            kind: 'MALFORMED_ITEM',
+            location: notification.method === 'item/started' ? 'STARTED' : 'COMPLETED',
+          }),
+        );
       } else if (item['type'] === 'contextCompaction') {
         const binding =
           typeof item['id'] === 'string'
@@ -662,7 +763,9 @@ class InvocationObserver {
     } else if (terminal !== undefined) {
       for (const item of terminal.items) {
         if (!isJsonObject(item)) {
-          this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+          this.diagnoseUnsupported(
+            Object.freeze({ schemaVersion: 1, kind: 'MALFORMED_ITEM', location: 'TERMINAL' }),
+          );
         } else {
           this.#recordItem(item, 'TERMINAL');
         }
@@ -721,20 +824,48 @@ class InvocationObserver {
     }
   }
 
-  #recordItemDisposition(disposition: ReturnType<typeof codexThreadItemDisposition>): void {
-    if (disposition === 'COMPACTION_POLICY_VIOLATION') {
+  #recordItemEvaluation(
+    evaluation: ReturnType<typeof evaluateCodexThreadItem>,
+    item: JsonObject,
+    location: CodexThreadItemLocation,
+  ): void {
+    if (evaluation.disposition === 'COMPACTION_POLICY_VIOLATION') {
       this.fail('COMPACTION_POLICY_VIOLATION');
-    } else if (disposition === 'UNSUPPORTED_BACKEND_ACTIVITY') {
-      this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+    } else if (evaluation.disposition === 'UNSUPPORTED_BACKEND_ACTIVITY') {
+      this.diagnoseUnsupported(
+        Object.freeze({
+          schemaVersion: 1,
+          kind: 'UNSUPPORTED_ITEM',
+          itemType: diagnosticToken(item['type']),
+          location,
+          reasonCode: evaluation.rejectionCode,
+        }),
+      );
     }
   }
 
   #recordItem(item: JsonObject, location: CodexThreadItemLocation): void {
     if (this.#itemPolicy === undefined) {
-      this.fail('UNSUPPORTED_BACKEND_ACTIVITY');
+      this.diagnoseUnsupported(
+        Object.freeze({ schemaVersion: 1, kind: 'ITEM_POLICY_UNAVAILABLE', location }),
+      );
       return;
     }
-    this.#recordItemDisposition(codexThreadItemDisposition(item, location, this.#itemPolicy));
+    const evaluation = evaluateCodexThreadItem(item, location, this.#itemPolicy);
+    this.#recordItemEvaluation(evaluation, item, location);
+    if (
+      evaluation.disposition === 'ALLOWED' &&
+      location === 'COMPLETED' &&
+      item['type'] === 'agentMessage'
+    ) {
+      if (this.#completedAgentMessages.length >= 256) {
+        this.fail('INVALID_TERMINAL_PAYLOAD');
+        return;
+      }
+      this.#completedAgentMessages.push(
+        Object.freeze({ digest: digestCanonical(item), phase: item['phase'] }),
+      );
+    }
   }
 }
 
@@ -852,11 +983,35 @@ export class CodexWorkerAdapter implements WorkerPort {
     this.#onLifecycleEvent = input.onLifecycleEvent;
     this.#observedAt = input.observedAt;
     this.#clientLimits = input.clientLimits;
-    this.#observer = new InvocationObserver(this.#directive);
+    this.#observer = new InvocationObserver(this.#directive, input.onDiagnosticEvent);
   }
 
   public observation(): CodexAdapterObservation {
     return this.#observer.snapshot();
+  }
+
+  public runtimeObservation(): unknown {
+    const observation = this.#observer.snapshot();
+    return Object.freeze({
+      schemaVersion: 1,
+      externalExecutionIntentDigest: observation.externalExecutionIntentDigest,
+      requestAttemptId: observation.requestAttemptId,
+      requestWorkerSessionId: observation.requestWorkerSessionId,
+      state: observation.state,
+      processLaunchCount: observation.processLaunchCount,
+      ...(observation.backendSessionRef === undefined
+        ? {}
+        : { backendSessionRef: observation.backendSessionRef }),
+      ...(observation.backendOperationRef === undefined
+        ? {}
+        : { backendOperationRef: observation.backendOperationRef }),
+      compactionCount: observation.compactionCount,
+      turnInterruptCount: observation.turnInterruptCount,
+      ...(observation.failureCode === undefined ? {} : { failureCode: observation.failureCode }),
+      ...(observation.resultEventId === undefined
+        ? {}
+        : { resultEventId: observation.resultEventId }),
+    });
   }
 
   public async *run(rawRequest: WorkerRequest, signal: AbortSignal): AsyncIterable<unknown> {
@@ -960,7 +1115,7 @@ export class CodexWorkerAdapter implements WorkerPort {
       const commonThreadParameters = {
         approvalPolicy: this.#directive.profile.approvalPolicy,
         approvalsReviewer: this.#directive.profile.approvalsReviewer,
-        config: {},
+        config: candidateThreadConfiguration(this.#directive),
         cwd: this.#directive.workspaceLease.root,
         developerInstructions: CODEX_WORKER_DEVELOPER_INSTRUCTIONS,
         model: this.#directive.profile.model,
@@ -992,6 +1147,14 @@ export class CodexWorkerAdapter implements WorkerPort {
         throw adapterFailure('THREAD_BINDING_MISMATCH');
       }
       assertEffectiveThread(effective, this.#directive);
+      const postStartConfig = await client.request(
+        'config/read',
+        { cwd: this.#directive.workspaceLease.root, includeLayers: true },
+        (value) => value,
+        requestOptions,
+      );
+      assertEffectiveConfiguration(postStartConfig, this.#directive);
+      assertInstructionSourcesCurrent(this.#directive);
       this.#observer.bindThread(effective.threadId);
       this.#observer.throwIfFailed();
       this.emitLifecycleEvent({
@@ -1036,13 +1199,7 @@ export class CodexWorkerAdapter implements WorkerPort {
           input: [{ text: prompt, text_elements: [], type: 'text' }],
           model: this.#directive.profile.model,
           outputSchema: toProtocolJsonValue(codexWorkerOutputSchema(this.#directive)),
-          sandboxPolicy: {
-            excludeSlashTmp: true,
-            excludeTmpdirEnvVar: true,
-            networkAccess: false,
-            type: 'workspaceWrite',
-            writableRoots: [this.#directive.workspaceLease.root],
-          },
+          sandboxPolicy: candidateTurnSandboxPolicy(this.#directive.workspaceLease.root),
           serviceTier: this.#directive.profile.serviceTier,
           threadId: effective.threadId,
         },
@@ -1064,13 +1221,20 @@ export class CodexWorkerAdapter implements WorkerPort {
         signal,
         this.#directive.profile.terminalTimeoutMilliseconds,
       );
-      if (wait.kind === 'ABORT') {
+      const activeClient = client;
+      const interruptKnownTurn = async (): Promise<void> => {
         this.#observer.markTurnInterrupt();
         try {
-          await client.interruptTurn({ threadId: effective.threadId, turnId: started.turnId });
+          await activeClient.interruptTurn({
+            threadId: effective.threadId,
+            turnId: started.turnId,
+          });
         } catch {
-          // Cancellation remains host-owned even if the backend cannot acknowledge interruption.
+          // The original host stop remains authoritative if interruption cannot be acknowledged.
         }
+      };
+      if (wait.kind === 'ABORT') {
+        await interruptKnownTurn();
         throw adapterFailure('HOST_CANCELLED');
       }
       if (wait.kind === 'POLICY_FAILURE') {
@@ -1080,7 +1244,8 @@ export class CodexWorkerAdapter implements WorkerPort {
       if (wait.kind === 'CLOSED') {
         throw adapterFailure('CLIENT_FAILURE');
       }
-      if (wait.kind !== 'TERMINAL') {
+      if (wait.kind === 'TIMEOUT') {
+        await interruptKnownTurn();
         throw adapterFailure('NO_TERMINAL_PAYLOAD');
       }
       if (hostCancelled(signal)) {
@@ -1101,7 +1266,11 @@ export class CodexWorkerAdapter implements WorkerPort {
         }
         let result;
         try {
-          const finalText = selectFinalAgentMessage(wait.terminal, itemPolicy);
+          const finalText = selectFinalAgentMessage(
+            wait.terminal,
+            itemPolicy,
+            this.#observer.completedAgentMessages(),
+          );
           result = decodeFinalCompletionRequest(
             finalText,
             this.#directive,

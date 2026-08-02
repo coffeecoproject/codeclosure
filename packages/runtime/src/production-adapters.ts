@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import {
   acceptanceDecisionId,
+  acceptanceCriticalVerificationPlanId,
   attemptId,
   auditEventId,
   candidateGenerationId,
@@ -21,6 +22,7 @@ import {
   workerSessionId,
   workflowId,
   type AcceptanceDecisionId,
+  type AcceptanceCriticalVerificationPlanId,
   type AttemptId,
   type AuditEventId,
   type CandidateGenerationId,
@@ -140,6 +142,10 @@ export class CryptographicIdentityGenerator
 
   public nextAcceptanceDecisionId(): AcceptanceDecisionId {
     return acceptanceDecisionId(`acceptance_${this.nextSuffix()}`);
+  }
+
+  public nextAcceptanceCriticalVerificationPlanId(): AcceptanceCriticalVerificationPlanId {
+    return acceptanceCriticalVerificationPlanId(`verification-plan_${this.nextSuffix()}`);
   }
 
   public nextRecoveryReconciliationId(): RecoveryReconciliationId {
