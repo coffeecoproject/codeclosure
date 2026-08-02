@@ -8,10 +8,13 @@ This document defines the accepted target contract for pre-Goal Intake under
 additionally closes pre-Goal command replay and retained Intake project-path
 participation in verified SQLite activation.
 Goal Intake is not implemented. M2 completed with its reusable App Server client
-seam preserved. The
+seam preserved. M2.5 Slice 0 has fixed the implementation identities, budgets,
+transaction meanings, and adapter dependency edge without adding Intake
+product behavior. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the next bounded milestone; implementation remains not started.
+contract into the current bounded milestone; Slice 1 product implementation
+has not started.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout
@@ -479,10 +482,18 @@ IntentAnalysisProposal
   proposedNonGoals[]
   proposedAssumptions[]
   proposedQuestions[]
+  candidateSourceSpanSuggestions[]
   proposedClassification?
   proposalDigest
   observedAt
 ```
+
+Each `candidateSourceSpanSuggestion` contains only a closed Projection-field
+reference, one Manifest-selected Raw Request revision, and zero-based,
+end-exclusive UTF-8 byte offsets. It is an untrusted lookup suggestion, not a
+`SourceBinding`; the Coordinator independently resolves the exact retained
+revision/content digests and validates the coordinates before constructing any
+binding.
 
 The assistant may propose interpretations and candidate source spans. It cannot
 author the trusted interaction action, Projection identity, Source Binding

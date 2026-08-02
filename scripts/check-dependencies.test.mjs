@@ -7,6 +7,8 @@ import {
   auditPackageDependencies,
   collectModuleSpecifiers,
   importViolation,
+  m25CodexIntakeAdapterDependencyExpectation,
+  m25CodexIntakeAdapterImportViolation,
   modulePackageName,
   parsePnpmLockImporters,
 } from './check-dependencies-lib.mjs';
@@ -160,6 +162,46 @@ void test('the Codex adapter reverse fixture cannot import authority owners or p
           specifier.startsWith('@codeclosure/codex-app-server-client/'),
       ),
       false,
+    );
+  }
+});
+
+void test('the planned Codex Intake adapter has one closed future package edge', () => {
+  assert.deepEqual(m25CodexIntakeAdapterDependencyExpectation, {
+    path: 'packages/adapter-codex-intake',
+    name: '@codeclosure/adapter-codex-intake',
+    dependencies: {
+      '@codeclosure/codex-app-server-client': 'workspace:*',
+      '@codeclosure/runtime': 'workspace:*',
+    },
+    devDependencies: {},
+  });
+
+  const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex-intake');
+  const sourcePath = resolve(packageRoot, 'src/adapter.ts');
+  for (const allowed of [
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/runtime',
+    'node:buffer',
+    'node:crypto',
+  ]) {
+    assert.equal(m25CodexIntakeAdapterImportViolation(allowed, sourcePath, packageRoot), undefined);
+  }
+  for (const forbidden of [
+    '@codeclosure/adapter-codex',
+    '@codeclosure/cli',
+    '@codeclosure/domain',
+    '@codeclosure/store-sqlite',
+    '@codeclosure/testing',
+    '@codeclosure/verification-local',
+    '@codeclosure/workspace-local',
+    '@codeclosure/runtime/composition',
+    '@codeclosure/runtime/testing/workflow-runtime',
+    '@codeclosure/codex-app-server-client/testing',
+  ]) {
+    assert.notEqual(
+      m25CodexIntakeAdapterImportViolation(forbidden, sourcePath, packageRoot),
+      undefined,
     );
   }
 });

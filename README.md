@@ -15,7 +15,8 @@ The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
 M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
-green on one source identity. M2.5 Goal Intake remains unimplemented. The
+green on one source identity. M2.5 Goal Intake remains unimplemented, while
+its initial interface decision closure is complete. The
 [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
 status source; the [milestone document](docs/milestones.md) defines the bounded
 scope and exit criteria.
@@ -138,10 +139,11 @@ Repository instructions and document precedence are defined in
 M1 proved the deterministic local control plane with `FakeWorker`; M2 proved a
 bounded real-Codex Candidate, verification, repair, and recovery vertical slice
 under the same authority rules. Both remain required regression baselines.
-M2.5 Goal Intake is the next milestone. Its detailed
+M2.5 Goal Intake is the current implementation milestone. Its detailed
 [implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
-[acceptance plan](docs/plans/m2.5-acceptance-plan.md) now exist, but product
-implementation has not started.
+[acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the work. The
+initial implementation decisions and dependency expectations are closed;
+product implementation has not started.
 
 ## Non-Goals
 

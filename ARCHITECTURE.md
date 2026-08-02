@@ -23,15 +23,18 @@ persistence, restart reconciliation, fresh repair Context, protected
 acceptance-critical verification, trusted CLI composition, and both bounded
 live Goal-bound paths are implemented, and the Slice 8 acceptance harness plus
 independent exit review completed the bounded M2 milestone on 2026-08-02.
-Goal Intake remains planned M2.5 behavior. Components marked for later
+M2.5 Slice 0 now fixes the Goal Intake implementation interfaces and bounded
+local proof profile, but Goal Intake product behavior remains planned.
+Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
 The completed [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md)
 and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
 historical implementation and exit evidence. The
 [M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
-[M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the next
-planned milestone; no M2.5 implementation has started. The following M2 slice
+[M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
+milestone. Slice 0 decision closure is complete; no Intake Domain, Runtime,
+Store, adapter, or CLI behavior is implemented. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -118,7 +121,9 @@ accepted in
 while
 [ADR 0034](docs/adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
 closes its pre-Goal command replay and verified SQLite activation boundaries.
-Goal Intake is not implemented. The completed M2 milestone preserved the
+Goal Intake is not implemented. M2.5 Slice 0 only fixes its future ownership,
+profiles, budgets, transactions, and dependency edges. The completed M2
+milestone preserved the
 reusable Codex App Server client boundary; the Intake Coordinator, Intent
 Projection/Admission authority, and Intake Assistant Adapter remain planned for
 M2.5. The same Intake boundary owns bounded non-authoritative Answer-only

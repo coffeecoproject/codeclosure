@@ -107,6 +107,22 @@ const packagePolicies = Object.freeze([
   }),
 ]);
 
+/**
+ * Slice 0 fixes the future Intake adapter package edge before the package
+ * exists. Slice 3 must promote this exact expectation into packagePolicies
+ * when it creates the package; until then the current nine-package graph
+ * remains unchanged and fully enforced.
+ */
+export const m25CodexIntakeAdapterDependencyExpectation = Object.freeze({
+  path: 'packages/adapter-codex-intake',
+  name: '@codeclosure/adapter-codex-intake',
+  dependencies: Object.freeze({
+    '@codeclosure/codex-app-server-client': 'workspace:*',
+    '@codeclosure/runtime': 'workspace:*',
+  }),
+  devDependencies: Object.freeze({}),
+});
+
 function repositoryPath(repositoryRoot, filePath) {
   return relative(repositoryRoot, filePath).split(sep).join('/');
 }
@@ -363,6 +379,26 @@ export function importViolation(specifier, filePath, packageRoot, availableDepen
   const packageName = modulePackageName(specifier);
   if (!availableDependencies.has(packageName)) {
     return `undeclared package import ${specifier}`;
+  }
+  return undefined;
+}
+
+export function m25CodexIntakeAdapterImportViolation(specifier, filePath, packageRoot) {
+  const expectation = m25CodexIntakeAdapterDependencyExpectation;
+  const violation = importViolation(
+    specifier,
+    filePath,
+    packageRoot,
+    new Set([expectation.name, ...Object.keys(expectation.dependencies)]),
+  );
+  if (violation !== undefined) {
+    return violation;
+  }
+  if (
+    specifier.startsWith('@codeclosure/runtime/') ||
+    specifier.startsWith('@codeclosure/codex-app-server-client/')
+  ) {
+    return `package subpath import is outside the Intake adapter contract (${specifier})`;
   }
   return undefined;
 }

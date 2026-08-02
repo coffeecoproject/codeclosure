@@ -49,8 +49,10 @@ Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
 ADR 0033's first-Start/static-lease alignment, and their Acceptance binding
 are implemented by Slice 7 without changing the existing M1 or schema-version-2
 authority meanings. Slice 8 adds no Domain authority; its independent review
-completed the bounded M2 milestone on 2026-08-02. Goal Intake records remain
-planned, unimplemented M2.5 behavior.
+completed the bounded M2 milestone on 2026-08-02. M2.5 Slice 0 adds no Domain
+type or authority; it fixes the future Intake interfaces and proof profile.
+Goal Intake records remain planned, unimplemented behavior for Slice 1 and
+later slices.
 
 ## Design Rules
 

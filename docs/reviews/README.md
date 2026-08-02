@@ -15,3 +15,4 @@ runtime evidence.
 - [M2 Slice 5 reject, repair, and accept review](m2-slice5-reject-repair-accept.md)
 - [M2 Slice 6 Thread, Compact, interruption, and restart review](m2-slice6-thread-compact-restart.md)
 - [M2 Slice 7 trusted composition, CLI, and live review](m2-slice7-trusted-composition-cli-live.md)
+- [M2.5 Slice 0 decision-closure review](m2-5-slice0-decision-closure.md)
