@@ -9,8 +9,9 @@ its exact per-slice evidence remain recorded in the
 completion result is recorded in the
 [`M1 completion review`](reviews/m1-completion-review.md). Target structures
 outside that subset remain planned behavior. The accepted pre-Goal Intake
-records below are planned for M2.5 and are not part of the implemented M1
-schema or Runtime. M2 Slice 0 has accepted the planned external-execution,
+records below have closed Domain types, codecs, semantic invariants, and
+canonical projections in M2.5 Slice 1, but no SQLite schema or operational
+Runtime path. M2 Slice 0 accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
 0028 through ADR 0030. ADR 0031 fixes the planned acceptance-critical
 Verification Plan and protected-asset authority, and ADR 0032 closes the
@@ -49,10 +50,10 @@ Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
 ADR 0033's first-Start/static-lease alignment, and their Acceptance binding
 are implemented by Slice 7 without changing the existing M1 or schema-version-2
 authority meanings. Slice 8 adds no Domain authority; its independent review
-completed the bounded M2 milestone on 2026-08-02. M2.5 Slice 0 adds no Domain
-type or authority; it fixes the future Intake interfaces and proof profile.
-Goal Intake records remain planned, unimplemented behavior for Slice 1 and
-later slices.
+completed the bounded M2 milestone on 2026-08-02. M2.5 Slice 1 implements the
+typed Intake record and fixed Admission Policy layer without making any Intake
+record persistable or executable. Store and behavioral integration remain
+planned for later slices.
 
 ## Design Rules
 
@@ -113,7 +114,7 @@ The M2 Slice 7 protected-verification extension adds a distinct
 Check Specification, Verification Obligation, Evidence, Policy, or Execution
 Profile identity.
 
-The planned M2.5 Intake boundary adds distinct `RawRequestId`,
+The M2.5 Slice 1 Intake Domain boundary adds distinct `RawRequestId`,
 `RawRequestRevision`, `IntakeRunId`, `IntakeManifestId`,
 `IntentAnalysisProposalId`,
 `IntentProjectionId`, `IntentProjectionRevision`, `MaterialAmbiguityId`,
@@ -124,7 +125,7 @@ The planned M2.5 Intake boundary adds distinct `RawRequestId`,
 interchanged with Goal, Workflow, Attempt, Worker, Command, or Acceptance
 identity.
 
-## Pre-Goal Intake — planned M2.5
+## Pre-Goal Intake — Domain contracts implemented; behavior planned for M2.5
 
 Goal Intake records the path from user input to source-bound admitted formal
 intent without creating Workflow authority early. Its minimal record

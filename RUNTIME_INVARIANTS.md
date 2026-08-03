@@ -252,3 +252,13 @@ NOT silently replace it.
 A missing, unavailable, malformed, or incompatible binding fails closed before
 continuation mutates Workflow authority. M1 has no automatic Policy upgrade for
 an existing Workflow; a future upgrade requires explicit versioned authority.
+
+### I-032 — Intent proposals cannot admit or materialize themselves
+
+Assistant-authored Intent proposals and Answer-only content are untrusted input.
+They MUST NOT issue an Intent Admission Decision, create or revise a Goal, create
+or mutate a Workflow, authorize Start, or become Evidence or Acceptance
+authority. Only trusted Runtime projection with explicit Source Bindings plus the
+versioned Intent Admission Policy may supply the Admission Engine's immutable
+input, and only the governed materialization transaction may create Goal and
+Workflow authority from a `MATERIALIZE` Decision.

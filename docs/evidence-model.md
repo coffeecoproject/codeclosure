@@ -27,7 +27,8 @@ later Attempt/Obligation identity. Slice 7 implements the additive protected
 Check/Evidence binding and decisive-family admission. Slice 8 adds no Evidence
 kind and completed the bounded M2 exit review on 2026-08-02. Pre-Goal
 Intake observations are not part of the implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
-M2.5 Slice 0 adds no Evidence kind or eligibility rule.
+M2.5 Slice 1 adds no Evidence kind or eligibility rule; its Proposal and
+Answer-only codecs explicitly reject injected Evidence or Acceptance authority.
 
 ## Purpose
 

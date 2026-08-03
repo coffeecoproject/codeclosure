@@ -348,26 +348,46 @@ void test('matrix and verdict preserve FAIL over BLOCKED and never omit a mandat
   );
 });
 
-void test('the bounded semantic review keeps M2 complete and Goal Intake unimplemented', () => {
+void test('the bounded semantic review keeps M2 complete while M2.5 contracts remain separate', () => {
   const root = resolve(import.meta.dirname, '..');
   const read = (path) => readFileSync(resolve(root, path), 'utf8');
-  const evidence = validateM2ScopeReview(
-    {
-      agents: read('AGENTS.md'),
-      readme: read('README.md'),
-      architecture: read('ARCHITECTURE.md'),
-      domainModel: read('docs/domain-model.md'),
-      workflow: read('docs/workflow.md'),
-      contextCompiler: read('docs/context-compiler.md'),
-      acceptanceEngine: read('docs/acceptance-engine.md'),
-      evidenceModel: read('docs/evidence-model.md'),
-      adrIndex: read('docs/adr/README.md'),
-      milestones: read('docs/milestones.md'),
-      implementationPlan: read('docs/plans/m2-codex-vertical-slice.md'),
-      acceptancePlan: read('docs/plans/m2-acceptance-plan.md'),
-    },
-    '',
-  );
+  const documents = {
+    agents: read('AGENTS.md'),
+    readme: read('README.md'),
+    architecture: read('ARCHITECTURE.md'),
+    domainModel: read('docs/domain-model.md'),
+    workflow: read('docs/workflow.md'),
+    contextCompiler: read('docs/context-compiler.md'),
+    acceptanceEngine: read('docs/acceptance-engine.md'),
+    evidenceModel: read('docs/evidence-model.md'),
+    adrIndex: read('docs/adr/README.md'),
+    milestones: read('docs/milestones.md'),
+    implementationPlan: read('docs/plans/m2-codex-vertical-slice.md'),
+    acceptancePlan: read('docs/plans/m2-acceptance-plan.md'),
+  };
+  const evidence = validateM2ScopeReview(documents, '');
   assert.equal(evidence.goalIntakeBoundary, 'NOT_M2_SCOPE');
+  assert.equal(evidence.goalIntakeSlice1ContractTokens, 0);
+  assert.equal(evidence.goalIntakeOperationalTokens, 0);
   assert.equal(evidence.acceptedM2Adrs, 6);
+
+  const completeSlice1Contract = [
+    'RawRequestId',
+    'IntakeRunId',
+    'IntentAnalysisProposalId',
+    'IntentProjectionId',
+    'IntentAdmissionDecisionId',
+    'GoalMaterializationRecord',
+  ].join('\n');
+  const slice1Evidence = validateM2ScopeReview(documents, completeSlice1Contract);
+  assert.equal(slice1Evidence.goalIntakeSlice1ContractTokens, 6);
+  assert.equal(slice1Evidence.goalIntakeOperationalTokens, 0);
+  assert.throws(
+    () => validateM2ScopeReview(documents, 'RawRequestId'),
+    /Slice 1 Intake contract is partial/,
+  );
+  assert.throws(
+    () => validateM2ScopeReview(documents, `${completeSlice1Contract}\nGoalIntakeCoordinator`),
+    /operational Intake work exceeds/,
+  );
 });

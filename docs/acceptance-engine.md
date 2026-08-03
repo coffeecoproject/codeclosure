@@ -18,8 +18,10 @@ atomicity and separates the static Check lease from later Attempt/Obligation
 causality. Slice 7 implements that protected Acceptance input and checker
 without changing the M1 rule set. Slice 8 adds no technical-completion authority
 and completed the bounded M2 exit review on 2026-08-02. Intent Admission and
-Goal Materialization are a separate pre-Goal authority. They are not implemented by the Acceptance Engine.
-M2.5 Slice 0 adds no technical-completion authority.
+Goal Materialization are a separate pre-Goal authority. M2.5 Slice 1 implements
+their Domain Decision and capability-free Admission Engine contracts, not the
+Admission evaluator or Materialization path. The technical Acceptance Engine
+remains unchanged and gains no pre-Goal or model-authored completion authority.
 
 ## Purpose
 

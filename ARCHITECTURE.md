@@ -23,8 +23,10 @@ persistence, restart reconciliation, fresh repair Context, protected
 acceptance-critical verification, trusted CLI composition, and both bounded
 live Goal-bound paths are implemented, and the Slice 8 acceptance harness plus
 independent exit review completed the bounded M2 milestone on 2026-08-02.
-M2.5 Slice 0 now fixes the Goal Intake implementation interfaces and bounded
-local proof profile, but Goal Intake product behavior remains planned.
+M2.5 Slice 1 now implements the closed Intake Domain records and codecs,
+canonical projections and golden vectors, fixed Admission Policy definitions,
+the capability-free Admission Engine contract, and the anti-self-admission
+Runtime invariant. Goal Intake persistence and product behavior remain planned.
 Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
@@ -33,8 +35,8 @@ and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
 historical implementation and exit evidence. The
 [M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
-milestone. Slice 0 decision closure is complete; no Intake Domain, Runtime,
-Store, adapter, or CLI behavior is implemented. The following M2 slice
+milestone. Slice 1 is complete; no Intake Store, Coordinator, package compiler,
+adapter, CLI, Materialization, or Start behavior is implemented. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -121,12 +123,14 @@ accepted in
 while
 [ADR 0034](docs/adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
 closes its pre-Goal command replay and verified SQLite activation boundaries.
-Goal Intake is not implemented. M2.5 Slice 0 only fixes its future ownership,
-profiles, budgets, transactions, and dependency edges. The completed M2
-milestone preserved the
-reusable Codex App Server client boundary; the Intake Coordinator, Intent
-Projection/Admission authority, and Intake Assistant Adapter remain planned for
-M2.5. The same Intake boundary owns bounded non-authoritative Answer-only
+Goal Intake is not operational. M2.5 Slice 1 implements its closed Domain
+records, codecs, canonical projections, fixed Policy definitions, and
+capability-free Admission Engine contract, but not the Engine evaluator,
+persistence, Coordinator, Materialization, Start, adapter, or CLI behavior. The
+completed M2 milestone preserved the reusable Codex App Server client boundary;
+the Intake Coordinator, Projection construction, Admission evaluator, and
+Intake Assistant Adapter remain planned for M2.5. The same Intake boundary owns
+bounded non-authoritative Answer-only
 results and terminal Intake-failure classification. Materialization creates a
 `READY` Workflow; optional automatic execution still crosses the separate
 ordinary `StartGoal` boundary.
@@ -328,13 +332,14 @@ the Runtime application boundary, where the Goal Manager validates formal
 intent and the Workflow Runtime remains the only Workflow writer. See
 [Goal Intake](docs/goal-intake.md).
 
-### Intent Admission Engine — planned M2.5
+### Intent Admission Engine — contract implemented; evaluator planned M2.5
 
-Evaluates either one immutable pre-analysis Raw Request view or one complete
-Projection/Source-Binding view under an exact Admission Policy and issues
-`MATERIALIZE`, `CLARIFY`, or `NO_EXECUTION` with an ordered reason trace. It is
-deterministic for fixed canonical inputs and cannot call an assistant while
-deciding.
+The Slice 1 capability-free interface defines evaluation of either one
+immutable pre-analysis Raw Request view or one complete
+Projection/Source-Binding view under an exact Admission Policy and issuance of
+`MATERIALIZE`, `CLARIFY`, or `NO_EXECUTION` with an ordered reason trace. The
+later evaluator must be deterministic for fixed canonical inputs and cannot
+call an assistant while deciding.
 
 It owns neither the Projection nor the resulting Goal. It cannot mutate Intake
 or Workflow state, create an Attempt, select a replacement execution profile,

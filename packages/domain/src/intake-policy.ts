@@ -1,0 +1,393 @@
+import {
+  auditEventId,
+  intentAdmissionPolicyId,
+  isoTimestamp,
+  sha256Digest,
+  type AuditEventId,
+  type IntentAdmissionPolicyId,
+  type IsoTimestamp,
+  type Sha256Digest,
+} from './identifiers.js';
+import { IntentProjectionField, SourceAuthorityClass } from './intake.js';
+import type {
+  IntakeInteractionAction,
+  IntentAdmissionDecisionKind,
+  IntentAdmissionOutcome,
+  IntentAdmissionReasonCode,
+  IntentExecutionDisposition,
+  IntakeInteractionAction as IntakeInteractionActionType,
+  IntentProjectionField as IntentProjectionFieldType,
+  SourceAuthorityClass as SourceAuthorityClassType,
+} from './intake.js';
+import { DomainInvariantError } from './workflow.js';
+
+export const IntentAdmissionPolicyRuleKind = {
+  ANSWER_ONLY_ACTION: 'ANSWER_ONLY_ACTION',
+  ABANDON_ACTIVE_QUESTION: 'ABANDON_ACTIVE_QUESTION',
+  MATERIAL_FIELD_ELIGIBILITY: 'MATERIAL_FIELD_ELIGIBILITY',
+  FIRST_MATERIAL_AMBIGUITY: 'FIRST_MATERIAL_AMBIGUITY',
+  MATERIALIZE_ONLY_DISPOSITION: 'MATERIALIZE_ONLY_DISPOSITION',
+  GOVERNED_EXECUTION_DISPOSITION: 'GOVERNED_EXECUTION_DISPOSITION',
+  DENY_EXACT_PRINCIPAL: 'DENY_EXACT_PRINCIPAL',
+  UNSUPPORTED_GOVERNED_EXECUTION: 'UNSUPPORTED_GOVERNED_EXECUTION',
+} as const;
+export type IntentAdmissionPolicyRuleKind =
+  (typeof IntentAdmissionPolicyRuleKind)[keyof typeof IntentAdmissionPolicyRuleKind];
+
+export const IntentAdmissionMaterialFieldKind = {
+  OBJECTIVE: 'OBJECTIVE',
+  REQUIRED_CRITERIA: 'REQUIRED_CRITERIA',
+  OPTIONAL_CRITERIA: 'OPTIONAL_CRITERIA',
+  PROJECT_PATH: 'PROJECT_PATH',
+  ALLOWED_PATHS: 'ALLOWED_PATHS',
+  NON_GOALS: 'NON_GOALS',
+  ASSUMPTIONS: 'ASSUMPTIONS',
+  REQUESTED_EXECUTION_DISPOSITION: 'REQUESTED_EXECUTION_DISPOSITION',
+} as const;
+export type IntentAdmissionMaterialFieldKind =
+  (typeof IntentAdmissionMaterialFieldKind)[keyof typeof IntentAdmissionMaterialFieldKind];
+
+export const IntentAdmissionFieldCardinality = {
+  EXACTLY_ONE: 'EXACTLY_ONE',
+  ONE_TO_SIXTEEN: 'ONE_TO_SIXTEEN',
+  ZERO_TO_SIXTEEN: 'ZERO_TO_SIXTEEN',
+  FIXED_EMPTY: 'FIXED_EMPTY',
+  ACTION_DERIVED_ONE: 'ACTION_DERIVED_ONE',
+} as const;
+export type IntentAdmissionFieldCardinality =
+  (typeof IntentAdmissionFieldCardinality)[keyof typeof IntentAdmissionFieldCardinality];
+
+export const IntentAdmissionDerivationRuleId = {
+  DECLARED_PROJECT_TO_SCOPE: 'declared-project-to-scope_codeclosure-m2-5-v1',
+  INTERACTION_ACTION_TO_DISPOSITION: 'interaction-action-to-disposition_codeclosure-m2-5-v1',
+} as const;
+export type IntentAdmissionDerivationRuleId =
+  (typeof IntentAdmissionDerivationRuleId)[keyof typeof IntentAdmissionDerivationRuleId];
+
+export const IntentAdmissionRuleId = {
+  ANSWER_ONLY_ACTION: 'answer-only_action_codeclosure-m2-5-v1',
+  ABANDON_ACTIVE_QUESTION: 'abandon-active-question_codeclosure-m2-5-v1',
+  MATERIAL_FIELD_ELIGIBILITY: 'material-field-eligibility_codeclosure-m2-5-v1',
+  FIRST_MATERIAL_AMBIGUITY: 'first-material-ambiguity_codeclosure-m2-5-v1',
+  MATERIALIZE_ONLY_DISPOSITION: 'materialize-only-disposition_codeclosure-m2-5-v1',
+  GOVERNED_EXECUTION_DISPOSITION: 'governed-execution-disposition_codeclosure-m2-5-v1',
+  TEST_DENY_EXACT_PRINCIPAL: 'deny-exact-principal_codeclosure-m2-5-test-v1',
+  TEST_UNSUPPORTED_GOVERNED_EXECUTION: 'unsupported-governed-execution_codeclosure-m2-5-test-v1',
+} as const;
+export type IntentAdmissionRuleId =
+  (typeof IntentAdmissionRuleId)[keyof typeof IntentAdmissionRuleId];
+
+export interface IntentAdmissionMaterialFieldRule {
+  readonly field: IntentAdmissionMaterialFieldKind;
+  readonly cardinality: IntentAdmissionFieldCardinality;
+  readonly allowedAuthorityClasses: readonly SourceAuthorityClassType[];
+  readonly exactDerivationRuleId?: IntentAdmissionDerivationRuleId;
+  readonly materializedCriterionRequired?: true;
+}
+
+export interface IntentAdmissionDerivationRuleDefinition {
+  readonly id: IntentAdmissionDerivationRuleId;
+  readonly version: 'codeclosure-m2-5-v1';
+  readonly sourceKind: 'DECLARED_PROJECT_REF' | 'TRUSTED_INTERACTION_ACTION';
+  readonly targetField:
+    | typeof IntentProjectionField.PROJECT_IDENTITY
+    | typeof IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION;
+  readonly meaningPreserving: true;
+}
+
+interface IntentAdmissionPolicyRuleBase {
+  readonly ruleId: IntentAdmissionRuleId;
+  readonly ruleVersion: 'codeclosure-m2-5-v1' | 'codeclosure-m2-5-test-v1';
+  readonly kind: IntentAdmissionPolicyRuleKind;
+}
+
+export interface AnswerOnlyActionRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.ANSWER_ONLY_ACTION;
+  readonly ruleVersion: 'codeclosure-m2-5-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.ANSWER_ONLY_ACTION;
+  readonly interactionAction: typeof IntakeInteractionAction.ANSWER_ONLY;
+  readonly decisionKind: typeof IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION;
+  readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+  readonly reasonCode: typeof IntentAdmissionReasonCode.ANSWER_ONLY;
+  readonly executionDisposition: typeof IntentExecutionDisposition.NONE;
+}
+
+export interface AbandonActiveQuestionRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.ABANDON_ACTIVE_QUESTION;
+  readonly ruleVersion: 'codeclosure-m2-5-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.ABANDON_ACTIVE_QUESTION;
+  readonly requiresExactCurrentQuestionBinding: true;
+  readonly decisionKind: typeof IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION;
+  readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+  readonly reasonCode: typeof IntentAdmissionReasonCode.ABANDONED;
+  readonly executionDisposition: typeof IntentExecutionDisposition.NONE;
+}
+
+export interface MaterialFieldEligibilityRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.MATERIAL_FIELD_ELIGIBILITY;
+  readonly ruleVersion: 'codeclosure-m2-5-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.MATERIAL_FIELD_ELIGIBILITY;
+  readonly fields: readonly IntentAdmissionMaterialFieldRule[];
+}
+
+export interface FirstMaterialAmbiguityRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.FIRST_MATERIAL_AMBIGUITY;
+  readonly ruleVersion: 'codeclosure-m2-5-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.FIRST_MATERIAL_AMBIGUITY;
+  readonly fieldPriority: readonly IntentProjectionFieldType[];
+  readonly tieBreak: 'SOURCE_BYTE_ORDER';
+  readonly maxActiveQuestions: 1;
+}
+
+export interface MaterializeOnlyDispositionRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.MATERIALIZE_ONLY_DISPOSITION;
+  readonly ruleVersion: 'codeclosure-m2-5-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.MATERIALIZE_ONLY_DISPOSITION;
+  readonly interactionAction: typeof IntakeInteractionAction.MATERIALIZE_ONLY;
+  readonly decisionKind: typeof IntentAdmissionDecisionKind.MATERIALIZE;
+  readonly outcome: typeof IntentAdmissionOutcome.MATERIALIZE;
+  readonly reasonCode: typeof IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED;
+  readonly executionDisposition: typeof IntentExecutionDisposition.LEAVE_READY;
+}
+
+export interface GovernedExecutionDispositionRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.GOVERNED_EXECUTION_DISPOSITION;
+  readonly ruleVersion: 'codeclosure-m2-5-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.GOVERNED_EXECUTION_DISPOSITION;
+  readonly interactionAction: typeof IntakeInteractionAction.GOVERNED_EXECUTION;
+  readonly requiresExactWorkflowPolicyAndProfilePreflight: true;
+  readonly decisionKind: typeof IntentAdmissionDecisionKind.MATERIALIZE;
+  readonly outcome: typeof IntentAdmissionOutcome.MATERIALIZE;
+  readonly reasonCode: typeof IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED;
+  readonly executionDisposition: typeof IntentExecutionDisposition.AUTHORIZE_START;
+}
+
+export interface DenyExactPrincipalRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.TEST_DENY_EXACT_PRINCIPAL;
+  readonly ruleVersion: 'codeclosure-m2-5-test-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.DENY_EXACT_PRINCIPAL;
+  readonly principalRef: 'principal_fixture-policy-denied';
+  readonly interactionAction: typeof IntakeInteractionAction.MATERIALIZE_ONLY;
+  readonly decisionKind: typeof IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION;
+  readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+  readonly reasonCode: typeof IntentAdmissionReasonCode.POLICY_DENIED;
+  readonly executionDisposition: typeof IntentExecutionDisposition.NONE;
+}
+
+export interface UnsupportedGovernedExecutionRule extends IntentAdmissionPolicyRuleBase {
+  readonly ruleId: typeof IntentAdmissionRuleId.TEST_UNSUPPORTED_GOVERNED_EXECUTION;
+  readonly ruleVersion: 'codeclosure-m2-5-test-v1';
+  readonly kind: typeof IntentAdmissionPolicyRuleKind.UNSUPPORTED_GOVERNED_EXECUTION;
+  readonly interactionAction: typeof IntakeInteractionAction.GOVERNED_EXECUTION;
+  readonly decisionKind: typeof IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION;
+  readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+  readonly reasonCode: typeof IntentAdmissionReasonCode.UNSUPPORTED;
+  readonly executionDisposition: typeof IntentExecutionDisposition.NONE;
+}
+
+export type IntentAdmissionPolicyRule =
+  | AnswerOnlyActionRule
+  | AbandonActiveQuestionRule
+  | MaterialFieldEligibilityRule
+  | FirstMaterialAmbiguityRule
+  | MaterializeOnlyDispositionRule
+  | GovernedExecutionDispositionRule
+  | DenyExactPrincipalRule
+  | UnsupportedGovernedExecutionRule;
+
+export interface IntentAdmissionPolicyDefinition {
+  readonly id: IntentAdmissionPolicyId;
+  readonly schemaVersion: 1;
+  readonly version: string;
+  readonly orderedRules: readonly IntentAdmissionPolicyRule[];
+  readonly derivationRules: readonly IntentAdmissionDerivationRuleDefinition[];
+  readonly policyDeniedRuleIds: readonly IntentAdmissionRuleId[];
+  readonly unsupportedRuleIds: readonly IntentAdmissionRuleId[];
+}
+
+export interface IntentAdmissionPolicy extends IntentAdmissionPolicyDefinition {
+  readonly digest: Sha256Digest;
+}
+
+export interface IntentAdmissionPolicyInstallInput {
+  readonly policy: IntentAdmissionPolicy;
+  readonly installedAt: IsoTimestamp;
+  readonly auditEventId: AuditEventId;
+  readonly payloadDigest: Sha256Digest;
+}
+
+function assertKnown<Value extends string>(
+  values: Readonly<Record<string, Value>>,
+  value: unknown,
+  name: string,
+): asserts value is Value {
+  if (!Object.values(values).some((candidate) => candidate === value)) {
+    throw new DomainInvariantError(`${name} is unknown`);
+  }
+}
+
+function assertNonBlank(value: string, name: string): void {
+  if (value.trim().length === 0) {
+    throw new DomainInvariantError(`${name} must not be blank`);
+  }
+}
+
+function assertUnique(values: readonly string[], name: string): void {
+  if (new Set(values).size !== values.length) {
+    throw new DomainInvariantError(`${name} must not contain duplicates`);
+  }
+}
+
+export function assertIntentAdmissionPolicyDefinitionInvariant(
+  policy: IntentAdmissionPolicyDefinition,
+): void {
+  intentAdmissionPolicyId(policy.id);
+  assertNonBlank(policy.version, 'Intent Admission Policy version');
+  if (policy.orderedRules.length < 6) {
+    throw new DomainInvariantError(
+      'Intent Admission Policy must contain the complete local registry',
+    );
+  }
+  const ruleIds = policy.orderedRules.map(({ ruleId }) => ruleId);
+  assertUnique(ruleIds, 'Intent Admission Policy rule ID');
+  for (const rule of policy.orderedRules) {
+    assertKnown(IntentAdmissionRuleId, rule.ruleId, 'Intent Admission rule ID');
+    assertKnown(IntentAdmissionPolicyRuleKind, rule.kind, 'Intent Admission rule kind');
+    assertNonBlank(rule.ruleVersion, 'Intent Admission rule version');
+    switch (rule.kind) {
+      case IntentAdmissionPolicyRuleKind.ANSWER_ONLY_ACTION:
+        break;
+      case IntentAdmissionPolicyRuleKind.ABANDON_ACTIVE_QUESTION:
+        break;
+      case IntentAdmissionPolicyRuleKind.MATERIAL_FIELD_ELIGIBILITY: {
+        const fields = rule.fields.map(({ field }) => field);
+        assertUnique(fields, 'Admission material field');
+        if (
+          fields.length !== Object.values(IntentAdmissionMaterialFieldKind).length ||
+          !Object.values(IntentAdmissionMaterialFieldKind).every((field) => fields.includes(field))
+        ) {
+          throw new DomainInvariantError(
+            'Material-field rule must cover the exact closed field set',
+          );
+        }
+        for (const fieldRule of rule.fields) {
+          assertKnown(IntentAdmissionMaterialFieldKind, fieldRule.field, 'Material field');
+          assertKnown(IntentAdmissionFieldCardinality, fieldRule.cardinality, 'Field cardinality');
+          for (const authorityClass of fieldRule.allowedAuthorityClasses) {
+            assertKnown(SourceAuthorityClass, authorityClass, 'Allowed source authority class');
+          }
+          assertUnique(fieldRule.allowedAuthorityClasses, 'Allowed source authority class');
+          if (fieldRule.exactDerivationRuleId !== undefined) {
+            assertKnown(
+              IntentAdmissionDerivationRuleId,
+              fieldRule.exactDerivationRuleId,
+              'Exact derivation rule',
+            );
+          }
+        }
+        break;
+      }
+      case IntentAdmissionPolicyRuleKind.FIRST_MATERIAL_AMBIGUITY:
+        if (new Set(rule.fieldPriority).size !== rule.fieldPriority.length) {
+          throw new DomainInvariantError(
+            'Material Ambiguity selection must be singular and ordered',
+          );
+        }
+        break;
+      case IntentAdmissionPolicyRuleKind.MATERIALIZE_ONLY_DISPOSITION:
+        break;
+      case IntentAdmissionPolicyRuleKind.GOVERNED_EXECUTION_DISPOSITION:
+        break;
+      case IntentAdmissionPolicyRuleKind.DENY_EXACT_PRINCIPAL:
+        break;
+      case IntentAdmissionPolicyRuleKind.UNSUPPORTED_GOVERNED_EXECUTION:
+        break;
+    }
+  }
+  const derivationIds = policy.derivationRules.map(({ id }) => id);
+  assertUnique(derivationIds, 'Intent Admission derivation rule ID');
+  if (
+    derivationIds.length !== Object.values(IntentAdmissionDerivationRuleId).length ||
+    !Object.values(IntentAdmissionDerivationRuleId).every((id) => derivationIds.includes(id))
+  ) {
+    throw new DomainInvariantError('Intent Admission derivation registry must be exact');
+  }
+  for (const rule of policy.derivationRules) {
+    assertKnown(IntentAdmissionDerivationRuleId, rule.id, 'Intent Admission derivation rule ID');
+    switch (rule.id) {
+      case IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE:
+        if (
+          rule.sourceKind !== 'DECLARED_PROJECT_REF' ||
+          rule.targetField !== IntentProjectionField.PROJECT_IDENTITY
+        ) {
+          throw new DomainInvariantError('Declared Project derivation has invalid fixed semantics');
+        }
+        break;
+      case IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION:
+        if (
+          rule.sourceKind !== 'TRUSTED_INTERACTION_ACTION' ||
+          rule.targetField !== IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION
+        ) {
+          throw new DomainInvariantError(
+            'Interaction-action derivation has invalid fixed semantics',
+          );
+        }
+        break;
+    }
+  }
+  assertUnique(policy.policyDeniedRuleIds, 'POLICY_DENIED rule ID');
+  assertUnique(policy.unsupportedRuleIds, 'UNSUPPORTED rule ID');
+  for (const ruleId of [...policy.policyDeniedRuleIds, ...policy.unsupportedRuleIds]) {
+    if (!ruleIds.includes(ruleId)) {
+      throw new DomainInvariantError('Admission reason collection references an absent rule');
+    }
+  }
+  const deniedRuleIds = policy.orderedRules
+    .filter(({ kind }) => kind === IntentAdmissionPolicyRuleKind.DENY_EXACT_PRINCIPAL)
+    .map(({ ruleId }) => ruleId);
+  const unsupportedRuleIds = policy.orderedRules
+    .filter(({ kind }) => kind === IntentAdmissionPolicyRuleKind.UNSUPPORTED_GOVERNED_EXECUTION)
+    .map(({ ruleId }) => ruleId);
+  if (deniedRuleIds.join('\u0000') !== policy.policyDeniedRuleIds.join('\u0000')) {
+    throw new DomainInvariantError('POLICY_DENIED collection must match the ordered rule registry');
+  }
+  if (unsupportedRuleIds.join('\u0000') !== policy.unsupportedRuleIds.join('\u0000')) {
+    throw new DomainInvariantError('UNSUPPORTED collection must match the ordered rule registry');
+  }
+}
+
+export function assertIntentAdmissionPolicyInvariant(policy: IntentAdmissionPolicy): void {
+  assertIntentAdmissionPolicyDefinitionInvariant(policy);
+  sha256Digest(policy.digest);
+}
+
+export function assertIntentAdmissionPolicyInstallInputInvariant(
+  input: IntentAdmissionPolicyInstallInput,
+): void {
+  assertIntentAdmissionPolicyInvariant(input.policy);
+  isoTimestamp(input.installedAt);
+  auditEventId(input.auditEventId);
+  sha256Digest(input.payloadDigest);
+  if (input.payloadDigest !== input.policy.digest) {
+    throw new DomainInvariantError('Admission Policy install payload must use the Policy digest');
+  }
+}
+
+export function intentAdmissionPolicyProjection(policy: IntentAdmissionPolicyDefinition): unknown {
+  return {
+    id: policy.id,
+    schemaVersion: policy.schemaVersion,
+    version: policy.version,
+    orderedRules: policy.orderedRules,
+    derivationRules: policy.derivationRules,
+    policyDeniedRuleIds: policy.policyDeniedRuleIds,
+    unsupportedRuleIds: policy.unsupportedRuleIds,
+  };
+}
+
+export function isAdmissionRuleForAction(
+  rule: IntentAdmissionPolicyRule,
+  action: IntakeInteractionActionType,
+): boolean {
+  return 'interactionAction' in rule && rule.interactionAction === action;
+}

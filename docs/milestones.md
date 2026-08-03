@@ -290,17 +290,18 @@ that CodeClosure can form a Goal from an incomplete natural-language request.
 
 ## M2.5 — Goal Intake and Materialization Vertical Slice
 
-Status: In progress. Slice 0 decision closure is complete; Slice 1 product
-implementation has not started. The scope below is planned behavior governed by
+Status: In progress. Slice 1 domain, codec, fixed-policy, Engine-contract, and
+invariant work is complete; Slice 2 SQLite Intake authority has not started.
+The operational scope below remains planned behavior governed by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and
 [ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md).
 M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
-[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. Slice 0
-fixes interfaces, profiles, budgets, transaction meanings, and the future
-adapter dependency edge without implementing Goal Intake behavior.
+[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. Slice 1
+adds no Intake persistence, Coordinator, adapter, CLI, Materialization, or Start
+behavior.
 
 ### Objective
 

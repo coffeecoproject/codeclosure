@@ -48,9 +48,11 @@ acceptance-critical Verification Plan and schema-version-3 Check/Evidence
 family, closed for bounded composition by ADR 0032 and aligned with the
 existing first-Start and Check-before-Attempt lifecycle by ADR 0033. Trusted
 CLI composition exercises both the natural live branch and the separate fresh
-repair-handoff branch without granting Codex Workflow authority. Goal Intake is an accepted pre-Goal
-target for M2.5; it is not implemented and does not add another Workflow phase.
-Slice 0 fixes only its future interface.
+repair-handoff branch without granting Codex Workflow authority. Goal Intake is
+an accepted pre-Goal target for M2.5 and does not add another Workflow phase.
+Slice 1 implements its separate Domain state and Admission contracts only; no
+Intake transition, Workflow mutation, Materialization, or automatic Start path
+is operational.
 Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
 2026-08-02.
 

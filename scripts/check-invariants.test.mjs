@@ -73,6 +73,6 @@ test('[I-002][I-2] wrong metadata', () => {});
 
 void test('the repository has executable metadata for every runtime invariant', () => {
   const audit = auditInvariantCoverage(repositoryRoot);
-  assert.equal(audit.catalog.length, 31);
+  assert.equal(audit.catalog.length, 32);
   assert.deepEqual(audit.violations, []);
 });

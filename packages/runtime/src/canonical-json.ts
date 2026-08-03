@@ -78,4 +78,10 @@ export class CanonicalJsonSha256DigestProvider implements DigestProvider {
     const bytes = Buffer.from(canonicalizeJson(value), 'utf8');
     return sha256Digest(`sha256:${createHash('sha256').update(bytes).digest('hex')}`);
   }
+
+  /** SHA-256 over the exact UTF-8 bytes of an uncanonicalized string. */
+  public digestUtf8(value: string): Sha256Digest {
+    const bytes = Buffer.from(value, 'utf8');
+    return sha256Digest(`sha256:${createHash('sha256').update(bytes).digest('hex')}`);
+  }
 }

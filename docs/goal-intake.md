@@ -7,14 +7,16 @@ This document defines the accepted target contract for pre-Goal Intake under
 [ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
 additionally closes pre-Goal command replay and retained Intake project-path
 participation in verified SQLite activation.
-Goal Intake is not implemented. M2 completed with its reusable App Server client
-seam preserved. M2.5 Slice 0 has fixed the implementation identities, budgets,
-transaction meanings, and adapter dependency edge without adding Intake
-product behavior. The
+Goal Intake is not operational. M2 completed with its reusable App Server client
+seam preserved. M2.5 Slice 1 implements typed Intake records, strict owning
+codecs, canonical projections and golden vectors, the fixed local and test
+Admission Policy definitions, the capability-free Admission Engine contract,
+and the anti-self-admission Runtime invariant. It adds no SQLite authority,
+Coordinator, package compiler, adapter, CLI, Materialization, or Start behavior. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 1 product implementation
-has not started.
+contract into the current bounded milestone; Slice 2 is the next implementation
+boundary.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout
@@ -344,7 +346,7 @@ to be absent. The clarification-answer transaction moves directly from the
 first shape to `ANALYZING` with no active reference; Store and strict reopen
 reject every other status/reference/binding combination.
 
-Planned `IntakeRunStatus` values are:
+The implemented Slice 1 `IntakeRunStatus` Domain values are:
 
 - `ANALYZING`;
 - `NEEDS_CLARIFICATION`;

@@ -657,17 +657,17 @@ export function validateM2ScopeReview(documents, productSources) {
   );
   requirePattern(
     documents.workflow,
-    /Goal Intake is an accepted pre-Goal[\s\S]{0,120}M2\.5; it is not implemented/u,
-    'Workflow does not preserve the planned Goal Intake boundary',
+    /Goal Intake is[\s\S]{0,120}accepted pre-Goal target for M2\.5[\s\S]{0,180}no[\s\S]{0,80}(Intake transition|Workflow mutation)[\s\S]{0,100}operational/u,
+    'Workflow does not preserve the non-operational Goal Intake boundary',
   );
   requirePattern(
     documents.contextCompiler,
-    /Goal-bound Worker Context Compiler;[\s\S]{0,180}separate Intake Package and Manifest[\s\S]{0,80}not implemented/u,
-    'Context Compiler does not preserve the separate unimplemented Intake contract',
+    /Goal-bound Worker Context Compiler;[\s\S]{0,180}separate Intake Package and Manifest[\s\S]{0,160}not the separate package compiler/u,
+    'Context Compiler does not preserve the separate unimplemented Intake compiler boundary',
   );
   requirePattern(
     documents.acceptanceEngine,
-    /(Goal Intake|Intent Admission)[\s\S]{0,220}not implemented by the Acceptance Engine/u,
+    /Intent Admission[\s\S]{0,300}technical Acceptance Engine[\s\S]{0,100}(unchanged|no pre-Goal)/u,
     'Acceptance Engine does not disclaim Goal Intake authority',
   );
   requirePattern(
@@ -713,22 +713,38 @@ export function validateM2ScopeReview(documents, productSources) {
     'RawRequestId',
     'IntakeRunId',
     'IntentAnalysisProposalId',
-    'IntentProjectionRevisionId',
+    'IntentProjectionId',
     'IntentAdmissionDecisionId',
     'GoalMaterializationRecord',
   ];
   const implementedIntakeTokens = intakeImplementationTokens.filter((token) =>
     productSources.includes(token),
   );
-  if (implementedIntakeTokens.length !== 0) {
+  if (
+    implementedIntakeTokens.length !== 0 &&
+    implementedIntakeTokens.length !== intakeImplementationTokens.length
+  ) {
     throw new TypeError(
-      `M2 product source contains Goal Intake implementation tokens: ${implementedIntakeTokens.join(', ')}`,
+      `M2.5 Slice 1 Intake contract is partial: ${implementedIntakeTokens.join(', ')}`,
+    );
+  }
+  const operationalIntakeTokens = [
+    'GoalIntakeCoordinator',
+    'IntakeControlStore',
+    'IntakeAssistantPort',
+    'materializeGoal(',
+    'submitIntake(',
+  ].filter((token) => productSources.includes(token));
+  if (operationalIntakeTokens.length !== 0) {
+    throw new TypeError(
+      `M2.5 operational Intake work exceeds the recorded Slice 1 boundary: ${operationalIntakeTokens.join(', ')}`,
     );
   }
   return Object.freeze({
     reviewedDocuments: requiredDocuments.length,
     acceptedM2Adrs: 6,
-    goalIntakeImplementationTokens: 0,
+    goalIntakeSlice1ContractTokens: implementedIntakeTokens.length,
+    goalIntakeOperationalTokens: operationalIntakeTokens.length,
     goalIntakeBoundary: 'NOT_M2_SCOPE',
     externalEffectAuthority: 'NOT_AUTHORIZED',
   });
