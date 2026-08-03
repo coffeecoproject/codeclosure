@@ -359,10 +359,15 @@ For the bounded local M2.5 surface, abandonment is an explicit
 `intake abandon <intake-run-id> --expected-version <number>` action. It is
 available only for the exact current `NEEDS_CLARIFICATION` version with one
 unanswered active Question and no external operation in flight. Runtime binds
-the current Projection, Question, and issuing Decision, clears only the active
-reference, and atomically records `PROJECTED_NO_EXECUTION / ABANDONED`, terminal
-state, command outcome, and audits. It creates no Raw Request revision and does
-not infer abandonment from silence, answer text, timeout, or assistant output.
+the current Projection, Question, and issuing Decision plus the exact
+`ABANDON_CLARIFICATION` command reservation, clears only the active reference,
+and atomically records `PROJECTED_NO_EXECUTION / ABANDONED`, terminal state,
+`APPLIED` command outcome, and audits. It creates no Raw Request revision and
+does not infer abandonment from silence, answer text, timeout, or assistant
+output. A schema-valid stale or ineligible command records only the ADR 0034
+deterministic `REJECTED` reservation/outcome transaction; missing target,
+invalid input, replay-integrity failure, and command conflict retain ADR 0034's
+no-new-row behavior.
 
 `MATERIALIZED`, `NO_EXECUTION`, and `FAILED` are terminal for one Intake Run.
 `NO_EXECUTION` means policy intentionally created no governed Goal. `FAILED`
@@ -812,6 +817,15 @@ ProjectionAdmissionBinding
   sourceBindingDigests[]
   materialAmbiguityRefs[]
 
+AbandonmentBinding
+  clarificationQuestionId
+  questionSpecDigest
+  questionDigest
+  issuingClarifyDecisionId
+  issuingClarifyDecisionDigest
+  commandId
+  canonicalCommandInputDigest
+
 PreAnalysisNoExecutionDecision
   common
   kind = PRE_ANALYSIS_NO_EXECUTION
@@ -824,6 +838,7 @@ ProjectedNoExecutionDecision
   common
   kind = PROJECTED_NO_EXECUTION
   projectionBinding
+  abandonmentBinding?
   projectOrScopeRef?
   outcome = NO_EXECUTION
   reasonCode
@@ -853,6 +868,11 @@ MaterializeIntentDecision
 separate authority record. A Store codec MUST reject a partial identity/digest
 tuple, Projection fields on `PRE_ANALYSIS_NO_EXECUTION`, a missing project/scope
 on `MATERIALIZE`, or any unknown kind/outcome/action/disposition combination.
+For local M2.5, `PROJECTED_NO_EXECUTION / ABANDONED` requires exactly one
+complete `AbandonmentBinding`; every other Decision kind or reason forbids it.
+The Store validates its Question/spec/record digests, prior `CLARIFY` Decision,
+Command ID/input digest, current active reference, principal, and Intake version
+against the same atomic reservation/outcome transaction.
 `CLARIFY` requires at least one current unresolved Material Ambiguity and one
 complete `QuestionPlanBinding`; every other Decision variant rejects that
 binding. The Store validates the plan binding against the exact Question record
@@ -890,12 +910,15 @@ need a governed read-only Goal rather than `ANSWER_ONLY`.
 
 `MATERIALIZE`, `CLARIFY`, and content-dependent `NO_EXECUTION` decisions require
 the complete exact Proposal and Projection binding. A deterministic
-pre-analysis `ANSWER_ONLY`, policy denial, unsupported request, or abandonment
-may use `PRE_ANALYSIS_NO_EXECUTION` without calling an assistant for Admission
-or creating empty Proposal/Projection records when the trusted action and policy
-inputs are already dispositive. A separate Answer-only call may still produce
-the requested non-authoritative response; it is not Intent analysis and cannot
-change the Admission outcome.
+pre-analysis `ANSWER_ONLY`, policy denial, or unsupported request may use
+`PRE_ANALYSIS_NO_EXECUTION` without calling an assistant for Admission or
+creating empty Proposal/Projection records when trusted action and policy inputs
+are already dispositive. ADR 0027 permits a future policy version to define a
+different trusted pre-analysis abandonment source, but local M2.5 does not:
+its sole explicit abandonment consumes current `CLARIFY` authority and MUST use
+`PROJECTED_NO_EXECUTION` with the exact `AbandonmentBinding`. A separate
+Answer-only call may still produce the requested non-authoritative response; it
+is not Intent analysis and cannot change the Admission outcome.
 
 For fixed canonical input and policy, the Admission Engine must produce the
 same outcome, ordered reason trace, and decision digest. It cannot call the
@@ -903,9 +926,10 @@ assistant while deciding.
 
 `decisionDigest` covers the exact semantic input bindings, Admission Policy,
 decision kind, outcome, reason code, ordered reason trace, and execution
-disposition. It excludes record ID, Runtime-authored `decidedAt`, and itself. A
-time-sensitive rule must use an explicit source-bound observed-time input rather
-than ambient wall time.
+disposition, including the complete `AbandonmentBinding` when present. It
+excludes record ID, Runtime-authored `decidedAt`, and itself. A time-sensitive
+rule must use an explicit source-bound observed-time input rather than ambient
+wall time.
 
 ## Admission Policy
 
@@ -919,6 +943,32 @@ installed by trusted composition. It owns at least:
 - interaction-action and `NO_EXECUTION` rules;
 - automatic-Start eligibility; and
 - closed reason ordering and decision aggregation.
+
+The built-in local-v1 registry is closed and ordered:
+
+1. `answer-only_action_codeclosure-m2-5-v1` maps exact trusted `ANSWER_ONLY` to
+   `PRE_ANALYSIS_NO_EXECUTION / ANSWER_ONLY`;
+2. `abandon-active-question_codeclosure-m2-5-v1` accepts only the exact
+   `ABANDON_CLARIFICATION` binding described above and maps it to
+   `PROJECTED_NO_EXECUTION / ABANDONED`;
+3. `material-field-eligibility_codeclosure-m2-5-v1` applies the fixed local
+   field/source matrix;
+4. `first-material-ambiguity_codeclosure-m2-5-v1` selects exactly one Question
+   by project identity, objective, required Criterion, scope, assumption, then
+   non-goal, with source-byte order breaking ties;
+5. `materialize-only-disposition_codeclosure-m2-5-v1` maps a complete exact
+   `MATERIALIZE_ONLY` input to `MATERIALIZE / LEAVE_READY`; and
+6. `governed-execution-disposition_codeclosure-m2-5-v1` maps a complete exact
+   `GOVERNED_EXECUTION` input to `MATERIALIZE / AUTHORIZE_START` only after the
+   fixed Workflow Policy/Profile preflight succeeds.
+
+The built-in local-v1 `POLICY_DENIED` and `UNSUPPORTED` rule collections are
+both exactly empty. No free-form request classifier, model label, or Slice 1
+implementation choice may populate them under this Policy version. Those
+accepted Decision reasons remain part of the general closed Domain contract and
+are exercised by exact non-default deterministic test Policies; adding either
+reason to the installed local profile requires a new Policy version and plan
+review.
 
 Trusted composition supplies a policy definition without a caller-authored
 digest. The Runtime computes its canonical identity and the Store independently
@@ -1052,7 +1102,7 @@ IntakeFailureRecord
 Initial `failedOperation` values are `INTENT_ANALYSIS`,
 `PROJECT_OBSERVATION`, and `ADMISSION_PREPARATION`. Initial safe reason codes
 are `ASSISTANT_UNAVAILABLE`, `ASSISTANT_TIMEOUT`,
-`ASSISTANT_PROTOCOL_ERROR`, `INTERRUPTED_ANALYSIS`,
+`ASSISTANT_PROTOCOL_ERROR`, `RESPONSE_REJECTED`, `INTERRUPTED_ANALYSIS`,
 `PROJECT_OBSERVATION_FAILED`, and `INTAKE_PREPARATION_FAILED`.
 
 When a bounded operation failure can be persisted, the Coordinator atomically
@@ -1441,16 +1491,35 @@ privacy UX remain later milestone work.
 
 The initial local profile makes “safe admitted source” deterministic rather
 than heuristic. It accepts only well-formed UTF-8 with no NUL, no unpaired
-surrogate, and no C0/C1 control character other than TAB, LF, and CR. Before
-creating a revision it rejects a PEM private-key boundary or a
-case-insensitive line whose first non-whitespace field name is
-`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `password`,
-`passwd`, `secret`, `client_secret`, `api_key`, `apikey`, `access_token`,
-`refresh_token`, or `private_key` followed by `:` or `=`. Rejection retains
-only the profile identity, typed reason, byte count, and command/audit identity;
-it retains neither submitted bytes nor their digest. This is a closed
-syntactic local policy, not a claim that CodeClosure can infer every semantic
-secret. A rejected request must be safely restated; masking never preserves
+surrogate, and no C0/C1 control character other than TAB, LF, and CR. It splits
+decoded content on CRLF, lone CR, or lone LF without Unicode normalization.
+Marker matching removes only leading and trailing ASCII SPACE/TAB from each
+line.
+
+The trimmed line matches a private-key marker only when it is byte-for-byte
+equal to `"-----" + ("BEGIN " | "END ") + LABEL + "-----"`, using ASCII
+case-sensitive bytes and one of these exact `LABEL` values:
+`PRIVATE KEY`, `ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, `DSA PRIVATE KEY`,
+`EC PRIVATE KEY`, `OPENSSH PRIVATE KEY`, and `PGP PRIVATE KEY BLOCK`. The
+complete field-marker set is ASCII case-insensitive `authorization`,
+`proxy-authorization`, `cookie`, `set-cookie`, `password`, `passwd`, `secret`,
+`client_secret`, `api_key`, `apikey`, `access_token`, `refresh_token`, or
+`private_key` at the start of the trimmed line, followed by zero or more ASCII
+SPACE/TAB and then `:` or `=`. No other whitespace, case folding, substring,
+decoded-value, or semantic-secret rule is implied.
+
+Before creating a Raw Request revision, any match rejects the submission and
+retains only profile identity, typed reason, byte count, and command/audit
+identity—never submitted content bytes or their content digest. The same
+UTF-8/control/marker classifier runs over every decoded assistant-authored
+string after wire-schema validation and before Proposal or Answer retention.
+Rejected Intent-analysis content becomes terminal
+`FAILED / RESPONSE_REJECTED`; rejected Answer-only content becomes
+`NO_EXECUTION / ANSWER_FAILED / RESPONSE_REJECTED`; neither retains rejected
+payload bytes or a payload digest. The ordinary typed Failure/AnswerFailed
+record still has its own semantic record digest. This is a closed syntactic
+local policy, not a claim that CodeClosure can infer every semantic secret. A
+rejected user request must be safely restated; masking never preserves
 `USER_STATED` authority.
 
 ## Failure and Invalidation
@@ -1554,19 +1623,20 @@ Before M2.5 can claim completion, tests must cover at least:
 3. Answer-only returns either bounded `ANSWER_RETURNED` content or a typed
    `ANSWER_FAILED` result while creating no Goal, and exact committed replay
    does not call the assistant again;
-4. denied, unsupported, and abandoned requests remain distinct non-execution
-   results with `answerDisposition = NOT_REQUESTED`, and a dispositive
-   no-external preflight commits its reservation, Decision, terminal state,
-   `APPLIED` outcome, and audits without an intermediate `ANALYZING` state;
-   exact-version abandonment is accepted only from `NEEDS_CLARIFICATION`,
-   clears the active Question reference, and creates no revision or assistant
-   call;
+4. exact non-default test Policies prove that `POLICY_DENIED` and `UNSUPPORTED`
+   remain distinct non-execution results while the installed local-v1 registry
+   contains neither rule; exact-version local abandonment is accepted only from
+   `NEEDS_CLARIFICATION`, commits its `ABANDON_CLARIFICATION` reservation,
+   complete Question/Decision/command `AbandonmentBinding`, terminal Decision,
+   cleared active reference, `APPLIED` outcome, and audits atomically, and
+   creates no revision or assistant call;
 5. a governed read-only repository investigation is not incorrectly treated as
    answer-only;
 6. assistant output claiming Admission, Goal identity, user action, or formal
    authority;
-7. malformed, unknown-field, oversized, and cross-Intake Proposal or Answer-only
-   payloads;
+7. malformed, invalid UTF-8, duplicate-key, unknown-field, null-versus-omitted,
+   missing-array, duplicate-array-item, invalid item-index/span, non-integer,
+   oversized, and cross-Intake Proposal or Answer-only payloads;
 8. Proposal, Projection, revision, digest, parent-chain, Source Binding, and
    project/scope mismatch, including partial bindings, Projection fields on a
    pre-analysis Decision, missing project/scope on `MATERIALIZE`, substituted
@@ -1577,7 +1647,10 @@ Before M2.5 can claim completion, tests must cover at least:
    correction failing to include both retained and explicit roots in
    pre-activation isolation;
 9. a material Projection field supported only by model inference, redacted
-   display text, an omission marker, or unavailable source content;
+   display text, an omission marker, or unavailable source content, plus exact
+   private-key/field marker positive and near-miss cases proving rejected user
+   and assistant payload bytes/content digests are not retained while the typed
+   rejection record keeps only its own semantic digest;
 10. Answer-only content offered as Source Binding, Fact, Criterion, Human
     Decision, Evidence, Acceptance, Goal, Workflow, or execution authority;
 11. new user input after an earlier Projection or Admission computation;

@@ -4,18 +4,16 @@
 - Scope: M2.5 Slice 0 only
 - Status: Complete
 - Verdict: `PASS`; the bounded cross-slice interfaces and ownership choices are
-  closed, so Slice 1 may implement the exact typed Policy definition assigned
-  to it
+  closed, so Slice 1 may encode the already fixed typed Policy definitions
 
 ## Review question
 
 This review asks whether M2.5 can begin authority implementation without a
 later slice having to invent or reinterpret package ownership, assistant
 capability, response shape, budgets, persistence meaning, replay, automatic
-Start, or public action semantics. Slice 1 still owns the exact typed Admission
-rule registry and digest within the fixed material-field matrix and aggregation
-order; that is implementation of its declared scope, not permission to change
-the outer authority contract.
+Start, or public action semantics. Slice 0 fixes the exact local and deterministic
+test Admission registries, predicates, and order. Slice 1 owns their typed
+encoding and computed canonical digests, not their semantic contents.
 
 It does not claim that Goal Intake works. It adds no Intake domain type,
 Runtime handler, Store method, SQLite migration, CLI command, App Server call,
@@ -34,31 +32,31 @@ The final reviewed working-tree source identity excludes only this review file
 to avoid self-reference:
 
 ```text
-Base Git revision: a324dd82de699886cd4de05f8cf6b60e480457a6
+Base Git revision: df512bc3db19d1ce73dbc32330d98bd2a4e7fb25
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 939
-Source manifest digest: sha256:96e1df0c8061dd3bfdeae899b17ac0c8ac69a8dc459c2996aafd4bb5fff4dc33
+Source manifest digest: sha256:78505b34cbda7d413b1921865d7f4257f81f28c09897a9d932585e44b28f58d5
 Self-referential review exclusion: docs/reviews/m2-5-slice0-decision-closure.md
 ```
 
 The implementation branch is `m2.5-goal-intake`. This bounded correction is
 based at the clean Slice 0 decision-closure commit
-`a324dd82de699886cd4de05f8cf6b60e480457a6`. Node `v22.22.3` and pnpm `11.1.3`
+`df512bc3db19d1ce73dbc32330d98bd2a4e7fb25`. Node `v22.22.3` and pnpm `11.1.3`
 satisfy the manifest.
 
 The canonical `corepack pnpm accept:m1` procedure ran on the final modified
 source and passed its complete quality gate, all eight adversarial demos, and
 independent black-box acceptance `8/8`. Its opening and closing source identity
 matched at 939 paths and
-`sha256:06c481db49c3550ca88c85f8960204a37427c35f0f64297962beea5c85548b7c`
+`sha256:cb73d403d1fa137484827e8cd9d343c582cf3803090a88cc5bdb2cda2a032772`
 with only the M1 completion review excluded.
 
 The canonical `corepack pnpm accept:m2` procedure then ran on the same final
 modified source with explicit bounded live authorization. It passed all
 `93/93` rows with zero failures or blocks. Its opening and closing source
 identity matched at 939 paths and
-`sha256:7c2e5ce4cff0f013b2fbabbc29fbedacca0f4e1f669fc15cb5c598e15822b5ec`
+`sha256:a4d1b822d9c92c195f763a8bf677e9ef8bcce3f75e2e41ce807355ee150da9f6`
 with only the M2 completion review excluded. The procedure included the
 complete 893-test quality aggregate, M1 black-box `8/8`, deterministic
 protected repair, failed-repair stop, adapter failure, scope review, live
@@ -167,11 +165,15 @@ The important boundary choices are:
 - required exact input that exceeds a fixed budget fails preparation instead
   of being silently truncated;
 - the local retention profile has one exact UTF-8/control-character and
-  credential-marker classifier, rejects before retaining prohibited bytes, and
-  keeps admitted exact source while dependent authority is usable;
+  byte-exact private-key/field-marker grammar, rejects before retaining
+  prohibited user or assistant payload bytes/content digests, and keeps
+  admitted exact source while dependent authority is usable;
 - the built-in Policy has a fixed material-field/source matrix, complete
-  `POLICY_DERIVED` rule set, decision ordering, and explicit trusted
-  abandonment action; and
+  `POLICY_DERIVED` and Admission rule registries, exact empty local-v1
+  `POLICY_DENIED`/`UNSUPPORTED` collections, fixed test-only variants, and
+  decision ordering;
+- explicit trusted abandonment has one `ABANDON_CLARIFICATION` reservation and
+  complete Question/issuing-Decision/Command binding; and
 - governed automatic Start uses the existing exact M1 Policy/Profile only for
   the deterministic M2.5 proof and still crosses ordinary `StartGoal`.
 
@@ -235,6 +237,9 @@ reinterpretation:
 - clarification atomically binds the exact current Question, creates the new
   Raw Request revision and unique Answer Binding, clears the active reference,
   and reserves the next operation;
+- abandonment atomically commits its exact reservation, projected terminal
+  Decision with complete `AbandonmentBinding`, cleared active reference,
+  `APPLIED` outcome, and audits without a revision or assistant call;
 - deterministic rejection records no revision or external call;
 - immediate no-external `NO_EXECUTION` uses one terminal transaction;
 - analysis, `CLARIFY`, Answer-only, failure, and Materialization each have one
@@ -283,9 +288,9 @@ contracts.
 
 `PASS`. No unresolved cross-slice decision remains that can change authority
 ownership, persistence/replay meaning, assistant capability/response shape,
-automatic Start, or public action semantics. Slice 1 may define and digest only
-the exact typed Admission rule registry already bounded by the fixed field
-matrix and aggregation order.
+automatic Start, or public action semantics. Slice 1 may only encode the fixed
+local/test Admission definitions and compute their canonical digests; changing
+an entry, predicate, or order requires a new Policy version and plan review.
 
 The next permitted work is M2.5 Slice 1: typed Domain identifiers and closed
 records, codecs, canonical projections and golden vectors, deterministic
