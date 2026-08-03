@@ -16,6 +16,8 @@ import {
   IntakeRunStatus,
   IntakeStartDisposition,
   IntentAdmissionDecisionKind,
+  IntentAdmissionFieldCardinality,
+  IntentAdmissionMaterialFieldKind,
   IntentAdmissionOutcome,
   IntentAdmissionReasonCode,
   IntentAdmissionRuleTraceOutcome,
@@ -551,7 +553,7 @@ function createFixtures() {
     digests,
   );
 
-  const reservation: IntakeCommandReservation = decodeIntakeCommandReservation({
+  const reservationBase: IntakeCommandReservation = {
     schemaVersion: 1,
     commandId: command,
     operationKind: IntakeCommandOperationKind.ABANDON_CLARIFICATION,
@@ -563,6 +565,7 @@ function createFixtures() {
     observedIntakeRunVersion: intakeRunVersion(1),
     operationId: intakeOperationId('intake-operation_golden-abandon'),
     reservedAt: NOW,
+    reservationDigest: ZERO,
     abandonClarificationBinding: {
       clarificationQuestionId: question.id,
       questionSpecDigest: question.questionSpecDigest,
@@ -570,7 +573,14 @@ function createFixtures() {
       issuingClarifyDecisionId: clarifyDecision.id,
       issuingClarifyDecisionDigest: clarifyDecision.decisionDigest,
     },
-  });
+  };
+  const reservation: IntakeCommandReservation = decodeIntakeCommandReservation(
+    {
+      ...reservationBase,
+      reservationDigest: digest(intakeCommandReservationProjection(reservationBase)),
+    },
+    digests,
+  );
   if (!('abandonClarificationBinding' in reservation)) {
     throw new Error('Golden applied abandonment reservation lost its binding');
   }
@@ -596,6 +606,7 @@ function createFixtures() {
     commandId: command,
     intakeRunId: runId,
     canonicalCommandInputDigest: commandInput.canonicalCommandInputDigest,
+    reservationDigest: reservation.reservationDigest,
     observedIntakeRunVersion: intakeRunVersion(1),
     result,
     resultDigest: digest(intakeCommandResultProjection(result)),
@@ -811,10 +822,189 @@ void test('[I-006] clarification projections remain acyclic and substitution-sen
   );
 });
 
+void test('[I-006][I-032] command, reservation, Decision, and result correlations fail closed', () => {
+  const fixtures = createFixtures();
+  const clarifyInputBase: IntakeCommandInput = {
+    schemaVersion: 1,
+    kind: 'CLARIFY',
+    commandId: commandId('command_intake-golden-clarify'),
+    principalRef: fixtures.raw.principalRef,
+    intakeRunId: fixtures.raw.intakeRunId,
+    expectedIntakeRunVersion: intakeRunVersion(1),
+    clarificationBinding: {
+      clarificationQuestionId: fixtures.question.id,
+      questionSpecDigest: fixtures.question.questionSpecDigest,
+      questionDigest: fixtures.question.questionDigest,
+      issuingClarifyDecisionId: fixtures.clarifyDecision.id,
+      issuingClarifyDecisionDigest: fixtures.clarifyDecision.decisionDigest,
+      answerSchema: fixtures.question.answerSchema,
+    },
+    answer: 'The Goal must preserve every M1 guard.',
+    canonicalCommandInputDigest: ZERO,
+  };
+  const clarifyInput = decodeIntakeCommandInput(
+    {
+      ...clarifyInputBase,
+      canonicalCommandInputDigest: digest(intakeCommandInputProjection(clarifyInputBase)),
+    },
+    digests,
+  );
+  assert.equal(clarifyInput.kind, 'CLARIFY');
+  const { clarificationBinding, ...bareClarifyInput } = clarifyInputBase;
+  void clarificationBinding;
+  assert.throws(
+    () =>
+      decodeIntakeCommandInput(
+        {
+          ...bareClarifyInput,
+          clarificationQuestionId: fixtures.question.id,
+          canonicalCommandInputDigest: ZERO,
+        },
+        digests,
+      ),
+    /Invalid input|clarificationBinding/,
+  );
+
+  const substitutedReservationBase: IntakeCommandReservation = {
+    ...fixtures.reservation,
+    principalRef: principalId('principal_substituted'),
+    rawRequestId: rawRequestId('raw-request_substituted'),
+    operationId: intakeOperationId('intake-operation_substituted'),
+    reservationDigest: ZERO,
+  };
+  const substitutedReservation = decodeIntakeCommandReservation(
+    {
+      ...substitutedReservationBase,
+      reservationDigest: digest(intakeCommandReservationProjection(substitutedReservationBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () => decodeIntakeCommandClosure(substitutedReservation, fixtures.outcome, digests),
+    /bindings must match exactly/,
+  );
+  const { expectedIntakeRunVersion, ...unversionedAbandonment } = fixtures.reservation;
+  void expectedIntakeRunVersion;
+  assert.throws(
+    () =>
+      decodeIntakeCommandReservation(
+        {
+          ...unversionedAbandonment,
+          reservationDigest: ZERO,
+        },
+        digests,
+      ),
+    /Invalid input|expectedIntakeRunVersion/,
+  );
+
+  assert.throws(
+    () =>
+      decodeIntakeCommandResult({
+        schemaVersion: 1,
+        kind: 'NO_EXECUTION',
+        intakeRunId: fixtures.raw.intakeRunId,
+        intakeRunVersion: intakeRunVersion(2),
+        decisionRef: {
+          id: fixtures.abandonDecision.id,
+          digest: fixtures.abandonDecision.decisionDigest,
+          outcome: IntentAdmissionOutcome.NO_EXECUTION,
+          reasonCode: IntentAdmissionReasonCode.POLICY_DENIED,
+        },
+        answerDisposition: IntakeAnswerDisposition.ANSWER_FAILED,
+        answerOnlyResponseRef: {
+          id: fixtures.answer.id,
+          digest: fixtures.answer.responseDigest,
+          kind: AnswerOnlyResponseKind.ANSWER_RETURNED,
+        },
+        materializationDisposition: IntakeMaterializationDisposition.NO_GOAL,
+        startDisposition: IntakeStartDisposition.NOT_AUTHORIZED,
+      }),
+    /Invalid input/,
+  );
+
+  assert.equal(fixtures.clarifyDecision.kind, IntentAdmissionDecisionKind.CLARIFY);
+  const { questionPlanBinding, ...decisionCommon } = fixtures.clarifyDecision;
+  void questionPlanBinding;
+  const mismatchedMaterializeDecision = {
+    ...decisionCommon,
+    id: intentAdmissionDecisionId('intent-admission_mismatched-materialize'),
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    kind: IntentAdmissionDecisionKind.MATERIALIZE,
+    outcome: IntentAdmissionOutcome.MATERIALIZE,
+    reasonCode: IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED,
+    executionDisposition: IntentExecutionDisposition.LEAVE_READY,
+    decisionDigest: ZERO,
+  };
+  const {
+    id: mismatchedDecisionId,
+    decidedAt: mismatchedDecidedAt,
+    decisionDigest: mismatchedDecisionDigest,
+    ...mismatchedMaterializeProjection
+  } = mismatchedMaterializeDecision;
+  void mismatchedDecisionId;
+  void mismatchedDecidedAt;
+  void mismatchedDecisionDigest;
+  assert.throws(
+    () =>
+      decodeIntentAdmissionDecision(
+        {
+          ...mismatchedMaterializeDecision,
+          decisionDigest: digest(mismatchedMaterializeProjection),
+        },
+        digests,
+      ),
+    /Invalid input|MATERIALIZE disposition must match trusted action/,
+  );
+
+  assert.throws(
+    () =>
+      decodeIntakeCommandResult({
+        schemaVersion: 1,
+        kind: 'MATERIALIZED',
+        intakeRunId: fixtures.raw.intakeRunId,
+        intakeRunVersion: intakeRunVersion(2),
+        decisionRef: {
+          id: fixtures.materialization.intentAdmissionDecisionId,
+          digest: fixtures.materialization.intentAdmissionDecisionDigest,
+          outcome: IntentAdmissionOutcome.MATERIALIZE,
+          reasonCode: IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED,
+        },
+        materializedGoalRef: {
+          goalMaterializationId: fixtures.materialization.id,
+          materializationDigest: fixtures.materialization.materializationDigest,
+          goalId: fixtures.materialization.goalId,
+          goalRevision: fixtures.materialization.goalRevision,
+          workflowId: fixtures.materialization.workflowId,
+          workflowVersion: fixtures.materialization.workflowVersion,
+        },
+        answerDisposition: IntakeAnswerDisposition.NOT_REQUESTED,
+        materializationDisposition: IntakeMaterializationDisposition.MATERIALIZED_READY,
+        startDisposition: IntakeStartDisposition.NOT_AUTHORIZED,
+      }),
+    /Invalid input/,
+  );
+});
+
 void test('[I-006] abandonment has separate applied-bound and rejected-base closures', () => {
   const fixtures = createFixtures();
-  const { abandonClarificationBinding, ...baseReservation } = fixtures.reservation;
+  const {
+    abandonClarificationBinding,
+    reservationDigest: boundReservationDigest,
+    ...baseReservationFields
+  } = fixtures.reservation;
   void abandonClarificationBinding;
+  void boundReservationDigest;
+  const baseReservation: IntakeCommandReservation = {
+    ...baseReservationFields,
+    reservationDigest: ZERO,
+  };
+  const rejectedReservation = decodeIntakeCommandReservation(
+    {
+      ...baseReservation,
+      reservationDigest: digest(intakeCommandReservationProjection(baseReservation)),
+    },
+    digests,
+  );
 
   const rejectedResult = decodeIntakeCommandResult({
     schemaVersion: 1,
@@ -830,6 +1020,7 @@ void test('[I-006] abandonment has separate applied-bound and rejected-base clos
     commandId: fixtures.reservation.commandId,
     intakeRunId: fixtures.reservation.intakeRunId,
     canonicalCommandInputDigest: fixtures.reservation.canonicalCommandInputDigest,
+    reservationDigest: rejectedReservation.reservationDigest,
     observedIntakeRunVersion: fixtures.reservation.observedIntakeRunVersion,
     result: rejectedResult,
     resultDigest: digest(intakeCommandResultProjection(rejectedResult)),
@@ -843,17 +1034,16 @@ void test('[I-006] abandonment has separate applied-bound and rejected-base clos
     },
     digests,
   );
-  const rejectedReservation = decodeIntakeCommandReservation(baseReservation);
   assert.doesNotThrow(() =>
     decodeIntakeCommandClosure(rejectedReservation, rejectedOutcome, digests),
   );
   assert.throws(
     () => decodeIntakeCommandClosure(baseReservation, fixtures.outcome, digests),
-    /complete binding and result/,
+    /reservation digest|bindings must match exactly/,
   );
   assert.throws(
     () => decodeIntakeCommandClosure(fixtures.reservation, rejectedOutcome, digests),
-    /base-only reservation/,
+    /bindings must match exactly/,
   );
 });
 
@@ -904,7 +1094,7 @@ void test('[I-006] Intake golden vectors pin every Slice 1 canonical projection'
     commandInput: 'sha256:ec92360fb67fc4cf7b655d0a6bfaee068bd3cae6bf5853cafce82809af70f2fa',
     commandReservation: 'sha256:f18503d82e054f389286c7d42dc78f02807adf43be442079458cc75ac88a8466',
     commandResult: 'sha256:e1baf2ef1c28539a4252fc3ceac0a795a9563f30a85ab7c259178b53b93d3f0d',
-    commandOutcome: 'sha256:ed491034dfa5be521862107be952d8cd4610e318e78dcaab9c3122cd56efab8f',
+    commandOutcome: 'sha256:a9972866f9d949c5bd22705795c28ed6244e52ee5a4b17550ba4ec66b4fdcd8b',
     materialization: 'sha256:df0344526be88166d76eec86549e0a50762db241da3871155f84c0c9465e914c',
     startAuthorization: 'sha256:47dc43dd8d5fe448f39d3498923d885c3d69d586f9ce0f09e90dd69ab7699292',
   };
@@ -912,7 +1102,8 @@ void test('[I-006] Intake golden vectors pin every Slice 1 canonical projection'
 });
 
 void test('[I-006] local and deterministic test Admission Policies have exact registries', () => {
-  const local = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  const localDefinition = createM25LocalAdmissionPolicyDefinition();
+  const local = createM25AdmissionPolicy(localDefinition, digests);
   const deny = createM25AdmissionPolicy(createM25TestDenyAdmissionPolicyDefinition(), digests);
   const unsupported = createM25AdmissionPolicy(
     createM25TestUnsupportedAdmissionPolicyDefinition(),
@@ -949,6 +1140,33 @@ void test('[I-006] local and deterministic test Admission Policies have exact re
   assert.equal(
     unsupported.digest,
     'sha256:838b0492163a00f64cb7a9a61930548c4edcbdc61a202c3b3d73de9534506580',
+  );
+
+  assert.throws(
+    () =>
+      createM25AdmissionPolicy(
+        {
+          ...localDefinition,
+          orderedRules: localDefinition.orderedRules.map((rule) =>
+            rule.kind === 'MATERIAL_FIELD_ELIGIBILITY'
+              ? {
+                  ...rule,
+                  fields: rule.fields.map((field) =>
+                    field.field === IntentAdmissionMaterialFieldKind.OBJECTIVE
+                      ? {
+                          ...field,
+                          cardinality: IntentAdmissionFieldCardinality.FIXED_EMPTY,
+                          allowedAuthorityClasses: [SourceAuthorityClass.MODEL_PROPOSED],
+                        }
+                      : field,
+                  ),
+                }
+              : rule,
+          ),
+        },
+        digests,
+      ),
+    /material fields must match the fixed ordered registry/,
   );
 });
 

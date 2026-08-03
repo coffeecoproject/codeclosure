@@ -567,16 +567,29 @@ interface IntentAdmissionDecisionCommon {
   readonly decisionDigest: Sha256Digest;
 }
 
-export interface PreAnalysisNoExecutionDecision extends IntentAdmissionDecisionCommon {
+interface PreAnalysisNoExecutionDecisionCommon extends IntentAdmissionDecisionCommon {
   readonly kind: typeof IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION;
   readonly projectOrScopeRef?: DeclaredProjectRef;
   readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
-  readonly reasonCode:
-    | typeof IntentAdmissionReasonCode.ANSWER_ONLY
-    | typeof IntentAdmissionReasonCode.POLICY_DENIED
-    | typeof IntentAdmissionReasonCode.UNSUPPORTED;
   readonly executionDisposition: typeof IntentExecutionDisposition.NONE;
 }
+
+export type PreAnalysisNoExecutionDecision =
+  | (PreAnalysisNoExecutionDecisionCommon &
+      Readonly<{
+        interactionAction: typeof IntakeInteractionAction.ANSWER_ONLY;
+        reasonCode: typeof IntentAdmissionReasonCode.ANSWER_ONLY;
+      }>)
+  | (PreAnalysisNoExecutionDecisionCommon &
+      Readonly<{
+        interactionAction: typeof IntakeInteractionAction.MATERIALIZE_ONLY;
+        reasonCode: typeof IntentAdmissionReasonCode.POLICY_DENIED;
+      }>)
+  | (PreAnalysisNoExecutionDecisionCommon &
+      Readonly<{
+        interactionAction: typeof IntakeInteractionAction.GOVERNED_EXECUTION;
+        reasonCode: typeof IntentAdmissionReasonCode.UNSUPPORTED;
+      }>);
 
 export interface ProjectedNoExecutionDecision extends IntentAdmissionDecisionCommon {
   readonly kind: typeof IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION;
@@ -592,6 +605,9 @@ export interface ProjectedNoExecutionDecision extends IntentAdmissionDecisionCom
 }
 
 export interface ClarifyIntentDecision extends IntentAdmissionDecisionCommon {
+  readonly interactionAction:
+    | typeof IntakeInteractionAction.MATERIALIZE_ONLY
+    | typeof IntakeInteractionAction.GOVERNED_EXECUTION;
   readonly kind: typeof IntentAdmissionDecisionKind.CLARIFY;
   readonly projectionBinding: ProjectionAdmissionBinding;
   readonly questionPlanBinding: QuestionPlanBinding;
@@ -601,18 +617,26 @@ export interface ClarifyIntentDecision extends IntentAdmissionDecisionCommon {
   readonly executionDisposition: typeof IntentExecutionDisposition.NONE;
 }
 
-export interface MaterializeIntentDecision extends IntentAdmissionDecisionCommon {
+interface MaterializeIntentDecisionCommon extends IntentAdmissionDecisionCommon {
   readonly kind: typeof IntentAdmissionDecisionKind.MATERIALIZE;
   readonly projectionBinding: ProjectionAdmissionBinding;
   readonly projectOrScopeRef: DeclaredProjectRef;
   readonly outcome: typeof IntentAdmissionOutcome.MATERIALIZE;
-  readonly reasonCode:
-    | typeof IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED
-    | typeof IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED;
-  readonly executionDisposition:
-    | typeof IntentExecutionDisposition.LEAVE_READY
-    | typeof IntentExecutionDisposition.AUTHORIZE_START;
 }
+
+export type MaterializeIntentDecision =
+  | (MaterializeIntentDecisionCommon &
+      Readonly<{
+        interactionAction: typeof IntakeInteractionAction.MATERIALIZE_ONLY;
+        reasonCode: typeof IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED;
+        executionDisposition: typeof IntentExecutionDisposition.LEAVE_READY;
+      }>)
+  | (MaterializeIntentDecisionCommon &
+      Readonly<{
+        interactionAction: typeof IntakeInteractionAction.GOVERNED_EXECUTION;
+        reasonCode: typeof IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED;
+        executionDisposition: typeof IntentExecutionDisposition.AUTHORIZE_START;
+      }>);
 
 export type IntentAdmissionDecision =
   | PreAnalysisNoExecutionDecision
@@ -828,7 +852,7 @@ export type IntakeCommandInput =
       principalRef: PrincipalId;
       intakeRunId: IntakeRunId;
       expectedIntakeRunVersion: IntakeRunVersion;
-      clarificationQuestionId: ClarificationQuestionId;
+      clarificationBinding: ClarificationCommandBinding;
       answer: string;
       declaredProjectRef?: DeclaredProjectRef;
       canonicalCommandInputDigest: Sha256Digest;
@@ -851,10 +875,10 @@ interface IntakeCommandReservationBase {
   readonly rawRequestId: RawRequestId;
   readonly intakeRunId: IntakeRunId;
   readonly canonicalCommandInputDigest: Sha256Digest;
-  readonly expectedIntakeRunVersion?: IntakeRunVersion;
   readonly observedIntakeRunVersion: IntakeRunVersion;
   readonly operationId: IntakeOperationId;
   readonly reservedAt: IsoTimestamp;
+  readonly reservationDigest: Sha256Digest;
 }
 
 export interface IntakeExternalOperationBinding {
@@ -877,21 +901,25 @@ export interface ExternalIntakeCommandReservation extends IntakeCommandReservati
 
 export interface ClarificationIntakeCommandReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.CLARIFICATION_ANALYSIS;
+  readonly expectedIntakeRunVersion: IntakeRunVersion;
   readonly clarificationBinding: ClarificationCommandBinding;
   readonly externalOperationBinding: IntakeExternalOperationBinding;
 }
 
 export interface ImmediateNoExecutionReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.IMMEDIATE_NO_EXECUTION;
+  readonly expectedIntakeRunVersion?: IntakeRunVersion;
 }
 
 export interface AppliedAbandonClarificationReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.ABANDON_CLARIFICATION;
+  readonly expectedIntakeRunVersion: IntakeRunVersion;
   readonly abandonClarificationBinding: AbandonClarificationReservationBinding;
 }
 
 export interface RejectedAbandonClarificationReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.ABANDON_CLARIFICATION;
+  readonly expectedIntakeRunVersion: IntakeRunVersion;
 }
 
 export type IntakeCommandReservation =
@@ -922,9 +950,44 @@ export type AppliedIntakeResult =
       intakeRunVersion: IntakeRunVersion;
       decisionRef: AdmissionDecisionRef & {
         readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+        readonly reasonCode: typeof IntentAdmissionReasonCode.ANSWER_ONLY;
       };
-      answerDisposition: IntakeAnswerDisposition;
-      answerOnlyResponseRef?: AnswerOnlyResponseRef;
+      answerDisposition: typeof IntakeAnswerDisposition.ANSWER_RETURNED;
+      answerOnlyResponseRef: AnswerOnlyResponseRef & {
+        readonly kind: typeof AnswerOnlyResponseKind.ANSWER_RETURNED;
+      };
+      materializationDisposition: typeof IntakeMaterializationDisposition.NO_GOAL;
+      startDisposition: typeof IntakeStartDisposition.NOT_AUTHORIZED;
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'NO_EXECUTION';
+      intakeRunId: IntakeRunId;
+      intakeRunVersion: IntakeRunVersion;
+      decisionRef: AdmissionDecisionRef & {
+        readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+        readonly reasonCode: typeof IntentAdmissionReasonCode.ANSWER_ONLY;
+      };
+      answerDisposition: typeof IntakeAnswerDisposition.ANSWER_FAILED;
+      answerOnlyResponseRef: AnswerOnlyResponseRef & {
+        readonly kind: typeof AnswerOnlyResponseKind.ANSWER_FAILED;
+      };
+      materializationDisposition: typeof IntakeMaterializationDisposition.NO_GOAL;
+      startDisposition: typeof IntakeStartDisposition.NOT_AUTHORIZED;
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'NO_EXECUTION';
+      intakeRunId: IntakeRunId;
+      intakeRunVersion: IntakeRunVersion;
+      decisionRef: AdmissionDecisionRef & {
+        readonly outcome: typeof IntentAdmissionOutcome.NO_EXECUTION;
+        readonly reasonCode:
+          | typeof IntentAdmissionReasonCode.POLICY_DENIED
+          | typeof IntentAdmissionReasonCode.UNSUPPORTED
+          | typeof IntentAdmissionReasonCode.ABANDONED;
+      };
+      answerDisposition: typeof IntakeAnswerDisposition.NOT_REQUESTED;
       materializationDisposition: typeof IntakeMaterializationDisposition.NO_GOAL;
       startDisposition: typeof IntakeStartDisposition.NOT_AUTHORIZED;
     }>
@@ -935,16 +998,35 @@ export type AppliedIntakeResult =
       intakeRunVersion: IntakeRunVersion;
       decisionRef: AdmissionDecisionRef & {
         readonly outcome: typeof IntentAdmissionOutcome.MATERIALIZE;
+        readonly reasonCode: typeof IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED;
       };
       materializedGoalRef: MaterializedGoalRef;
-      goalStartAuthorizationRef?: Readonly<{
+      answerDisposition: typeof IntakeAnswerDisposition.NOT_REQUESTED;
+      materializationDisposition: typeof IntakeMaterializationDisposition.MATERIALIZED_READY;
+      startDisposition: typeof IntakeStartDisposition.NOT_AUTHORIZED;
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      kind: 'MATERIALIZED';
+      intakeRunId: IntakeRunId;
+      intakeRunVersion: IntakeRunVersion;
+      decisionRef: AdmissionDecisionRef & {
+        readonly outcome: typeof IntentAdmissionOutcome.MATERIALIZE;
+        readonly reasonCode: typeof IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED;
+      };
+      materializedGoalRef: MaterializedGoalRef;
+      goalStartAuthorizationRef: Readonly<{
         id: GoalStartAuthorizationId;
         digest: Sha256Digest;
         startCommandId: CommandId;
       }>;
       answerDisposition: typeof IntakeAnswerDisposition.NOT_REQUESTED;
       materializationDisposition: typeof IntakeMaterializationDisposition.MATERIALIZED_READY;
-      startDisposition: IntakeStartDisposition;
+      startDisposition:
+        | typeof IntakeStartDisposition.READY_PENDING_START
+        | typeof IntakeStartDisposition.START_COMMAND_APPLIED
+        | typeof IntakeStartDisposition.START_COMMAND_REJECTED
+        | typeof IntakeStartDisposition.START_INFRASTRUCTURE_FAILURE;
     }>;
 
 export interface RejectedIntakeResult {
@@ -972,6 +1054,7 @@ export type IntakeCommandOutcome =
       commandId: CommandId;
       intakeRunId: IntakeRunId;
       canonicalCommandInputDigest: Sha256Digest;
+      reservationDigest: Sha256Digest;
       observedIntakeRunVersion: IntakeRunVersion;
       result: AppliedIntakeResult;
       resultDigest: Sha256Digest;
@@ -984,6 +1067,7 @@ export type IntakeCommandOutcome =
       commandId: CommandId;
       intakeRunId: IntakeRunId;
       canonicalCommandInputDigest: Sha256Digest;
+      reservationDigest: Sha256Digest;
       observedIntakeRunVersion: IntakeRunVersion;
       result: RejectedIntakeResult;
       resultDigest: Sha256Digest;
@@ -996,6 +1080,7 @@ export type IntakeCommandOutcome =
       commandId: CommandId;
       intakeRunId: IntakeRunId;
       canonicalCommandInputDigest: Sha256Digest;
+      reservationDigest: Sha256Digest;
       observedIntakeRunVersion: IntakeRunVersion;
       result: FailedIntakeResult;
       resultDigest: Sha256Digest;
@@ -1378,15 +1463,6 @@ export function assertIntentAdmissionDecisionInvariant(decision: IntentAdmission
     case IntentAdmissionDecisionKind.MATERIALIZE:
       assertProjectionAdmissionBinding(decision.projectionBinding);
       assertDeclaredProjectRefInvariant(decision.projectOrScopeRef);
-      if (
-        (decision.interactionAction === IntakeInteractionAction.MATERIALIZE_ONLY &&
-          decision.executionDisposition !== IntentExecutionDisposition.LEAVE_READY) ||
-        (decision.interactionAction === IntakeInteractionAction.GOVERNED_EXECUTION &&
-          decision.executionDisposition !== IntentExecutionDisposition.AUTHORIZE_START) ||
-        decision.interactionAction === IntakeInteractionAction.ANSWER_ONLY
-      ) {
-        throw new DomainInvariantError('MATERIALIZE disposition must match trusted action');
-      }
       break;
   }
 }
@@ -1495,12 +1571,17 @@ export function assertIntakeCommandClosureInvariant(
   rawRequestId(reservation.rawRequestId);
   principalId(reservation.principalRef);
   sha256Digest(reservation.canonicalCommandInputDigest);
+  if ('expectedIntakeRunVersion' in reservation) {
+    intakeRunVersion(reservation.expectedIntakeRunVersion);
+  }
   intakeRunVersion(reservation.observedIntakeRunVersion);
   intakeOperationId(reservation.operationId);
   isoTimestamp(reservation.reservedAt);
+  sha256Digest(reservation.reservationDigest);
   commandId(outcome.commandId);
   intakeRunId(outcome.intakeRunId);
   sha256Digest(outcome.canonicalCommandInputDigest);
+  sha256Digest(outcome.reservationDigest);
   intakeRunVersion(outcome.observedIntakeRunVersion);
   sha256Digest(outcome.resultDigest);
   isoTimestamp(outcome.completedAt);
@@ -1509,12 +1590,22 @@ export function assertIntakeCommandClosureInvariant(
     reservation.commandId !== outcome.commandId ||
     reservation.intakeRunId !== outcome.intakeRunId ||
     reservation.canonicalCommandInputDigest !== outcome.canonicalCommandInputDigest ||
+    reservation.reservationDigest !== outcome.reservationDigest ||
     reservation.observedIntakeRunVersion !== outcome.observedIntakeRunVersion
   ) {
     throw new DomainInvariantError('Intake reservation and outcome bindings must match exactly');
   }
   if (outcome.completedAt < reservation.reservedAt) {
     throw new DomainInvariantError('Intake outcome cannot predate its reservation');
+  }
+  if (outcome.result.intakeRunId !== outcome.intakeRunId) {
+    throw new DomainInvariantError('Intake command result must target its owning outcome Intake');
+  }
+  if (
+    outcome.result.kind === 'REJECTED' &&
+    outcome.result.observedIntakeRunVersion !== outcome.observedIntakeRunVersion
+  ) {
+    throw new DomainInvariantError('Rejected result must bind the exact observed Intake version');
   }
   if (reservation.operationKind === IntakeCommandOperationKind.ABANDON_CLARIFICATION) {
     const hasBinding = 'abandonClarificationBinding' in reservation;
@@ -1884,7 +1975,9 @@ export function intakeCommandInputProjection(input: IntakeCommandInput): unknown
 
 export function intakeCommandReservationProjection(reservation: IntakeCommandReservation): unknown {
   const projection = Object.fromEntries(
-    Object.entries(reservation).filter(([key]) => key !== 'reservedAt'),
+    Object.entries(reservation).filter(
+      ([key]) => key !== 'reservedAt' && key !== 'reservationDigest',
+    ),
   );
   return 'abandonClarificationBinding' in reservation
     ? {
@@ -1907,6 +2000,7 @@ export function intakeCommandOutcomeProjection(outcome: IntakeCommandOutcome): u
     commandId: outcome.commandId,
     intakeRunId: outcome.intakeRunId,
     canonicalCommandInputDigest: outcome.canonicalCommandInputDigest,
+    reservationDigest: outcome.reservationDigest,
     observedIntakeRunVersion: outcome.observedIntakeRunVersion,
     resultDigest: outcome.resultDigest,
   };

@@ -79,6 +79,7 @@ import {
   goalStartAuthorizationProjection,
   intakeCommandInputProjection,
   intakeCommandOutcomeProjection,
+  intakeCommandReservationProjection,
   intakeCommandResultProjection,
   intakeFailureRecordProjection,
   intakeManifestProjection,
@@ -717,18 +718,37 @@ const decisionCommon = {
   decidedAt: timestampSchema,
   decisionDigest: sha256Schema,
 };
-const decisionSchema = z.discriminatedUnion('kind', [
+const decisionSchema = z.union([
   z
     .object({
       ...decisionCommon,
+      interactionAction: z.literal(IntakeInteractionAction.ANSWER_ONLY),
       kind: z.literal(IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION),
       projectOrScopeRef: declaredProjectRefSchema.optional(),
       outcome: z.literal(IntentAdmissionOutcome.NO_EXECUTION),
-      reasonCode: z.enum([
-        IntentAdmissionReasonCode.ANSWER_ONLY,
-        IntentAdmissionReasonCode.POLICY_DENIED,
-        IntentAdmissionReasonCode.UNSUPPORTED,
-      ]),
+      reasonCode: z.literal(IntentAdmissionReasonCode.ANSWER_ONLY),
+      executionDisposition: z.literal(IntentExecutionDisposition.NONE),
+    })
+    .strict(),
+  z
+    .object({
+      ...decisionCommon,
+      interactionAction: z.literal(IntakeInteractionAction.MATERIALIZE_ONLY),
+      kind: z.literal(IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION),
+      projectOrScopeRef: declaredProjectRefSchema.optional(),
+      outcome: z.literal(IntentAdmissionOutcome.NO_EXECUTION),
+      reasonCode: z.literal(IntentAdmissionReasonCode.POLICY_DENIED),
+      executionDisposition: z.literal(IntentExecutionDisposition.NONE),
+    })
+    .strict(),
+  z
+    .object({
+      ...decisionCommon,
+      interactionAction: z.literal(IntakeInteractionAction.GOVERNED_EXECUTION),
+      kind: z.literal(IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION),
+      projectOrScopeRef: declaredProjectRefSchema.optional(),
+      outcome: z.literal(IntentAdmissionOutcome.NO_EXECUTION),
+      reasonCode: z.literal(IntentAdmissionReasonCode.UNSUPPORTED),
       executionDisposition: z.literal(IntentExecutionDisposition.NONE),
     })
     .strict(),
@@ -751,6 +771,10 @@ const decisionSchema = z.discriminatedUnion('kind', [
   z
     .object({
       ...decisionCommon,
+      interactionAction: z.enum([
+        IntakeInteractionAction.MATERIALIZE_ONLY,
+        IntakeInteractionAction.GOVERNED_EXECUTION,
+      ]),
       kind: z.literal(IntentAdmissionDecisionKind.CLARIFY),
       projectionBinding: projectionBindingSchema,
       questionPlanBinding: z
@@ -765,18 +789,25 @@ const decisionSchema = z.discriminatedUnion('kind', [
   z
     .object({
       ...decisionCommon,
+      interactionAction: z.literal(IntakeInteractionAction.MATERIALIZE_ONLY),
       kind: z.literal(IntentAdmissionDecisionKind.MATERIALIZE),
       projectionBinding: projectionBindingSchema,
       projectOrScopeRef: declaredProjectRefSchema,
       outcome: z.literal(IntentAdmissionOutcome.MATERIALIZE),
-      reasonCode: z.enum([
-        IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED,
-        IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED,
-      ]),
-      executionDisposition: z.enum([
-        IntentExecutionDisposition.LEAVE_READY,
-        IntentExecutionDisposition.AUTHORIZE_START,
-      ]),
+      reasonCode: z.literal(IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED),
+      executionDisposition: z.literal(IntentExecutionDisposition.LEAVE_READY),
+    })
+    .strict(),
+  z
+    .object({
+      ...decisionCommon,
+      interactionAction: z.literal(IntakeInteractionAction.GOVERNED_EXECUTION),
+      kind: z.literal(IntentAdmissionDecisionKind.MATERIALIZE),
+      projectionBinding: projectionBindingSchema,
+      projectOrScopeRef: declaredProjectRefSchema,
+      outcome: z.literal(IntentAdmissionOutcome.MATERIALIZE),
+      reasonCode: z.literal(IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED),
+      executionDisposition: z.literal(IntentExecutionDisposition.AUTHORIZE_START),
     })
     .strict(),
 ]);
@@ -815,9 +846,14 @@ const decisionRefSchema = z
   .strict();
 const clarifyDecisionRefSchema = decisionRefSchema.extend({
   outcome: z.literal(IntentAdmissionOutcome.CLARIFY),
+  reasonCode: z.literal(IntentAdmissionReasonCode.MATERIAL_AMBIGUITY),
 });
 const materializeDecisionRefSchema = decisionRefSchema.extend({
   outcome: z.literal(IntentAdmissionOutcome.MATERIALIZE),
+  reasonCode: z.enum([
+    IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED,
+    IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED,
+  ]),
 });
 const noExecutionDecisionRefSchema = decisionRefSchema.extend({
   outcome: z.literal(IntentAdmissionOutcome.NO_EXECUTION),
@@ -840,6 +876,12 @@ const answerResponseRefSchema = z
     kind: z.enum(Object.values(AnswerOnlyResponseKind)),
   })
   .strict();
+const answerReturnedResponseRefSchema = answerResponseRefSchema.extend({
+  kind: z.literal(AnswerOnlyResponseKind.ANSWER_RETURNED),
+});
+const answerFailedResponseRefSchema = answerResponseRefSchema.extend({
+  kind: z.literal(AnswerOnlyResponseKind.ANSWER_FAILED),
+});
 const materializedGoalRefSchema = z
   .object({
     goalMaterializationId: materializationIdSchema,
@@ -1081,7 +1123,7 @@ const commandInputSchema = z.discriminatedUnion('kind', [
       principalRef: principalIdSchema,
       intakeRunId: intakeRunIdSchema,
       expectedIntakeRunVersion: intakeVersionSchema,
-      clarificationQuestionId: questionIdSchema,
+      clarificationBinding: abandonmentReservationBindingSchema.extend({ answerSchema }).strict(),
       answer: nonBlankStringSchema,
       declaredProjectRef: declaredProjectRefSchema.optional(),
       canonicalCommandInputDigest: sha256Schema,
@@ -1136,10 +1178,10 @@ const reservationBase = {
   rawRequestId: rawRequestIdSchema,
   intakeRunId: intakeRunIdSchema,
   canonicalCommandInputDigest: sha256Schema,
-  expectedIntakeRunVersion: intakeVersionSchema.optional(),
   observedIntakeRunVersion: intakeVersionSchema,
   operationId: operationIdSchema,
   reservedAt: timestampSchema,
+  reservationDigest: sha256Schema,
 };
 const reservationSchema = z.discriminatedUnion('operationKind', [
   z
@@ -1160,6 +1202,7 @@ const reservationSchema = z.discriminatedUnion('operationKind', [
     .object({
       ...reservationBase,
       operationKind: z.literal(IntakeCommandOperationKind.CLARIFICATION_ANALYSIS),
+      expectedIntakeRunVersion: intakeVersionSchema,
       clarificationBinding: clarificationBindingSchema,
       externalOperationBinding: externalOperationBindingSchema,
     })
@@ -1168,22 +1211,34 @@ const reservationSchema = z.discriminatedUnion('operationKind', [
     .object({
       ...reservationBase,
       operationKind: z.literal(IntakeCommandOperationKind.IMMEDIATE_NO_EXECUTION),
+      expectedIntakeRunVersion: intakeVersionSchema.optional(),
     })
     .strict(),
   z
     .object({
       ...reservationBase,
       operationKind: z.literal(IntakeCommandOperationKind.ABANDON_CLARIFICATION),
+      expectedIntakeRunVersion: intakeVersionSchema,
       abandonClarificationBinding: abandonmentReservationBindingSchema.optional(),
     })
     .strict(),
 ]);
 
-export function decodeIntakeCommandReservation(value: unknown): IntakeCommandReservation {
-  return parse(reservationSchema, value);
+export function decodeIntakeCommandReservation(
+  value: unknown,
+  verifier: IntakeDigestVerifier,
+): IntakeCommandReservation {
+  const reservation = parse(reservationSchema, value);
+  verifyDigest(
+    reservation.reservationDigest,
+    intakeCommandReservationProjection(reservation),
+    verifier,
+    'Intake command reservation digest',
+  );
+  return reservation;
 }
 
-const appliedResultSchema = z.discriminatedUnion('kind', [
+const appliedResultSchema = z.union([
   z
     .object({
       schemaVersion: z.literal(1),
@@ -1203,9 +1258,34 @@ const appliedResultSchema = z.discriminatedUnion('kind', [
       kind: z.literal('NO_EXECUTION'),
       intakeRunId: intakeRunIdSchema,
       intakeRunVersion: intakeVersionSchema,
-      decisionRef: noExecutionDecisionRefSchema,
-      answerDisposition: z.enum(Object.values(IntakeAnswerDisposition)),
-      answerOnlyResponseRef: answerResponseRefSchema.optional(),
+      decisionRef: answerOnlyDecisionRefSchema,
+      answerDisposition: z.literal(IntakeAnswerDisposition.ANSWER_RETURNED),
+      answerOnlyResponseRef: answerReturnedResponseRefSchema,
+      materializationDisposition: z.literal(IntakeMaterializationDisposition.NO_GOAL),
+      startDisposition: z.literal(IntakeStartDisposition.NOT_AUTHORIZED),
+    })
+    .strict(),
+  z
+    .object({
+      schemaVersion: z.literal(1),
+      kind: z.literal('NO_EXECUTION'),
+      intakeRunId: intakeRunIdSchema,
+      intakeRunVersion: intakeVersionSchema,
+      decisionRef: answerOnlyDecisionRefSchema,
+      answerDisposition: z.literal(IntakeAnswerDisposition.ANSWER_FAILED),
+      answerOnlyResponseRef: answerFailedResponseRefSchema,
+      materializationDisposition: z.literal(IntakeMaterializationDisposition.NO_GOAL),
+      startDisposition: z.literal(IntakeStartDisposition.NOT_AUTHORIZED),
+    })
+    .strict(),
+  z
+    .object({
+      schemaVersion: z.literal(1),
+      kind: z.literal('NO_EXECUTION'),
+      intakeRunId: intakeRunIdSchema,
+      intakeRunVersion: intakeVersionSchema,
+      decisionRef: otherNoExecutionDecisionRefSchema,
+      answerDisposition: z.literal(IntakeAnswerDisposition.NOT_REQUESTED),
       materializationDisposition: z.literal(IntakeMaterializationDisposition.NO_GOAL),
       startDisposition: z.literal(IntakeStartDisposition.NOT_AUTHORIZED),
     })
@@ -1216,7 +1296,24 @@ const appliedResultSchema = z.discriminatedUnion('kind', [
       kind: z.literal('MATERIALIZED'),
       intakeRunId: intakeRunIdSchema,
       intakeRunVersion: intakeVersionSchema,
-      decisionRef: materializeDecisionRefSchema,
+      decisionRef: materializeDecisionRefSchema.extend({
+        reasonCode: z.literal(IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED),
+      }),
+      materializedGoalRef: materializedGoalRefSchema,
+      answerDisposition: z.literal(IntakeAnswerDisposition.NOT_REQUESTED),
+      materializationDisposition: z.literal(IntakeMaterializationDisposition.MATERIALIZED_READY),
+      startDisposition: z.literal(IntakeStartDisposition.NOT_AUTHORIZED),
+    })
+    .strict(),
+  z
+    .object({
+      schemaVersion: z.literal(1),
+      kind: z.literal('MATERIALIZED'),
+      intakeRunId: intakeRunIdSchema,
+      intakeRunVersion: intakeVersionSchema,
+      decisionRef: materializeDecisionRefSchema.extend({
+        reasonCode: z.literal(IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED),
+      }),
       materializedGoalRef: materializedGoalRefSchema,
       goalStartAuthorizationRef: z
         .object({
@@ -1224,11 +1321,15 @@ const appliedResultSchema = z.discriminatedUnion('kind', [
           digest: sha256Schema,
           startCommandId: commandIdSchema,
         })
-        .strict()
-        .optional(),
+        .strict(),
       answerDisposition: z.literal(IntakeAnswerDisposition.NOT_REQUESTED),
       materializationDisposition: z.literal(IntakeMaterializationDisposition.MATERIALIZED_READY),
-      startDisposition: z.enum(Object.values(IntakeStartDisposition)),
+      startDisposition: z.enum([
+        IntakeStartDisposition.READY_PENDING_START,
+        IntakeStartDisposition.START_COMMAND_APPLIED,
+        IntakeStartDisposition.START_COMMAND_REJECTED,
+        IntakeStartDisposition.START_INFRASTRUCTURE_FAILURE,
+      ]),
     })
     .strict(),
 ]);
@@ -1256,6 +1357,7 @@ const outcomeCommon = {
   commandId: commandIdSchema,
   intakeRunId: intakeRunIdSchema,
   canonicalCommandInputDigest: sha256Schema,
+  reservationDigest: sha256Schema,
   observedIntakeRunVersion: intakeVersionSchema,
   resultDigest: sha256Schema,
   completedAt: timestampSchema,
@@ -1286,17 +1388,7 @@ const outcomeSchema = z.discriminatedUnion('disposition', [
 ]);
 
 export function decodeIntakeCommandResult(value: unknown): IntakeCommandResult {
-  const result = parse(resultSchema, value);
-  if (result.kind === 'NO_EXECUTION') {
-    const hasAnswer = result.answerOnlyResponseRef !== undefined;
-    if (
-      (result.answerDisposition === IntakeAnswerDisposition.NOT_REQUESTED && hasAnswer) ||
-      (result.answerDisposition !== IntakeAnswerDisposition.NOT_REQUESTED && !hasAnswer)
-    ) {
-      throw new TypeError('Answer disposition and Answer-only reference must agree');
-    }
-  }
-  return result;
+  return parse(resultSchema, value);
 }
 
 export function decodeIntakeCommandOutcome(
@@ -1325,7 +1417,7 @@ export function decodeIntakeCommandClosure(
   rawOutcome: unknown,
   verifier: IntakeDigestVerifier,
 ): Readonly<{ reservation: IntakeCommandReservation; outcome: IntakeCommandOutcome }> {
-  const reservation = decodeIntakeCommandReservation(rawReservation);
+  const reservation = decodeIntakeCommandReservation(rawReservation, verifier);
   const outcome = decodeIntakeCommandOutcome(rawOutcome, verifier);
   assertIntakeCommandClosureInvariant(reservation, outcome);
   return Object.freeze({ reservation, outcome });

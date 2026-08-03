@@ -412,8 +412,9 @@ project observer, Runtime atomically persists one exact
 operation Manifest/bindings, and audit. The reservation binds `CommandId`,
 closed operation kind, trusted principal, target, canonical input digest,
 expected/observed Intake version, Manifest/policy/adapter/response-contract
-identity when external work is required, and causal time. Failure to commit
-that boundary authorizes no external call.
+identity when external work is required, causal time, and one canonical
+`reservationDigest`. Failure to commit that boundary authorizes no external
+call.
 
 `ABANDON_CLARIFICATION` is a closed compound-only reservation variant:
 
@@ -443,9 +444,10 @@ AbandonClarificationReservationBinding
 
 For clarification, the reservation and canonical command input additionally
 bind the exact current `ClarificationQuestionId`, `questionSpecDigest`,
-`questionDigest`, and answer schema resolved from Store. A stale, foreign,
-already answered, Decision-mismatched, spec-substituted, or record-substituted
-question creates no Raw Request revision and invokes no assistant.
+`questionDigest`, issuing `CLARIFY` Decision ID/digest, and answer schema
+resolved from Store. A stale, foreign, already answered, Decision-mismatched,
+spec-substituted, or record-substituted question creates no Raw Request revision
+and invokes no assistant.
 
 An accepted clarification reservation atomically creates the new Raw Request
 revision with its embedded `AnsweredQuestionBinding`, one unique immutable
@@ -460,7 +462,9 @@ Invalid input, missing target, replay-integrity failure, and command conflict do
 not become stored rejections.
 
 The final compound transaction adds one separate immutable Store-authored
-`IntakeCommandOutcome`:
+`IntakeCommandOutcome`. It carries the exact `reservationDigest`; the owning
+decoder rejects an Outcome paired with a substituted principal, target,
+operation, Manifest/binding, or other Reservation field:
 
 - `APPLIED` for a committed `CLARIFY`, intentional `NO_EXECUTION`, successful
   Materialization, or `NO_EXECUTION / ANSWER_FAILED` result;

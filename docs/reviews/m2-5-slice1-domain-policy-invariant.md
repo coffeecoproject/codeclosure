@@ -25,19 +25,21 @@ The final reviewed working-tree source identity excludes only this review file
 to avoid self-reference:
 
 ```text
-Base Git revision: d37665b104a1e5e3bfa01f44819b7682a42c14bd
+Base Git revision: 682cd5527d1f87f8eb26a455d1e48b33fd2190ba
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 946
-Source manifest digest: sha256:b5ef0a7192d8c7d4a13ddeece740cd882e96f7e994740372303a8ca12316cab1
+Source manifest digest: sha256:56e51700e5333d8538165d50fa5e1089f6a6a510d7f08a13a4fd4b3201832230
 Self-referential review exclusion: docs/reviews/m2-5-slice1-domain-policy-invariant.md
 ```
 
-The implementation branch is `m2.5-goal-intake`. The pre-slice tree was clean
-at `d37665b104a1e5e3bfa01f44819b7682a42c14bd`. The available shell reports Node
-`v23.11.0`, outside the repository's supported Node 22 range, and pnpm `11.1.3`.
-All recorded checks passed in that environment with the engine warning visible;
-the Node-version limitation is not hidden as supported-environment evidence.
+The implementation branch is `m2.5-goal-intake`. This correction tree begins at
+the committed Slice 1 revision `682cd5527d1f87f8eb26a455d1e48b33fd2190ba`;
+the original pre-slice revision remains recorded in Git history. The available
+shell reports Node `v23.11.0`, outside the repository's supported Node 22 range,
+and pnpm `11.1.3`. All recorded checks passed in that environment with the
+engine warning visible; the Node-version limitation is not hidden as
+supported-environment evidence.
 
 ## Implemented authority surface
 
@@ -74,6 +76,28 @@ exactly empty `POLICY_DENIED` and `UNSUPPORTED` collections. Each test Policy
 inserts only its one fixed pre-analysis rule immediately after the Answer-only
 rule. No request-text classifier or model label was added.
 
+## Follow-up correction review
+
+A post-commit adversarial review identified five Slice 1 contract gaps. This
+working tree closes exactly those gaps:
+
+- a known Policy ID/version now validates only the exact reviewed rule,
+  material-field, priority, and derivation semantics;
+- a `CLARIFY` command canonically binds the exact Question, Question Spec, and
+  issuing Decision identities and digests plus the Answer Schema;
+- each Outcome binds the exact Reservation digest, and version-sensitive
+  clarification and abandonment Reservations require the observed Intake
+  version;
+- applied results use closed unions that prevent contradictory Answer-return
+  and Start-authorization combinations; and
+- Decision codecs use closed action/reason/disposition combinations instead of
+  independently valid but semantically contradictory fields.
+
+The correction does not add persistence, coordination, assistant, CLI,
+materialization, Start execution, or any other Slice 2-or-later behavior. It
+implements the already accepted ADR 0034 reservation-binding requirement and
+does not introduce a new durable architectural decision.
+
 ## Boundary review
 
 The Domain and Runtime dependency directions remain unchanged. Codex protocol
@@ -97,12 +121,12 @@ The final Slice 1 tree passed:
 - `corepack pnpm gate:quality`, including format, documentation, package
   boundary, typecheck, lint, digest, unit, authority, CLI integration, M1 demo,
   and invariant stages;
-- focused Intake Domain tests: `7/7`, with zero failures, cancellations, skips,
+- focused Intake Domain tests: `8/8`, with zero failures, cancellations, skips,
   or todos;
 - Node test suites reported by the complete gate: `99/99`, `301/301`, and
   `62/62`, each with zero failures, cancellations, skips, or todos;
 - M1 adversarial demonstrations: `8/8`;
-- Runtime invariant coverage: `32/32` across 44 test sources and 452 executable
+- Runtime invariant coverage: `32/32` across 44 test sources and 453 executable
   metadata-bearing tests;
 - documentation validation: 75 assertions across 72 Markdown sources;
 - historical M2 scope-guard tests: `8/8`, covering the absent, complete,

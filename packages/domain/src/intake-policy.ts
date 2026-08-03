@@ -238,6 +238,117 @@ function assertUnique(values: readonly string[], name: string): void {
   }
 }
 
+const localAdmissionRuleOrder = [
+  IntentAdmissionRuleId.ANSWER_ONLY_ACTION,
+  IntentAdmissionRuleId.ABANDON_ACTIVE_QUESTION,
+  IntentAdmissionRuleId.MATERIAL_FIELD_ELIGIBILITY,
+  IntentAdmissionRuleId.FIRST_MATERIAL_AMBIGUITY,
+  IntentAdmissionRuleId.MATERIALIZE_ONLY_DISPOSITION,
+  IntentAdmissionRuleId.GOVERNED_EXECUTION_DISPOSITION,
+] as const;
+
+const localMaterialFieldRules: readonly IntentAdmissionMaterialFieldRule[] = [
+  {
+    field: IntentAdmissionMaterialFieldKind.OBJECTIVE,
+    cardinality: IntentAdmissionFieldCardinality.EXACTLY_ONE,
+    allowedAuthorityClasses: [SourceAuthorityClass.USER_STATED],
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.REQUIRED_CRITERIA,
+    cardinality: IntentAdmissionFieldCardinality.ONE_TO_SIXTEEN,
+    allowedAuthorityClasses: [SourceAuthorityClass.USER_STATED],
+    materializedCriterionRequired: true,
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.OPTIONAL_CRITERIA,
+    cardinality: IntentAdmissionFieldCardinality.FIXED_EMPTY,
+    allowedAuthorityClasses: [],
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.PROJECT_PATH,
+    cardinality: IntentAdmissionFieldCardinality.EXACTLY_ONE,
+    allowedAuthorityClasses: [SourceAuthorityClass.POLICY_DERIVED],
+    exactDerivationRuleId: IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE,
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.ALLOWED_PATHS,
+    cardinality: IntentAdmissionFieldCardinality.FIXED_EMPTY,
+    allowedAuthorityClasses: [],
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.NON_GOALS,
+    cardinality: IntentAdmissionFieldCardinality.ZERO_TO_SIXTEEN,
+    allowedAuthorityClasses: [SourceAuthorityClass.USER_STATED],
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.ASSUMPTIONS,
+    cardinality: IntentAdmissionFieldCardinality.FIXED_EMPTY,
+    allowedAuthorityClasses: [],
+  },
+  {
+    field: IntentAdmissionMaterialFieldKind.REQUESTED_EXECUTION_DISPOSITION,
+    cardinality: IntentAdmissionFieldCardinality.ACTION_DERIVED_ONE,
+    allowedAuthorityClasses: [SourceAuthorityClass.POLICY_DERIVED],
+    exactDerivationRuleId: IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION,
+  },
+];
+
+const localAmbiguityFieldPriority = [
+  IntentProjectionField.PROJECT_IDENTITY,
+  IntentProjectionField.OBJECTIVE,
+  IntentProjectionField.REQUIRED_CRITERION,
+  IntentProjectionField.SCOPE,
+  IntentProjectionField.ASSUMPTION,
+  IntentProjectionField.NON_GOAL,
+] as const;
+
+function assertExactOrderedValues(
+  actual: readonly string[],
+  expected: readonly string[],
+  name: string,
+): void {
+  if (
+    actual.length !== expected.length ||
+    actual.some((value, index) => value !== expected[index])
+  ) {
+    throw new DomainInvariantError(`${name} must match the fixed ordered registry`);
+  }
+}
+
+function materialFieldRuleFingerprint(rule: IntentAdmissionMaterialFieldRule): string {
+  return [
+    rule.field,
+    rule.cardinality,
+    rule.allowedAuthorityClasses.join(','),
+    rule.exactDerivationRuleId ?? '',
+    rule.materializedCriterionRequired === true ? 'required' : '',
+  ].join('\u0000');
+}
+
+function expectedPolicyRuleOrder(policy: IntentAdmissionPolicyDefinition): readonly string[] {
+  const identity = `${policy.id}\u0000${policy.version}`;
+  switch (identity) {
+    case 'admission-policy_codeclosure-m2-5-local\u0000codeclosure-m2-5-local-admission-v1':
+      return localAdmissionRuleOrder;
+    case 'admission-policy_codeclosure-m2-5-test-deny\u0000codeclosure-m2-5-test-deny-v1':
+      return [
+        localAdmissionRuleOrder[0],
+        IntentAdmissionRuleId.TEST_DENY_EXACT_PRINCIPAL,
+        ...localAdmissionRuleOrder.slice(1),
+      ];
+    case 'admission-policy_codeclosure-m2-5-test-unsupported\u0000codeclosure-m2-5-test-unsupported-v1':
+      return [
+        localAdmissionRuleOrder[0],
+        IntentAdmissionRuleId.TEST_UNSUPPORTED_GOVERNED_EXECUTION,
+        ...localAdmissionRuleOrder.slice(1),
+      ];
+    default:
+      throw new DomainInvariantError(
+        'Intent Admission Policy identity and version must select one reviewed M2.5 registry',
+      );
+  }
+}
+
 export function assertIntentAdmissionPolicyDefinitionInvariant(
   policy: IntentAdmissionPolicyDefinition,
 ): void {
@@ -250,6 +361,11 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
   }
   const ruleIds = policy.orderedRules.map(({ ruleId }) => ruleId);
   assertUnique(ruleIds, 'Intent Admission Policy rule ID');
+  assertExactOrderedValues(
+    ruleIds,
+    expectedPolicyRuleOrder(policy),
+    'Intent Admission Policy rules',
+  );
   for (const rule of policy.orderedRules) {
     assertKnown(IntentAdmissionRuleId, rule.ruleId, 'Intent Admission rule ID');
     assertKnown(IntentAdmissionPolicyRuleKind, rule.kind, 'Intent Admission rule kind');
@@ -285,6 +401,11 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
             );
           }
         }
+        assertExactOrderedValues(
+          rule.fields.map(materialFieldRuleFingerprint),
+          localMaterialFieldRules.map(materialFieldRuleFingerprint),
+          'Intent Admission material fields',
+        );
         break;
       }
       case IntentAdmissionPolicyRuleKind.FIRST_MATERIAL_AMBIGUITY:
@@ -293,6 +414,11 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
             'Material Ambiguity selection must be singular and ordered',
           );
         }
+        assertExactOrderedValues(
+          rule.fieldPriority,
+          localAmbiguityFieldPriority,
+          'Material Ambiguity field priority',
+        );
         break;
       case IntentAdmissionPolicyRuleKind.MATERIALIZE_ONLY_DISPOSITION:
         break;
@@ -312,6 +438,14 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
   ) {
     throw new DomainInvariantError('Intent Admission derivation registry must be exact');
   }
+  assertExactOrderedValues(
+    derivationIds,
+    [
+      IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE,
+      IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION,
+    ],
+    'Intent Admission derivation rules',
+  );
   for (const rule of policy.derivationRules) {
     assertKnown(IntentAdmissionDerivationRuleId, rule.id, 'Intent Admission derivation rule ID');
     switch (rule.id) {
