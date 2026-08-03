@@ -26,11 +26,11 @@ The final reviewed working-tree source identity excludes only this review file
 to avoid self-reference:
 
 ```text
-Base Git revision: b0829fb8d68110c4a7fccea99605ae138e6e6c41
+Base Git revision: 8e3f076c4350792e4182b014743af5dc4f4b57dd
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 950
-Source manifest digest: sha256:9e3a1bfde704c51f89f625e5832f3b4c213fbde1e6dde3820a23523128333233
+Source manifest digest: sha256:9c679642cbdbc8d270fb0e89e0cf70f688ddfd4828adafb22041f1afb77253f6
 Self-referential review exclusion: docs/reviews/m2-5-slice2-sqlite-intake-authority.md
 ```
 
@@ -57,6 +57,13 @@ cannot supply a stored outcome or promote a Proposal into Admission. The Store
 implements exact replay, active-operation detection, typed version/command
 losers, policy installation, deterministic read ordering, and one complete
 read view reconstructed from retained authority.
+
+Each public Intake write now validates the operation-specific ordered audit
+plan, Intake Run aggregate identity, causal timestamp order, and terminal
+timestamp before entering its transaction. Strict reopen independently
+reconstructs the complete per-command audit sequence from the immutable Intake
+relationship and Runtime audit tables; missing, reordered, foreign, or
+substituted relationships fail closed.
 
 Compound transactions cover:
 
@@ -89,7 +96,9 @@ verifier activation. Complete retained Raw Request revision, Intake Run,
 Admission Decision, and Materialization project references participate as
 denial-only isolation inputs alongside Goal paths. The post-migration set must
 match the inspected set exactly; none of these references becomes Goal
-authority.
+authority. Before any isolation verifier call, each retained relational project
+path and identity digest must also match its owning authority JSON; direct Store
+reopen applies the same closure.
 
 The final migration fingerprint is 60 tables, 25 indexes, 209 triggers, no
 views, and
@@ -118,15 +127,19 @@ govern the implemented decisions, so no new ADR is required.
 identity. It recorded 75/75 documentation-structure tests over 73 Markdown
 sources, 28/28 boundary/dependency tests over 823 JavaScript/TypeScript
 sources, 296/296 staged unit tests, 44/44 digest tests, 99/99 migration tests,
-379/379 authority tests, 62/62 CLI integration tests, 8/8 adversarial demos,
+385/385 authority tests, 62/62 CLI integration tests, 8/8 adversarial demos,
 4/4 invariant-checker tests with 32/32 invariant coverage, and the final clean
 production build. Every invoked Node test stage reported zero failed,
 cancelled, skipped, and todo tests.
 
 Focused migration, authority, failure-injection, corruption, activation,
-replay, and reopen tests are included in those stages. The source manifest
-above was generated after the non-review tree reached its final content and
-excludes only this review file.
+replay, and reopen tests are included in those stages. The added coverage
+includes both Policy-install write probes, exact install replay, substituted
+audit write rejection, missing-audit reopen rejection, project-column/JSON
+activation rejection before verifier use, and one competing Materialization
+loser that creates no second Goal or Workflow. The source manifest above was
+generated after the non-review tree reached its final content and excludes only
+this review file.
 
 ## Remaining boundary
 

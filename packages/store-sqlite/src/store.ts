@@ -614,6 +614,18 @@ const retainedProjectReferenceRowsSchema = z.array(
     .strict(),
 );
 
+const retainedIntakeProjectMismatchRowSchema = z
+  .object({
+    kind: z.enum([
+      'RAW_REQUEST_REVISION',
+      'INTAKE_RUN',
+      'INTENT_ADMISSION_DECISION',
+      'GOAL_MATERIALIZATION',
+    ]),
+    authority_id: z.string().min(1),
+  })
+  .strict();
+
 const storedIntakeRecordRowsSchema = z.array(z.object({ record_json: z.string().min(2) }).strict());
 
 const projectionSourceBindingRowsSchema = z.array(
@@ -632,6 +644,29 @@ const ambiguityMembershipRowsSchema = z.array(
     .object({
       ambiguity_set_digest: z.string().min(1),
       record_json: z.string().min(2),
+    })
+    .strict(),
+);
+
+const retainedIntakeAuditRowsSchema = z.array(
+  z
+    .object({
+      intake_run_id: z.string().min(1),
+      relationship_command_id: z.string().min(1),
+      position: z.number().int().nonnegative(),
+      id: z.string().min(1),
+      sequence: z.number().int().positive(),
+      aggregate_type: z.string().min(1),
+      aggregate_id: z.string().min(1),
+      event_type: z.string().min(1),
+      actor_type: z.string().min(1),
+      command_id: z.string().nullable(),
+      before_version: z.number().int().positive().nullable(),
+      after_version: z.number().int().positive().nullable(),
+      correlation_id: z.string().min(1).nullable(),
+      causation_id: z.string().min(1).nullable(),
+      payload_digest: z.string().min(1),
+      occurred_at: z.string().min(1),
     })
     .strict(),
 );
@@ -669,6 +704,47 @@ const intakeAuthorityTableNames = Object.freeze([
   'intake_audit_events',
 ]);
 
+function retainedIntakeProjectColumnMismatch(
+  database: Database.Database,
+): z.infer<typeof retainedIntakeProjectMismatchRowSchema> | undefined {
+  const row = database
+    .prepare(
+      `SELECT kind, authority_id
+         FROM (
+           SELECT 'RAW_REQUEST_REVISION' AS kind,
+                  raw_request_id || '@' || revision AS authority_id
+             FROM raw_request_revisions
+            WHERE declared_project_path IS NOT
+                    json_extract(record_json, '$.declaredProjectRef.normalizedPath')
+               OR declared_project_identity_digest IS NOT
+                    json_extract(record_json, '$.declaredProjectRef.identityDigest')
+           UNION ALL
+           SELECT 'INTAKE_RUN', id
+             FROM intake_runs
+            WHERE project_path IS NOT json_extract(record_json, '$.projectRef.normalizedPath')
+               OR project_identity_digest IS NOT
+                    json_extract(record_json, '$.projectRef.identityDigest')
+           UNION ALL
+           SELECT 'INTENT_ADMISSION_DECISION', id
+             FROM intent_admission_decisions
+            WHERE project_path IS NOT
+                    json_extract(record_json, '$.projectOrScopeRef.normalizedPath')
+               OR project_identity_digest IS NOT
+                    json_extract(record_json, '$.projectOrScopeRef.identityDigest')
+           UNION ALL
+           SELECT 'GOAL_MATERIALIZATION', id
+             FROM goal_materializations
+            WHERE project_path IS NOT
+                    json_extract(record_json, '$.projectOrScopeRef.normalizedPath')
+               OR project_identity_digest IS NOT
+                    json_extract(record_json, '$.projectOrScopeRef.identityDigest')
+         )
+        LIMIT 1`,
+    )
+    .get();
+  return row === undefined ? undefined : retainedIntakeProjectMismatchRowSchema.parse(row);
+}
+
 function inspectRetainedProjectReferences(
   database: Database.Database,
   tableNames: ReadonlySet<string>,
@@ -681,6 +757,14 @@ function inspectRetainedProjectReferences(
     throw new AuthorityActivationError(
       'SQLite authority bootstrap found partial M2.5 Intake schema',
     );
+  }
+  if (presentIntakeTables.length !== 0) {
+    const mismatch = retainedIntakeProjectColumnMismatch(database);
+    if (mismatch !== undefined) {
+      throw new AuthorityActivationError(
+        `SQLite authority bootstrap found substituted ${mismatch.kind} project binding ${mismatch.authority_id}`,
+      );
+    }
   }
 
   const intakeUnion =
@@ -1001,6 +1085,145 @@ function validateIntakeAuditWrites(rawWrites: unknown): readonly IntakeAuditWrit
       });
     }),
   );
+}
+
+type IntakeAuditEventName = IntakeAuditWrite['eventType'];
+
+const initialIntakeReservationAuditEvents = Object.freeze([
+  IntakeAuditEventType.RAW_REQUEST_ADMITTED,
+  IntakeAuditEventType.INTAKE_RUN_CREATED,
+  IntakeAuditEventType.INTAKE_COMMAND_RESERVED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const clarificationIntakeReservationAuditEvents = Object.freeze([
+  IntakeAuditEventType.RAW_REQUEST_ADMITTED,
+  IntakeAuditEventType.CLARIFICATION_ANSWER_BOUND,
+  IntakeAuditEventType.INTAKE_COMMAND_RESERVED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const clarifyIntakeCommitAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTENT_ANALYSIS_RECORDED,
+  IntakeAuditEventType.INTENT_PROJECTION_RECORDED,
+  IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+  IntakeAuditEventType.CLARIFICATION_QUESTION_ACTIVATED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const analyzedNoExecutionAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTENT_ANALYSIS_RECORDED,
+  IntakeAuditEventType.INTENT_PROJECTION_RECORDED,
+  IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const immediateNoExecutionAuditEvents = Object.freeze([
+  IntakeAuditEventType.RAW_REQUEST_ADMITTED,
+  IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const abandonmentAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+  IntakeAuditEventType.INTAKE_RUN_UPDATED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const answerOnlyAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+  IntakeAuditEventType.ANSWER_ONLY_RESPONSE_RECORDED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const intakeFailureAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTAKE_FAILURE_RECORDED,
+  IntakeAuditEventType.INTAKE_RUN_UPDATED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const intakeCommandRejectionAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTAKE_COMMAND_REJECTED,
+] satisfies readonly IntakeAuditEventName[]);
+
+const materializationAuditEvents = Object.freeze([
+  IntakeAuditEventType.INTENT_ANALYSIS_RECORDED,
+  IntakeAuditEventType.INTENT_PROJECTION_RECORDED,
+  IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+  IntakeAuditEventType.GOAL_MATERIALIZED,
+  IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+] satisfies readonly IntakeAuditEventName[]);
+
+function materializationAuditEventsFor(
+  hasStartAuthorization: boolean,
+): readonly IntakeAuditEventName[] {
+  return hasStartAuthorization
+    ? Object.freeze([
+        ...materializationAuditEvents.slice(0, -1),
+        IntakeAuditEventType.GOAL_START_AUTHORIZED,
+        IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+      ])
+    : materializationAuditEvents;
+}
+
+function assertExactIntakeAuditPlan(
+  writes: readonly IntakeAuditWrite[],
+  runIdentifier: string,
+  expectedEventTypes: readonly IntakeAuditEventName[],
+  terminalAt: IsoTimestamp,
+): void {
+  if (
+    writes.length !== expectedEventTypes.length ||
+    writes.some(
+      (write, index) =>
+        write.aggregateType !== IntakeAuditAggregateType.INTAKE_RUN ||
+        write.aggregateId !== runIdentifier ||
+        write.eventType !== expectedEventTypes[index] ||
+        (index > 0 && write.occurredAt < (writes[index - 1]?.occurredAt ?? write.occurredAt)),
+    ) ||
+    writes.at(-1)?.occurredAt !== terminalAt
+  ) {
+    throw new StoreInvariantError(`Intake Run ${runIdentifier} has a substituted audit plan`);
+  }
+}
+
+function expectedRetainedIntakeAuditEvents(
+  reservation: IntakeCommandReservation,
+  outcome: IntakeCommandOutcome | undefined,
+): readonly IntakeAuditEventName[] {
+  if (outcome?.disposition === IntakeCommandDisposition.REJECTED) {
+    return intakeCommandRejectionAuditEvents;
+  }
+  if (reservation.operationKind === IntakeCommandOperationKind.IMMEDIATE_NO_EXECUTION) {
+    return immediateNoExecutionAuditEvents;
+  }
+  if (reservation.operationKind === IntakeCommandOperationKind.ABANDON_CLARIFICATION) {
+    return abandonmentAuditEvents;
+  }
+
+  const reservationEvents =
+    reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS
+      ? clarificationIntakeReservationAuditEvents
+      : initialIntakeReservationAuditEvents;
+  if (outcome === undefined) {
+    return reservationEvents;
+  }
+  switch (outcome.result.kind) {
+    case 'CLARIFICATION_REQUIRED':
+      return Object.freeze([...reservationEvents, ...clarifyIntakeCommitAuditEvents]);
+    case 'NO_EXECUTION':
+      return Object.freeze([
+        ...reservationEvents,
+        ...(reservation.operationKind === IntakeCommandOperationKind.ANSWER_ONLY
+          ? answerOnlyAuditEvents
+          : analyzedNoExecutionAuditEvents),
+      ]);
+    case 'FAILED':
+      return Object.freeze([...reservationEvents, ...intakeFailureAuditEvents]);
+    case 'MATERIALIZED':
+      return Object.freeze([
+        ...reservationEvents,
+        ...materializationAuditEventsFor('goalStartAuthorizationRef' in outcome.result),
+      ]);
+  }
 }
 
 function validateCreateGoalWithWorkflowInput(
@@ -3115,6 +3338,12 @@ export class SqliteControlStore
       canonicalAuthorityDigests,
     );
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      run.id,
+      initialIntakeReservationAuditEvents,
+      reservation.reservedAt,
+    );
     if (
       (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
         reservation.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY) ||
@@ -3199,6 +3428,12 @@ export class SqliteControlStore
       canonicalAuthorityDigests,
     );
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      nextRun.id,
+      clarificationIntakeReservationAuditEvents,
+      reservation.reservedAt,
+    );
     if (
       reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS ||
       nextRun.status !== IntakeRunStatus.ANALYZING ||
@@ -3306,6 +3541,12 @@ export class SqliteControlStore
     const nextRun = decodeIntakeRun(rawInput.intakeRun);
     const completedAt = isoTimestamp(rawInput.completedAt);
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      nextRun.id,
+      rawInput.kind === 'CLARIFY' ? clarifyIntakeCommitAuditEvents : analyzedNoExecutionAuditEvents,
+      completedAt,
+    );
     const questionSpec =
       rawInput.kind === 'CLARIFY'
         ? decodeClarificationQuestionSpec(rawInput.questionSpec, canonicalAuthorityDigests)
@@ -3469,6 +3710,16 @@ export class SqliteControlStore
       rawInput.kind === 'ANSWER_ONLY'
         ? commandId(rawInput.commandId)
         : suppliedReservation?.commandId;
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      nextRun.id,
+      rawInput.kind === 'IMMEDIATE'
+        ? immediateNoExecutionAuditEvents
+        : rawInput.kind === 'ABANDONMENT'
+          ? abandonmentAuditEvents
+          : answerOnlyAuditEvents,
+      completedAt,
+    );
     if (
       commandIdentifier === undefined ||
       nextRun.status !== IntakeRunStatus.NO_EXECUTION ||
@@ -3647,6 +3898,7 @@ export class SqliteControlStore
     const nextRun = decodeIntakeRun(rawInput.intakeRun);
     const completedAt = isoTimestamp(rawInput.completedAt);
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    assertExactIntakeAuditPlan(auditEvents, nextRun.id, intakeFailureAuditEvents, completedAt);
     if (
       nextRun.status !== IntakeRunStatus.FAILED ||
       failure.commandId !== commandIdentifier ||
@@ -3711,6 +3963,12 @@ export class SqliteControlStore
     const observedRun = decodeIntakeRun(rawInput.observedIntakeRun);
     const completedAt = isoTimestamp(rawInput.completedAt);
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      observedRun.id,
+      intakeCommandRejectionAuditEvents,
+      completedAt,
+    );
     if (typeof rawInput.detailCode !== 'string' || rawInput.detailCode.trim().length === 0) {
       throw new TypeError('Intake rejection detailCode must not be blank');
     }
@@ -3806,6 +4064,12 @@ export class SqliteControlStore
     const goalCreationPayloadDigest = sha256Digest(rawInput.goalCreationPayloadDigest);
     const completedAt = isoTimestamp(rawInput.completedAt);
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      nextRun.id,
+      materializationAuditEventsFor(startAuthorization !== undefined),
+      completedAt,
+    );
     if (
       goalAuditEventId === workflowAuditEventId ||
       auditEvents.some(
@@ -4028,6 +4292,22 @@ export class SqliteControlStore
       return;
     }
 
+    try {
+      const mismatch = retainedIntakeProjectColumnMismatch(this.#database);
+      if (mismatch !== undefined) {
+        throw new StoreInvariantError(
+          `Retained ${mismatch.kind} project binding ${mismatch.authority_id} differs from its authority JSON`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof StoreInvariantError) {
+        throw error;
+      }
+      throw new StoreInvariantError('Retained Intake project binding failed strict reopen', {
+        cause: error,
+      });
+    }
+
     const policies = this.decodeStoredIntakeRecords(
       'intent_admission_policies',
       'Intent Admission Policy',
@@ -4209,6 +4489,85 @@ export class SqliteControlStore
       'Goal Start Authorization Materialization',
     );
     const runById = uniqueMap(runs, (record) => record.id, 'Intake Run');
+
+    const auditEventsByCommand = new Map<CommandId, AuditEventRecord[]>();
+    const nextAuditPositionByRun = new Map<string, number>();
+    try {
+      for (const row of retainedIntakeAuditRowsSchema.parse(
+        this.#database
+          .prepare(
+            `SELECT relationship.intake_run_id,
+                    relationship.command_id AS relationship_command_id,
+                    relationship.position,
+                    audit.id, audit.sequence, audit.aggregate_type, audit.aggregate_id,
+                    audit.event_type, audit.actor_type, audit.command_id,
+                    audit.before_version, audit.after_version, audit.correlation_id,
+                    audit.causation_id, audit.payload_digest, audit.occurred_at
+               FROM intake_audit_events AS relationship
+               JOIN audit_events AS audit ON audit.id = relationship.audit_event_id
+              ORDER BY relationship.intake_run_id, relationship.position`,
+          )
+          .all(),
+      )) {
+        const event = decodeAuditEvent(row);
+        const relationshipCommandId = commandId(row.relationship_command_id);
+        const nextPosition = nextAuditPositionByRun.get(row.intake_run_id) ?? 0;
+        if (
+          !runById.has(row.intake_run_id) ||
+          row.position !== nextPosition ||
+          event.actorType !== 'RUNTIME' ||
+          event.aggregateType !== IntakeAuditAggregateType.INTAKE_RUN ||
+          event.aggregateId !== row.intake_run_id ||
+          event.commandId !== relationshipCommandId ||
+          !Object.values(IntakeAuditEventType).some((value) => value === event.eventType)
+        ) {
+          throw new StoreInvariantError('Retained Intake audit relationship is substituted');
+        }
+        nextAuditPositionByRun.set(row.intake_run_id, nextPosition + 1);
+        const commandEvents = auditEventsByCommand.get(relationshipCommandId) ?? [];
+        if (
+          commandEvents.length > 0 &&
+          event.occurredAt <
+            (commandEvents[commandEvents.length - 1]?.occurredAt ?? event.occurredAt)
+        ) {
+          throw new StoreInvariantError(
+            `Retained Intake command ${relationshipCommandId} audit time moved backwards`,
+          );
+        }
+        commandEvents.push(event);
+        auditEventsByCommand.set(relationshipCommandId, commandEvents);
+      }
+    } catch (error) {
+      if (error instanceof StoreInvariantError) {
+        throw error;
+      }
+      throw new StoreInvariantError('Retained Intake audit authority failed strict reopen', {
+        cause: error,
+      });
+    }
+
+    for (const reservation of reservations) {
+      const outcome = outcomeByCommandId.get(reservation.commandId);
+      const events = auditEventsByCommand.get(reservation.commandId);
+      const expected = expectedRetainedIntakeAuditEvents(reservation, outcome);
+      const terminalAt = outcome?.completedAt ?? reservation.reservedAt;
+      if (
+        events?.length !== expected.length ||
+        events.some((event, index) => event.eventType !== expected[index]) ||
+        events.at(-1)?.occurredAt !== terminalAt
+      ) {
+        throw new StoreInvariantError(
+          `Intake command ${reservation.commandId} has no exact audit closure`,
+        );
+      }
+    }
+    for (const commandIdentifier of auditEventsByCommand.keys()) {
+      if (!reservationByCommandId.has(commandIdentifier)) {
+        throw new StoreInvariantError(
+          `Retained Intake audit command ${commandIdentifier} has no reservation`,
+        );
+      }
+    }
 
     for (const root of rawRequests) {
       if (runById.get(root.intakeRunId)?.id !== root.intakeRunId) {

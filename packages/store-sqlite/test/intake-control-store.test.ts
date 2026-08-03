@@ -1552,6 +1552,134 @@ function persistClarification(
   );
 }
 
+void test('[I-006][I-008][I-009] Admission Policy install is atomic and replay-safe', (t) => {
+  const filename = temporaryDatabase(t);
+  const localDefinition = createM25LocalAdmissionPolicyDefinition();
+  const policy = createM25AdmissionPolicy(localDefinition, digests);
+  const store = openStore(filename);
+  const installed = store.installIntentAdmissionPolicy({
+    policy,
+    installedAt: NOW,
+    auditEventId: auditEventId('audit_intake-policy-install-closure'),
+    payloadDigest: policy.digest,
+  });
+  assert.equal(installed.status, 'INSTALLED');
+  assert.equal(
+    store.installIntentAdmissionPolicy({
+      policy,
+      installedAt: LATER,
+      auditEventId: auditEventId('audit_intake-policy-install-replay'),
+      payloadDigest: policy.digest,
+    }).status,
+    'EXISTING',
+  );
+
+  assert.deepEqual(store.getIntentAdmissionPolicy(policy.id), policy);
+  store.close();
+
+  const database = new Database(filename, { readonly: true });
+  try {
+    const policyCount = database
+      .prepare('SELECT COUNT(*) AS count FROM intent_admission_policies WHERE id = ?')
+      .get(policy.id) as { readonly count: number };
+    const auditCount = database
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM audit_events
+          WHERE aggregate_type = 'INTENT_ADMISSION_POLICY' AND aggregate_id = ?`,
+      )
+      .get(policy.id) as { readonly count: number };
+    assert.equal(policyCount.count, 1);
+    assert.equal(auditCount.count, 1);
+  } finally {
+    database.close();
+  }
+
+  const reopened = openStore(filename);
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.getIntentAdmissionPolicy(policy.id), policy);
+});
+
+for (const step of [
+  IntakeTransactionStep.AFTER_POLICY_AUDIT_WRITE,
+  IntakeTransactionStep.AFTER_POLICY_WRITE,
+] as const) {
+  void test(`[I-008][I-009] Admission Policy install rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+    const installAuditEventId = auditEventId(
+      `audit_intake-policy-${step.toLowerCase().replaceAll('_', '-')}`,
+    );
+    const store = openStore(filename, {
+      transactionProbe: (observed) => {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.installIntentAdmissionPolicy({
+          policy,
+          installedAt: NOW,
+          auditEventId: installAuditEventId,
+          payloadDigest: policy.digest,
+        }),
+      new RegExp(step),
+    );
+    assert.equal(store.getIntentAdmissionPolicy(policy.id), undefined);
+    store.close();
+
+    const database = new Database(filename, { readonly: true });
+    try {
+      const auditCount = database
+        .prepare('SELECT COUNT(*) AS count FROM audit_events WHERE id = ?')
+        .get(installAuditEventId) as { readonly count: number };
+      assert.equal(auditCount.count, 0);
+    } finally {
+      database.close();
+    }
+
+    const reopened = openStore(filename);
+    try {
+      assert.equal(reopened.getIntentAdmissionPolicy(policy.id), undefined);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('[I-006][I-008][I-009] Intake write rejects a substituted audit plan without state effects', (t) => {
+  const filename = temporaryDatabase(t);
+  const fixture = fixtures('substituted-audit-write');
+  const store = openStore(filename);
+  installPolicy(store, 'substituted-audit-write', fixture.policy);
+  const firstAudit = fixture.reservationAudits[0];
+  assert.ok(firstAudit);
+  const substitutedAudits: readonly IntakeAuditWrite[] = Object.freeze([
+    { ...firstAudit, eventType: IntakeAuditEventType.INTAKE_RUN_CREATED },
+    ...fixture.reservationAudits.slice(1),
+  ]);
+  assert.throws(
+    () =>
+      store.reserveInitialIntake({
+        rawRequest: fixture.rawRequest,
+        rawRequestRevision: fixture.revision,
+        intakeRun: fixture.analyzingRun,
+        manifest: fixture.manifest,
+        reservation: fixture.reservation,
+        auditEvents: substitutedAudits,
+      }),
+    /substituted audit plan/,
+  );
+  assert.equal(store.getIntakeAuthority(fixture.analyzingRun.id), undefined);
+  store.close();
+
+  const reopened = openStore(filename);
+  t.after(() => reopened.close());
+  assert.equal(reopened.getIntakeAuthority(fixture.analyzingRun.id), undefined);
+});
+
 void test('[I-006][I-008][I-009] Intake reservation/failure/outcome survives exact reopen and replay', (t) => {
   const filename = temporaryDatabase(t);
   const fixture = fixtures('failure-reopen');
@@ -2079,6 +2207,32 @@ void test('[I-006][I-008][I-009] Materialization atomically creates READY Goal/W
     }).status,
     'REPLAYED',
   );
+  const competing = materializationFixtures(base, startAuthority, 'materialization-competing');
+  const competingResult = store.commitIntakeMaterialization({
+    kind: 'MATERIALIZE',
+    commandId: base.reservation.commandId,
+    proposal: competing.proposal,
+    projection: competing.projection,
+    ambiguitySet: competing.ambiguitySet,
+    decision: competing.decision,
+    goal: competing.goal,
+    workflow: competing.workflow,
+    materialization: competing.materialization,
+    startAuthorization: competing.startAuthorization,
+    intakeRun: competing.materializedRun,
+    goalAuditEventId: auditEventId('audit_intake-materialization-competing-goal'),
+    workflowAuditEventId: auditEventId('audit_intake-materialization-competing-workflow'),
+    goalCreationPayloadDigest: competing.goalCreationPayloadDigest,
+    completedAt: LAST,
+    auditEvents: competing.audits,
+  });
+  assert.equal(competingResult.status, 'COMMAND_CONFLICT');
+  assert.equal(store.getGoal(competing.goal.id), undefined);
+  assert.equal(store.getWorkflow(competing.workflow.id), undefined);
+  assert.deepEqual(
+    store.getIntakeAuthority(base.analyzingRun.id)?.materialization,
+    materialized.materialization,
+  );
   store.close();
 
   const database = new Database(filename, { readonly: true });
@@ -2599,6 +2753,39 @@ for (const step of abandonmentFailureSteps) {
   });
 }
 
+void test('[I-006][I-008][I-009] strict reopen rejects a missing Intake audit relationship', (t) => {
+  const filename = temporaryDatabase(t);
+  const fixture = fixtures('missing-audit-relationship');
+  const store = openStore(filename);
+  installPolicy(store, 'missing-audit-relationship', fixture.policy);
+  assert.equal(
+    store.reserveInitialIntake({
+      rawRequest: fixture.rawRequest,
+      rawRequestRevision: fixture.revision,
+      intakeRun: fixture.analyzingRun,
+      manifest: fixture.manifest,
+      reservation: fixture.reservation,
+      auditEvents: fixture.reservationAudits,
+    }).status,
+    'RESERVED',
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER intake_audit_events_no_delete');
+    database
+      .prepare('DELETE FROM intake_audit_events WHERE audit_event_id = ?')
+      .run(fixture.reservationAudits[1]?.id);
+  } finally {
+    database.close();
+  }
+  assert.throws(
+    () => openStore(filename),
+    /exact audit closure|audit relationship is substituted|strict reopen/,
+  );
+});
+
 void test('[I-006][I-008][I-009] strict reopen rejects codec-invalid retained Intake authority', (t) => {
   const filename = temporaryDatabase(t);
   const fixture = fixtures('poisoned-reopen');
@@ -2860,6 +3047,61 @@ void test('[I-006][I-008][I-009] strict reopen rejects a terminal abandonment wi
     () => openStore(filename),
     /foreign-key integrity|terminal Materialization|terminal Decision|strict reopen/,
   );
+});
+
+void test('[I-006][I-008] verified activation rejects a substituted Intake project column before verifier use', (t) => {
+  const filename = temporaryDatabase(t);
+  const fixture = fixtures('activation-substituted-path');
+  const store = openStore(filename);
+  installPolicy(store, 'activation-substituted-path', fixture.policy);
+  assert.equal(
+    store.reserveInitialIntake({
+      rawRequest: fixture.rawRequest,
+      rawRequestRevision: fixture.revision,
+      intakeRun: fixture.analyzingRun,
+      manifest: fixture.manifest,
+      reservation: fixture.reservation,
+      auditEvents: fixture.reservationAudits,
+    }).status,
+    'RESERVED',
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER raw_request_revisions_no_update');
+    database
+      .prepare(
+        `UPDATE raw_request_revisions
+            SET declared_project_path = ?, declared_project_identity_digest = ?
+          WHERE raw_request_id = ? AND revision = ?`,
+      )
+      .run(
+        '/fixture/substituted-path',
+        sha256Digest(`sha256:${'b'.repeat(64)}`),
+        fixture.revision.rawRequestId,
+        fixture.revision.revision,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => openStore(filename), /differs from its authority JSON/);
+  let verifierCalled = false;
+  assert.throws(
+    () =>
+      SqliteControlStore.openVerified({
+        filename,
+        isolationVerifier: {
+          verify: () => {
+            verifierCalled = true;
+            throw new Error('verifier must not observe substituted Intake project authority');
+          },
+        },
+      }),
+    /substituted RAW_REQUEST_REVISION project binding/,
+  );
+  assert.equal(verifierCalled, false);
 });
 
 void test('[I-006][I-008] verified activation carries retained Intake project references as denial inputs', (t) => {
