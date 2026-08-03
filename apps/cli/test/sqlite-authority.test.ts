@@ -50,7 +50,7 @@ void test('[I-006][I-007] trusted CLI composition uses verified SQLite activatio
   });
   t.after(() => store.close());
 
-  assert.equal(store.appliedMigrations().length, 25);
+  assert.equal(store.appliedMigrations().length, 26);
   assert.deepEqual(store.listStartupRecoveryCatalog(), []);
 });
 

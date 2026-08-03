@@ -23,10 +23,11 @@ persistence, restart reconciliation, fresh repair Context, protected
 acceptance-critical verification, trusted CLI composition, and both bounded
 live Goal-bound paths are implemented, and the Slice 8 acceptance harness plus
 independent exit review completed the bounded M2 milestone on 2026-08-02.
-M2.5 Slice 1 now implements the closed Intake Domain records and codecs,
+M2.5 Slices 1 and 2 now implement the closed Intake Domain records and codecs,
 canonical projections and golden vectors, fixed Admission Policy definitions,
-the capability-free Admission Engine contract, and the anti-self-admission
-Runtime invariant. Goal Intake persistence and product behavior remain planned.
+the capability-free Admission Engine contract, the anti-self-admission Runtime
+invariant, and strict transactional SQLite Intake authority. Goal Intake
+coordination and product behavior remain planned.
 Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
@@ -35,8 +36,10 @@ and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
 historical implementation and exit evidence. The
 [M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
-milestone. Slice 1 is complete; no Intake Store, Coordinator, package compiler,
-adapter, CLI, Materialization, or Start behavior is implemented. The following M2 slice
+milestone. Slices 1 and 2 are complete; the Store can persist and strictly
+reopen the planned compound Intake/Goal/Workflow/Materialization authority, but
+no Coordinator, package compiler, adapter, CLI, or ordinary Start invocation is
+implemented. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -123,10 +126,12 @@ accepted in
 while
 [ADR 0034](docs/adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
 closes its pre-Goal command replay and verified SQLite activation boundaries.
-Goal Intake is not operational. M2.5 Slice 1 implements its closed Domain
-records, codecs, canonical projections, fixed Policy definitions, and
-capability-free Admission Engine contract, but not the Engine evaluator,
-persistence, Coordinator, Materialization, Start, adapter, or CLI behavior. The
+Goal Intake is not operational. M2.5 Slices 1 and 2 implement its closed Domain
+records, codecs, canonical projections, fixed Policy definitions,
+capability-free Admission Engine contract, migrations, Store ports, compound
+transactions, verified activation inputs, and strict reopen validation. They do
+not implement the Engine evaluator, Coordinator, package compiler, adapter, CLI,
+or ordinary Start invocation. The
 completed M2 milestone preserved the reusable Codex App Server client boundary;
 the Intake Coordinator, Projection construction, Admission evaluator, and
 Intake Assistant Adapter remain planned for M2.5. The same Intake boundary owns

@@ -50,9 +50,11 @@ existing first-Start and Check-before-Attempt lifecycle by ADR 0033. Trusted
 CLI composition exercises both the natural live branch and the separate fresh
 repair-handoff branch without granting Codex Workflow authority. Goal Intake is
 an accepted pre-Goal target for M2.5 and does not add another Workflow phase.
-Slice 1 implements its separate Domain state and Admission contracts only; no
-Intake transition, Workflow mutation, Materialization, or automatic Start path
-is operational.
+At the M2 boundary, no Intake transition or Workflow mutation was operational.
+Slices 1 and 2 implement its separate Domain/Admission contracts and atomic
+SQLite creation of a `DISCOVERY / READY` Workflow through the Intake Store
+boundary. No Coordinator, public Intake transition, automatic Start invocation,
+or new Workflow phase is operational.
 Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
 2026-08-02.
 

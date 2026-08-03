@@ -920,6 +920,7 @@ export interface AppliedAbandonClarificationReservation extends IntakeCommandRes
 export interface RejectedAbandonClarificationReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.ABANDON_CLARIFICATION;
   readonly expectedIntakeRunVersion: IntakeRunVersion;
+  readonly abandonClarificationBinding?: never;
 }
 
 export type IntakeCommandReservation =
@@ -1993,7 +1994,19 @@ export function intakeCommandResultProjection(result: IntakeCommandResult): unkn
   return result;
 }
 
-export function intakeCommandOutcomeProjection(outcome: IntakeCommandOutcome): unknown {
+export function intakeCommandOutcomeProjection(
+  outcome: Pick<
+    IntakeCommandOutcome,
+    | 'schemaVersion'
+    | 'disposition'
+    | 'commandId'
+    | 'intakeRunId'
+    | 'canonicalCommandInputDigest'
+    | 'reservationDigest'
+    | 'observedIntakeRunVersion'
+    | 'resultDigest'
+  >,
+): unknown {
   return {
     schemaVersion: outcome.schemaVersion,
     disposition: outcome.disposition,

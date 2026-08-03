@@ -105,6 +105,67 @@ function seedRetainedGoal(filename: string, namespace: string, projectPath: stri
   }
 }
 
+void test('[I-006][I-008] verified activation rejects a partial Intake schema before migration or verifier activation', (t) => {
+  const filename = temporaryDatabase(t);
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-activation-migrations-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  for (const name of readdirSync(defaultMigrationsDirectory()).filter(
+    (entry) => entry.endsWith('.sql') && entry < '0026_intake_authority.sql',
+  )) {
+    copyFileSync(join(defaultMigrationsDirectory(), name), join(migrationsDirectory, name));
+  }
+  const legacy = openSqliteControlStore({
+    filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  try {
+    assert.equal(
+      legacy.createGoalWithWorkflow(
+        creationInput('partial-intake-schema', '/fixture/partial-intake-schema'),
+      ).status,
+      'APPLIED',
+    );
+    assert.equal(legacy.appliedMigrations().length, 25);
+  } finally {
+    legacy.close();
+  }
+  const database = new Database(filename);
+  try {
+    database.exec('CREATE TABLE intake_runs(id TEXT PRIMARY KEY) STRICT');
+  } finally {
+    database.close();
+  }
+  let verifierCalled = false;
+  assert.throws(
+    () =>
+      openVerifiedSqliteControlStore({
+        filename,
+        isolationVerifier: {
+          verify: () => {
+            verifierCalled = true;
+            return isolationLease(['/fixture/partial-intake-schema']);
+          },
+        },
+      }),
+    /partial M2\.5 Intake schema/,
+  );
+  assert.equal(verifierCalled, false);
+  const inspected = new Database(filename, { readonly: true });
+  try {
+    assert.equal(inspected.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), 25);
+    assert.equal(
+      inspected
+        .prepare("SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'intake_runs'")
+        .pluck()
+        .get(),
+      1,
+    );
+  } finally {
+    inspected.close();
+  }
+});
+
 void test('[I-006][I-007][I-008] verified activation gates new Goal project admission', (t) => {
   const filename = temporaryDatabase(t);
   writeFileSync(filename, '');
@@ -130,7 +191,7 @@ void test('[I-006][I-007][I-008] verified activation gates new Goal project admi
   assert.ok(snapshot);
   assert.equal(snapshot.databaseState, SqliteAuthorityDatabaseState.EMPTY);
   assert.deepEqual(snapshot.projectReferences, []);
-  assert.equal(store.appliedMigrations().length, 25);
+  assert.equal(store.appliedMigrations().length, 26);
   assert.ok(currentAssertions >= 3);
 
   assert.equal(
@@ -268,7 +329,7 @@ void test('[I-007][I-008] activation writer reservation closes the snapshot/use 
     isolationVerifier: Object.freeze({
       verify: (snapshot: SqliteAuthorityIsolationSnapshot) => {
         assert.deepEqual(snapshot.projectReferences, [
-          { goalId: goalId('goal_activation-lock'), projectPath },
+          { kind: 'GOAL', authorityId: goalId('goal_activation-lock'), projectPath },
         ]);
         const competing = new Database(filename, { fileMustExist: true, timeout: 0 });
         try {
@@ -342,7 +403,7 @@ void test('[I-006][I-008] migration cannot rewrite an inspected project binding'
     copyFileSync(join(defaultMigrationsDirectory(), name), join(migrationsDirectory, name));
   }
   writeFileSync(
-    join(migrationsDirectory, '0026_rewrite_project_binding.sql'),
+    join(migrationsDirectory, '0027_rewrite_project_binding.sql'),
     "UPDATE goals SET project_path = '/fixture/rewritten-by-migration';\n",
   );
 
@@ -369,7 +430,7 @@ void test('[I-006][I-008] migration cannot rewrite an inspected project binding'
       projectPath,
     );
     assert.equal(
-      inspected.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 26').pluck().get(),
+      inspected.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 27').pluck().get(),
       0,
     );
   } finally {

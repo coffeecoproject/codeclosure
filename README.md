@@ -15,16 +15,18 @@ The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
 M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
-green on one source identity. M2.5 Goal Intake remains unimplemented, while
-its initial interface decision closure is complete. The
-[M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) is the detailed
-status source; the [milestone document](docs/milestones.md) defines the bounded
-scope and exit criteria.
+green on one source identity. M2.5 Goal Intake remains unimplemented as an
+operational loop; its closed Domain, Policy, and SQLite authority foundation
+is implemented without a Coordinator, assistant adapter, CLI, or Start execution.
+This foundation does not prove Goal Intake, product completion, or authority to
+merge, release, deploy, or perform another external effect.
+The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
+detailed status source required by the repository README contract; the
+[milestone document](docs/milestones.md) defines the current bounded scope and
+exit criteria.
 
 This README intentionally does not duplicate the rolling slice, feature, or
-test inventory. M1 and M2 remain regression baselines. M2 completion does not
-prove Goal Intake, product completion, or authority to merge, release, deploy,
-or perform another external effect.
+test inventory. M1 and M2 remain regression baselines.
 
 ## Development
 

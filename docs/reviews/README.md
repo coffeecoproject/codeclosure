@@ -17,3 +17,4 @@ runtime evidence.
 - [M2 Slice 7 trusted composition, CLI, and live review](m2-slice7-trusted-composition-cli-live.md)
 - [M2.5 Slice 0 decision-closure review](m2-5-slice0-decision-closure.md)
 - [M2.5 Slice 1 domain, policy, and invariant review](m2-5-slice1-domain-policy-invariant.md)
+- [M2.5 Slice 2 SQLite Intake authority review](m2-5-slice2-sqlite-intake-authority.md)

@@ -20,6 +20,14 @@ import {
   ExternalMaintenanceState,
   GoalStatus,
   GuardOutcome,
+  IntakeCommandDisposition,
+  IntakeCommandOperationKind,
+  IntakeInteractionAction,
+  IntakeRunStatus,
+  IntentAdmissionDecisionKind,
+  IntentAdmissionOutcome,
+  IntentAdmissionReasonCode,
+  IntentExecutionDisposition,
   RecoveryReconciliationDisposition,
   RecoveryReconciliationPurpose,
   RunStatus,
@@ -70,6 +78,29 @@ import {
   decodeContextManifest,
   decodeAttemptEvent,
   decodeGoalSnapshot,
+  decodeAnswerOnlyResponse,
+  decodeClarificationAnswerBinding,
+  decodeClarificationQuestion,
+  decodeClarificationQuestionSpec,
+  decodeGoalMaterializationRecord,
+  decodeGoalStartAuthorization,
+  decodeIntakeCommandClosure,
+  decodeIntakeCommandResult,
+  decodeIntakeCommandOutcome,
+  decodeIntakeCommandReservation,
+  decodeIntakeFailureRecord,
+  decodeIntakeManifest,
+  decodeIntakeRun,
+  decodeIntentAdmissionDecision,
+  decodeIntentAdmissionPolicy,
+  decodeIntentAdmissionPolicyInstallInput,
+  decodeIntentAnalysisProposal,
+  decodeIntentProjectionRevision,
+  decodeMaterialAmbiguity,
+  decodeMaterialAmbiguitySet,
+  decodeRawRequest,
+  decodeRawRequestRevision,
+  decodeSourceBinding,
   decodeWorkflowEvent,
   decodeWorkflowSnapshot,
   decodePolicyBundle,
@@ -80,6 +111,10 @@ import {
   deriveGoalStatus,
   goalId,
   goalRevision,
+  intakeCommandOutcomeProjection,
+  intakeCommandResultProjection,
+  intakeRunId,
+  intentAdmissionPolicyId,
   hasExactWorkflowActiveAttemptAuthority,
   evidenceId,
   evidenceSetDigestProjection,
@@ -147,6 +182,27 @@ import {
   type CloseoutRecord,
   type Goal,
   type GoalId,
+  type AnswerOnlyResponse,
+  type ClarificationAnswerBinding,
+  type ClarificationQuestion,
+  type ClarificationQuestionSpec,
+  type GoalMaterializationRecord,
+  type GoalStartAuthorization,
+  type IntakeCommandOutcome,
+  type IntakeCommandReservation,
+  type IntakeCommandResult,
+  type IntakeFailureRecord,
+  type IntakeManifest,
+  type IntakeRun,
+  type IntentAdmissionDecision,
+  type IntentAdmissionPolicy,
+  type IntentAdmissionPolicyInstallInput,
+  type IntentAnalysisProposal,
+  type IntentProjectionRevisionRecord,
+  type MaterialAmbiguity,
+  type MaterialAmbiguitySet,
+  type RawRequest,
+  type RawRequestRevisionRecord,
   type IsoTimestamp,
   type PolicyBundle,
   type PolicyBundleId,
@@ -248,6 +304,21 @@ import {
   type InstallPolicyBundle,
   type InstallExecutionProfile,
   type InstallExternalBackendCapabilityRecord,
+  IntakeAuditAggregateType,
+  IntakeAuditEventType,
+  type IntakeAuditWrite,
+  type IntakeAuthorityView,
+  type IntakeCommitStoreResult,
+  type IntakeControlStore,
+  type IntakeReservationStoreResult,
+  type IntentAdmissionPolicyInstallResult,
+  type CommitAnalyzedIntake,
+  type CommitIntakeCommandRejection,
+  type CommitIntakeFailure,
+  type CommitIntakeMaterialization,
+  type CommitIntakeNoExecution,
+  type ReserveClarificationIntakeOperation,
+  type ReserveInitialIntakeOperation,
   type InstalledExecutionProfile,
   type InstalledPolicyBundle,
   type ExecutionProfileInstallResult,
@@ -277,7 +348,7 @@ import {
   OptimisticConcurrencyError,
   StoreInvariantError,
 } from './errors.js';
-import { serializeJson } from './json.js';
+import { parseJson, serializeJson } from './json.js';
 import {
   applyMigrations,
   applyMigrationsWithinCurrentTransaction,
@@ -386,6 +457,34 @@ export const RecoveryTransactionStep = {
 export type RecoveryTransactionStep =
   (typeof RecoveryTransactionStep)[keyof typeof RecoveryTransactionStep];
 
+export const IntakeTransactionStep = {
+  AFTER_POLICY_AUDIT_WRITE: 'AFTER_INTAKE_POLICY_AUDIT_WRITE',
+  AFTER_POLICY_WRITE: 'AFTER_INTAKE_POLICY_WRITE',
+  AFTER_RAW_REQUEST_WRITE: 'AFTER_INTAKE_RAW_REQUEST_WRITE',
+  AFTER_RAW_REQUEST_REVISION_WRITE: 'AFTER_INTAKE_RAW_REQUEST_REVISION_WRITE',
+  AFTER_RUN_WRITE: 'AFTER_INTAKE_RUN_WRITE',
+  AFTER_MANIFEST_WRITE: 'AFTER_INTAKE_MANIFEST_WRITE',
+  AFTER_ANSWER_BINDING_WRITE: 'AFTER_INTAKE_ANSWER_BINDING_WRITE',
+  AFTER_RESERVATION_WRITE: 'AFTER_INTAKE_RESERVATION_WRITE',
+  AFTER_PROPOSAL_WRITE: 'AFTER_INTAKE_PROPOSAL_WRITE',
+  AFTER_SOURCE_BINDING_WRITE: 'AFTER_INTAKE_SOURCE_BINDING_WRITE',
+  AFTER_PROJECTION_WRITE: 'AFTER_INTAKE_PROJECTION_WRITE',
+  AFTER_AMBIGUITY_WRITE: 'AFTER_INTAKE_AMBIGUITY_WRITE',
+  AFTER_DECISION_WRITE: 'AFTER_INTAKE_DECISION_WRITE',
+  AFTER_QUESTION_WRITE: 'AFTER_INTAKE_QUESTION_WRITE',
+  AFTER_ANSWER_RESPONSE_WRITE: 'AFTER_INTAKE_ANSWER_RESPONSE_WRITE',
+  AFTER_FAILURE_WRITE: 'AFTER_INTAKE_FAILURE_WRITE',
+  AFTER_GOAL_WRITE: 'AFTER_INTAKE_GOAL_WRITE',
+  AFTER_WORKFLOW_WRITE: 'AFTER_INTAKE_WORKFLOW_WRITE',
+  AFTER_MATERIALIZATION_WRITE: 'AFTER_INTAKE_MATERIALIZATION_WRITE',
+  AFTER_START_AUTHORIZATION_WRITE: 'AFTER_INTAKE_START_AUTHORIZATION_WRITE',
+  AFTER_AUDIT_WRITE: 'AFTER_INTAKE_AUDIT_WRITE',
+  AFTER_OUTCOME_WRITE: 'AFTER_INTAKE_OUTCOME_WRITE',
+  BEFORE_COMMIT: 'BEFORE_INTAKE_COMMIT',
+} as const;
+export type IntakeTransactionStep =
+  (typeof IntakeTransactionStep)[keyof typeof IntakeTransactionStep];
+
 export interface SqliteControlStoreOptions {
   readonly filename: string;
   readonly migrationsDirectory?: string;
@@ -397,7 +496,8 @@ export interface SqliteControlStoreOptions {
       | WorkerTransactionStep
       | CandidateEvidenceTransactionStep
       | AcceptanceTransactionStep
-      | RecoveryTransactionStep,
+      | RecoveryTransactionStep
+      | IntakeTransactionStep,
   ) => void;
 }
 
@@ -408,8 +508,19 @@ export const SqliteAuthorityDatabaseState = {
 export type SqliteAuthorityDatabaseState =
   (typeof SqliteAuthorityDatabaseState)[keyof typeof SqliteAuthorityDatabaseState];
 
+export const SqliteRetainedProjectReferenceKind = {
+  GOAL: 'GOAL',
+  RAW_REQUEST_REVISION: 'RAW_REQUEST_REVISION',
+  INTAKE_RUN: 'INTAKE_RUN',
+  INTENT_ADMISSION_DECISION: 'INTENT_ADMISSION_DECISION',
+  GOAL_MATERIALIZATION: 'GOAL_MATERIALIZATION',
+} as const;
+export type SqliteRetainedProjectReferenceKind =
+  (typeof SqliteRetainedProjectReferenceKind)[keyof typeof SqliteRetainedProjectReferenceKind];
+
 export interface SqliteRetainedProjectReference {
-  readonly goalId: GoalId;
+  readonly kind: SqliteRetainedProjectReferenceKind;
+  readonly authorityId: string;
   readonly projectPath: string;
 }
 
@@ -496,19 +607,128 @@ const sqliteSchemaObjectRowsSchema = z.array(
 const retainedProjectReferenceRowsSchema = z.array(
   z
     .object({
-      id: z.string(),
+      kind: z.enum(Object.values(SqliteRetainedProjectReferenceKind)),
+      authority_id: z.string().min(1),
       project_path: z.string().min(1),
     })
     .strict(),
 );
 
-const retainedGoalIdentifierRowsSchema = z.array(
+const storedIntakeRecordRowsSchema = z.array(z.object({ record_json: z.string().min(2) }).strict());
+
+const projectionSourceBindingRowsSchema = z.array(
   z
     .object({
-      id: z.string(),
+      projection_id: z.string().min(1),
+      projection_revision: z.number().int().positive(),
+      position: z.number().int().nonnegative(),
+      binding_digest: z.string().min(1),
     })
     .strict(),
 );
+
+const ambiguityMembershipRowsSchema = z.array(
+  z
+    .object({
+      ambiguity_set_digest: z.string().min(1),
+      record_json: z.string().min(2),
+    })
+    .strict(),
+);
+
+function intakeRevisionKey(identifier: string, revision: number): string {
+  return `${identifier}\u0000${String(revision)}`;
+}
+
+function sameCanonicalAuthority(left: unknown, right: unknown): boolean {
+  return canonicalizeJson(decodeJsonValue(left)) === canonicalizeJson(decodeJsonValue(right));
+}
+
+const intakeAuthorityTableNames = Object.freeze([
+  'intent_admission_policies',
+  'raw_requests',
+  'raw_request_revisions',
+  'intake_runs',
+  'intake_manifests',
+  'intent_analysis_proposals',
+  'source_bindings',
+  'intent_projection_revisions',
+  'projection_source_bindings',
+  'material_ambiguity_sets',
+  'material_ambiguities',
+  'clarification_question_specs',
+  'intent_admission_decisions',
+  'clarification_questions',
+  'clarification_answer_bindings',
+  'answer_only_responses',
+  'intake_failure_records',
+  'intake_command_reservations',
+  'intake_command_outcomes',
+  'goal_materializations',
+  'goal_start_authorizations',
+  'intake_audit_events',
+]);
+
+function inspectRetainedProjectReferences(
+  database: Database.Database,
+  tableNames: ReadonlySet<string>,
+): readonly SqliteRetainedProjectReference[] {
+  const presentIntakeTables = intakeAuthorityTableNames.filter((name) => tableNames.has(name));
+  if (
+    presentIntakeTables.length !== 0 &&
+    presentIntakeTables.length !== intakeAuthorityTableNames.length
+  ) {
+    throw new AuthorityActivationError(
+      'SQLite authority bootstrap found partial M2.5 Intake schema',
+    );
+  }
+
+  const intakeUnion =
+    presentIntakeTables.length === 0
+      ? ''
+      : `
+        UNION ALL
+        SELECT 'RAW_REQUEST_REVISION', raw_request_id || '@' || revision, declared_project_path
+          FROM raw_request_revisions WHERE declared_project_path IS NOT NULL
+        UNION ALL
+        SELECT 'INTAKE_RUN', id, project_path
+          FROM intake_runs WHERE project_path IS NOT NULL
+        UNION ALL
+        SELECT 'INTENT_ADMISSION_DECISION', id, project_path
+          FROM intent_admission_decisions WHERE project_path IS NOT NULL
+        UNION ALL
+        SELECT 'GOAL_MATERIALIZATION', id, project_path
+          FROM goal_materializations`;
+  const rows = retainedProjectReferenceRowsSchema.parse(
+    database
+      .prepare(
+        `SELECT kind, authority_id, project_path
+           FROM (
+             SELECT 'GOAL' AS kind, id AS authority_id, project_path FROM goals
+             ${intakeUnion}
+           )
+          ORDER BY kind, authority_id`,
+      )
+      .all(),
+  );
+  const seen = new Set<string>();
+  return Object.freeze(
+    rows.map((row) => {
+      const identity = `${row.kind}\u0000${row.authority_id}`;
+      if (seen.has(identity)) {
+        throw new AuthorityActivationError(
+          `SQLite authority bootstrap contains duplicate ${row.kind} project owner ${row.authority_id}`,
+        );
+      }
+      seen.add(identity);
+      return Object.freeze({
+        kind: row.kind,
+        authorityId: row.authority_id,
+        projectPath: row.project_path,
+      });
+    }),
+  );
+}
 
 const auditSequenceWatermarkRowSchema = z
   .object({
@@ -556,6 +776,42 @@ function systemNow(): IsoTimestamp {
 }
 
 const canonicalAuthorityDigests = new CanonicalJsonSha256DigestProvider();
+
+function storeAuthoredIntakeOutcome(
+  reservation: IntakeCommandReservation,
+  rawResult: IntakeCommandResult,
+  completedAt: IsoTimestamp,
+): IntakeCommandOutcome {
+  const result = decodeIntakeCommandResult(rawResult);
+  const disposition =
+    result.kind === 'REJECTED'
+      ? IntakeCommandDisposition.REJECTED
+      : result.kind === 'FAILED'
+        ? IntakeCommandDisposition.FAILED
+        : IntakeCommandDisposition.APPLIED;
+  const resultDigest = canonicalAuthorityDigests.digest(intakeCommandResultProjection(result));
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    disposition,
+    commandId: reservation.commandId,
+    intakeRunId: reservation.intakeRunId,
+    canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+    reservationDigest: reservation.reservationDigest,
+    observedIntakeRunVersion: reservation.observedIntakeRunVersion,
+    result,
+    resultDigest,
+    completedAt: isoTimestamp(completedAt),
+  });
+  return decodeIntakeCommandOutcome(
+    {
+      ...withoutDigest,
+      outcomeDigest: canonicalAuthorityDigests.digest(
+        intakeCommandOutcomeProjection(withoutDigest),
+      ),
+    },
+    canonicalAuthorityDigests,
+  );
+}
 
 function normalizeFilename(filename: string): string {
   if (filename === ':memory:') {
@@ -620,22 +876,7 @@ function inspectAuthorityIsolationSnapshot(
       );
     }
 
-    const rows = retainedProjectReferenceRowsSchema.parse(
-      database.prepare('SELECT id, project_path FROM goals ORDER BY id').all(),
-    );
-    const seenGoalIds = new Set<GoalId>();
-    const projectReferences = Object.freeze(
-      rows.map((row) => {
-        const identifier = goalId(row.id);
-        if (seenGoalIds.has(identifier)) {
-          throw new AuthorityActivationError(
-            `SQLite authority bootstrap contains duplicate Goal ${identifier}`,
-          );
-        }
-        seenGoalIds.add(identifier);
-        return Object.freeze({ goalId: identifier, projectPath: row.project_path });
-      }),
-    );
+    const projectReferences = inspectRetainedProjectReferences(database, tableNames);
     return Object.freeze({
       schemaVersion: 1,
       databasePath,
@@ -704,6 +945,62 @@ function validateOptionalMetadata(value: unknown, fieldName: string): string | u
     throw new TypeError(`${fieldName} must be a non-empty string when present`);
   }
   return value;
+}
+
+const intakeAuditWriteInputSchema = z
+  .object({
+    id: z.string(),
+    aggregateType: z.enum(Object.values(IntakeAuditAggregateType)),
+    aggregateId: z.string(),
+    eventType: z.enum(Object.values(IntakeAuditEventType)),
+    payloadDigest: z.string(),
+    occurredAt: z.string(),
+    beforeVersion: z.number().optional(),
+    afterVersion: z.number().optional(),
+    correlationId: z.string().optional(),
+    causationId: z.string().optional(),
+  })
+  .strict();
+
+function validateIntakeAuditWrites(rawWrites: unknown): readonly IntakeAuditWrite[] {
+  const writes = z.array(intakeAuditWriteInputSchema).min(1).parse(rawWrites);
+  const seen = new Set<AuditEventId>();
+  return Object.freeze(
+    writes.map((rawWrite) => {
+      const id = auditEventId(rawWrite.id);
+      if (seen.has(id)) {
+        throw new TypeError(`Intake audit event ${id} is duplicated`);
+      }
+      seen.add(id);
+      if (typeof rawWrite.aggregateId !== 'string' || rawWrite.aggregateId.trim().length === 0) {
+        throw new TypeError('Intake audit aggregate identity must not be blank');
+      }
+      const beforeVersion = rawWrite.beforeVersion;
+      const afterVersion = rawWrite.afterVersion;
+      for (const [name, version] of [
+        ['beforeVersion', beforeVersion],
+        ['afterVersion', afterVersion],
+      ] as const) {
+        if (version !== undefined && (!Number.isSafeInteger(version) || version < 1)) {
+          throw new TypeError(`${name} must be a positive safe integer when present`);
+        }
+      }
+      const correlationId = validateOptionalMetadata(rawWrite.correlationId, 'correlationId');
+      const causationId = validateOptionalMetadata(rawWrite.causationId, 'causationId');
+      return Object.freeze({
+        id,
+        aggregateType: rawWrite.aggregateType,
+        aggregateId: rawWrite.aggregateId,
+        eventType: rawWrite.eventType,
+        payloadDigest: sha256Digest(rawWrite.payloadDigest),
+        occurredAt: isoTimestamp(rawWrite.occurredAt),
+        ...(beforeVersion === undefined ? {} : { beforeVersion }),
+        ...(afterVersion === undefined ? {} : { afterVersion }),
+        ...(correlationId === undefined ? {} : { correlationId }),
+        ...(causationId === undefined ? {} : { causationId }),
+      });
+    }),
+  );
 }
 
 function validateCreateGoalWithWorkflowInput(
@@ -1689,7 +1986,11 @@ function isM1CodingWorkerPhase(phase: WorkflowPhase): boolean {
 }
 
 export class SqliteControlStore
-  implements AcceptanceControlStore, CodeClosureApplicationStore, WorkflowDriverControlStore
+  implements
+    AcceptanceControlStore,
+    CodeClosureApplicationStore,
+    WorkflowDriverControlStore,
+    IntakeControlStore
 {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
@@ -1701,7 +2002,8 @@ export class SqliteControlStore
           | WorkerTransactionStep
           | CandidateEvidenceTransactionStep
           | AcceptanceTransactionStep
-          | RecoveryTransactionStep,
+          | RecoveryTransactionStep
+          | IntakeTransactionStep,
       ) => void)
     | undefined;
   #closed = false;
@@ -1716,7 +2018,8 @@ export class SqliteControlStore
             | WorkerTransactionStep
             | CandidateEvidenceTransactionStep
             | AcceptanceTransactionStep
-            | RecoveryTransactionStep,
+            | RecoveryTransactionStep
+            | IntakeTransactionStep,
         ) => void)
       | undefined,
     authorityIsolationLease?: SqliteAuthorityIsolationLease,
@@ -1760,6 +2063,7 @@ export class SqliteControlStore
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
       store.assertRetainedProtectedVerificationAuthorityClosure();
+      store.assertRetainedIntakeAuthorityClosure();
       return store;
     } catch (error) {
       database.close();
@@ -1811,6 +2115,7 @@ export class SqliteControlStore
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
       store.assertRetainedProtectedVerificationAuthorityClosure();
+      store.assertRetainedIntakeAuthorityClosure();
       store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
       isolationLease.assertCurrent();
       database.exec('COMMIT');
@@ -1843,36 +2148,2806 @@ export class SqliteControlStore
     return this.#appliedMigrations;
   }
 
+  public installIntentAdmissionPolicy(
+    rawInput: IntentAdmissionPolicyInstallInput,
+  ): IntentAdmissionPolicyInstallResult {
+    this.assertOpen();
+    const input = decodeIntentAdmissionPolicyInstallInput(rawInput, canonicalAuthorityDigests);
+    return this.runImmediate(() => {
+      const existing = this.getIntentAdmissionPolicyInsideTransaction(input.policy.id);
+      if (existing !== undefined) {
+        return existing.version === input.policy.version &&
+          existing.digest === input.policy.digest &&
+          sameCanonicalAuthority(existing, input.policy)
+          ? { status: 'EXISTING', policy: existing }
+          : {
+              status: 'POLICY_CONFLICT',
+              message: `Intent Admission Policy ${input.policy.id} already has different authority`,
+            };
+      }
+
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'INTENT_ADMISSION_POLICY',
+        aggregateId: input.policy.id,
+        eventType: 'INTENT_ADMISSION_POLICY_INSTALLED',
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.installedAt,
+      });
+      this.probe(IntakeTransactionStep.AFTER_POLICY_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO intent_admission_policies(
+             id, schema_version, policy_version, record_json, policy_digest,
+             installed_at, install_audit_event_id, payload_digest
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.policy.id,
+          input.policy.schemaVersion,
+          input.policy.version,
+          serializeJson(decodeJsonValue(input.policy)),
+          input.policy.digest,
+          input.installedAt,
+          input.auditEventId,
+          input.payloadDigest,
+        );
+      this.probe(IntakeTransactionStep.AFTER_POLICY_WRITE);
+      const persisted = this.getIntentAdmissionPolicyInsideTransaction(input.policy.id);
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, input.policy)) {
+        throw new StoreInvariantError(
+          `Intent Admission Policy ${input.policy.id} was not immediately readable`,
+        );
+      }
+      this.assertAuditEventsReadable([input.auditEventId]);
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'INSTALLED', policy: persisted };
+    });
+  }
+
+  public getIntentAdmissionPolicy(rawPolicyId: string): IntentAdmissionPolicy | undefined {
+    this.assertOpen();
+    const policyIdentifier = intentAdmissionPolicyId(rawPolicyId);
+    return this.runRead(() => this.getIntentAdmissionPolicyInsideTransaction(policyIdentifier));
+  }
+
+  private getIntentAdmissionPolicyInsideTransaction(
+    policyIdentifier: ReturnType<typeof intentAdmissionPolicyId>,
+  ): IntentAdmissionPolicy | undefined {
+    const row = this.#database
+      .prepare('SELECT record_json FROM intent_admission_policies WHERE id = ?')
+      .get(policyIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z.object({ record_json: z.string() }).strict().parse(row);
+    return decodeIntentAdmissionPolicy(
+      parseJson(parsed.record_json, 'Intent Admission Policy'),
+      canonicalAuthorityDigests,
+    );
+  }
+
+  public getIntakeCommandOutcome(rawCommandId: CommandId): IntakeCommandOutcome | undefined {
+    this.assertOpen();
+    const commandIdentifier = commandId(rawCommandId);
+    return this.runRead(() => this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier));
+  }
+
+  private getIntakeCommandOutcomeInsideTransaction(
+    commandIdentifier: CommandId,
+  ): IntakeCommandOutcome | undefined {
+    const row = this.#database
+      .prepare('SELECT record_json FROM intake_command_outcomes WHERE command_id = ?')
+      .get(commandIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z.object({ record_json: z.string() }).strict().parse(row);
+    return decodeIntakeCommandOutcome(
+      parseJson(parsed.record_json, 'Intake command outcome'),
+      canonicalAuthorityDigests,
+    );
+  }
+
+  private getIntakeCommandReservationInsideTransaction(
+    commandIdentifier: CommandId,
+  ): IntakeCommandReservation | undefined {
+    const row = this.#database
+      .prepare('SELECT record_json FROM intake_command_reservations WHERE command_id = ?')
+      .get(commandIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z.object({ record_json: z.string() }).strict().parse(row);
+    return decodeIntakeCommandReservation(
+      parseJson(parsed.record_json, 'Intake command reservation'),
+      canonicalAuthorityDigests,
+    );
+  }
+
+  private getIntakeRunInsideTransaction(
+    runIdentifier: ReturnType<typeof intakeRunId>,
+  ): IntakeRun | undefined {
+    const row = this.#database
+      .prepare('SELECT record_json FROM intake_runs WHERE id = ?')
+      .get(runIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z.object({ record_json: z.string() }).strict().parse(row);
+    return decodeIntakeRun(parseJson(parsed.record_json, 'Intake Run'));
+  }
+
+  public getIntakeAuthority(rawIntakeRunId: string): IntakeAuthorityView | undefined {
+    this.assertOpen();
+    const runIdentifier = intakeRunId(rawIntakeRunId);
+    return this.runRead(() => {
+      this.assertRetainedIntakeAuthorityClosure();
+      const intakeRun = this.getIntakeRunInsideTransaction(runIdentifier);
+      if (intakeRun === undefined) {
+        return undefined;
+      }
+      const rawRequest = this.decodeStoredIntakeRecords('raw_requests', 'Raw Request', (value) =>
+        decodeRawRequest(value),
+      ).find((record) => record.intakeRunId === runIdentifier);
+      if (rawRequest === undefined) {
+        throw new StoreInvariantError(`Intake Run ${runIdentifier} has no Raw Request`);
+      }
+      const rawRequestRevisions = this.decodeStoredIntakeRecords(
+        'raw_request_revisions',
+        'Raw Request revision',
+        (value) => decodeRawRequestRevision(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const manifests = this.decodeStoredIntakeRecords(
+        'intake_manifests',
+        'Intake Manifest',
+        (value) => decodeIntakeManifest(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const proposals = this.decodeStoredIntakeRecords(
+        'intent_analysis_proposals',
+        'Intent Analysis Proposal',
+        (value) => decodeIntentAnalysisProposal(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const projections = this.decodeStoredIntakeRecords(
+        'intent_projection_revisions',
+        'Intent Projection revision',
+        (value) => decodeIntentProjectionRevision(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const ambiguitySets = this.decodeStoredIntakeRecords(
+        'material_ambiguity_sets',
+        'Material Ambiguity set',
+        (value) => decodeMaterialAmbiguitySet(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const decisions = this.decodeStoredIntakeRecords(
+        'intent_admission_decisions',
+        'Intent Admission Decision',
+        (value) => decodeIntentAdmissionDecision(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const questions = this.decodeStoredIntakeRecords(
+        'clarification_questions',
+        'Clarification Question',
+        (value) => decodeClarificationQuestion(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const answerBindings = this.decodeStoredIntakeRecords(
+        'clarification_answer_bindings',
+        'Clarification Answer Binding',
+        (value) => decodeClarificationAnswerBinding(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const answerOnlyResponses = this.decodeStoredIntakeRecords(
+        'answer_only_responses',
+        'Answer-only Response',
+        (value) => decodeAnswerOnlyResponse(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const failures = this.decodeStoredIntakeRecords(
+        'intake_failure_records',
+        'Intake Failure Record',
+        (value) => decodeIntakeFailureRecord(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const reservations = this.decodeStoredIntakeRecords(
+        'intake_command_reservations',
+        'Intake command reservation',
+        (value) => decodeIntakeCommandReservation(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const outcomes = this.decodeStoredIntakeRecords(
+        'intake_command_outcomes',
+        'Intake command outcome',
+        (value) => decodeIntakeCommandOutcome(value, canonicalAuthorityDigests),
+      ).filter((record) => record.intakeRunId === runIdentifier);
+      const materialization = this.decodeStoredIntakeRecords(
+        'goal_materializations',
+        'Goal Materialization',
+        (value) => decodeGoalMaterializationRecord(value, canonicalAuthorityDigests),
+      ).find((record) => record.intakeRunId === runIdentifier);
+      const startAuthorization =
+        materialization === undefined
+          ? undefined
+          : this.decodeStoredIntakeRecords(
+              'goal_start_authorizations',
+              'Goal Start Authorization',
+              (value) => decodeGoalStartAuthorization(value, canonicalAuthorityDigests),
+            ).find((record) => record.goalMaterializationId === materialization.id);
+      const compareText = (left: string, right: string): number =>
+        left < right ? -1 : left > right ? 1 : 0;
+      return Object.freeze({
+        intakeRun,
+        rawRequest,
+        rawRequestRevisions: Object.freeze(
+          [...rawRequestRevisions].sort((left, right) => left.revision - right.revision),
+        ),
+        manifests: Object.freeze(
+          [...manifests].sort(
+            (left, right) =>
+              compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id),
+          ),
+        ),
+        proposals: Object.freeze(
+          [...proposals].sort(
+            (left, right) =>
+              compareText(left.observedAt, right.observedAt) || compareText(left.id, right.id),
+          ),
+        ),
+        projections: Object.freeze(
+          [...projections].sort(
+            (left, right) => left.revision - right.revision || compareText(left.id, right.id),
+          ),
+        ),
+        ambiguitySets: Object.freeze(
+          [...ambiguitySets].sort(
+            (left, right) =>
+              left.intentProjectionRevision - right.intentProjectionRevision ||
+              compareText(left.ambiguitySetDigest, right.ambiguitySetDigest),
+          ),
+        ),
+        decisions: Object.freeze(
+          [...decisions].sort(
+            (left, right) =>
+              left.intakeRunVersion - right.intakeRunVersion ||
+              compareText(left.decidedAt, right.decidedAt) ||
+              compareText(left.id, right.id),
+          ),
+        ),
+        questions: Object.freeze(
+          [...questions].sort(
+            (left, right) =>
+              compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id),
+          ),
+        ),
+        answerBindings: Object.freeze(
+          [...answerBindings].sort(
+            (left, right) =>
+              compareText(left.answeredAt, right.answeredAt) || compareText(left.id, right.id),
+          ),
+        ),
+        answerOnlyResponses: Object.freeze(
+          [...answerOnlyResponses].sort(
+            (left, right) =>
+              compareText(left.observedAt, right.observedAt) || compareText(left.id, right.id),
+          ),
+        ),
+        failures: Object.freeze(
+          [...failures].sort(
+            (left, right) =>
+              compareText(left.failedAt, right.failedAt) || compareText(left.id, right.id),
+          ),
+        ),
+        reservations: Object.freeze(
+          [...reservations].sort(
+            (left, right) =>
+              compareText(left.reservedAt, right.reservedAt) ||
+              compareText(left.commandId, right.commandId),
+          ),
+        ),
+        outcomes: Object.freeze(
+          [...outcomes].sort(
+            (left, right) =>
+              compareText(left.completedAt, right.completedAt) ||
+              compareText(left.commandId, right.commandId),
+          ),
+        ),
+        ...(materialization === undefined ? {} : { materialization }),
+        ...(startAuthorization === undefined ? {} : { startAuthorization }),
+      });
+    });
+  }
+
+  private insertRawRequest(record: RawRequest): void {
+    this.#database
+      .prepare(
+        `INSERT INTO raw_requests(id, schema_version, intake_run_id, created_at, record_json)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.createdAt,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_RAW_REQUEST_WRITE);
+  }
+
+  private insertRawRequestRevision(record: RawRequestRevisionRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO raw_request_revisions(
+           raw_request_id, revision, intake_run_id, parent_revision, principal_ref,
+           interaction_action, declared_project_path, declared_project_identity_digest,
+           admitted_content_digest, raw_request_digest, submitted_at, answered_question_id,
+           record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.rawRequestId,
+        record.revision,
+        record.intakeRunId,
+        record.parentRevision ?? null,
+        record.principalRef,
+        record.interactionAction,
+        record.declaredProjectRef?.normalizedPath ?? null,
+        record.declaredProjectRef?.identityDigest ?? null,
+        record.admittedContentDigest,
+        record.rawRequestDigest,
+        record.submittedAt,
+        record.answeredQuestionBinding?.clarificationQuestionId ?? null,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_RAW_REQUEST_REVISION_WRITE);
+  }
+
+  private intakeRunColumns(record: IntakeRun): readonly unknown[] {
+    const terminalDecisionId =
+      'terminalDecisionRef' in record ? record.terminalDecisionRef.id : null;
+    const answerOnlyResponseId =
+      'answerOnlyResponseRef' in record ? record.answerOnlyResponseRef.id : null;
+    const terminalFailureId = 'terminalFailureRef' in record ? record.terminalFailureRef.id : null;
+    const goalMaterializationId =
+      'materializedGoalRef' in record ? record.materializedGoalRef.goalMaterializationId : null;
+    return Object.freeze([
+      record.version,
+      record.principalRef,
+      record.status,
+      record.projectRef?.normalizedPath ?? null,
+      record.projectRef?.identityDigest ?? null,
+      record.activeRawRequestRevision.rawRequestId,
+      record.activeRawRequestRevision.revision,
+      record.activeRawRequestRevision.digest,
+      record.activeIntentProjectionRevision?.id ?? null,
+      record.activeIntentProjectionRevision?.revision ?? null,
+      record.activeIntentProjectionRevision?.digest ?? null,
+      'activeQuestionRef' in record ? record.activeQuestionRef.clarificationQuestionId : null,
+      terminalDecisionId,
+      answerOnlyResponseId,
+      terminalFailureId,
+      goalMaterializationId,
+      record.createdAt,
+      record.updatedAt,
+      serializeJson(decodeJsonValue(record)),
+    ]);
+  }
+
+  private insertIntakeRun(record: IntakeRun): void {
+    this.#database
+      .prepare(
+        `INSERT INTO intake_runs(
+           id, schema_version, version, principal_ref, status, project_path,
+           project_identity_digest, active_raw_request_id, active_raw_request_revision,
+           active_raw_request_digest, active_projection_id, active_projection_revision,
+           active_projection_digest, active_question_id, terminal_decision_id,
+           answer_only_response_id, terminal_failure_id, goal_materialization_id,
+           created_at, updated_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(record.id, record.schemaVersion, ...this.intakeRunColumns(record));
+    this.probe(IntakeTransactionStep.AFTER_RUN_WRITE);
+  }
+
+  private updateIntakeRun(current: IntakeRun, next: IntakeRun): void {
+    if (current.id !== next.id || next.version !== current.version + 1) {
+      throw new OptimisticConcurrencyError('INTAKE_RUN', current.id);
+    }
+    const result = this.#database
+      .prepare(
+        `UPDATE intake_runs
+            SET version = ?, principal_ref = ?, status = ?, project_path = ?,
+                project_identity_digest = ?, active_raw_request_id = ?,
+                active_raw_request_revision = ?, active_raw_request_digest = ?,
+                active_projection_id = ?, active_projection_revision = ?,
+                active_projection_digest = ?, active_question_id = ?,
+                terminal_decision_id = ?, answer_only_response_id = ?,
+                terminal_failure_id = ?, goal_materialization_id = ?, created_at = ?,
+                updated_at = ?, record_json = ?
+          WHERE id = ? AND version = ?`,
+      )
+      .run(...this.intakeRunColumns(next), current.id, current.version);
+    if (result.changes !== 1) {
+      throw new OptimisticConcurrencyError('INTAKE_RUN', current.id);
+    }
+    this.probe(IntakeTransactionStep.AFTER_RUN_WRITE);
+  }
+
+  private insertIntakeManifest(record: IntakeManifest): void {
+    this.#database
+      .prepare(
+        `INSERT INTO intake_manifests(
+           id, schema_version, operation, intake_run_id, package_digest,
+           manifest_digest, created_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.operation,
+        record.intakeRunId,
+        record.packageDigest,
+        record.manifestDigest,
+        record.createdAt,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_MANIFEST_WRITE);
+  }
+
+  private insertClarificationAnswerBinding(record: ClarificationAnswerBinding): void {
+    this.#database
+      .prepare(
+        `INSERT INTO clarification_answer_bindings(
+           id, schema_version, intake_run_id, question_id, question_spec_digest,
+           question_digest, decision_id, decision_digest, raw_request_id,
+           raw_request_revision, raw_request_digest, command_id,
+           canonical_command_input_digest, answered_at, answer_binding_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.clarificationQuestionId,
+        record.questionSpecDigest,
+        record.questionDigest,
+        record.intentAdmissionDecisionId,
+        record.intentAdmissionDecisionDigest,
+        record.rawRequestId,
+        record.rawRequestRevision,
+        record.rawRequestDigest,
+        record.commandId,
+        record.canonicalCommandInputDigest,
+        record.answeredAt,
+        record.answerBindingDigest,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_ANSWER_BINDING_WRITE);
+  }
+
+  private insertIntakeCommandReservation(record: IntakeCommandReservation): void {
+    const external =
+      'externalOperationBinding' in record ? record.externalOperationBinding : undefined;
+    this.#database
+      .prepare(
+        `INSERT INTO intake_command_reservations(
+           command_id, schema_version, operation_kind, principal_ref, raw_request_id,
+           intake_run_id, canonical_command_input_digest, expected_intake_run_version,
+           observed_intake_run_version, operation_id, manifest_id, manifest_digest,
+           reservation_digest, reserved_at, has_abandonment_binding, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.commandId,
+        record.schemaVersion,
+        record.operationKind,
+        record.principalRef,
+        record.rawRequestId,
+        record.intakeRunId,
+        record.canonicalCommandInputDigest,
+        'expectedIntakeRunVersion' in record ? record.expectedIntakeRunVersion : null,
+        record.observedIntakeRunVersion,
+        record.operationId,
+        external?.manifestId ?? null,
+        external?.manifestDigest ?? null,
+        record.reservationDigest,
+        record.reservedAt,
+        'abandonClarificationBinding' in record ? 1 : 0,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_RESERVATION_WRITE);
+  }
+
+  private insertIntentAnalysisAuthority(
+    proposal: IntentAnalysisProposal,
+    projection: IntentProjectionRevisionRecord,
+    ambiguitySet: MaterialAmbiguitySet,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO intent_analysis_proposals(
+           id, schema_version, intake_run_id, raw_request_revision, raw_request_digest,
+           proposal_digest, observed_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        proposal.id,
+        proposal.schemaVersion,
+        proposal.intakeRunId,
+        proposal.rawRequestRevision,
+        proposal.rawRequestDigest,
+        proposal.proposalDigest,
+        proposal.observedAt,
+        serializeJson(decodeJsonValue(proposal)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_PROPOSAL_WRITE);
+
+    const insertSource = this.#database.prepare(
+      `INSERT INTO source_bindings(
+         binding_digest, schema_version, authority_class, source_record_ref,
+         source_revision, source_digest, record_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const source of projection.sourceBindings) {
+      const existing = this.#database
+        .prepare('SELECT record_json FROM source_bindings WHERE binding_digest = ?')
+        .get(source.bindingDigest);
+      if (existing === undefined) {
+        insertSource.run(
+          source.bindingDigest,
+          source.schemaVersion,
+          source.authorityClass,
+          source.sourceRecordRef,
+          source.sourceRevision,
+          source.sourceDigest,
+          serializeJson(decodeJsonValue(source)),
+        );
+        this.probe(IntakeTransactionStep.AFTER_SOURCE_BINDING_WRITE);
+      } else {
+        const parsed = z.object({ record_json: z.string() }).strict().parse(existing);
+        const retained = decodeSourceBinding(
+          parseJson(parsed.record_json, 'Source Binding'),
+          canonicalAuthorityDigests,
+        );
+        if (!sameCanonicalAuthority(retained, source)) {
+          throw new StoreInvariantError(`Source Binding ${source.bindingDigest} conflicts`);
+        }
+      }
+    }
+
+    this.#database
+      .prepare(
+        `INSERT INTO intent_projection_revisions(
+           id, revision, schema_version, intake_run_id, parent_revision, proposal_id,
+           proposal_digest, projection_digest, created_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        projection.id,
+        projection.revision,
+        projection.schemaVersion,
+        projection.intakeRunId,
+        projection.parentRevision ?? null,
+        projection.intentAnalysisProposalRef.id,
+        projection.intentAnalysisProposalRef.digest,
+        projection.projectionDigest,
+        projection.createdAt,
+        serializeJson(decodeJsonValue(projection)),
+      );
+    const insertMembership = this.#database.prepare(
+      `INSERT INTO projection_source_bindings(
+         projection_id, projection_revision, position, binding_digest
+       ) VALUES (?, ?, ?, ?)`,
+    );
+    projection.sourceBindings.forEach((source, position) => {
+      insertMembership.run(projection.id, projection.revision, position, source.bindingDigest);
+      this.probe(IntakeTransactionStep.AFTER_SOURCE_BINDING_WRITE);
+    });
+    this.probe(IntakeTransactionStep.AFTER_PROJECTION_WRITE);
+
+    this.#database
+      .prepare(
+        `INSERT INTO material_ambiguity_sets(
+           ambiguity_set_digest, schema_version, intake_run_id, projection_id,
+           projection_revision, projection_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        ambiguitySet.ambiguitySetDigest,
+        ambiguitySet.schemaVersion,
+        ambiguitySet.intakeRunId,
+        ambiguitySet.intentProjectionId,
+        ambiguitySet.intentProjectionRevision,
+        ambiguitySet.intentProjectionDigest,
+        serializeJson(decodeJsonValue(ambiguitySet)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_AMBIGUITY_WRITE);
+    const insertAmbiguity = this.#database.prepare(
+      `INSERT INTO material_ambiguities(
+         id, ambiguity_set_digest, position, intake_run_id, status,
+         resolved_by_raw_request_revision, record_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    ambiguitySet.ambiguities.forEach((ambiguity, position) => {
+      insertAmbiguity.run(
+        ambiguity.id,
+        ambiguitySet.ambiguitySetDigest,
+        position,
+        ambiguity.intakeRunId,
+        ambiguity.status,
+        ambiguity.resolvedByRawRequestRevision ?? null,
+        serializeJson(decodeJsonValue(ambiguity)),
+      );
+      this.probe(IntakeTransactionStep.AFTER_AMBIGUITY_WRITE);
+    });
+  }
+
+  private insertClarificationQuestionSpec(record: ClarificationQuestionSpec): void {
+    this.#database
+      .prepare(
+        `INSERT INTO clarification_question_specs(
+           question_spec_digest, schema_version, intake_run_id, ambiguity_ref, record_json
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.questionSpecDigest,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.ambiguityRef,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_QUESTION_WRITE);
+  }
+
+  private insertIntentAdmissionDecision(record: IntentAdmissionDecision): void {
+    const projection = 'projectionBinding' in record ? record.projectionBinding : undefined;
+    const questionSpecDigest =
+      record.kind === IntentAdmissionDecisionKind.CLARIFY
+        ? record.questionPlanBinding.questionSpecDigest
+        : null;
+    const abandonment =
+      record.kind === IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION
+        ? record.abandonmentBinding
+        : undefined;
+    this.#database
+      .prepare(
+        `INSERT INTO intent_admission_decisions(
+           id, schema_version, intake_run_id, intake_run_version, principal_ref,
+           interaction_action, decision_kind, outcome, reason_code, execution_disposition,
+           admission_policy_id, admission_policy_digest, projection_id,
+           projection_revision, projection_digest, question_spec_digest,
+           abandonment_question_id, abandonment_command_id, project_path,
+           project_identity_digest, decision_digest, decided_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.intakeRunVersion,
+        record.principalRef,
+        record.interactionAction,
+        record.kind,
+        record.outcome,
+        record.reasonCode,
+        record.executionDisposition,
+        record.admissionPolicyId,
+        record.admissionPolicyDigest,
+        projection?.intentProjectionId ?? null,
+        projection?.intentProjectionRevision ?? null,
+        projection?.intentProjectionDigest ?? null,
+        questionSpecDigest,
+        abandonment?.clarificationQuestionId ?? null,
+        abandonment?.commandId ?? null,
+        record.projectOrScopeRef?.normalizedPath ?? null,
+        record.projectOrScopeRef?.identityDigest ?? null,
+        record.decisionDigest,
+        record.decidedAt,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_DECISION_WRITE);
+  }
+
+  private insertClarificationQuestion(record: ClarificationQuestion): void {
+    this.#database
+      .prepare(
+        `INSERT INTO clarification_questions(
+           id, schema_version, intake_run_id, decision_id, decision_digest,
+           ambiguity_ref, question_spec_digest, question_digest, created_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.intentAdmissionDecisionId,
+        record.intentAdmissionDecisionDigest,
+        record.ambiguityRef,
+        record.questionSpecDigest,
+        record.questionDigest,
+        record.createdAt,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_QUESTION_WRITE);
+  }
+
+  private insertAnswerOnlyResponse(record: AnswerOnlyResponse): void {
+    this.#database
+      .prepare(
+        `INSERT INTO answer_only_responses(
+           id, schema_version, intake_run_id, response_kind, decision_id,
+           decision_digest, response_digest, observed_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.kind,
+        record.intentAdmissionDecisionId,
+        record.intentAdmissionDecisionDigest,
+        record.responseDigest,
+        record.observedAt,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_ANSWER_RESPONSE_WRITE);
+  }
+
+  private insertIntakeFailure(record: IntakeFailureRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO intake_failure_records(
+           id, schema_version, command_id, intake_run_id, intake_run_version,
+           failed_operation, reason_code, failure_digest, failed_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.commandId,
+        record.intakeRunId,
+        record.intakeRunVersion,
+        record.failedOperation,
+        record.reasonCode,
+        record.failureDigest,
+        record.failedAt,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_FAILURE_WRITE);
+  }
+
+  private insertIntakeOutcome(record: IntakeCommandOutcome): void {
+    this.#database
+      .prepare(
+        `INSERT INTO intake_command_outcomes(
+           command_id, schema_version, intake_run_id, disposition,
+           canonical_command_input_digest, reservation_digest,
+           observed_intake_run_version, result_kind, result_digest, completed_at,
+           outcome_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.commandId,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.disposition,
+        record.canonicalCommandInputDigest,
+        record.reservationDigest,
+        record.observedIntakeRunVersion,
+        record.result.kind,
+        record.resultDigest,
+        record.completedAt,
+        record.outcomeDigest,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_OUTCOME_WRITE);
+  }
+
+  private insertIntakeAudits(
+    runIdentifier: ReturnType<typeof intakeRunId>,
+    commandIdentifier: CommandId,
+    rawWrites: readonly IntakeAuditWrite[],
+  ): void {
+    const writes = validateIntakeAuditWrites(rawWrites);
+    const row = z
+      .object({ position: z.number().int() })
+      .strict()
+      .parse(
+        this.#database
+          .prepare(
+            'SELECT COALESCE(MAX(position), -1) AS position FROM intake_audit_events WHERE intake_run_id = ?',
+          )
+          .get(runIdentifier),
+      );
+    const insertRelationship = this.#database.prepare(
+      `INSERT INTO intake_audit_events(intake_run_id, audit_event_id, command_id, position)
+       VALUES (?, ?, ?, ?)`,
+    );
+    writes.forEach((write, offset) => {
+      this.insertAuditEvent({
+        id: write.id,
+        aggregateType: write.aggregateType,
+        aggregateId: write.aggregateId,
+        eventType: write.eventType,
+        commandId: commandIdentifier,
+        ...(write.beforeVersion === undefined ? {} : { beforeVersion: write.beforeVersion }),
+        ...(write.afterVersion === undefined ? {} : { afterVersion: write.afterVersion }),
+        ...(write.correlationId === undefined ? {} : { correlationId: write.correlationId }),
+        ...(write.causationId === undefined ? {} : { causationId: write.causationId }),
+        payloadDigest: write.payloadDigest,
+        occurredAt: write.occurredAt,
+      });
+      insertRelationship.run(runIdentifier, write.id, commandIdentifier, row.position + offset + 1);
+      this.probe(IntakeTransactionStep.AFTER_AUDIT_WRITE);
+    });
+    this.assertAuditEventsReadable(writes.map((write) => write.id));
+  }
+
+  private insertInitialGoalAndWorkflowForIntake(goal: Goal, workflow: WorkflowInstance): void {
+    this.validateInitialGoalAndWorkflow(goal, workflow);
+    this.#authorityIsolationLease?.assertProjectPathAllowed(goal.scope.projectPath);
+    this.#database
+      .prepare(
+        `INSERT INTO goals(
+           id, revision, objective, project_path, allowed_paths_json, non_goals_json,
+           status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        goal.id,
+        goal.revision,
+        goal.objective,
+        goal.scope.projectPath,
+        serializeJson(decodeJsonValue(goal.scope.allowedPaths)),
+        serializeJson(decodeJsonValue(goal.nonGoals)),
+        goal.status,
+        goal.createdAt,
+        goal.updatedAt,
+      );
+    const insertCriterion = this.#database.prepare(
+      `INSERT INTO goal_criteria(goal_id, position, id, description, required)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    goal.successCriteria.forEach((criterion, position) => {
+      insertCriterion.run(
+        goal.id,
+        position,
+        criterion.id,
+        criterion.description,
+        criterion.required ? 1 : 0,
+      );
+    });
+    this.probe(IntakeTransactionStep.AFTER_GOAL_WRITE);
+    this.#database
+      .prepare(
+        `INSERT INTO workflows(
+           id, goal_id, goal_revision, phase, run_status, version, active_attempt_id,
+           active_candidate_generation_id, suspended_reason, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        workflow.id,
+        workflow.goalId,
+        workflow.goalRevision,
+        workflow.phase,
+        workflow.runStatus,
+        workflow.version,
+        workflow.activeAttemptId ?? null,
+        workflow.activeCandidateGenerationId ?? null,
+        workflow.suspendedReason ?? null,
+        workflow.createdAt,
+        workflow.updatedAt,
+      );
+    this.probe(IntakeTransactionStep.AFTER_WORKFLOW_WRITE);
+  }
+
+  private insertGoalMaterialization(record: GoalMaterializationRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO goal_materializations(
+           id, schema_version, intake_run_id, decision_id, decision_digest,
+           projection_id, projection_revision, projection_digest, project_path,
+           project_identity_digest, goal_id, goal_revision, workflow_id,
+           workflow_version, materialized_at, materialization_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.intakeRunId,
+        record.intentAdmissionDecisionId,
+        record.intentAdmissionDecisionDigest,
+        record.intentProjectionId,
+        record.intentProjectionRevision,
+        record.intentProjectionDigest,
+        record.projectOrScopeRef.normalizedPath,
+        record.projectOrScopeRef.identityDigest,
+        record.goalId,
+        record.goalRevision,
+        record.workflowId,
+        record.workflowVersion,
+        record.materializedAt,
+        record.materializationDigest,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_MATERIALIZATION_WRITE);
+  }
+
+  private insertGoalStartAuthorization(record: GoalStartAuthorization): void {
+    this.#database
+      .prepare(
+        `INSERT INTO goal_start_authorizations(
+           id, schema_version, materialization_id, materialization_digest,
+           decision_id, decision_digest, goal_id, goal_revision, workflow_id,
+           workflow_version, start_command_id, policy_bundle_id, policy_bundle_digest,
+           execution_profile_id, execution_profile_digest, authorized_at,
+           authorization_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.goalMaterializationId,
+        record.goalMaterializationDigest,
+        record.intentAdmissionDecisionId,
+        record.intentAdmissionDecisionDigest,
+        record.goalId,
+        record.goalRevision,
+        record.workflowId,
+        record.workflowVersion,
+        record.startCommandId,
+        record.policyBundleId,
+        record.policyBundleDigest,
+        record.executionProfileId,
+        record.executionProfileDigest,
+        record.authorizedAt,
+        record.authorizationDigest,
+        serializeJson(decodeJsonValue(record)),
+      );
+    this.probe(IntakeTransactionStep.AFTER_START_AUTHORIZATION_WRITE);
+  }
+
+  public reserveInitialIntake(
+    rawInput: ReserveInitialIntakeOperation,
+  ): IntakeReservationStoreResult {
+    this.assertOpen();
+    const rawRequest = decodeRawRequest(rawInput.rawRequest);
+    const revision = decodeRawRequestRevision(
+      rawInput.rawRequestRevision,
+      canonicalAuthorityDigests,
+    );
+    const run = decodeIntakeRun(rawInput.intakeRun);
+    const manifest = decodeIntakeManifest(rawInput.manifest, canonicalAuthorityDigests);
+    const reservation = decodeIntakeCommandReservation(
+      rawInput.reservation,
+      canonicalAuthorityDigests,
+    );
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    if (
+      (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+        reservation.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY) ||
+      run.status !== IntakeRunStatus.ANALYZING ||
+      run.version !== 1 ||
+      revision.revision !== 1 ||
+      rawRequest.id !== revision.rawRequestId ||
+      rawRequest.intakeRunId !== run.id ||
+      revision.intakeRunId !== run.id ||
+      run.activeRawRequestRevision.rawRequestId !== rawRequest.id ||
+      run.activeRawRequestRevision.revision !== revision.revision ||
+      run.activeRawRequestRevision.digest !== revision.rawRequestDigest ||
+      manifest.intakeRunId !== run.id ||
+      reservation.rawRequestId !== rawRequest.id ||
+      reservation.intakeRunId !== run.id ||
+      reservation.principalRef !== revision.principalRef ||
+      reservation.observedIntakeRunVersion !== run.version ||
+      reservation.externalOperationBinding.manifestId !== manifest.id ||
+      reservation.externalOperationBinding.manifestDigest !== manifest.manifestDigest ||
+      rawRequest.createdAt > revision.submittedAt ||
+      revision.submittedAt > run.updatedAt ||
+      manifest.createdAt > reservation.reservedAt
+    ) {
+      throw new StoreInvariantError('Initial Intake reservation has inconsistent authority');
+    }
+    if (revision.declaredProjectRef !== undefined) {
+      this.#authorityIsolationLease?.assertProjectPathAllowed(
+        revision.declaredProjectRef.normalizedPath,
+      );
+    }
+
+    return this.runIntakeReservationImmediate(() => {
+      const existing = this.getIntakeCommandReservationInsideTransaction(reservation.commandId);
+      if (existing !== undefined) {
+        if (
+          existing.canonicalCommandInputDigest !== reservation.canonicalCommandInputDigest ||
+          existing.reservationDigest !== reservation.reservationDigest ||
+          !sameCanonicalAuthority(existing, reservation)
+        ) {
+          throw new CommandIdConflictError(reservation.commandId);
+        }
+        const outcome = this.getIntakeCommandOutcomeInsideTransaction(reservation.commandId);
+        if (outcome !== undefined) {
+          decodeIntakeCommandClosure(existing, outcome, canonicalAuthorityDigests);
+          return { status: 'REPLAYED', outcome };
+        }
+        const retainedRun = this.getIntakeRunInsideTransaction(reservation.intakeRunId);
+        if (retainedRun === undefined) {
+          throw new StoreInvariantError('Active Intake reservation has no Intake Run');
+        }
+        return { status: 'ACTIVE', reservation: existing, intakeRun: retainedRun };
+      }
+
+      this.insertRawRequest(rawRequest);
+      this.insertRawRequestRevision(revision);
+      this.insertIntakeRun(run);
+      this.insertIntakeManifest(manifest);
+      this.insertIntakeCommandReservation(reservation);
+      this.insertIntakeAudits(run.id, reservation.commandId, auditEvents);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'RESERVED', reservation, intakeRun: run };
+    });
+  }
+
+  public reserveClarificationIntake(
+    rawInput: ReserveClarificationIntakeOperation,
+  ): IntakeReservationStoreResult {
+    this.assertOpen();
+    const revision = decodeRawRequestRevision(
+      rawInput.rawRequestRevision,
+      canonicalAuthorityDigests,
+    );
+    const answerBinding = decodeClarificationAnswerBinding(
+      rawInput.answerBinding,
+      canonicalAuthorityDigests,
+    );
+    const nextRun = decodeIntakeRun(rawInput.intakeRun);
+    const manifest = decodeIntakeManifest(rawInput.manifest, canonicalAuthorityDigests);
+    const reservation = decodeIntakeCommandReservation(
+      rawInput.reservation,
+      canonicalAuthorityDigests,
+    );
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    if (
+      reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS ||
+      nextRun.status !== IntakeRunStatus.ANALYZING ||
+      revision.intakeRunId !== reservation.intakeRunId ||
+      revision.rawRequestId !== reservation.rawRequestId ||
+      answerBinding.intakeRunId !== reservation.intakeRunId ||
+      answerBinding.rawRequestId !== reservation.rawRequestId ||
+      answerBinding.rawRequestRevision !== revision.revision ||
+      answerBinding.rawRequestDigest !== revision.rawRequestDigest ||
+      answerBinding.commandId !== reservation.commandId ||
+      answerBinding.canonicalCommandInputDigest !== reservation.canonicalCommandInputDigest ||
+      answerBinding.clarificationQuestionId !==
+        reservation.clarificationBinding.clarificationQuestionId ||
+      answerBinding.questionSpecDigest !== reservation.clarificationBinding.questionSpecDigest ||
+      answerBinding.questionDigest !== reservation.clarificationBinding.questionDigest ||
+      answerBinding.intentAdmissionDecisionId !==
+        reservation.clarificationBinding.issuingClarifyDecisionId ||
+      answerBinding.intentAdmissionDecisionDigest !==
+        reservation.clarificationBinding.issuingClarifyDecisionDigest ||
+      manifest.intakeRunId !== reservation.intakeRunId ||
+      reservation.externalOperationBinding.manifestId !== manifest.id ||
+      reservation.externalOperationBinding.manifestDigest !== manifest.manifestDigest ||
+      answerBinding.answeredAt < reservation.reservedAt
+    ) {
+      throw new StoreInvariantError('Clarification reservation has inconsistent authority');
+    }
+    if (revision.declaredProjectRef !== undefined) {
+      this.#authorityIsolationLease?.assertProjectPathAllowed(
+        revision.declaredProjectRef.normalizedPath,
+      );
+    }
+
+    return this.runIntakeReservationImmediate(() => {
+      const existing = this.getIntakeCommandReservationInsideTransaction(reservation.commandId);
+      if (existing !== undefined) {
+        if (
+          existing.canonicalCommandInputDigest !== reservation.canonicalCommandInputDigest ||
+          existing.reservationDigest !== reservation.reservationDigest ||
+          !sameCanonicalAuthority(existing, reservation)
+        ) {
+          throw new CommandIdConflictError(reservation.commandId);
+        }
+        const outcome = this.getIntakeCommandOutcomeInsideTransaction(reservation.commandId);
+        if (outcome !== undefined) {
+          decodeIntakeCommandClosure(existing, outcome, canonicalAuthorityDigests);
+          return { status: 'REPLAYED', outcome };
+        }
+        const retainedRun = this.getIntakeRunInsideTransaction(reservation.intakeRunId);
+        if (retainedRun === undefined) {
+          throw new StoreInvariantError('Active Intake reservation has no Intake Run');
+        }
+        return { status: 'ACTIVE', reservation: existing, intakeRun: retainedRun };
+      }
+
+      const current = this.getIntakeRunInsideTransaction(reservation.intakeRunId);
+      if (
+        current?.status !== IntakeRunStatus.NEEDS_CLARIFICATION ||
+        current.version !== reservation.expectedIntakeRunVersion ||
+        reservation.observedIntakeRunVersion !== current.version ||
+        nextRun.id !== current.id ||
+        nextRun.version !== current.version + 1 ||
+        revision.parentRevision !== current.activeRawRequestRevision.revision ||
+        revision.revision !== current.activeRawRequestRevision.revision + 1 ||
+        current.activeQuestionRef.clarificationQuestionId !==
+          reservation.clarificationBinding.clarificationQuestionId ||
+        current.activeQuestionRef.questionSpecDigest !==
+          reservation.clarificationBinding.questionSpecDigest ||
+        current.activeQuestionRef.questionDigest !==
+          reservation.clarificationBinding.questionDigest ||
+        current.activeQuestionRef.issuingDecisionId !==
+          reservation.clarificationBinding.issuingClarifyDecisionId ||
+        current.activeQuestionRef.issuingDecisionDigest !==
+          reservation.clarificationBinding.issuingClarifyDecisionDigest ||
+        nextRun.activeRawRequestRevision.rawRequestId !== revision.rawRequestId ||
+        nextRun.activeRawRequestRevision.revision !== revision.revision ||
+        nextRun.activeRawRequestRevision.digest !== revision.rawRequestDigest
+      ) {
+        throw new OptimisticConcurrencyError('INTAKE_RUN', reservation.intakeRunId);
+      }
+      this.insertRawRequestRevision(revision);
+      this.insertClarificationAnswerBinding(answerBinding);
+      this.updateIntakeRun(current, nextRun);
+      this.insertIntakeManifest(manifest);
+      this.insertIntakeCommandReservation(reservation);
+      this.insertIntakeAudits(nextRun.id, reservation.commandId, auditEvents);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'RESERVED', reservation, intakeRun: nextRun };
+    });
+  }
+
+  public commitAnalyzedIntake(rawInput: CommitAnalyzedIntake): IntakeCommitStoreResult {
+    this.assertOpen();
+    const commandIdentifier = commandId(rawInput.commandId);
+    const proposal = decodeIntentAnalysisProposal(rawInput.proposal, canonicalAuthorityDigests);
+    const projection = decodeIntentProjectionRevision(
+      rawInput.projection,
+      canonicalAuthorityDigests,
+    );
+    const ambiguitySet = decodeMaterialAmbiguitySet(
+      rawInput.ambiguitySet,
+      canonicalAuthorityDigests,
+    );
+    const decision = decodeIntentAdmissionDecision(rawInput.decision, canonicalAuthorityDigests);
+    const nextRun = decodeIntakeRun(rawInput.intakeRun);
+    const completedAt = isoTimestamp(rawInput.completedAt);
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    const questionSpec =
+      rawInput.kind === 'CLARIFY'
+        ? decodeClarificationQuestionSpec(rawInput.questionSpec, canonicalAuthorityDigests)
+        : undefined;
+    const question =
+      rawInput.kind === 'CLARIFY'
+        ? decodeClarificationQuestion(rawInput.question, canonicalAuthorityDigests)
+        : undefined;
+    if (
+      proposal.intakeRunId !== nextRun.id ||
+      projection.intakeRunId !== nextRun.id ||
+      ambiguitySet.intakeRunId !== nextRun.id ||
+      decision.intakeRunId !== nextRun.id ||
+      projection.intentAnalysisProposalRef.id !== proposal.id ||
+      projection.intentAnalysisProposalRef.digest !== proposal.proposalDigest ||
+      ambiguitySet.intentProjectionId !== projection.id ||
+      ambiguitySet.intentProjectionRevision !== projection.revision ||
+      ambiguitySet.intentProjectionDigest !== projection.projectionDigest ||
+      !('projectionBinding' in decision) ||
+      decision.projectionBinding.intentAnalysisProposalId !== proposal.id ||
+      decision.projectionBinding.intentAnalysisProposalDigest !== proposal.proposalDigest ||
+      decision.projectionBinding.intentProjectionId !== projection.id ||
+      decision.projectionBinding.intentProjectionRevision !== projection.revision ||
+      decision.projectionBinding.intentProjectionDigest !== projection.projectionDigest ||
+      completedAt < decision.decidedAt ||
+      (rawInput.kind === 'CLARIFY' &&
+        (decision.kind !== IntentAdmissionDecisionKind.CLARIFY ||
+          nextRun.status !== IntakeRunStatus.NEEDS_CLARIFICATION ||
+          questionSpec === undefined ||
+          question === undefined)) ||
+      (rawInput.kind === 'NO_EXECUTION' &&
+        (decision.kind !== IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION ||
+          nextRun.status !== IntakeRunStatus.NO_EXECUTION))
+    ) {
+      throw new StoreInvariantError('Analyzed Intake commit has inconsistent authority');
+    }
+
+    const result = decodeIntakeCommandResult(
+      rawInput.kind === 'CLARIFY' && question !== undefined
+        ? {
+            schemaVersion: 1,
+            kind: 'CLARIFICATION_REQUIRED',
+            intakeRunId: nextRun.id,
+            intakeRunVersion: nextRun.version,
+            decisionRef: {
+              id: decision.id,
+              digest: decision.decisionDigest,
+              outcome: decision.outcome,
+              reasonCode: decision.reasonCode,
+            },
+            activeQuestionRef: {
+              clarificationQuestionId: question.id,
+              questionSpecDigest: question.questionSpecDigest,
+              questionDigest: question.questionDigest,
+              issuingDecisionId: question.intentAdmissionDecisionId,
+              issuingDecisionDigest: question.intentAdmissionDecisionDigest,
+            },
+            answerDisposition: 'NOT_REQUESTED',
+            materializationDisposition: 'NO_GOAL',
+            startDisposition: 'NOT_AUTHORIZED',
+          }
+        : {
+            schemaVersion: 1,
+            kind: 'NO_EXECUTION',
+            intakeRunId: nextRun.id,
+            intakeRunVersion: nextRun.version,
+            decisionRef: {
+              id: decision.id,
+              digest: decision.decisionDigest,
+              outcome: decision.outcome,
+              reasonCode: decision.reasonCode,
+            },
+            answerDisposition: 'NOT_REQUESTED',
+            materializationDisposition: 'NO_GOAL',
+            startDisposition: 'NOT_AUTHORIZED',
+          },
+    );
+
+    return this.runIntakeCommitImmediate(() => {
+      const reservation = this.getIntakeCommandReservationInsideTransaction(commandIdentifier);
+      if (reservation === undefined) {
+        throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
+      }
+      const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
+      if (existingOutcome !== undefined) {
+        if (!sameCanonicalAuthority(existingOutcome.result, result)) {
+          throw new CommandIdConflictError(commandIdentifier);
+        }
+        const retainedRun = this.getIntakeRunInsideTransaction(reservation.intakeRunId);
+        if (retainedRun === undefined) {
+          throw new StoreInvariantError('Replayed Intake outcome has no Intake Run');
+        }
+        return { status: 'REPLAYED', outcome: existingOutcome, intakeRun: retainedRun };
+      }
+      if (
+        (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+          reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) ||
+        reservation.intakeRunId !== nextRun.id
+      ) {
+        throw new CommandIdConflictError(commandIdentifier);
+      }
+      const current = this.getIntakeRunInsideTransaction(nextRun.id);
+      if (
+        current?.status !== IntakeRunStatus.ANALYZING ||
+        current.version !== reservation.observedIntakeRunVersion ||
+        nextRun.version !== current.version + 1 ||
+        decision.intakeRunVersion !== current.version ||
+        proposal.rawRequestRevision !== current.activeRawRequestRevision.revision ||
+        proposal.rawRequestDigest !== current.activeRawRequestRevision.digest ||
+        projection.rawRequestRevision !== current.activeRawRequestRevision.revision
+      ) {
+        throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
+      }
+      if (rawInput.kind === 'CLARIFY' && questionSpec !== undefined && question !== undefined) {
+        if (
+          decision.kind !== IntentAdmissionDecisionKind.CLARIFY ||
+          decision.questionPlanBinding.questionId !== question.id ||
+          decision.questionPlanBinding.questionSpecDigest !== questionSpec.questionSpecDigest ||
+          question.questionSpecDigest !== questionSpec.questionSpecDigest ||
+          nextRun.status !== IntakeRunStatus.NEEDS_CLARIFICATION ||
+          nextRun.activeQuestionRef.clarificationQuestionId !== question.id ||
+          nextRun.activeQuestionRef.questionDigest !== question.questionDigest
+        ) {
+          throw new StoreInvariantError('CLARIFY commit substituted its Question authority');
+        }
+      }
+
+      this.insertIntentAnalysisAuthority(proposal, projection, ambiguitySet);
+      if (questionSpec !== undefined) {
+        this.insertClarificationQuestionSpec(questionSpec);
+      }
+      this.insertIntentAdmissionDecision(decision);
+      if (question !== undefined) {
+        this.insertClarificationQuestion(question);
+      }
+      this.updateIntakeRun(current, nextRun);
+      const outcome = storeAuthoredIntakeOutcome(reservation, result, completedAt);
+      this.insertIntakeAudits(nextRun.id, reservation.commandId, auditEvents);
+      this.insertIntakeOutcome(outcome);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', outcome, intakeRun: nextRun };
+    });
+  }
+
+  public commitIntakeNoExecution(rawInput: CommitIntakeNoExecution): IntakeCommitStoreResult {
+    this.assertOpen();
+    const decision = decodeIntentAdmissionDecision(rawInput.decision, canonicalAuthorityDigests);
+    const nextRun = decodeIntakeRun(rawInput.intakeRun);
+    const completedAt = isoTimestamp(rawInput.completedAt);
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    const response =
+      rawInput.kind === 'ANSWER_ONLY'
+        ? decodeAnswerOnlyResponse(rawInput.response, canonicalAuthorityDigests)
+        : undefined;
+    const suppliedReservation =
+      rawInput.kind === 'ANSWER_ONLY'
+        ? undefined
+        : decodeIntakeCommandReservation(rawInput.reservation, canonicalAuthorityDigests);
+    const commandIdentifier =
+      rawInput.kind === 'ANSWER_ONLY'
+        ? commandId(rawInput.commandId)
+        : suppliedReservation?.commandId;
+    if (
+      commandIdentifier === undefined ||
+      nextRun.status !== IntakeRunStatus.NO_EXECUTION ||
+      decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION ||
+      decision.intakeRunId !== nextRun.id ||
+      completedAt < decision.decidedAt ||
+      (rawInput.kind === 'ANSWER_ONLY' &&
+        (response === undefined ||
+          decision.kind !== IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION ||
+          response.intakeRunId !== nextRun.id ||
+          response.intentAdmissionDecisionId !== decision.id ||
+          response.intentAdmissionDecisionDigest !== decision.decisionDigest)) ||
+      (rawInput.kind === 'IMMEDIATE' &&
+        (suppliedReservation?.operationKind !== IntakeCommandOperationKind.IMMEDIATE_NO_EXECUTION ||
+          decision.kind !== IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION)) ||
+      (rawInput.kind === 'ABANDONMENT' &&
+        (suppliedReservation?.operationKind !== IntakeCommandOperationKind.ABANDON_CLARIFICATION ||
+          !('abandonClarificationBinding' in suppliedReservation) ||
+          decision.kind !== IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION ||
+          decision.abandonmentBinding?.commandId !== suppliedReservation.commandId ||
+          decision.abandonmentBinding.canonicalCommandInputDigest !==
+            suppliedReservation.canonicalCommandInputDigest))
+    ) {
+      throw new StoreInvariantError('NO_EXECUTION commit has inconsistent authority');
+    }
+
+    const result = decodeIntakeCommandResult(
+      response === undefined
+        ? {
+            schemaVersion: 1,
+            kind: 'NO_EXECUTION',
+            intakeRunId: nextRun.id,
+            intakeRunVersion: nextRun.version,
+            decisionRef: {
+              id: decision.id,
+              digest: decision.decisionDigest,
+              outcome: decision.outcome,
+              reasonCode: decision.reasonCode,
+            },
+            answerDisposition: 'NOT_REQUESTED',
+            materializationDisposition: 'NO_GOAL',
+            startDisposition: 'NOT_AUTHORIZED',
+          }
+        : {
+            schemaVersion: 1,
+            kind: 'NO_EXECUTION',
+            intakeRunId: nextRun.id,
+            intakeRunVersion: nextRun.version,
+            decisionRef: {
+              id: decision.id,
+              digest: decision.decisionDigest,
+              outcome: decision.outcome,
+              reasonCode: decision.reasonCode,
+            },
+            answerDisposition:
+              response.kind === 'ANSWER_RETURNED' ? 'ANSWER_RETURNED' : 'ANSWER_FAILED',
+            answerOnlyResponseRef: {
+              id: response.id,
+              digest: response.responseDigest,
+              kind: response.kind,
+            },
+            materializationDisposition: 'NO_GOAL',
+            startDisposition: 'NOT_AUTHORIZED',
+          },
+    );
+
+    return this.runIntakeCommitImmediate(() => {
+      const existingReservation =
+        this.getIntakeCommandReservationInsideTransaction(commandIdentifier);
+      if (existingReservation !== undefined) {
+        if (
+          suppliedReservation !== undefined &&
+          (existingReservation.reservationDigest !== suppliedReservation.reservationDigest ||
+            !sameCanonicalAuthority(existingReservation, suppliedReservation))
+        ) {
+          throw new CommandIdConflictError(commandIdentifier);
+        }
+        const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
+        if (existingOutcome !== undefined) {
+          if (!sameCanonicalAuthority(existingOutcome.result, result)) {
+            throw new CommandIdConflictError(commandIdentifier);
+          }
+          const retainedRun = this.getIntakeRunInsideTransaction(existingReservation.intakeRunId);
+          if (retainedRun === undefined) {
+            throw new StoreInvariantError('Replayed NO_EXECUTION has no Intake Run');
+          }
+          return { status: 'REPLAYED', outcome: existingOutcome, intakeRun: retainedRun };
+        }
+      }
+
+      if (rawInput.kind === 'IMMEDIATE') {
+        if (existingReservation !== undefined || suppliedReservation === undefined) {
+          throw new CommandIdConflictError(commandIdentifier);
+        }
+        const rawRequest = decodeRawRequest(rawInput.rawRequest);
+        const revision = decodeRawRequestRevision(
+          rawInput.rawRequestRevision,
+          canonicalAuthorityDigests,
+        );
+        if (
+          nextRun.version !== 1 ||
+          decision.intakeRunVersion !== nextRun.version ||
+          suppliedReservation.observedIntakeRunVersion !== nextRun.version ||
+          rawRequest.id !== revision.rawRequestId ||
+          rawRequest.intakeRunId !== nextRun.id ||
+          revision.intakeRunId !== nextRun.id ||
+          nextRun.activeRawRequestRevision.digest !== revision.rawRequestDigest
+        ) {
+          throw new StoreInvariantError('Immediate NO_EXECUTION source chain is inconsistent');
+        }
+        this.insertRawRequest(rawRequest);
+        this.insertRawRequestRevision(revision);
+        this.insertIntakeRun(nextRun);
+        this.insertIntakeCommandReservation(suppliedReservation);
+      } else {
+        if (existingReservation === undefined) {
+          if (suppliedReservation === undefined) {
+            throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
+          }
+          this.insertIntakeCommandReservation(suppliedReservation);
+        }
+        const reservation = existingReservation ?? suppliedReservation;
+        if (reservation === undefined) {
+          throw new StoreInvariantError('NO_EXECUTION reservation could not be resolved');
+        }
+        const current = this.getIntakeRunInsideTransaction(nextRun.id);
+        const expectedStatus =
+          rawInput.kind === 'ABANDONMENT'
+            ? IntakeRunStatus.NEEDS_CLARIFICATION
+            : IntakeRunStatus.ANALYZING;
+        if (
+          current?.status !== expectedStatus ||
+          current.version !== reservation.observedIntakeRunVersion ||
+          nextRun.version !== current.version + 1 ||
+          decision.intakeRunVersion !== current.version
+        ) {
+          throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
+        }
+        if (rawInput.kind === 'ABANDONMENT') {
+          if (
+            reservation.operationKind !== IntakeCommandOperationKind.ABANDON_CLARIFICATION ||
+            reservation.abandonClarificationBinding === undefined ||
+            current.status !== IntakeRunStatus.NEEDS_CLARIFICATION ||
+            current.activeQuestionRef.clarificationQuestionId !==
+              reservation.abandonClarificationBinding.clarificationQuestionId ||
+            current.activeQuestionRef.questionDigest !==
+              reservation.abandonClarificationBinding.questionDigest
+          ) {
+            throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
+          }
+        }
+        this.updateIntakeRun(current, nextRun);
+      }
+
+      this.insertIntentAdmissionDecision(decision);
+      if (response !== undefined) {
+        this.insertAnswerOnlyResponse(response);
+      }
+      const reservation = this.getIntakeCommandReservationInsideTransaction(commandIdentifier);
+      if (reservation === undefined) {
+        throw new StoreInvariantError('NO_EXECUTION reservation did not persist');
+      }
+      const outcome = storeAuthoredIntakeOutcome(reservation, result, completedAt);
+      this.insertIntakeAudits(nextRun.id, commandIdentifier, auditEvents);
+      this.insertIntakeOutcome(outcome);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', outcome, intakeRun: nextRun };
+    });
+  }
+
+  public commitIntakeFailure(rawInput: CommitIntakeFailure): IntakeCommitStoreResult {
+    this.assertOpen();
+    const commandIdentifier = commandId(rawInput.commandId);
+    const failure = decodeIntakeFailureRecord(rawInput.failure, canonicalAuthorityDigests);
+    const nextRun = decodeIntakeRun(rawInput.intakeRun);
+    const completedAt = isoTimestamp(rawInput.completedAt);
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    if (
+      nextRun.status !== IntakeRunStatus.FAILED ||
+      failure.commandId !== commandIdentifier ||
+      failure.intakeRunId !== nextRun.id ||
+      nextRun.terminalFailureRef.id !== failure.id ||
+      nextRun.terminalFailureRef.digest !== failure.failureDigest ||
+      completedAt < failure.failedAt
+    ) {
+      throw new StoreInvariantError('FAILED Intake commit has inconsistent authority');
+    }
+    const result = decodeIntakeCommandResult({
+      schemaVersion: 1,
+      kind: 'FAILED',
+      intakeRunId: nextRun.id,
+      intakeRunVersion: nextRun.version,
+      failureRef: { id: failure.id, digest: failure.failureDigest },
+    });
+    return this.runIntakeCommitImmediate(() => {
+      const reservation = this.getIntakeCommandReservationInsideTransaction(commandIdentifier);
+      if (reservation === undefined) {
+        throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
+      }
+      const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
+      if (existingOutcome !== undefined) {
+        if (!sameCanonicalAuthority(existingOutcome.result, result)) {
+          throw new CommandIdConflictError(commandIdentifier);
+        }
+        const retainedRun = this.getIntakeRunInsideTransaction(nextRun.id);
+        if (retainedRun === undefined) {
+          throw new StoreInvariantError('Replayed Intake failure has no Intake Run');
+        }
+        return { status: 'REPLAYED', outcome: existingOutcome, intakeRun: retainedRun };
+      }
+      const current = this.getIntakeRunInsideTransaction(nextRun.id);
+      if (
+        current?.status !== IntakeRunStatus.ANALYZING ||
+        current.version !== reservation.observedIntakeRunVersion ||
+        nextRun.version !== current.version + 1 ||
+        failure.intakeRunVersion !== current.version
+      ) {
+        throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
+      }
+      this.insertIntakeFailure(failure);
+      this.updateIntakeRun(current, nextRun);
+      const outcome = storeAuthoredIntakeOutcome(reservation, result, completedAt);
+      this.insertIntakeAudits(nextRun.id, commandIdentifier, auditEvents);
+      this.insertIntakeOutcome(outcome);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', outcome, intakeRun: nextRun };
+    });
+  }
+
+  public commitIntakeCommandRejection(
+    rawInput: CommitIntakeCommandRejection,
+  ): IntakeCommitStoreResult {
+    this.assertOpen();
+    const reservation = decodeIntakeCommandReservation(
+      rawInput.reservation,
+      canonicalAuthorityDigests,
+    );
+    const observedRun = decodeIntakeRun(rawInput.observedIntakeRun);
+    const completedAt = isoTimestamp(rawInput.completedAt);
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    if (typeof rawInput.detailCode !== 'string' || rawInput.detailCode.trim().length === 0) {
+      throw new TypeError('Intake rejection detailCode must not be blank');
+    }
+    if (
+      reservation.intakeRunId !== observedRun.id ||
+      reservation.observedIntakeRunVersion !== observedRun.version ||
+      completedAt < reservation.reservedAt ||
+      (reservation.operationKind === IntakeCommandOperationKind.ABANDON_CLARIFICATION &&
+        'abandonClarificationBinding' in reservation)
+    ) {
+      throw new StoreInvariantError('Rejected Intake command has inconsistent reservation shape');
+    }
+    const result = decodeIntakeCommandResult({
+      schemaVersion: 1,
+      kind: 'REJECTED',
+      intakeRunId: observedRun.id,
+      observedIntakeRunVersion: observedRun.version,
+      detailCode: rawInput.detailCode,
+    });
+    return this.runIntakeCommitImmediate(() => {
+      const existingReservation = this.getIntakeCommandReservationInsideTransaction(
+        reservation.commandId,
+      );
+      if (existingReservation !== undefined) {
+        if (
+          existingReservation.reservationDigest !== reservation.reservationDigest ||
+          !sameCanonicalAuthority(existingReservation, reservation)
+        ) {
+          throw new CommandIdConflictError(reservation.commandId);
+        }
+        const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(
+          reservation.commandId,
+        );
+        if (existingOutcome === undefined) {
+          throw new StoreInvariantError(
+            'An active external Intake operation cannot become a rejection',
+          );
+        }
+        if (!sameCanonicalAuthority(existingOutcome.result, result)) {
+          throw new CommandIdConflictError(reservation.commandId);
+        }
+        const retainedRun = this.getIntakeRunInsideTransaction(observedRun.id);
+        if (retainedRun === undefined) {
+          throw new StoreInvariantError('Replayed Intake rejection has no Intake Run');
+        }
+        return { status: 'REPLAYED', outcome: existingOutcome, intakeRun: retainedRun };
+      }
+      const retainedRun = this.getIntakeRunInsideTransaction(observedRun.id);
+      if (
+        retainedRun?.version !== observedRun.version ||
+        !sameCanonicalAuthority(retainedRun, observedRun)
+      ) {
+        throw new OptimisticConcurrencyError('INTAKE_RUN', observedRun.id);
+      }
+      this.insertIntakeCommandReservation(reservation);
+      const outcome = storeAuthoredIntakeOutcome(reservation, result, completedAt);
+      this.insertIntakeAudits(observedRun.id, reservation.commandId, auditEvents);
+      this.insertIntakeOutcome(outcome);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', outcome, intakeRun: observedRun };
+    });
+  }
+
+  public commitIntakeMaterialization(
+    rawInput: CommitIntakeMaterialization,
+  ): IntakeCommitStoreResult {
+    this.assertOpen();
+    const commandIdentifier = commandId(rawInput.commandId);
+    const proposal = decodeIntentAnalysisProposal(rawInput.proposal, canonicalAuthorityDigests);
+    const projection = decodeIntentProjectionRevision(
+      rawInput.projection,
+      canonicalAuthorityDigests,
+    );
+    const ambiguitySet = decodeMaterialAmbiguitySet(
+      rawInput.ambiguitySet,
+      canonicalAuthorityDigests,
+    );
+    const decision = decodeIntentAdmissionDecision(rawInput.decision, canonicalAuthorityDigests);
+    const goal = decodeGoalSnapshot(rawInput.goal);
+    const workflow = decodeWorkflowSnapshot(rawInput.workflow);
+    const materialization = decodeGoalMaterializationRecord(
+      rawInput.materialization,
+      canonicalAuthorityDigests,
+    );
+    const startAuthorization =
+      rawInput.startAuthorization === undefined
+        ? undefined
+        : decodeGoalStartAuthorization(rawInput.startAuthorization, canonicalAuthorityDigests);
+    const nextRun = decodeIntakeRun(rawInput.intakeRun);
+    const goalAuditEventId = auditEventId(rawInput.goalAuditEventId);
+    const workflowAuditEventId = auditEventId(rawInput.workflowAuditEventId);
+    const goalCreationPayloadDigest = sha256Digest(rawInput.goalCreationPayloadDigest);
+    const completedAt = isoTimestamp(rawInput.completedAt);
+    const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
+    if (
+      goalAuditEventId === workflowAuditEventId ||
+      auditEvents.some(
+        (event) => event.id === goalAuditEventId || event.id === workflowAuditEventId,
+      ) ||
+      decision.kind !== IntentAdmissionDecisionKind.MATERIALIZE ||
+      nextRun.status !== IntakeRunStatus.MATERIALIZED ||
+      proposal.intakeRunId !== nextRun.id ||
+      projection.intakeRunId !== nextRun.id ||
+      ambiguitySet.intakeRunId !== nextRun.id ||
+      decision.intakeRunId !== nextRun.id ||
+      materialization.intakeRunId !== nextRun.id ||
+      projection.intentAnalysisProposalRef.id !== proposal.id ||
+      projection.intentAnalysisProposalRef.digest !== proposal.proposalDigest ||
+      ambiguitySet.intentProjectionId !== projection.id ||
+      ambiguitySet.intentProjectionRevision !== projection.revision ||
+      ambiguitySet.intentProjectionDigest !== projection.projectionDigest ||
+      decision.projectionBinding.intentAnalysisProposalId !== proposal.id ||
+      decision.projectionBinding.intentAnalysisProposalDigest !== proposal.proposalDigest ||
+      decision.projectionBinding.intentProjectionId !== projection.id ||
+      decision.projectionBinding.intentProjectionRevision !== projection.revision ||
+      decision.projectionBinding.intentProjectionDigest !== projection.projectionDigest ||
+      materialization.intentAdmissionDecisionId !== decision.id ||
+      materialization.intentAdmissionDecisionDigest !== decision.decisionDigest ||
+      materialization.intentProjectionId !== projection.id ||
+      materialization.intentProjectionRevision !== projection.revision ||
+      materialization.intentProjectionDigest !== projection.projectionDigest ||
+      materialization.goalId !== goal.id ||
+      materialization.goalRevision !== goal.revision ||
+      materialization.workflowId !== workflow.id ||
+      materialization.workflowVersion !== workflow.version ||
+      materialization.projectOrScopeRef.normalizedPath !== goal.scope.projectPath ||
+      nextRun.materializedGoalRef.goalMaterializationId !== materialization.id ||
+      nextRun.materializedGoalRef.materializationDigest !== materialization.materializationDigest ||
+      completedAt < materialization.materializedAt ||
+      (decision.executionDisposition === IntentExecutionDisposition.AUTHORIZE_START) !==
+        (startAuthorization !== undefined)
+    ) {
+      throw new StoreInvariantError('Materialization commit has inconsistent authority');
+    }
+    if (
+      startAuthorization !== undefined &&
+      (startAuthorization.goalMaterializationId !== materialization.id ||
+        startAuthorization.goalMaterializationDigest !== materialization.materializationDigest ||
+        startAuthorization.intentAdmissionDecisionId !== decision.id ||
+        startAuthorization.intentAdmissionDecisionDigest !== decision.decisionDigest ||
+        startAuthorization.goalId !== goal.id ||
+        startAuthorization.goalRevision !== goal.revision ||
+        startAuthorization.workflowId !== workflow.id ||
+        startAuthorization.workflowVersion !== workflow.version ||
+        startAuthorization.authorizedAt < materialization.materializedAt)
+    ) {
+      throw new StoreInvariantError('Start Authorization substituted Materialization authority');
+    }
+    this.validateInitialGoalAndWorkflow(goal, workflow);
+
+    const result = decodeIntakeCommandResult({
+      schemaVersion: 1,
+      kind: 'MATERIALIZED',
+      intakeRunId: nextRun.id,
+      intakeRunVersion: nextRun.version,
+      decisionRef: {
+        id: decision.id,
+        digest: decision.decisionDigest,
+        outcome: decision.outcome,
+        reasonCode: decision.reasonCode,
+      },
+      materializedGoalRef: {
+        goalMaterializationId: materialization.id,
+        materializationDigest: materialization.materializationDigest,
+        goalId: goal.id,
+        goalRevision: goal.revision,
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+      },
+      ...(startAuthorization === undefined
+        ? {}
+        : {
+            goalStartAuthorizationRef: {
+              id: startAuthorization.id,
+              digest: startAuthorization.authorizationDigest,
+              startCommandId: startAuthorization.startCommandId,
+            },
+          }),
+      answerDisposition: 'NOT_REQUESTED',
+      materializationDisposition: 'MATERIALIZED_READY',
+      startDisposition: startAuthorization === undefined ? 'NOT_AUTHORIZED' : 'READY_PENDING_START',
+    });
+
+    return this.runIntakeCommitImmediate(() => {
+      const reservation = this.getIntakeCommandReservationInsideTransaction(commandIdentifier);
+      if (reservation === undefined) {
+        throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
+      }
+      const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
+      if (existingOutcome !== undefined) {
+        if (!sameCanonicalAuthority(existingOutcome.result, result)) {
+          throw new CommandIdConflictError(commandIdentifier);
+        }
+        const retainedRun = this.getIntakeRunInsideTransaction(nextRun.id);
+        if (retainedRun === undefined) {
+          throw new StoreInvariantError('Replayed Materialization has no Intake Run');
+        }
+        return { status: 'REPLAYED', outcome: existingOutcome, intakeRun: retainedRun };
+      }
+      if (
+        reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+        reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS
+      ) {
+        throw new CommandIdConflictError(commandIdentifier);
+      }
+      const current = this.getIntakeRunInsideTransaction(nextRun.id);
+      if (
+        current?.status !== IntakeRunStatus.ANALYZING ||
+        current.version !== reservation.observedIntakeRunVersion ||
+        nextRun.version !== current.version + 1 ||
+        decision.intakeRunVersion !== current.version ||
+        materialization.rawRequestRevision !== current.activeRawRequestRevision.revision ||
+        materialization.rawRequestDigest !== current.activeRawRequestRevision.digest
+      ) {
+        throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
+      }
+      this.insertIntentAnalysisAuthority(proposal, projection, ambiguitySet);
+      this.insertIntentAdmissionDecision(decision);
+      this.insertInitialGoalAndWorkflowForIntake(goal, workflow);
+      this.insertGoalMaterialization(materialization);
+      if (startAuthorization !== undefined) {
+        this.insertGoalStartAuthorization(startAuthorization);
+      }
+      this.updateIntakeRun(current, nextRun);
+      this.insertAuditEvent({
+        id: goalAuditEventId,
+        aggregateType: 'GOAL',
+        aggregateId: goal.id,
+        eventType: 'GOAL_CREATED',
+        commandId: reservation.commandId,
+        afterVersion: goal.revision,
+        payloadDigest: goalCreationPayloadDigest,
+        occurredAt: goal.createdAt,
+      });
+      this.insertAuditEvent({
+        id: workflowAuditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: workflow.id,
+        eventType: 'WORKFLOW_CREATED',
+        commandId: reservation.commandId,
+        afterVersion: workflow.version,
+        payloadDigest: goalCreationPayloadDigest,
+        occurredAt: workflow.createdAt,
+      });
+      this.probe(IntakeTransactionStep.AFTER_AUDIT_WRITE);
+      const outcome = storeAuthoredIntakeOutcome(reservation, result, completedAt);
+      this.insertIntakeAudits(nextRun.id, reservation.commandId, auditEvents);
+      this.insertIntakeOutcome(outcome);
+      this.assertAuditEventsReadable([goalAuditEventId, workflowAuditEventId]);
+      this.assertRetainedIntakeAuthorityClosure();
+      this.probe(IntakeTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', outcome, intakeRun: nextRun };
+    });
+  }
+
   private assertRetainedProjectReferencesUnchanged(
     isolationSnapshot: SqliteAuthorityIsolationSnapshot,
   ): void {
-    const identifiers = retainedGoalIdentifierRowsSchema.parse(
-      this.#database.prepare('SELECT id FROM goals ORDER BY id').all(),
+    const tableNames = new Set(
+      sqliteSchemaObjectRowsSchema
+        .parse(
+          this.#database
+            .prepare(
+              `SELECT type, name
+                 FROM sqlite_schema
+                WHERE name NOT LIKE 'sqlite_%'
+                ORDER BY type, name`,
+            )
+            .all(),
+        )
+        .filter((object) => object.type === 'table')
+        .map((object) => object.name),
     );
-    const decodedReferences = identifiers.map((row) => {
-      const identifier = goalId(row.id);
-      const owner = this.getGoalWithWorkflow(identifier);
-      if (owner === undefined) {
-        throw new AuthorityActivationError(
-          `Goal ${identifier} disappeared during SQLite authority activation`,
-        );
-      }
-      return Object.freeze({ goalId: owner.goal.id, projectPath: owner.goal.scope.projectPath });
-    });
+    const decodedReferences = inspectRetainedProjectReferences(this.#database, tableNames);
     if (decodedReferences.length !== isolationSnapshot.projectReferences.length) {
       throw new AuthorityActivationError(
-        'Retained Goal project bindings changed during SQLite authority activation',
+        'Retained project bindings changed during SQLite authority activation',
       );
     }
     for (const [index, reference] of decodedReferences.entries()) {
       const inspected = isolationSnapshot.projectReferences[index];
       if (
-        inspected?.goalId !== reference.goalId ||
+        inspected?.kind !== reference.kind ||
+        inspected.authorityId !== reference.authorityId ||
         inspected.projectPath !== reference.projectPath
       ) {
         throw new AuthorityActivationError(
-          'Retained Goal project bindings changed during SQLite authority activation',
+          'Retained project bindings changed during SQLite authority activation',
         );
+      }
+    }
+  }
+
+  private decodeStoredIntakeRecords<Value>(
+    tableName: string,
+    recordType: string,
+    decode: (value: unknown) => Value,
+  ): readonly Value[] {
+    try {
+      return Object.freeze(
+        storedIntakeRecordRowsSchema
+          .parse(this.#database.prepare(`SELECT record_json FROM ${tableName}`).all())
+          .map((row) => decode(parseJson(row.record_json, recordType))),
+      );
+    } catch (error) {
+      throw new StoreInvariantError(`Retained ${recordType} authority failed strict reopen`, {
+        cause: error,
+      });
+    }
+  }
+
+  private assertRetainedIntakeAuthorityClosure(): void {
+    if (!this.hasTable('intake_runs')) {
+      return;
+    }
+
+    const policies = this.decodeStoredIntakeRecords(
+      'intent_admission_policies',
+      'Intent Admission Policy',
+      (value) => decodeIntentAdmissionPolicy(value, canonicalAuthorityDigests),
+    );
+    const rawRequests = this.decodeStoredIntakeRecords('raw_requests', 'Raw Request', (value) =>
+      decodeRawRequest(value),
+    );
+    const revisions = this.decodeStoredIntakeRecords(
+      'raw_request_revisions',
+      'Raw Request revision',
+      (value) => decodeRawRequestRevision(value, canonicalAuthorityDigests),
+    );
+    const manifests = this.decodeStoredIntakeRecords(
+      'intake_manifests',
+      'Intake Manifest',
+      (value) => decodeIntakeManifest(value, canonicalAuthorityDigests),
+    );
+    const proposals = this.decodeStoredIntakeRecords(
+      'intent_analysis_proposals',
+      'Intent Analysis Proposal',
+      (value) => decodeIntentAnalysisProposal(value, canonicalAuthorityDigests),
+    );
+    const sourceBindings = this.decodeStoredIntakeRecords(
+      'source_bindings',
+      'Source Binding',
+      (value) => decodeSourceBinding(value, canonicalAuthorityDigests),
+    );
+    const projections = this.decodeStoredIntakeRecords(
+      'intent_projection_revisions',
+      'Intent Projection revision',
+      (value) => decodeIntentProjectionRevision(value, canonicalAuthorityDigests),
+    );
+    const ambiguitySets = this.decodeStoredIntakeRecords(
+      'material_ambiguity_sets',
+      'Material Ambiguity set',
+      (value) => decodeMaterialAmbiguitySet(value, canonicalAuthorityDigests),
+    );
+    const questionSpecs = this.decodeStoredIntakeRecords(
+      'clarification_question_specs',
+      'Clarification Question specification',
+      (value) => decodeClarificationQuestionSpec(value, canonicalAuthorityDigests),
+    );
+    const decisions = this.decodeStoredIntakeRecords(
+      'intent_admission_decisions',
+      'Intent Admission Decision',
+      (value) => decodeIntentAdmissionDecision(value, canonicalAuthorityDigests),
+    );
+    const questions = this.decodeStoredIntakeRecords(
+      'clarification_questions',
+      'Clarification Question',
+      (value) => decodeClarificationQuestion(value, canonicalAuthorityDigests),
+    );
+    const answerBindings = this.decodeStoredIntakeRecords(
+      'clarification_answer_bindings',
+      'Clarification Answer Binding',
+      (value) => decodeClarificationAnswerBinding(value, canonicalAuthorityDigests),
+    );
+    const answerResponses = this.decodeStoredIntakeRecords(
+      'answer_only_responses',
+      'Answer-only Response',
+      (value) => decodeAnswerOnlyResponse(value, canonicalAuthorityDigests),
+    );
+    const failures = this.decodeStoredIntakeRecords(
+      'intake_failure_records',
+      'Intake Failure Record',
+      (value) => decodeIntakeFailureRecord(value, canonicalAuthorityDigests),
+    );
+    const reservations = this.decodeStoredIntakeRecords(
+      'intake_command_reservations',
+      'Intake command reservation',
+      (value) => decodeIntakeCommandReservation(value, canonicalAuthorityDigests),
+    );
+    const outcomes = this.decodeStoredIntakeRecords(
+      'intake_command_outcomes',
+      'Intake command outcome',
+      (value) => decodeIntakeCommandOutcome(value, canonicalAuthorityDigests),
+    );
+    const materializations = this.decodeStoredIntakeRecords(
+      'goal_materializations',
+      'Goal Materialization',
+      (value) => decodeGoalMaterializationRecord(value, canonicalAuthorityDigests),
+    );
+    const startAuthorizations = this.decodeStoredIntakeRecords(
+      'goal_start_authorizations',
+      'Goal Start Authorization',
+      (value) => decodeGoalStartAuthorization(value, canonicalAuthorityDigests),
+    );
+    const runs = this.decodeStoredIntakeRecords('intake_runs', 'Intake Run', (value) =>
+      decodeIntakeRun(value),
+    );
+
+    const uniqueMap = <Value>(
+      values: readonly Value[],
+      identity: (value: Value) => string,
+      recordType: string,
+    ): ReadonlyMap<string, Value> => {
+      const map = new Map<string, Value>();
+      for (const value of values) {
+        const key = identity(value);
+        if (map.has(key)) {
+          throw new StoreInvariantError(`Retained ${recordType} identity ${key} is duplicated`);
+        }
+        map.set(key, value);
+      }
+      return map;
+    };
+
+    const policyById = uniqueMap(policies, (record) => record.id, 'Admission Policy');
+    const rawRequestById = uniqueMap(rawRequests, (record) => record.id, 'Raw Request');
+    const revisionByKey = uniqueMap(
+      revisions,
+      (record) => intakeRevisionKey(record.rawRequestId, record.revision),
+      'Raw Request revision',
+    );
+    const manifestById = uniqueMap(manifests, (record) => record.id, 'Intake Manifest');
+    const proposalById = uniqueMap(proposals, (record) => record.id, 'Intent Analysis Proposal');
+    const sourceBindingByDigest = uniqueMap(
+      sourceBindings,
+      (record) => record.bindingDigest,
+      'Source Binding',
+    );
+    const projectionByKey = uniqueMap(
+      projections,
+      (record) => intakeRevisionKey(record.id, record.revision),
+      'Intent Projection revision',
+    );
+    const ambiguitySetByDigest = uniqueMap(
+      ambiguitySets,
+      (record) => record.ambiguitySetDigest,
+      'Material Ambiguity set',
+    );
+    const ambiguitySetByProjection = uniqueMap(
+      ambiguitySets,
+      (record) => intakeRevisionKey(record.intentProjectionId, record.intentProjectionRevision),
+      'Material Ambiguity set Projection',
+    );
+    const questionSpecByDigest = uniqueMap(
+      questionSpecs,
+      (record) => record.questionSpecDigest,
+      'Clarification Question specification',
+    );
+    const decisionById = uniqueMap(decisions, (record) => record.id, 'Admission Decision');
+    const questionById = uniqueMap(questions, (record) => record.id, 'Clarification Question');
+    const answerBindingByQuestionId = uniqueMap(
+      answerBindings,
+      (record) => record.clarificationQuestionId,
+      'Clarification Answer Binding question',
+    );
+    const answerBindingByDigest = uniqueMap(
+      answerBindings,
+      (record) => record.answerBindingDigest,
+      'Clarification Answer Binding digest',
+    );
+    const answerResponseById = uniqueMap(
+      answerResponses,
+      (record) => record.id,
+      'Answer-only Response',
+    );
+    const failureById = uniqueMap(failures, (record) => record.id, 'Intake Failure Record');
+    const reservationByCommandId = uniqueMap(
+      reservations,
+      (record) => record.commandId,
+      'Intake command reservation',
+    );
+    const outcomeByCommandId = uniqueMap(
+      outcomes,
+      (record) => record.commandId,
+      'Intake command outcome',
+    );
+    const materializationById = uniqueMap(
+      materializations,
+      (record) => record.id,
+      'Goal Materialization',
+    );
+    const startAuthorizationByMaterializationId = uniqueMap(
+      startAuthorizations,
+      (record) => record.goalMaterializationId,
+      'Goal Start Authorization Materialization',
+    );
+    const runById = uniqueMap(runs, (record) => record.id, 'Intake Run');
+
+    for (const root of rawRequests) {
+      if (runById.get(root.intakeRunId)?.id !== root.intakeRunId) {
+        throw new StoreInvariantError(`Raw Request ${root.id} has no exact Intake Run`);
+      }
+    }
+    for (const revision of revisions) {
+      const root = rawRequestById.get(revision.rawRequestId);
+      if (root?.intakeRunId !== revision.intakeRunId) {
+        throw new StoreInvariantError(
+          `Raw Request revision ${revision.rawRequestId}@${String(revision.revision)} has no exact root`,
+        );
+      }
+      if (revision.revision > 1) {
+        const parent = revisionByKey.get(
+          intakeRevisionKey(revision.rawRequestId, revision.revision - 1),
+        );
+        if (parent === undefined || revision.parentRevision !== parent.revision) {
+          throw new StoreInvariantError(
+            `Raw Request revision ${revision.rawRequestId}@${String(revision.revision)} has no exact parent`,
+          );
+        }
+      }
+    }
+
+    const projectionMembership = new Map<string, string[]>();
+    for (const row of projectionSourceBindingRowsSchema.parse(
+      this.#database
+        .prepare(
+          `SELECT projection_id, projection_revision, position, binding_digest
+             FROM projection_source_bindings
+            ORDER BY projection_id, projection_revision, position`,
+        )
+        .all(),
+    )) {
+      const key = intakeRevisionKey(row.projection_id, row.projection_revision);
+      if (!projectionByKey.has(key) || !sourceBindingByDigest.has(row.binding_digest)) {
+        throw new StoreInvariantError('Projection Source Binding membership is orphaned');
+      }
+      const entries = projectionMembership.get(key) ?? [];
+      if (row.position !== entries.length) {
+        throw new StoreInvariantError('Projection Source Binding positions are not contiguous');
+      }
+      entries.push(row.binding_digest);
+      projectionMembership.set(key, entries);
+    }
+    for (const projection of projections) {
+      const key = intakeRevisionKey(projection.id, projection.revision);
+      const proposal = proposalById.get(projection.intentAnalysisProposalRef.id);
+      if (
+        proposal?.proposalDigest !== projection.intentAnalysisProposalRef.digest ||
+        proposal.intakeRunId !== projection.intakeRunId ||
+        proposal.rawRequestRevision !== projection.rawRequestRevision
+      ) {
+        throw new StoreInvariantError(`Intent Projection ${key} has no exact Proposal`);
+      }
+      const membership = projectionMembership.get(key) ?? [];
+      if (
+        !sameCanonicalAuthority(
+          membership,
+          projection.sourceBindings.map((binding) => binding.bindingDigest),
+        )
+      ) {
+        throw new StoreInvariantError(`Intent Projection ${key} has substituted Source Bindings`);
+      }
+      for (const binding of projection.sourceBindings) {
+        const retained = sourceBindingByDigest.get(binding.bindingDigest);
+        if (retained === undefined || !sameCanonicalAuthority(retained, binding)) {
+          throw new StoreInvariantError(`Intent Projection ${key} embeds a false Source Binding`);
+        }
+      }
+    }
+
+    const ambiguityMembership = new Map<string, MaterialAmbiguity[]>();
+    for (const row of ambiguityMembershipRowsSchema.parse(
+      this.#database
+        .prepare(
+          `SELECT ambiguity_set_digest, record_json
+             FROM material_ambiguities
+            ORDER BY ambiguity_set_digest, position`,
+        )
+        .all(),
+    )) {
+      const ambiguity = decodeMaterialAmbiguity(parseJson(row.record_json, 'Material Ambiguity'));
+      if (!ambiguitySetByDigest.has(row.ambiguity_set_digest)) {
+        throw new StoreInvariantError(`Material Ambiguity ${ambiguity.id} has no owning set`);
+      }
+      const entries = ambiguityMembership.get(row.ambiguity_set_digest) ?? [];
+      entries.push(ambiguity);
+      ambiguityMembership.set(row.ambiguity_set_digest, entries);
+    }
+    for (const set of ambiguitySets) {
+      const projection = projectionByKey.get(
+        intakeRevisionKey(set.intentProjectionId, set.intentProjectionRevision),
+      );
+      if (
+        projection?.projectionDigest !== set.intentProjectionDigest ||
+        projection.intakeRunId !== set.intakeRunId
+      ) {
+        throw new StoreInvariantError(
+          `Material Ambiguity set ${set.ambiguitySetDigest} has no exact Projection`,
+        );
+      }
+      const retained = ambiguityMembership.get(set.ambiguitySetDigest) ?? [];
+      if (!sameCanonicalAuthority(retained, set.ambiguities)) {
+        throw new StoreInvariantError(
+          `Material Ambiguity set ${set.ambiguitySetDigest} has substituted members`,
+        );
+      }
+    }
+
+    for (const manifest of manifests) {
+      const run = runById.get(manifest.intakeRunId);
+      if (run === undefined) {
+        throw new StoreInvariantError(`Intake Manifest ${manifest.id} has no Intake Run`);
+      }
+      const policy = policyById.get(manifest.admissionPolicy.id);
+      if (
+        policy?.version !== manifest.admissionPolicy.version ||
+        policy.digest !== manifest.admissionPolicy.digest
+      ) {
+        throw new StoreInvariantError(`Intake Manifest ${manifest.id} has no exact Policy`);
+      }
+      for (const reference of manifest.rawRequestRevisions) {
+        const revision = revisionByKey.get(
+          intakeRevisionKey(reference.rawRequestId, reference.revision),
+        );
+        if (
+          revision?.rawRequestDigest !== reference.digest ||
+          revision.intakeRunId !== manifest.intakeRunId
+        ) {
+          throw new StoreInvariantError(`Intake Manifest ${manifest.id} has a false Raw Request`);
+        }
+      }
+      if (
+        (manifest.declaredProjectRef === undefined) !== (run.projectRef === undefined) ||
+        (manifest.declaredProjectRef !== undefined &&
+          !sameCanonicalAuthority(manifest.declaredProjectRef, run.projectRef))
+      ) {
+        throw new StoreInvariantError(`Intake Manifest ${manifest.id} has a false project binding`);
+      }
+      if (manifest.currentProjectionRef !== undefined) {
+        const projection = projectionByKey.get(
+          intakeRevisionKey(
+            manifest.currentProjectionRef.id,
+            manifest.currentProjectionRef.revision,
+          ),
+        );
+        if (
+          projection?.projectionDigest !== manifest.currentProjectionRef.digest ||
+          projection.intakeRunId !== manifest.intakeRunId
+        ) {
+          throw new StoreInvariantError(
+            `Intake Manifest ${manifest.id} has a false current Projection`,
+          );
+        }
+      }
+      for (const questionRef of manifest.questionRefs) {
+        const question = questionById.get(questionRef.clarificationQuestionId);
+        if (
+          question?.intakeRunId !== manifest.intakeRunId ||
+          question.questionSpecDigest !== questionRef.questionSpecDigest ||
+          question.questionDigest !== questionRef.questionDigest ||
+          question.intentAdmissionDecisionId !== questionRef.issuingDecisionId ||
+          question.intentAdmissionDecisionDigest !== questionRef.issuingDecisionDigest
+        ) {
+          throw new StoreInvariantError(`Intake Manifest ${manifest.id} has a false Question`);
+        }
+      }
+      for (const answerBindingDigest of manifest.answerBindingDigests) {
+        if (answerBindingByDigest.get(answerBindingDigest)?.intakeRunId !== manifest.intakeRunId) {
+          throw new StoreInvariantError(
+            `Intake Manifest ${manifest.id} has a false Answer Binding`,
+          );
+        }
+      }
+    }
+
+    for (const decision of decisions) {
+      const run = runById.get(decision.intakeRunId);
+      const policy = policyById.get(decision.admissionPolicyId);
+      const raw = rawRequestById.get(run?.activeRawRequestRevision.rawRequestId ?? '');
+      const revision =
+        raw === undefined
+          ? undefined
+          : revisionByKey.get(intakeRevisionKey(raw.id, decision.rawRequestRevision));
+      if (
+        revision?.rawRequestDigest !== decision.rawRequestDigest ||
+        revision.principalRef !== decision.principalRef ||
+        revision.interactionAction !== decision.interactionAction ||
+        policy?.version !== decision.admissionPolicyVersion ||
+        policy.digest !== decision.admissionPolicyDigest ||
+        decision.intakeRunVersion > (run?.version ?? 0) ||
+        decision.decidedAt < revision.submittedAt
+      ) {
+        throw new StoreInvariantError(
+          `Admission Decision ${decision.id} has false source authority`,
+        );
+      }
+      if ('projectionBinding' in decision) {
+        const binding = decision.projectionBinding;
+        const projection = projectionByKey.get(
+          intakeRevisionKey(binding.intentProjectionId, binding.intentProjectionRevision),
+        );
+        const proposal = proposalById.get(binding.intentAnalysisProposalId);
+        if (
+          projection?.projectionDigest !== binding.intentProjectionDigest ||
+          projection.intakeRunId !== decision.intakeRunId ||
+          proposal?.proposalDigest !== binding.intentAnalysisProposalDigest ||
+          proposal.id !== projection.intentAnalysisProposalRef.id ||
+          !sameCanonicalAuthority(
+            binding.sourceBindingDigests,
+            projection.sourceBindings.map((source) => source.bindingDigest),
+          ) ||
+          !sameCanonicalAuthority(binding.materialAmbiguityRefs, projection.materialAmbiguityRefs)
+        ) {
+          throw new StoreInvariantError(
+            `Admission Decision ${decision.id} has a substituted Projection binding`,
+          );
+        }
+      }
+    }
+
+    for (const question of questions) {
+      const decision = decisionById.get(question.intentAdmissionDecisionId);
+      const spec = questionSpecByDigest.get(question.questionSpecDigest);
+      if (
+        decision?.kind !== IntentAdmissionDecisionKind.CLARIFY ||
+        decision.decisionDigest !== question.intentAdmissionDecisionDigest ||
+        decision.intakeRunId !== question.intakeRunId ||
+        decision.questionPlanBinding.questionId !== question.id ||
+        decision.questionPlanBinding.questionSpecDigest !== question.questionSpecDigest ||
+        spec?.intakeRunId !== question.intakeRunId ||
+        spec.basedOnProjectionRevision !== question.basedOnProjectionRevision ||
+        spec.ambiguityRef !== question.ambiguityRef ||
+        spec.prompt !== question.prompt ||
+        !sameCanonicalAuthority(spec.affectedFields, question.affectedFields) ||
+        !sameCanonicalAuthority(spec.answerSchema, question.answerSchema) ||
+        question.createdAt < decision.decidedAt
+      ) {
+        throw new StoreInvariantError(`Clarification Question ${question.id} is falsely bound`);
+      }
+    }
+
+    for (const binding of answerBindings) {
+      const question = questionById.get(binding.clarificationQuestionId);
+      const revision = revisionByKey.get(
+        intakeRevisionKey(binding.rawRequestId, binding.rawRequestRevision),
+      );
+      if (
+        question?.intakeRunId !== binding.intakeRunId ||
+        revision?.intakeRunId !== binding.intakeRunId ||
+        question.questionSpecDigest !== binding.questionSpecDigest ||
+        question.questionDigest !== binding.questionDigest ||
+        question.intentAdmissionDecisionId !== binding.intentAdmissionDecisionId ||
+        question.intentAdmissionDecisionDigest !== binding.intentAdmissionDecisionDigest ||
+        revision.rawRequestDigest !== binding.rawRequestDigest ||
+        revision.answeredQuestionBinding?.clarificationQuestionId !== question.id ||
+        revision.answeredQuestionBinding.questionSpecDigest !== question.questionSpecDigest ||
+        revision.answeredQuestionBinding.questionDigest !== question.questionDigest ||
+        revision.answeredQuestionBinding.intentAdmissionDecisionId !==
+          question.intentAdmissionDecisionId ||
+        revision.answeredQuestionBinding.intentAdmissionDecisionDigest !==
+          question.intentAdmissionDecisionDigest ||
+        binding.answeredAt < question.createdAt ||
+        binding.answeredAt < revision.submittedAt
+      ) {
+        throw new StoreInvariantError(
+          `Clarification Answer Binding ${binding.id} has false Question authority`,
+        );
+      }
+    }
+    for (const revision of revisions) {
+      const answered = revision.answeredQuestionBinding;
+      if (
+        answered !== undefined &&
+        answerBindingByQuestionId.get(answered.clarificationQuestionId)?.rawRequestDigest !==
+          revision.rawRequestDigest
+      ) {
+        throw new StoreInvariantError(
+          `Answered Raw Request revision ${revision.rawRequestId}@${String(revision.revision)} has no exact Answer Binding`,
+        );
+      }
+    }
+
+    for (const response of answerResponses) {
+      const decision = decisionById.get(response.intentAdmissionDecisionId);
+      const run = runById.get(response.intakeRunId);
+      const outcome = outcomes.find(
+        (candidate) =>
+          candidate.result.kind === 'NO_EXECUTION' &&
+          'answerOnlyResponseRef' in candidate.result &&
+          candidate.result.answerOnlyResponseRef.id === response.id,
+      );
+      const reservation =
+        outcome === undefined ? undefined : reservationByCommandId.get(outcome.commandId);
+      const revision =
+        run === undefined
+          ? undefined
+          : revisionByKey.get(
+              intakeRevisionKey(
+                run.activeRawRequestRevision.rawRequestId,
+                response.rawRequestRevision,
+              ),
+            );
+      if (
+        decision?.decisionDigest !== response.intentAdmissionDecisionDigest ||
+        decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION ||
+        decision.interactionAction !== IntakeInteractionAction.ANSWER_ONLY ||
+        revision?.rawRequestDigest !== response.rawRequestDigest ||
+        reservation?.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY ||
+        reservation.externalOperationBinding.assistantAdapterId !== response.assistantAdapterId ||
+        reservation.externalOperationBinding.assistantAdapterVersion !==
+          response.assistantAdapterVersion ||
+        reservation.externalOperationBinding.responseContractDigest !==
+          response.responseContractDigest ||
+        response.observedAt < decision.decidedAt
+      ) {
+        throw new StoreInvariantError(`Answer-only Response ${response.id} is falsely bound`);
+      }
+    }
+    for (const failure of failures) {
+      const run = runById.get(failure.intakeRunId);
+      const revision =
+        run === undefined
+          ? undefined
+          : revisionByKey.get(
+              intakeRevisionKey(
+                run.activeRawRequestRevision.rawRequestId,
+                failure.rawRequestRevision,
+              ),
+            );
+      if (
+        revision?.rawRequestDigest !== failure.rawRequestDigest ||
+        failure.failedAt < revision.submittedAt
+      ) {
+        throw new StoreInvariantError(`Intake Failure ${failure.id} is falsely bound`);
+      }
+    }
+
+    for (const reservation of reservations) {
+      const root = rawRequestById.get(reservation.rawRequestId);
+      const run = runById.get(reservation.intakeRunId);
+      const outcome = outcomeByCommandId.get(reservation.commandId);
+      if (
+        root?.intakeRunId !== reservation.intakeRunId ||
+        reservation.observedIntakeRunVersion > (run?.version ?? 0)
+      ) {
+        throw new StoreInvariantError(
+          `Intake command reservation ${reservation.commandId} has false target authority`,
+        );
+      }
+      if ('externalOperationBinding' in reservation) {
+        const external = reservation.externalOperationBinding;
+        const manifest = manifestById.get(external.manifestId);
+        const policy = policyById.get(external.admissionPolicyId);
+        if (
+          manifest?.manifestDigest !== external.manifestDigest ||
+          manifest.intakeRunId !== reservation.intakeRunId ||
+          manifest.assistantAdapter.id !== external.assistantAdapterId ||
+          manifest.assistantAdapter.version !== external.assistantAdapterVersion ||
+          manifest.responseContract.digest !== external.responseContractDigest ||
+          policy?.version !== external.admissionPolicyVersion ||
+          policy.digest !== external.admissionPolicyDigest
+        ) {
+          throw new StoreInvariantError(
+            `Intake command reservation ${reservation.commandId} has false external binding`,
+          );
+        }
+      }
+      if (reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) {
+        const question = questionById.get(reservation.clarificationBinding.clarificationQuestionId);
+        const answerBinding = answerBindingByQuestionId.get(
+          reservation.clarificationBinding.clarificationQuestionId,
+        );
+        if (
+          question?.intakeRunId !== reservation.intakeRunId ||
+          question.questionSpecDigest !== reservation.clarificationBinding.questionSpecDigest ||
+          question.questionDigest !== reservation.clarificationBinding.questionDigest ||
+          question.intentAdmissionDecisionId !==
+            reservation.clarificationBinding.issuingClarifyDecisionId ||
+          question.intentAdmissionDecisionDigest !==
+            reservation.clarificationBinding.issuingClarifyDecisionDigest ||
+          !sameCanonicalAuthority(
+            question.answerSchema,
+            reservation.clarificationBinding.answerSchema,
+          ) ||
+          answerBinding?.commandId !== reservation.commandId ||
+          answerBinding.canonicalCommandInputDigest !== reservation.canonicalCommandInputDigest ||
+          answerBinding.answeredAt < reservation.reservedAt
+        ) {
+          throw new StoreInvariantError(
+            `Clarification reservation ${reservation.commandId} has false Question/Answer authority`,
+          );
+        }
+      }
+      if (reservation.operationKind === IntakeCommandOperationKind.ABANDON_CLARIFICATION) {
+        if ('abandonClarificationBinding' in reservation) {
+          const binding = reservation.abandonClarificationBinding;
+          const question = questionById.get(binding.clarificationQuestionId);
+          const result = outcome?.result;
+          const decision =
+            result?.kind === 'NO_EXECUTION' ? decisionById.get(result.decisionRef.id) : undefined;
+          if (
+            question?.intakeRunId !== reservation.intakeRunId ||
+            question.questionSpecDigest !== binding.questionSpecDigest ||
+            question.questionDigest !== binding.questionDigest ||
+            question.intentAdmissionDecisionId !== binding.issuingClarifyDecisionId ||
+            question.intentAdmissionDecisionDigest !== binding.issuingClarifyDecisionDigest ||
+            outcome?.disposition !== IntakeCommandDisposition.APPLIED ||
+            decision?.kind !== IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION ||
+            decision.reasonCode !== IntentAdmissionReasonCode.ABANDONED ||
+            decision.abandonmentBinding?.clarificationQuestionId !==
+              binding.clarificationQuestionId ||
+            decision.abandonmentBinding.questionSpecDigest !== binding.questionSpecDigest ||
+            decision.abandonmentBinding.questionDigest !== binding.questionDigest ||
+            decision.abandonmentBinding.issuingClarifyDecisionId !==
+              binding.issuingClarifyDecisionId ||
+            decision.abandonmentBinding.issuingClarifyDecisionDigest !==
+              binding.issuingClarifyDecisionDigest ||
+            decision.abandonmentBinding.commandId !== reservation.commandId ||
+            decision.abandonmentBinding.canonicalCommandInputDigest !==
+              reservation.canonicalCommandInputDigest
+          ) {
+            throw new StoreInvariantError(
+              `Applied abandonment ${reservation.commandId} has false bound authority`,
+            );
+          }
+        } else if (outcome?.disposition !== IntakeCommandDisposition.REJECTED) {
+          throw new StoreInvariantError(
+            `Rejected abandonment ${reservation.commandId} has a false outcome`,
+          );
+        }
+      }
+      if (outcome === undefined) {
+        if (
+          !(
+            reservation.operationKind === IntakeCommandOperationKind.INTENT_ANALYSIS ||
+            reservation.operationKind === IntakeCommandOperationKind.ANSWER_ONLY ||
+            reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS
+          ) ||
+          run?.status !== IntakeRunStatus.ANALYZING
+        ) {
+          throw new StoreInvariantError(
+            `Intake command reservation ${reservation.commandId} is an invalid orphan`,
+          );
+        }
+      } else {
+        decodeIntakeCommandClosure(reservation, outcome, canonicalAuthorityDigests);
+        if (outcome.completedAt < reservation.reservedAt) {
+          throw new StoreInvariantError(
+            `Intake command outcome ${outcome.commandId} predates its reservation`,
+          );
+        }
+      }
+    }
+    for (const outcome of outcomes) {
+      if (!reservationByCommandId.has(outcome.commandId)) {
+        throw new StoreInvariantError(`Intake command outcome ${outcome.commandId} is orphaned`);
+      }
+      const result = outcome.result;
+      if (result.kind === 'CLARIFICATION_REQUIRED') {
+        const decision = decisionById.get(result.decisionRef.id);
+        const question = questionById.get(result.activeQuestionRef.clarificationQuestionId);
+        if (
+          decision?.decisionDigest !== result.decisionRef.digest ||
+          decision.outcome !== IntentAdmissionOutcome.CLARIFY ||
+          question?.questionDigest !== result.activeQuestionRef.questionDigest ||
+          question.questionSpecDigest !== result.activeQuestionRef.questionSpecDigest
+        ) {
+          throw new StoreInvariantError(
+            `Intake outcome ${outcome.commandId} has false CLARIFY result`,
+          );
+        }
+      } else if (result.kind === 'NO_EXECUTION') {
+        const decision = decisionById.get(result.decisionRef.id);
+        if (
+          decision?.decisionDigest !== result.decisionRef.digest ||
+          decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION
+        ) {
+          throw new StoreInvariantError(
+            `Intake outcome ${outcome.commandId} has false NO_EXECUTION result`,
+          );
+        }
+        if (
+          'answerOnlyResponseRef' in result &&
+          answerResponseById.get(result.answerOnlyResponseRef.id)?.responseDigest !==
+            result.answerOnlyResponseRef.digest
+        ) {
+          throw new StoreInvariantError(
+            `Intake outcome ${outcome.commandId} has a false Answer-only result`,
+          );
+        }
+      } else if (result.kind === 'MATERIALIZED') {
+        const decision = decisionById.get(result.decisionRef.id);
+        const materialization = materializationById.get(
+          result.materializedGoalRef.goalMaterializationId,
+        );
+        const authorization =
+          materialization === undefined
+            ? undefined
+            : startAuthorizationByMaterializationId.get(materialization.id);
+        if (
+          decision?.decisionDigest !== result.decisionRef.digest ||
+          decision.outcome !== IntentAdmissionOutcome.MATERIALIZE ||
+          materialization?.materializationDigest !==
+            result.materializedGoalRef.materializationDigest ||
+          materialization.goalId !== result.materializedGoalRef.goalId ||
+          materialization.goalRevision !== result.materializedGoalRef.goalRevision ||
+          materialization.workflowId !== result.materializedGoalRef.workflowId ||
+          materialization.workflowVersion !== result.materializedGoalRef.workflowVersion ||
+          ('goalStartAuthorizationRef' in result
+            ? authorization?.id !== result.goalStartAuthorizationRef.id ||
+              authorization.authorizationDigest !== result.goalStartAuthorizationRef.digest ||
+              authorization.startCommandId !== result.goalStartAuthorizationRef.startCommandId
+            : authorization !== undefined)
+        ) {
+          throw new StoreInvariantError(
+            `Intake outcome ${outcome.commandId} has false Materialization result`,
+          );
+        }
+      } else if (result.kind === 'FAILED') {
+        if (failureById.get(result.failureRef.id)?.failureDigest !== result.failureRef.digest) {
+          throw new StoreInvariantError(
+            `Intake outcome ${outcome.commandId} has false Failure result`,
+          );
+        }
+      }
+    }
+
+    for (const materialization of materializations) {
+      const run = runById.get(materialization.intakeRunId);
+      const decision = decisionById.get(materialization.intentAdmissionDecisionId);
+      const projection = projectionByKey.get(
+        intakeRevisionKey(
+          materialization.intentProjectionId,
+          materialization.intentProjectionRevision,
+        ),
+      );
+      const ambiguitySet = ambiguitySetByProjection.get(
+        intakeRevisionKey(
+          materialization.intentProjectionId,
+          materialization.intentProjectionRevision,
+        ),
+      );
+      const owner = this.getGoalWithWorkflow(materialization.goalId);
+      const authorization = startAuthorizationByMaterializationId.get(materialization.id);
+      if (
+        run === undefined ||
+        decision?.kind !== IntentAdmissionDecisionKind.MATERIALIZE ||
+        projection === undefined ||
+        ambiguitySet === undefined ||
+        owner === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Goal Materialization ${materialization.id} is falsely bound`,
+        );
+      }
+      if (
+        decision.decisionDigest !== materialization.intentAdmissionDecisionDigest ||
+        projection.projectionDigest !== materialization.intentProjectionDigest ||
+        projection.rawRequestRevision !== materialization.rawRequestRevision ||
+        projection.objective !== owner.goal.objective ||
+        !sameCanonicalAuthority(
+          projection.requiredCriteria,
+          owner.goal.successCriteria.map((criterion) => criterion.description),
+        ) ||
+        owner.goal.successCriteria.some((criterion) => !criterion.required) ||
+        projection.optionalCriteria.length !== 0 ||
+        projection.assumptions.length !== 0 ||
+        projection.scope.projectPath !== materialization.projectOrScopeRef.normalizedPath ||
+        !sameCanonicalAuthority(projection.scope.allowedPaths, owner.goal.scope.allowedPaths) ||
+        !sameCanonicalAuthority(projection.nonGoals, owner.goal.nonGoals) ||
+        projection.requestedExecutionDisposition !== decision.executionDisposition ||
+        ambiguitySet.ambiguities.length !== 0 ||
+        owner.goal.revision !== materialization.goalRevision ||
+        owner.goal.scope.projectPath !== materialization.projectOrScopeRef.normalizedPath ||
+        decision.projectOrScopeRef.normalizedPath !==
+          materialization.projectOrScopeRef.normalizedPath ||
+        decision.projectOrScopeRef.identityDigest !==
+          materialization.projectOrScopeRef.identityDigest ||
+        run.activeRawRequestRevision.revision !== materialization.rawRequestRevision ||
+        run.activeRawRequestRevision.digest !== materialization.rawRequestDigest ||
+        owner.workflow.id !== materialization.workflowId ||
+        owner.workflow.version !== materialization.workflowVersion ||
+        owner.workflow.phase !== WorkflowPhase.DISCOVERY ||
+        owner.workflow.runStatus !== RunStatus.READY ||
+        materialization.materializedAt < decision.decidedAt ||
+        (decision.executionDisposition === IntentExecutionDisposition.AUTHORIZE_START) !==
+          (authorization !== undefined)
+      ) {
+        throw new StoreInvariantError(
+          `Goal Materialization ${materialization.id} is falsely bound`,
+        );
+      }
+    }
+    for (const authorization of startAuthorizations) {
+      const materialization = materializationById.get(authorization.goalMaterializationId);
+      const decision = decisionById.get(authorization.intentAdmissionDecisionId);
+      const policy = this.getPolicyBundle(authorization.policyBundleId);
+      const profile = this.getExecutionProfile(authorization.executionProfileId);
+      const materializationOutcome =
+        materialization === undefined
+          ? undefined
+          : outcomes.find(
+              (outcome) =>
+                outcome.intakeRunId === materialization.intakeRunId &&
+                outcome.result.kind === 'MATERIALIZED' &&
+                outcome.result.materializedGoalRef.goalMaterializationId === materialization.id,
+            );
+      if (
+        materialization === undefined ||
+        decision === undefined ||
+        materializationOutcome === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Goal Start Authorization ${authorization.id} is falsely bound`,
+        );
+      }
+      if (
+        materialization.materializationDigest !== authorization.goalMaterializationDigest ||
+        materialization.goalId !== authorization.goalId ||
+        materialization.goalRevision !== authorization.goalRevision ||
+        materialization.workflowId !== authorization.workflowId ||
+        materialization.workflowVersion !== authorization.workflowVersion ||
+        decision.decisionDigest !== authorization.intentAdmissionDecisionDigest ||
+        decision.executionDisposition !== IntentExecutionDisposition.AUTHORIZE_START ||
+        authorization.principalRef !== decision.principalRef ||
+        authorization.rawRequestRevision !== materialization.rawRequestRevision ||
+        authorization.rawRequestDigest !== materialization.rawRequestDigest ||
+        authorization.startCommandId === materializationOutcome.commandId ||
+        policy?.bundle.digest !== authorization.policyBundleDigest ||
+        profile?.profile.digest !== authorization.executionProfileDigest ||
+        authorization.authorizedAt < materialization.materializedAt
+      ) {
+        throw new StoreInvariantError(
+          `Goal Start Authorization ${authorization.id} is falsely bound`,
+        );
+      }
+    }
+
+    for (const run of runs) {
+      const root = rawRequestById.get(run.activeRawRequestRevision.rawRequestId);
+      const revision = revisionByKey.get(
+        intakeRevisionKey(
+          run.activeRawRequestRevision.rawRequestId,
+          run.activeRawRequestRevision.revision,
+        ),
+      );
+      if (
+        root?.intakeRunId !== run.id ||
+        revision?.rawRequestDigest !== run.activeRawRequestRevision.digest ||
+        revision.intakeRunId !== run.id ||
+        run.updatedAt < revision.submittedAt ||
+        (run.projectRef !== undefined &&
+          (revision.declaredProjectRef === undefined ||
+            !sameCanonicalAuthority(run.projectRef, revision.declaredProjectRef)))
+      ) {
+        throw new StoreInvariantError(
+          `Intake Run ${run.id} has false active Raw Request authority`,
+        );
+      }
+      if (run.activeIntentProjectionRevision !== undefined) {
+        const activeProjection = projectionByKey.get(
+          intakeRevisionKey(
+            run.activeIntentProjectionRevision.id,
+            run.activeIntentProjectionRevision.revision,
+          ),
+        );
+        if (
+          activeProjection?.projectionDigest !== run.activeIntentProjectionRevision.digest ||
+          activeProjection.intakeRunId !== run.id
+        ) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has a false current Projection`);
+        }
+      }
+      const terminalOutcomes = outcomes.filter(
+        (outcome) =>
+          outcome.intakeRunId === run.id &&
+          'intakeRunVersion' in outcome.result &&
+          outcome.result.intakeRunVersion === run.version &&
+          (outcome.result.kind === 'MATERIALIZED' ||
+            outcome.result.kind === 'NO_EXECUTION' ||
+            outcome.result.kind === 'FAILED'),
+      );
+      if (run.status === IntakeRunStatus.NEEDS_CLARIFICATION) {
+        const question = questionById.get(run.activeQuestionRef.clarificationQuestionId);
+        if (
+          question?.intakeRunId !== run.id ||
+          question.questionSpecDigest !== run.activeQuestionRef.questionSpecDigest ||
+          question.questionDigest !== run.activeQuestionRef.questionDigest ||
+          question.intentAdmissionDecisionId !== run.activeQuestionRef.issuingDecisionId ||
+          question.intentAdmissionDecisionDigest !== run.activeQuestionRef.issuingDecisionDigest ||
+          answerBindingByQuestionId.has(question.id)
+        ) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has a false active Question`);
+        }
+      } else if (run.status === IntakeRunStatus.MATERIALIZED) {
+        const decision = decisionById.get(run.terminalDecisionRef.id);
+        const materialization = materializationById.get(
+          run.materializedGoalRef.goalMaterializationId,
+        );
+        if (
+          terminalOutcomes.length !== 1 ||
+          terminalOutcomes[0]?.result.kind !== 'MATERIALIZED' ||
+          decision?.decisionDigest !== run.terminalDecisionRef.digest ||
+          decision.outcome !== IntentAdmissionOutcome.MATERIALIZE ||
+          materialization?.materializationDigest !==
+            run.materializedGoalRef.materializationDigest ||
+          materialization.intakeRunId !== run.id
+        ) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has false terminal Materialization`);
+        }
+      } else if (run.status === IntakeRunStatus.NO_EXECUTION) {
+        const decision = decisionById.get(run.terminalDecisionRef.id);
+        if (
+          terminalOutcomes.length !== 1 ||
+          terminalOutcomes[0]?.result.kind !== 'NO_EXECUTION' ||
+          decision?.decisionDigest !== run.terminalDecisionRef.digest ||
+          decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION
+        ) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has a false terminal Decision`);
+        }
+        if (
+          'answerOnlyResponseRef' in run &&
+          answerResponseById.get(run.answerOnlyResponseRef.id)?.responseDigest !==
+            run.answerOnlyResponseRef.digest
+        ) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has a false Answer-only Response`);
+        }
+      } else if (run.status === IntakeRunStatus.FAILED) {
+        if (
+          terminalOutcomes.length !== 1 ||
+          terminalOutcomes[0]?.result.kind !== 'FAILED' ||
+          failureById.get(run.terminalFailureRef.id)?.failureDigest !==
+            run.terminalFailureRef.digest
+        ) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has a false terminal Failure`);
+        }
       }
     }
   }
@@ -9761,6 +12836,64 @@ export class SqliteControlStore
     );
   }
 
+  private hasExactIntakeMaterializationWorkflowClosure(
+    workflow: WorkflowInstance,
+    workflowAudit: AuditEventRecord | undefined,
+  ): boolean {
+    if (
+      workflow.version !== workflowVersion(1) ||
+      workflowAudit?.commandId === undefined ||
+      !this.hasTable('goal_materializations') ||
+      !this.hasTable('intake_command_outcomes')
+    ) {
+      return false;
+    }
+    const rows = storedIntakeRecordRowsSchema.parse(
+      this.#database
+        .prepare(
+          `SELECT record_json
+             FROM goal_materializations
+            WHERE workflow_id = ? AND workflow_version = ?`,
+        )
+        .all(workflow.id, workflow.version),
+    );
+    if (rows.length !== 1) {
+      return false;
+    }
+    const materialization = decodeGoalMaterializationRecord(
+      parseJson(rows[0]?.record_json ?? '', 'Goal Materialization'),
+      canonicalAuthorityDigests,
+    );
+    const outcome = this.getIntakeCommandOutcomeInsideTransaction(workflowAudit.commandId);
+    const goalAudits = this.listAuditEvents('GOAL', workflow.goalId).filter(
+      (audit) => audit.afterVersion === workflow.goalRevision,
+    );
+    const goalAudit = goalAudits[0];
+    return (
+      materialization.goalId === workflow.goalId &&
+      materialization.goalRevision === workflow.goalRevision &&
+      materialization.workflowId === workflow.id &&
+      materialization.workflowVersion === workflow.version &&
+      materialization.materializedAt === workflow.updatedAt &&
+      outcome?.disposition === IntakeCommandDisposition.APPLIED &&
+      outcome.completedAt === workflow.updatedAt &&
+      outcome.result.kind === 'MATERIALIZED' &&
+      outcome.result.materializedGoalRef.goalMaterializationId === materialization.id &&
+      outcome.result.materializedGoalRef.materializationDigest ===
+        materialization.materializationDigest &&
+      outcome.result.materializedGoalRef.goalId === workflow.goalId &&
+      outcome.result.materializedGoalRef.goalRevision === workflow.goalRevision &&
+      outcome.result.materializedGoalRef.workflowId === workflow.id &&
+      outcome.result.materializedGoalRef.workflowVersion === workflow.version &&
+      goalAudits.length === 1 &&
+      goalAudit?.actorType === 'RUNTIME' &&
+      goalAudit.commandId === workflowAudit.commandId &&
+      goalAudit.beforeVersion === undefined &&
+      goalAudit.occurredAt === workflow.updatedAt &&
+      goalAudit.payloadDigest === workflowAudit.payloadDigest
+    );
+  }
+
   private assertCurrentWorkflowCommandClosure(workflow: WorkflowInstance): void {
     if (!this.hasM1AttemptAuthorityClosureMigration()) {
       return;
@@ -9772,6 +12905,8 @@ export class SqliteControlStore
     const command =
       audit?.commandId === undefined ? undefined : this.getProcessedCommand(audit.commandId);
     const outcome = command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+    const hasIntakeMaterializationClosure =
+      command === undefined && this.hasExactIntakeMaterializationWorkflowClosure(workflow, audit);
     if (
       currentAudits.length !== 1 ||
       audit?.actorType !== 'RUNTIME' ||
@@ -9780,13 +12915,14 @@ export class SqliteControlStore
       (workflow.version === 1
         ? audit.beforeVersion !== undefined
         : audit.beforeVersion !== workflow.version - 1) ||
-      command?.completedAt !== workflow.updatedAt ||
-      outcome?.disposition !== StoredCommandDisposition.APPLIED ||
-      outcome.goalId !== workflow.goalId ||
-      outcome.workflow.id !== workflow.id ||
-      outcome.workflow.version !== workflow.version ||
-      outcome.workflow.phase !== workflow.phase ||
-      outcome.workflow.runStatus !== workflow.runStatus
+      (!hasIntakeMaterializationClosure &&
+        (command?.completedAt !== workflow.updatedAt ||
+          outcome?.disposition !== StoredCommandDisposition.APPLIED ||
+          outcome.goalId !== workflow.goalId ||
+          outcome.workflow.id !== workflow.id ||
+          outcome.workflow.version !== workflow.version ||
+          outcome.workflow.phase !== workflow.phase ||
+          outcome.workflow.runStatus !== workflow.runStatus))
     ) {
       throw new StoreInvariantError(
         `Workflow ${workflow.id} current state has no exact command and audit authority`,
@@ -12201,12 +15337,14 @@ export class SqliteControlStore
       this.assertRetainedM1RetryBoundaryClosure();
       this.assertRetainedTerminalAttemptAuthorityClosure();
       this.assertRetainedCurrentWorkflowCommandClosure();
+      this.assertRetainedIntakeAuthorityClosure();
       const result = operation();
       this.assertRetainedWorkflowAttemptLifecycleClosure();
       this.assertRetainedWorkflowStartAuthorityClosure();
       this.assertRetainedM1RetryBoundaryClosure();
       this.assertRetainedTerminalAttemptAuthorityClosure();
       this.assertRetainedCurrentWorkflowCommandClosure();
+      this.assertRetainedIntakeAuthorityClosure();
       this.#authorityIsolationLease?.assertCurrent();
       this.#database.exec('COMMIT');
       return result;
@@ -12219,6 +15357,38 @@ export class SqliteControlStore
   private runCommandImmediate<Value>(
     operation: () => StoreCommandResult<Value>,
   ): StoreCommandResult<Value> {
+    try {
+      return this.runImmediate(operation);
+    } catch (error) {
+      if (error instanceof OptimisticConcurrencyError) {
+        return { status: 'VERSION_CONFLICT', message: error.message };
+      }
+      if (error instanceof CommandIdConflictError) {
+        return { status: 'COMMAND_CONFLICT', message: error.message };
+      }
+      throw error;
+    }
+  }
+
+  private runIntakeReservationImmediate(
+    operation: () => IntakeReservationStoreResult,
+  ): IntakeReservationStoreResult {
+    try {
+      return this.runImmediate(operation);
+    } catch (error) {
+      if (error instanceof OptimisticConcurrencyError) {
+        return { status: 'VERSION_CONFLICT', message: error.message };
+      }
+      if (error instanceof CommandIdConflictError) {
+        return { status: 'COMMAND_CONFLICT', message: error.message };
+      }
+      throw error;
+    }
+  }
+
+  private runIntakeCommitImmediate(
+    operation: () => IntakeCommitStoreResult,
+  ): IntakeCommitStoreResult {
     try {
       return this.runImmediate(operation);
     } catch (error) {
@@ -12278,7 +15448,8 @@ export class SqliteControlStore
       | WorkerTransactionStep
       | CandidateEvidenceTransactionStep
       | AcceptanceTransactionStep
-      | RecoveryTransactionStep,
+      | RecoveryTransactionStep
+      | IntakeTransactionStep,
   ): void {
     this.#transactionProbe?.(step);
   }

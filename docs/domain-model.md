@@ -9,9 +9,9 @@ its exact per-slice evidence remain recorded in the
 completion result is recorded in the
 [`M1 completion review`](reviews/m1-completion-review.md). Target structures
 outside that subset remain planned behavior. The accepted pre-Goal Intake
-records below have closed Domain types, codecs, semantic invariants, and
-canonical projections in M2.5 Slice 1, but no SQLite schema or operational
-Runtime path. M2 Slice 0 accepted the planned external-execution,
+records below have closed Domain types, codecs, semantic invariants, canonical
+projections, and strict SQLite persistence in M2.5 Slices 1 and 2, but no
+operational Runtime coordination path. M2 Slice 0 accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
 0028 through ADR 0030. ADR 0031 fixes the planned acceptance-critical
 Verification Plan and protected-asset authority, and ADR 0032 closes the
@@ -50,9 +50,10 @@ Check/Evidence variants, ADR 0032's bounded asset-lease/Profile composition,
 ADR 0033's first-Start/static-lease alignment, and their Acceptance binding
 are implemented by Slice 7 without changing the existing M1 or schema-version-2
 authority meanings. Slice 8 adds no Domain authority; its independent review
-completed the bounded M2 milestone on 2026-08-02. M2.5 Slice 1 implements the
-typed Intake record and fixed Admission Policy layer without making any Intake
-record persistable or executable. Store and behavioral integration remain
+completed the bounded M2 milestone on 2026-08-02. M2.5 Slices 1 and 2 implement
+the typed Intake record and fixed Admission Policy layer plus strict SQLite
+authority, Store-authored command outcomes, compound persistence, activation,
+and reopen validation. Coordinator, adapter, CLI, and execution behavior remain
 planned for later slices.
 
 ## Design Rules

@@ -23,10 +23,10 @@ to each protected Package/Manifest and dispatch claim and exercises it through
 trusted bounded live composition. The existing M1 Compiler and Manifest
 authority are otherwise unchanged. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest.
-M2.5 Slice 1 implements the closed Intake Manifest record and projection, but
-not the separate package compiler, package type, Store integration, or adapter
-call. Slice 8 adds no Context
-authority and completed the bounded M2 exit review on 2026-08-02.
+M2.5 Slices 1 and 2 persist only that closed manifest contract and its
+reservations: not the separate package compiler, package type, or adapter call.
+Slice 8 adds no Context authority and completed the bounded M2 exit review on
+2026-08-02.
 
 ## Purpose
 

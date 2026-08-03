@@ -8,14 +8,17 @@ This document defines the accepted target contract for pre-Goal Intake under
 additionally closes pre-Goal command replay and retained Intake project-path
 participation in verified SQLite activation.
 Goal Intake is not operational. M2 completed with its reusable App Server client
-seam preserved. M2.5 Slice 1 implements typed Intake records, strict owning
-codecs, canonical projections and golden vectors, the fixed local and test
-Admission Policy definitions, the capability-free Admission Engine contract,
-and the anti-self-admission Runtime invariant. It adds no SQLite authority,
-Coordinator, package compiler, adapter, CLI, Materialization, or Start behavior. The
+seam preserved. M2.5 Slices 1 and 2 implement typed Intake records, strict
+owning codecs, canonical projections and golden vectors, fixed Admission Policy
+definitions, the capability-free Admission Engine contract, the
+anti-self-admission Runtime invariant, and transactional SQLite Intake
+authority through exact reopen. The persistence layer includes the planned
+compound Goal/Workflow/Materialization/Start-Authorization write but does not
+provide a Coordinator, package compiler, adapter, CLI, or ordinary Start
+invocation. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 2 is the next implementation
+contract into the current bounded milestone; Slice 3 is the next implementation
 boundary.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
@@ -1625,21 +1628,18 @@ Revision Admission contract. M4 may add complete Human Decision UX,
 privacy/retention controls, operator burden and quality metrics, and
 model-version comparison.
 
-## Planned Invariant
+## Implemented Runtime Invariant
 
-The owning M2.5 implementation is expected to add a canonical invariant with
-executable tests equivalent to:
+M2.5 Slice 1 added canonical Runtime invariant `I-032` with executable tests:
 
 ```text
 Intent proposals cannot admit or materialize themselves.
 ```
 
-That future invariant must prove that model output cannot create or revise a
+That invariant proves that model output cannot create or revise a
 formal Goal, only a deterministic Admission Decision over exact source-bound
 input can authorize Materialization, and automatic Start still passes the
-ordinary `StartGoal` boundary. It is not added to `RUNTIME_INVARIANTS.md` until
-the owning implementation and executable test metadata land in the same
-change.
+ordinary `StartGoal` boundary.
 
 ## Required User and Adversarial Tests
 

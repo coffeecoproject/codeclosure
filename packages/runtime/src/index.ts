@@ -10,6 +10,7 @@ export * from './evidence-factory.js';
 export * from './execution-profile-installer.js';
 export * from './intake-admission.js';
 export * from './intake-policy.js';
+export * from './intake-store.js';
 export * from './m1-policy.js';
 export * from './local-command-verification-contracts.js';
 export * from './local-command-verification.js';
