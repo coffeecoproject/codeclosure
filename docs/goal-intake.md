@@ -7,19 +7,26 @@ This document defines the accepted target contract for pre-Goal Intake under
 [ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md)
 additionally closes pre-Goal command replay and retained Intake project-path
 participation in verified SQLite activation.
+[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md) defines the
+Intake assistant's isolated read-only, no-authority-effect boundary without
+claiming an empty model-visible App Server tool set.
 Goal Intake is not operational. M2 completed with its reusable App Server client
 seam preserved. M2.5 Slices 1 and 2 implement typed Intake records, strict
 owning codecs, canonical projections and golden vectors, fixed Admission Policy
 definitions, the capability-free Admission Engine contract, the
 anti-self-admission Runtime invariant, and transactional SQLite Intake
-authority through exact reopen. The persistence layer includes the planned
-compound Goal/Workflow/Materialization/Start-Authorization write but does not
-provide a Coordinator, package compiler, adapter, CLI, or ordinary Start
-invocation. The
+authority through exact reopen. Slice 3 implements deterministic Intake and
+Answer-only packages with durable Manifests plus one fresh isolated read-only
+Adapter operation. The Adapter grants no CodeClosure authority capability,
+discards an operation after observed tool use, and does not claim pre-selection
+tool denial. The persistence layer includes the planned compound
+Goal/Workflow/Materialization/Start-Authorization write but does not provide a
+Coordinator, Admission evaluator, Projection construction, CLI,
+Materialization application path, or ordinary Start invocation. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 3 is the next implementation
-boundary.
+contract into the current bounded milestone; Slice 4 is the next implementation
+boundary and has not begun.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout

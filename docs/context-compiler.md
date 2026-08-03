@@ -23,8 +23,14 @@ to each protected Package/Manifest and dispatch claim and exercises it through
 trusted bounded live composition. The existing M1 Compiler and Manifest
 authority are otherwise unchanged. This is the Goal-bound Worker Context Compiler;
 the accepted pre-Goal Intake target uses a separate Intake Package and Manifest.
-M2.5 Slices 1 and 2 persist only that closed manifest contract and its
-reservations: not the separate package compiler, package type, or adapter call.
+M2.5 Slices 1 and 2 persist that closed manifest contract and its reservations.
+Slice 3 implements the separate deterministic Intake/Answer package compiler
+without changing Goal-bound Worker Context authority. It also implements the
+package types, durable Manifest construction, and isolated read-only Adapter
+defined by
+[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). The Adapter
+selects no CodeClosure authority capability and fails on observed tool use; it
+does not claim an empty model-visible App Server tool inventory.
 Slice 8 adds no Context authority and completed the bounded M2 exit review on
 2026-08-02.
 

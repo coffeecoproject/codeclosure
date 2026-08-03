@@ -291,18 +291,24 @@ that CodeClosure can form a Goal from an incomplete natural-language request.
 ## M2.5 — Goal Intake and Materialization Vertical Slice
 
 Status: In progress. Slice 1 domain, codec, fixed-policy, Engine-contract, and
-invariant work and Slice 2 SQLite Intake authority are complete. Slice 3 is the
-next implementation boundary.
+invariant work plus Slice 2 SQLite Intake authority are complete. Slice 3
+Runtime packages, Manifests, and the isolated read-only Intake Assistant Adapter
+are implemented under
+[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). The Adapter
+grants no CodeClosure authority capability and fails on observed tool use
+without claiming an empty model-visible tool set. Slice 4 is the next
+implementation boundary and has not begun.
 The operational scope below remains planned behavior governed by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and
-[ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md).
+[ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md),
+with the assistant effect boundary governed by ADR 0035 above.
 M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
-[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. Slice 2
-adds Store persistence and compound authority only; no Coordinator, adapter,
-CLI, assistant call, or ordinary Start invocation is implemented.
+[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. At the
+current post-Slice-3 boundary, no Coordinator, Admission evaluator, Projection construction, CLI,
+Materialization application path, or ordinary Start invocation is implemented.
 
 ### Objective
 

@@ -662,8 +662,8 @@ export function validateM2ScopeReview(documents, productSources) {
   );
   requirePattern(
     documents.contextCompiler,
-    /Goal-bound Worker Context Compiler;[\s\S]{0,180}separate Intake Package and Manifest[\s\S]{0,160}not the separate package compiler/u,
-    'Context Compiler does not preserve the separate unimplemented Intake compiler boundary',
+    /Goal-bound Worker Context Compiler;[\s\S]{0,180}separate Intake Package and Manifest[\s\S]{0,300}Slice 3 implements the separate deterministic Intake\/Answer package compiler[\s\S]{0,180}without changing Goal-bound Worker Context authority/u,
+    'Context Compiler does not preserve the separate M2.5 Intake compiler boundary',
   );
   requirePattern(
     documents.acceptanceEngine,

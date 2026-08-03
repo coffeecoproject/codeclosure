@@ -5,6 +5,7 @@
     { "path": "./packages/domain" },
     { "path": "./packages/runtime" },
     { "path": "./packages/adapter-codex" },
+    { "path": "./packages/adapter-codex-intake" },
     { "path": "./packages/workspace-local" },
     { "path": "./packages/verification-local" },
     { "path": "./packages/store-sqlite" },

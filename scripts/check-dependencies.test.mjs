@@ -74,13 +74,17 @@ packages:
 
 void test('the current manifest, lockfile, and actual source dependency graph are closed', () => {
   const audit = auditPackageDependencies(repositoryRoot);
-  assert.equal(audit.packageCount, 9);
+  assert.equal(audit.packageCount, 10);
   assert.deepEqual(audit.violations, []);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/adapter-codex'), [
     '@codeclosure/codex-app-server-client',
     '@codeclosure/runtime',
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/codex-app-server-client'), []);
+  assert.deepEqual(audit.productionGraph.get('@codeclosure/adapter-codex-intake'), [
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/runtime',
+  ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/domain'), ['zod']);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/runtime'), [
     '@codeclosure/domain',
@@ -167,7 +171,7 @@ void test('the Codex adapter reverse fixture cannot import authority owners or p
   }
 });
 
-void test('the planned Codex Intake adapter has one closed future package edge', () => {
+void test('the Codex Intake adapter has one closed package edge and production capability set', () => {
   assert.deepEqual(m25CodexIntakeAdapterDependencyExpectation, {
     path: 'packages/adapter-codex-intake',
     name: '@codeclosure/adapter-codex-intake',
@@ -180,6 +184,7 @@ void test('the planned Codex Intake adapter has one closed future package edge',
   assert.deepEqual(m25CodexIntakeAdapterAllowedNodeBuiltins, [
     'node:buffer',
     'node:crypto',
+    'node:fs',
     'node:path',
     'node:timers',
   ]);
@@ -191,6 +196,7 @@ void test('the planned Codex Intake adapter has one closed future package edge',
     '@codeclosure/runtime',
     'node:buffer',
     'node:crypto',
+    'node:fs',
     'node:path',
     'node:timers',
   ]) {
@@ -208,7 +214,6 @@ void test('the planned Codex Intake adapter has one closed future package edge',
     '@codeclosure/runtime/testing/workflow-runtime',
     '@codeclosure/codex-app-server-client/testing',
     'node:child_process',
-    'node:fs',
     'node:http',
     'node:https',
     'node:net',
@@ -219,6 +224,20 @@ void test('the planned Codex Intake adapter has one closed future package edge',
       m25CodexIntakeAdapterImportViolation(forbidden, sourcePath, packageRoot),
       undefined,
     );
+  }
+
+  for (const file of ['adapter.ts', 'contracts.ts', 'index.ts', 'protocol.ts']) {
+    const actualSourcePath = resolve(packageRoot, 'src', file);
+    const specifiers = collectModuleSpecifiers(
+      readFileSync(actualSourcePath, 'utf8'),
+      actualSourcePath,
+    );
+    for (const specifier of specifiers) {
+      assert.equal(
+        m25CodexIntakeAdapterImportViolation(specifier, actualSourcePath, packageRoot),
+        undefined,
+      );
+    }
   }
 });
 

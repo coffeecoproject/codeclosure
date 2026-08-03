@@ -10,8 +10,11 @@ completion result is recorded in the
 [`M1 completion review`](reviews/m1-completion-review.md). Target structures
 outside that subset remain planned behavior. The accepted pre-Goal Intake
 records below have closed Domain types, codecs, semantic invariants, canonical
-projections, and strict SQLite persistence in M2.5 Slices 1 and 2, but no
-operational Runtime coordination path. M2 Slice 0 accepted the planned external-execution,
+projections, and strict SQLite persistence in M2.5 Slices 1 and 2. Slice 3 adds
+only protocol-neutral public Runtime package and assistant contracts plus an
+adapter candidate outside the Domain; that adapter is not accepted and no
+operational Runtime coordination path exists.
+M2 Slice 0 accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
 0028 through ADR 0030. ADR 0031 fixes the planned acceptance-critical
 Verification Plan and protected-asset authority, and ADR 0032 closes the
@@ -53,8 +56,14 @@ authority meanings. Slice 8 adds no Domain authority; its independent review
 completed the bounded M2 milestone on 2026-08-02. M2.5 Slices 1 and 2 implement
 the typed Intake record and fixed Admission Policy layer plus strict SQLite
 authority, Store-authored command outcomes, compound persistence, activation,
-and reopen validation. Coordinator, adapter, CLI, and execution behavior remain
-planned for later slices.
+and reopen validation. Slice 3 adds deterministic Runtime Intake/Answer package
+compilation and an isolated read-only Intake Adapter without adding Domain
+authority. Its empty `selectedAuthorityCapabilities` binding describes
+CodeClosure grants, not the App Server's model-visible tool inventory; observed
+tool use fails the operation under
+[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md).
+Coordinator, Projection construction, Admission evaluation, CLI, and execution
+behavior remain planned for later slices.
 
 ## Design Rules
 

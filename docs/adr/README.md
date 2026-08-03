@@ -40,6 +40,7 @@ supersedes it.
 | [0032](0032-close-bounded-m2-protected-verification-composition.md) | Close bounded M2 protected-verification composition | Accepted |
 | [0033](0033-align-protected-verification-with-start-and-check-lifecycle.md) | Align protected verification with Start and Check lifecycle | Accepted |
 | [0034](0034-close-pre-goal-command-replay-and-sqlite-activation.md) | Close pre-Goal command replay and SQLite activation | Accepted |
+| [0035](0035-bound-intake-by-non-authoritative-effects.md) | Bound M2.5 Intake by non-authoritative effects instead of model-visible tool absence | Accepted |
 
 ## ADR lifecycle
 

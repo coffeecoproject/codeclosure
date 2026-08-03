@@ -7,6 +7,24 @@ import ts from 'typescript';
 const sourceExtensionPattern = /\.(?:[cm]?[jt]s)$/u;
 const ignoredDirectoryNames = new Set(['coverage', 'dist', 'node_modules']);
 
+export const m25CodexIntakeAdapterDependencyExpectation = Object.freeze({
+  path: 'packages/adapter-codex-intake',
+  name: '@codeclosure/adapter-codex-intake',
+  dependencies: Object.freeze({
+    '@codeclosure/codex-app-server-client': 'workspace:*',
+    '@codeclosure/runtime': 'workspace:*',
+  }),
+  devDependencies: Object.freeze({}),
+});
+
+export const m25CodexIntakeAdapterAllowedNodeBuiltins = Object.freeze([
+  'node:buffer',
+  'node:crypto',
+  'node:fs',
+  'node:path',
+  'node:timers',
+]);
+
 const packagePolicies = Object.freeze([
   Object.freeze({
     path: '.',
@@ -40,6 +58,7 @@ const packagePolicies = Object.freeze([
     }),
     devDependencies: Object.freeze({ '@codeclosure/domain': 'workspace:*' }),
   }),
+  m25CodexIntakeAdapterDependencyExpectation,
   Object.freeze({
     path: 'packages/domain',
     name: '@codeclosure/domain',
@@ -105,29 +124,6 @@ const packagePolicies = Object.freeze([
     }),
     devDependencies: Object.freeze({}),
   }),
-]);
-
-/**
- * Slice 0 fixes the future Intake adapter package edge before the package
- * exists. Slice 3 must promote this exact expectation into packagePolicies
- * when it creates the package; until then the current nine-package graph
- * remains unchanged and fully enforced.
- */
-export const m25CodexIntakeAdapterDependencyExpectation = Object.freeze({
-  path: 'packages/adapter-codex-intake',
-  name: '@codeclosure/adapter-codex-intake',
-  dependencies: Object.freeze({
-    '@codeclosure/codex-app-server-client': 'workspace:*',
-    '@codeclosure/runtime': 'workspace:*',
-  }),
-  devDependencies: Object.freeze({}),
-});
-
-export const m25CodexIntakeAdapterAllowedNodeBuiltins = Object.freeze([
-  'node:buffer',
-  'node:crypto',
-  'node:path',
-  'node:timers',
 ]);
 
 function repositoryPath(repositoryRoot, filePath) {

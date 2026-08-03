@@ -16,10 +16,15 @@ M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
 green on one source identity. M2.5 Goal Intake remains unimplemented as an
-operational loop; its closed Domain, Policy, and SQLite authority foundation
-is implemented without a Coordinator, assistant adapter, CLI, or Start execution.
-This foundation does not prove Goal Intake, product completion, or authority to
-merge, release, deploy, or perform another external effect.
+operational loop; its closed Domain, Policy, SQLite authority, and deterministic
+package compiler plus isolated read-only Intake Assistant Adapter are
+implemented. The adapter grants no CodeClosure authority
+capability, fails an operation when tool use is observed, and does not claim
+that the pinned App Server exposes an empty model-visible tool set. No
+Coordinator, Admission evaluator, CLI, Materialization, or Start execution is
+implemented. This foundation does not prove Goal Intake, product
+completion, or authority to merge, release, deploy, or perform another external
+effect.
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
 detailed status source required by the repository README contract; the
 [milestone document](docs/milestones.md) defines the current bounded scope and
@@ -144,8 +149,9 @@ under the same authority rules. Both remain required regression baselines.
 M2.5 Goal Intake is the current implementation milestone. Its detailed
 [implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the work. The
-initial implementation decisions and dependency expectations are closed;
-product implementation has not started.
+initial implementation decisions and dependency expectations are closed. The
+Domain, SQLite, and package foundations are implemented; the Intake Assistant
+Adapter proof, Runtime coordination, and the product loop remain incomplete.
 
 ## Non-Goals
 
