@@ -32,42 +32,42 @@ The final reviewed working-tree source identity excludes only this review file
 to avoid self-reference:
 
 ```text
-Base Git revision: df512bc3db19d1ce73dbc32330d98bd2a4e7fb25
+Base Git revision: d49e3a13a2a970c7238cfaafe13707bdfa7b92b0
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 939
-Source manifest digest: sha256:78505b34cbda7d413b1921865d7f4257f81f28c09897a9d932585e44b28f58d5
+Source manifest digest: sha256:cfa3b9b7f8d1161e4aa173a87ca40ec6e31a22debff1c585ca3cc93e37266000
 Self-referential review exclusion: docs/reviews/m2-5-slice0-decision-closure.md
 ```
 
 The implementation branch is `m2.5-goal-intake`. This bounded correction is
 based at the clean Slice 0 decision-closure commit
-`df512bc3db19d1ce73dbc32330d98bd2a4e7fb25`. Node `v22.22.3` and pnpm `11.1.3`
+`d49e3a13a2a970c7238cfaafe13707bdfa7b92b0`. Node `v22.22.3` and pnpm `11.1.3`
 satisfy the manifest.
 
-The canonical `corepack pnpm accept:m1` procedure ran on the final modified
-source and passed its complete quality gate, all eight adversarial demos, and
-independent black-box acceptance `8/8`. Its opening and closing source identity
-matched at 939 paths and
-`sha256:cb73d403d1fa137484827e8cd9d343c582cf3803090a88cc5bdb2cda2a032772`
+The canonical `corepack pnpm accept:m1` procedure ran after every non-review
+file in this correction had reached its final content and before this review's
+self-referential evidence block was refreshed. It passed its complete quality
+gate, all eight adversarial demos, and independent black-box acceptance `8/8`.
+Its opening and closing source identity matched at 939 paths and
+`sha256:4c1e7d8c0ae9f3ab075c03a97756d4859e0950d361d7309b15f062a266cd7148`
 with only the M1 completion review excluded.
 
-The canonical `corepack pnpm accept:m2` procedure then ran on the same final
-modified source with explicit bounded live authorization. It passed all
-`93/93` rows with zero failures or blocks. Its opening and closing source
-identity matched at 939 paths and
-`sha256:a4d1b822d9c92c195f763a8bf677e9ef8bcce3f75e2e41ce807355ee150da9f6`
+The canonical `corepack pnpm accept:m2` procedure then ran on the same
+normative source and pre-refresh review evidence with explicit bounded live
+authorization. It passed all `93/93` rows with zero failures or blocks. Its
+opening and closing source identity matched at 939 paths and
+`sha256:9249755ec29e0b3810e929475b11aa3499cec6d0825625b8282f294671919c3c`
 with only the M2 completion review excluded. The procedure included the
 complete 893-test quality aggregate, M1 black-box `8/8`, deterministic
 protected repair, failed-repair stop, adapter failure, scope review, live
 compatibility preflight, live repair handoff, and live natural branch.
 
-On the final modified tree, `corepack pnpm gate:quality` passed its complete
-893-test aggregate with zero failures, cancellations, skips, or todos; format,
-documentation, protocol snapshot, dependency, type, migration, authority, CLI,
-demo, invariant, and build checks all passed. One earlier restricted-sandbox
-invocation failed closed because Darwin process-start identity was unavailable;
-the identical command passed with ordinary system process visibility.
+The only later source edit was this review's evidence-only source/digest prose,
+which the Slice 0 source identity above explicitly excludes. On that final
+modified tree, formatting and diff checks passed, `corepack pnpm docs:check`
+passed `75/75`, and the focused documentation, dependency, and M2 acceptance-
+library tests passed `91/91`.
 
 ## Exact pre-Intake implementation baseline
 
@@ -240,7 +240,11 @@ reinterpretation:
 - abandonment atomically commits its exact reservation, projected terminal
   Decision with complete `AbandonmentBinding`, cleared active reference,
   `APPLIED` outcome, and audits without a revision or assistant call;
-- deterministic rejection records no revision or external call;
+- an eligible abandonment reservation requires its complete Question/Decision
+  binding, while a deterministic abandonment rejection is base-only; `FAILED`,
+  outcome-less, and mixed shapes are invalid;
+- deterministic rejection records no revision, Decision, lifecycle mutation,
+  or external call;
 - immediate no-external `NO_EXECUTION` uses one terminal transaction;
 - analysis, `CLARIFY`, Answer-only, failure, and Materialization each have one
   closed final compound commit;

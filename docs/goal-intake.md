@@ -360,14 +360,16 @@ For the bounded local M2.5 surface, abandonment is an explicit
 available only for the exact current `NEEDS_CLARIFICATION` version with one
 unanswered active Question and no external operation in flight. Runtime binds
 the current Projection, Question, and issuing Decision plus the exact
-`ABANDON_CLARIFICATION` command reservation, clears only the active reference,
-and atomically records `PROJECTED_NO_EXECUTION / ABANDONED`, terminal state,
+`ABANDON_CLARIFICATION` command reservation carrying one complete
+`AbandonClarificationReservationBinding`, clears only the active reference, and
+atomically records `PROJECTED_NO_EXECUTION / ABANDONED`, terminal state,
 `APPLIED` command outcome, and audits. It creates no Raw Request revision and
 does not infer abandonment from silence, answer text, timeout, or assistant
-output. A schema-valid stale or ineligible command records only the ADR 0034
-deterministic `REJECTED` reservation/outcome transaction; missing target,
-invalid input, replay-integrity failure, and command conflict retain ADR 0034's
-no-new-row behavior.
+output. A schema-valid stale or ineligible command records only an ADR 0034
+base reservation plus deterministic `REJECTED` outcome and audit; that
+reservation forbids the binding, a Decision, and lifecycle mutation. Missing
+target, invalid input, replay-integrity failure, and command conflict retain
+ADR 0034's no-new-row behavior.
 
 `MATERIALIZED`, `NO_EXECUTION`, and `FAILED` are terminal for one Intake Run.
 `NO_EXECUTION` means policy intentionally created no governed Goal. `FAILED`
@@ -410,6 +412,32 @@ closed operation kind, trusted principal, target, canonical input digest,
 expected/observed Intake version, Manifest/policy/adapter/response-contract
 identity when external work is required, and causal time. Failure to commit
 that boundary authorizes no external call.
+
+`ABANDON_CLARIFICATION` is a closed compound-only reservation variant:
+
+```text
+IntakeCommandReservation
+  operationKind = ABANDON_CLARIFICATION
+  abandonClarificationBinding?
+
+AbandonClarificationReservationBinding
+  clarificationQuestionId
+  questionSpecDigest
+  questionDigest
+  issuingClarifyDecisionId
+  issuingClarifyDecisionDigest
+```
+
+- an `APPLIED` abandonment reservation requires exactly one complete
+  `abandonClarificationBinding`; its atomic Decision repeats those fields in
+  `AbandonmentBinding` and adds the same reservation's `commandId` and
+  `canonicalCommandInputDigest`;
+- a deterministic `REJECTED` abandonment reservation contains only the base
+  reservation fields and forbids `abandonClarificationBinding`, any abandonment
+  Decision, and Intake lifecycle mutation; and
+- `FAILED` and a retained abandonment reservation without its same-transaction
+  outcome are invalid shapes. An infrastructure failure before commit leaves
+  no reservation or outcome.
 
 For clarification, the reservation and canonical command input additionally
 bind the exact current `ClarificationQuestionId`, `questionSpecDigest`,
