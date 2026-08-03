@@ -296,7 +296,9 @@ Runtime packages, Manifests, and the isolated read-only Intake Assistant Adapter
 are implemented under
 [ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). The Adapter
 grants no CodeClosure authority capability and fails on observed tool use
-without claiming an empty model-visible tool set. Slice 4 is the next
+without claiming an empty model-visible tool set. Slice 4 Coordinator,
+source-bound Projection, clarification, abandonment, deterministic Admission,
+and non-Answer `NO_EXECUTION` behavior are implemented. Slice 5 is the next
 implementation boundary and has not begun.
 The operational scope below remains planned behavior governed by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
@@ -307,7 +309,7 @@ M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. At the
-current post-Slice-3 boundary, no Coordinator, Admission evaluator, Projection construction, CLI,
+current post-Slice-4 boundary, no Answer-only/failure recovery, CLI,
 Materialization application path, or ordinary Start invocation is implemented.
 
 ### Objective
@@ -448,8 +450,8 @@ Supplementary cases must show:
   Goal-bound verification;
 - correction after Materialization uses explicit cancellation/new Intake rather
   than silently revising the Goal;
-- the planned proposal-self-materialization invariant and its executable tests
-  enter `RUNTIME_INVARIANTS.md` together; and
+- the proposal-self-materialization invariant and its executable tests remain
+  green; and
 - every M1 and M2 regression gate remains green.
 
 ## M3 — Full Fact Graph and Context Compiler

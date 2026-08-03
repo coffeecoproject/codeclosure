@@ -10,7 +10,7 @@ participation in verified SQLite activation.
 [ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md) defines the
 Intake assistant's isolated read-only, no-authority-effect boundary without
 claiming an empty model-visible App Server tool set.
-Goal Intake is not operational. M2 completed with its reusable App Server client
+Goal Intake is not yet operational. M2 completed with its reusable App Server client
 seam preserved. M2.5 Slices 1 and 2 implement typed Intake records, strict
 owning codecs, canonical projections and golden vectors, fixed Admission Policy
 definitions, the capability-free Admission Engine contract, the
@@ -19,13 +19,17 @@ authority through exact reopen. Slice 3 implements deterministic Intake and
 Answer-only packages with durable Manifests plus one fresh isolated read-only
 Adapter operation. The Adapter grants no CodeClosure authority capability,
 discards an operation after observed tool use, and does not claim pre-selection
-tool denial. The persistence layer includes the planned compound
-Goal/Workflow/Materialization/Start-Authorization write but does not provide a
-Coordinator, Admission evaluator, Projection construction, CLI,
-Materialization application path, or ordinary Start invocation. The
+tool denial. Slice 4 implements Runtime-owned non-Answer submission,
+clarification and abandonment coordination, exact source-bound Projection and
+Question construction, deterministic Admission evaluation, atomic `CLARIFY`
+and non-Answer `NO_EXECUTION`, and typed in-process status views. The
+persistence layer includes the later compound
+Goal/Workflow/Materialization/Start-Authorization write but does not yet provide
+Answer-only/failure recovery, CLI, the Materialization application path, or an
+ordinary Start invocation. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 4 is the next implementation
+contract into the current bounded milestone; Slice 5 is the next implementation
 boundary and has not begun.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
@@ -157,8 +161,9 @@ content.
 
 ### Goal Intake Coordinator
 
-The planned Coordinator owns `IntakeRun` sequencing and validated creation of
-Intake records. It:
+The Slice 4 Coordinator owns non-Answer `IntakeRun` sequencing and validated
+creation of Intake records. The later Answer-only, failure, recovery,
+Materialization, and CLI slices complete the remaining behavior. It:
 
 - persists Raw Request revisions outside model and project authority;
 - constructs Intake Packages;
@@ -170,7 +175,8 @@ Intake records. It:
 - computes canonical digests;
 - constructs immutable clarification Answer Bindings from exact admitted
   commands and Raw Request revisions;
-- classifies and persists bounded Answer-only results and Intake failures;
+- will classify and persist bounded Answer-only results and Intake failures in
+  Slice 5;
 - persists records, status changes, and audit atomically; and
 - exposes typed read views and next actions, including the exact current
   question ID, specification/record digests, and answer schema for verifying
@@ -184,7 +190,7 @@ authorize Promotion.
 
 ### Goal Intake Assistant Adapter
 
-The planned adapter translates an Intake-specific request to an assistant such
+The Slice 3 adapter translates an Intake-specific request to an assistant such
 as Codex App Server. It exposes two distinct closed operations: Intent analysis
 returns an `IntentAnalysisProposal`, while Answer-only handling returns bounded
 answer content. It receives no Goal-bound WorkerPort request, Store mutation
@@ -198,7 +204,7 @@ record, or execution instruction merely because it is displayed or retained.
 
 ### Intent Admission Engine
 
-The planned Engine evaluates one exact immutable admission input under one
+The Slice 4 Engine evaluates one exact immutable admission input under one
 versioned policy. It owns the semantic `MATERIALIZE`, `CLARIFY`, or
 `NO_EXECUTION` decision and ordered reason trace.
 
@@ -580,6 +586,13 @@ IntentAnalysisProposal
   observedAt
 ```
 
+For analyzed Intake, Admission compares the Proposal's adapter ID/version and
+response-contract digest with the exact retained operation identity. The Store
+independently repeats that comparison against the command reservation's
+Manifest-bound external-operation identity during commit and strict reopen. A
+digest-valid Proposal cannot substitute one of those identities merely by
+rehashing its dependent Projection and Decision chain.
+
 Each `candidateSourceSpanSuggestion` remains an untrusted lookup suggestion,
 not a `SourceBinding`; the Coordinator independently resolves the exact
 Manifest-selected retained revision/content digests and validates the field,
@@ -625,6 +638,14 @@ The closed authority classes are:
 Classification is Runtime-owned. A model cannot label its inference as
 user-stated, policy-derived, or resolved.
 
+The bounded local Admission profile accepts an `UNRESOLVED` Source Binding only
+when it binds an exact Proposal structured-field path and an unresolved
+same-field `MaterialAmbiguity` names that binding digest. This shape can produce
+`CLARIFY`; it cannot satisfy Materialization. The local Projection compiler does
+not synthesize that optional classification when ordinary `MODEL_PROPOSED`
+bindings plus the Material Ambiguity set already express the unresolved
+meaning.
+
 Source Binding proves where content or a deterministic derivation came from.
 It does not prove semantic correctness. Admission policy may use
 `POLICY_DERIVED` content only for meaning-preserving normalization, such as a
@@ -663,7 +684,7 @@ IntentProjectionRevision
   parentRevision?
   rawRequestRevision
   intentAnalysisProposalRef
-  objective
+  objective?
   requiredCriteria[]
   optionalCriteria[]
   scope
@@ -682,6 +703,16 @@ The Intake Coordinator derives every identity, revision, timestamp, canonical
 projection, and digest after validating the proposal and current sources.
 Model-authored IDs, digests, timestamps, classifications, or unknown fields are
 never copied into authority.
+
+Projection schema version 1 remains decodable with canonical profile
+`codeclosure-m2-5-projection-v1` and a required `objective`. The implemented
+local compiler emits schema version 2 with
+`codeclosure-m2-5-projection-v2`, which may omit an unresolved objective. That
+omission is valid only when the Projection has no objective Source Binding and
+one exact unresolved `OBJECTIVE_UNRESOLVED` ambiguity binds the owning Proposal
+digest. It never creates placeholder objective text, and Materialization still
+requires a non-blank `USER_STATED` objective. Migration 0029 retains every
+schema-version-1 Projection record and digest unchanged.
 
 Changing objective, criteria, scope, non-goals, assumptions, requested
 execution disposition, or a material source binding creates a new immutable

@@ -675,6 +675,8 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0025_local_verification_recovery_barrier.sql',
       '0026_intake_authority.sql',
       '0027_intake_project_correction.sql',
+      '0028_rejected_clarification_reservation.sql',
+      '0029_intent_projection_schema_v2.sql',
     ],
   );
   store.close();

@@ -162,6 +162,11 @@ export function applyMigrationsWithinCurrentTransaction(
   if (!database.inTransaction) {
     throw new MigrationIntegrityError('Migration activation requires an existing transaction');
   }
+  if (database.pragma('foreign_keys', { simple: true }) !== 0) {
+    throw new MigrationIntegrityError(
+      'Migration activation must disable foreign-key enforcement before its transaction',
+    );
+  }
   return applyMigrationFiles(database, readMigrationFiles(directory), directory, now);
 }
 
@@ -171,5 +176,27 @@ export function applyMigrations(
   now: () => IsoTimestamp,
 ): readonly AppliedMigration[] {
   const files = readMigrationFiles(directory);
-  return beginImmediate(database, () => applyMigrationFiles(database, files, directory, now));
+  const restoreForeignKeys = database.pragma('foreign_keys', { simple: true }) === 1;
+  if (restoreForeignKeys) {
+    database.pragma('foreign_keys = OFF');
+  }
+  try {
+    const applied = beginImmediate(database, () =>
+      applyMigrationFiles(database, files, directory, now),
+    );
+    if (restoreForeignKeys) {
+      database.pragma('foreign_keys = ON');
+      if (database.pragma('foreign_keys', { simple: true }) !== 1) {
+        throw new MigrationIntegrityError(
+          'SQLite foreign-key enforcement was not restored after migration',
+        );
+      }
+    }
+    return applied;
+  } catch (error) {
+    if (restoreForeignKeys && database.pragma('foreign_keys', { simple: true }) !== 1) {
+      database.pragma('foreign_keys = ON');
+    }
+    throw error;
+  }
 }

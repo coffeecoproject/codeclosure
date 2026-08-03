@@ -33,7 +33,12 @@ Adapter are implemented under
 [ADR 0035](docs/adr/0035-bound-intake-by-non-authoritative-effects.md). The
 adapter grants no CodeClosure authority capability and fails on observed tool
 use without claiming that the pinned App Server presents an empty model-visible
-tool set. Goal Intake coordination and product behavior remain planned.
+tool set. Slice 4 implements the source-bound Projection compiler,
+capability-free deterministic Admission evaluator, Runtime-owned submit,
+clarification and abandonment coordination, atomic `CLARIFY` and non-Answer
+`NO_EXECUTION`, and typed in-process status views. Goal Intake remains
+non-operational until its later terminal handling, Materialization, CLI, and
+Start slices are implemented.
 Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
@@ -42,12 +47,15 @@ and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
 historical implementation and exit evidence. The
 [M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
-milestone. Slices 1 through 3 are complete; the Store can persist and strictly
+milestone. Slices 1 through 4 are complete; the Store can persist and strictly
 reopen the planned compound Intake/Goal/Workflow/Materialization authority, and
 Runtime can compile the bounded assistant inputs consumed by the separate
 Intake adapter. The Adapter runs one fresh isolated read-only operation and
-returns only strictly decoded untrusted values. No Coordinator, Admission evaluator, CLI, Materialization
-application path, or ordinary Start invocation is implemented. The following M2 slice
+returns only strictly decoded untrusted values. Runtime now coordinates the
+non-Answer analysis and clarification path through source-bound Projection and
+deterministic Admission without persisting `READY_TO_MATERIALIZE`. No
+Answer-only/failure recovery, CLI, Materialization application path, or ordinary
+Start invocation is implemented. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -138,18 +146,18 @@ and
 [ADR 0035](docs/adr/0035-bound-intake-by-non-authoritative-effects.md)
 defines the enforceable Intake assistant effect boundary without claiming an
 empty App Server tool inventory. Goal Intake is not operational. M2.5 Slices 1
-through 3 implement its closed Domain
+through 4 implement its closed Domain
 records, codecs, canonical projections, fixed Policy definitions,
-capability-free Admission Engine contract, migrations, Store ports, compound
+capability-free Admission Engine and evaluator, migrations, Store ports, compound
 transactions, verified activation inputs, strict reopen validation,
 deterministic Intake/Answer package compilation, and the isolated read-only
-Intake Assistant Adapter. They do not implement the Engine evaluator,
-Coordinator, Projection construction, CLI, Materialization application path, or
-ordinary Start invocation. The
-completed M2 milestone preserved the reusable Codex App Server client boundary;
-the Intake Coordinator, Projection construction, and Admission evaluator remain
-planned for M2.5. The same Intake boundary owns
-bounded non-authoritative Answer-only
+Intake Assistant Adapter. Slice 4 adds Runtime-owned submit, clarification and
+abandonment coordination; exact source-bound Projection, ambiguity and Question
+construction; atomic non-Answer outcomes; and typed status views. It does not
+implement Answer-only/failure recovery, CLI, Materialization application path,
+or ordinary Start invocation. The completed M2 milestone preserved the reusable
+Codex App Server client boundary, which the M2.5 Intake Adapter now reuses. The
+same Intake boundary will later own bounded non-authoritative Answer-only
 results and terminal Intake-failure classification. Materialization creates a
 `READY` Workflow; optional automatic execution still crosses the separate
 ordinary `StartGoal` boundary.
@@ -312,26 +320,25 @@ requires a separate gateway and policy.
 
 ## Logical Components
 
-### Goal Intake Coordinator — planned M2.5
+### Goal Intake Coordinator — Slice 4 core implemented
 
-Owns the pre-Goal IntakeRun lifecycle and validated Raw Request revisions,
+The Slice 4 implementation owns the non-Answer pre-Goal IntakeRun lifecycle and
+validated Raw Request revisions,
 Intent Analysis Proposals, Intent Projection revisions, Source Bindings,
 Material Ambiguities, Clarification Questions, immutable Clarification Answer
-Bindings, Answer-only result disposition, and terminal Intake failure
-classification. It compiles operation-specific Intake packages, invokes an
+Bindings, abandonment, and deterministic no-execution disposition. It compiles
+operation-specific Intake packages, invokes an
 Intake Assistant through a narrow port, validates all assistant output as
-untrusted input, and derives immutable Projection, AnswerOnlyResponse, and
-IntakeFailureRecord identity and digest authority. It also derives each
+untrusted input, and derives immutable Projection identity and digest authority.
+It also derives each
 Clarification Answer Binding from an already admitted Question-bound Raw Request
 revision and exact command reservation; neither the user nor the assistant
 authors that record envelope or digest.
 
-The planned Runtime composition reserves each exact pre-Goal command and its
+The implemented Slice 4 composition reserves each supported exact pre-Goal command and its
 immutable operation Manifest before external work; the Store authors the final
-command outcome from the owning transaction. Startup recovery dispatches on
-that retained operation kind. Non-Answer-only analysis interruption becomes
-terminal Intake `FAILED`, while interrupted Answer-only delivery remains
-`NO_EXECUTION / ANSWER_FAILED` and recalls no model.
+command outcome from the owning transaction. Slice 5 still owns Answer-only,
+terminal failure classification, retention finalization, and startup recovery.
 
 For `CLARIFY`, composition may preallocate identities and construct one bounded
 question specification, but the Question becomes active only when the Intent
@@ -351,14 +358,15 @@ the Runtime application boundary, where the Goal Manager validates formal
 intent and the Workflow Runtime remains the only Workflow writer. See
 [Goal Intake](docs/goal-intake.md).
 
-### Intent Admission Engine — contract implemented; evaluator planned M2.5
+### Intent Admission Engine — Slice 4 evaluator implemented
 
-The Slice 1 capability-free interface defines evaluation of either one
+The Slice 4 capability-free evaluator implements the Slice 1 interface over either one
 immutable pre-analysis Raw Request view or one complete
 Projection/Source-Binding view under an exact Admission Policy and issuance of
 `MATERIALIZE`, `CLARIFY`, or `NO_EXECUTION` with an ordered reason trace. The
-later evaluator must be deterministic for fixed canonical inputs and cannot
-call an assistant while deciding.
+evaluator is deterministic for fixed canonical inputs and cannot call an
+assistant while deciding. A `MATERIALIZE` result remains non-durable at the
+Slice 4 boundary and is consumed only by the later atomic Slice 6 composition.
 
 It owns neither the Projection nor the resulting Goal. It cannot mutate Intake
 or Workflow state, create an Attempt, select a replacement execution profile,
@@ -1076,7 +1084,7 @@ authority validation, and exact binding comparison. Only after activation does
 composition invoke startup recovery, and recovery completes before any handler
 capability is published.
 
-The planned M2.5 extension under ADR 0034 adds every retained Intake project
+The implemented M2.5 SQLite activation extension under ADR 0034 adds every retained Intake project
 reference to that decoded snapshot. A structured project root supplied by
 `intake submit` or an eligible `intake clarify` is carried separately as an
 explicit denial root in the same isolation lease; it does not replace retained

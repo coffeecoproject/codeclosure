@@ -251,5 +251,6 @@ export interface IntakeControlStore {
   commitIntakeCommandRejection(input: CommitIntakeCommandRejection): IntakeCommitStoreResult;
   commitIntakeMaterialization(input: CommitIntakeMaterialization): IntakeCommitStoreResult;
   getIntakeAuthority(intakeRunId: string): IntakeAuthorityView | undefined;
+  getIntakeCommandReservation(commandId: CommandId): IntakeCommandReservation | undefined;
   getIntakeCommandOutcome(commandId: CommandId): IntakeCommandOutcome | undefined;
 }

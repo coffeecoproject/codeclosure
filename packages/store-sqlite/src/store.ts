@@ -42,6 +42,7 @@ import {
   applyEvidenceEligibilityEvent,
   applyWorkflowCancellationToAttempt,
   applyWorkflowEvent,
+  assertIntentProjectionAmbiguityClosure,
   acceptanceDecisionProjection,
   acceptanceInputManifestProjection,
   acceptanceCriticalVerificationPlanProjection,
@@ -735,6 +736,31 @@ function assertExactIntakeManifestRevisionChain(
   ) {
     throw new StoreInvariantError(
       `Intake Manifest ${manifest.id} has no exact current Raw Request revision`,
+    );
+  }
+}
+
+function assertExactProposalAnalysisAuthority(
+  proposal: IntentAnalysisProposal,
+  decision: IntentAdmissionDecision,
+  reservation: IntakeCommandReservation,
+): void {
+  if (!('externalOperationBinding' in reservation)) {
+    throw new StoreInvariantError(
+      `Intent Analysis Proposal ${proposal.id} has no exact reservation/Manifest authority`,
+    );
+  }
+  const external = reservation.externalOperationBinding;
+  if (
+    proposal.assistantAdapterId !== external.assistantAdapterId ||
+    proposal.assistantAdapterVersion !== external.assistantAdapterVersion ||
+    proposal.responseContractDigest !== external.responseContractDigest ||
+    decision.admissionPolicyId !== external.admissionPolicyId ||
+    decision.admissionPolicyVersion !== external.admissionPolicyVersion ||
+    decision.admissionPolicyDigest !== external.admissionPolicyDigest
+  ) {
+    throw new StoreInvariantError(
+      `Intent Analysis Proposal ${proposal.id} has no exact reservation/Manifest authority`,
     );
   }
 }
@@ -2345,6 +2371,9 @@ export class SqliteControlStore
         options.migrationsDirectory ?? defaultMigrationsDirectory(),
         options.now ?? systemNow,
       );
+      if (database.pragma('foreign_keys', { simple: true }) !== 1) {
+        throw new StoreInvariantError('SQLite migrations did not restore foreign-key enforcement');
+      }
       const store = new SqliteControlStore(database, migrations, options.transactionProbe);
       store.assertRetainedWorkflowAttemptLifecycleClosure();
       store.assertRetainedWorkflowStartAuthorityClosure();
@@ -2376,6 +2405,13 @@ export class SqliteControlStore
       const foreignKeys = database.pragma('foreign_keys', { simple: true });
       if (foreignKeys !== 1) {
         throw new StoreInvariantError('SQLite foreign-key enforcement could not be enabled');
+      }
+
+      database.pragma('foreign_keys = OFF');
+      if (database.pragma('foreign_keys', { simple: true }) !== 0) {
+        throw new StoreInvariantError(
+          'SQLite foreign-key enforcement could not be suspended for migration',
+        );
       }
 
       database.exec('BEGIN IMMEDIATE');
@@ -2412,6 +2448,11 @@ export class SqliteControlStore
       store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
       isolationLease.assertCurrent();
       database.exec('COMMIT');
+
+      database.pragma('foreign_keys = ON');
+      if (database.pragma('foreign_keys', { simple: true }) !== 1) {
+        throw new StoreInvariantError('SQLite foreign-key enforcement could not be restored');
+      }
 
       const journalMode = database.pragma('journal_mode = WAL', { simple: true });
       if (journalMode !== 'wal') {
@@ -2556,6 +2597,14 @@ export class SqliteControlStore
       parseJson(parsed.record_json, 'Intake command reservation'),
       canonicalAuthorityDigests,
     );
+  }
+
+  public getIntakeCommandReservation(
+    rawCommandId: CommandId,
+  ): IntakeCommandReservation | undefined {
+    this.assertOpen();
+    const commandIdentifier = commandId(rawCommandId);
+    return this.runRead(() => this.getIntakeCommandReservationInsideTransaction(commandIdentifier));
   }
 
   private getIntakeRunInsideTransaction(
@@ -3549,6 +3598,7 @@ export class SqliteControlStore
     );
     if (
       reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS ||
+      reservation.externalOperationBinding === undefined ||
       nextRun.status !== IntakeRunStatus.ANALYZING ||
       revision.intakeRunId !== reservation.intakeRunId ||
       revision.rawRequestId !== reservation.rawRequestId ||
@@ -3608,7 +3658,7 @@ export class SqliteControlStore
       if (
         current?.status !== IntakeRunStatus.NEEDS_CLARIFICATION ||
         current.version !== reservation.expectedIntakeRunVersion ||
-        reservation.observedIntakeRunVersion !== current.version ||
+        reservation.observedIntakeRunVersion !== nextRun.version ||
         nextRun.id !== current.id ||
         nextRun.version !== current.version + 1 ||
         revision.parentRevision !== current.activeRawRequestRevision.revision ||
@@ -3719,6 +3769,7 @@ export class SqliteControlStore
     ) {
       throw new StoreInvariantError('Analyzed Intake commit has inconsistent authority');
     }
+    assertIntentProjectionAmbiguityClosure(proposal, projection, ambiguitySet);
 
     const result = decodeIntakeCommandResult(
       rawInput.kind === 'CLARIFY' && question !== undefined
@@ -3766,6 +3817,7 @@ export class SqliteControlStore
       if (reservation === undefined) {
         throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
       }
+      assertExactProposalAnalysisAuthority(proposal, decision, reservation);
       const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
       if (existingOutcome !== undefined) {
         if (!sameCanonicalAuthority(existingOutcome.result, result)) {
@@ -4295,6 +4347,7 @@ export class SqliteControlStore
     ) {
       throw new StoreInvariantError('Materialization commit has inconsistent authority');
     }
+    assertIntentProjectionAmbiguityClosure(proposal, projection, ambiguitySet);
     if (
       startAuthorization !== undefined &&
       (startAuthorization.goalMaterializationId !== materialization.id ||
@@ -4349,6 +4402,7 @@ export class SqliteControlStore
       if (reservation === undefined) {
         throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
       }
+      assertExactProposalAnalysisAuthority(proposal, decision, reservation);
       const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
       if (existingOutcome !== undefined) {
         if (!sameCanonicalAuthority(existingOutcome.result, result)) {
@@ -5041,6 +5095,20 @@ export class SqliteControlStore
           `Material Ambiguity set ${set.ambiguitySetDigest} has substituted members`,
         );
       }
+      const proposal = proposalById.get(projection.intentAnalysisProposalRef.id);
+      if (proposal === undefined) {
+        throw new StoreInvariantError(
+          `Intent Projection ${projection.id}@${String(projection.revision)} has no Proposal`,
+        );
+      }
+      try {
+        assertIntentProjectionAmbiguityClosure(proposal, projection, set);
+      } catch (error) {
+        throw new StoreInvariantError(
+          `Intent Projection ${projection.id}@${String(projection.revision)} has false ambiguity closure`,
+          { cause: error },
+        );
+      }
     }
 
     for (const manifest of manifests) {
@@ -5313,7 +5381,32 @@ export class SqliteControlStore
           );
         }
       }
-      if (reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) {
+      if (
+        reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS &&
+        reservation.externalOperationBinding === undefined
+      ) {
+        const question = questionById.get(reservation.clarificationBinding.clarificationQuestionId);
+        const answerBinding = answerBindingByCommandId.get(reservation.commandId);
+        if (
+          question?.intakeRunId !== reservation.intakeRunId ||
+          question.questionSpecDigest !== reservation.clarificationBinding.questionSpecDigest ||
+          question.questionDigest !== reservation.clarificationBinding.questionDigest ||
+          question.intentAdmissionDecisionId !==
+            reservation.clarificationBinding.issuingClarifyDecisionId ||
+          question.intentAdmissionDecisionDigest !==
+            reservation.clarificationBinding.issuingClarifyDecisionDigest ||
+          !sameCanonicalAuthority(
+            question.answerSchema,
+            reservation.clarificationBinding.answerSchema,
+          ) ||
+          answerBinding !== undefined ||
+          outcome?.disposition !== IntakeCommandDisposition.REJECTED
+        ) {
+          throw new StoreInvariantError(
+            `Rejected clarification ${reservation.commandId} has false Question authority`,
+          );
+        }
+      } else if (reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) {
         const question = questionById.get(reservation.clarificationBinding.clarificationQuestionId);
         const answerBinding = answerBindingByQuestionId.get(
           reservation.clarificationBinding.clarificationQuestionId,
@@ -5421,10 +5514,23 @@ export class SqliteControlStore
       }
     }
     for (const outcome of outcomes) {
-      if (!reservationByCommandId.has(outcome.commandId)) {
+      const reservation = reservationByCommandId.get(outcome.commandId);
+      if (reservation === undefined) {
         throw new StoreInvariantError(`Intake command outcome ${outcome.commandId} is orphaned`);
       }
       const result = outcome.result;
+      if ('decisionRef' in result && 'externalOperationBinding' in reservation) {
+        const decision = decisionById.get(result.decisionRef.id);
+        if (decision !== undefined && 'projectionBinding' in decision) {
+          const proposal = proposalById.get(decision.projectionBinding.intentAnalysisProposalId);
+          if (proposal === undefined) {
+            throw new StoreInvariantError(
+              `Intake outcome ${outcome.commandId} has no exact Proposal authority`,
+            );
+          }
+          assertExactProposalAnalysisAuthority(proposal, decision, reservation);
+        }
+      }
       if (result.kind === 'CLARIFICATION_REQUIRED') {
         const decision = decisionById.get(result.decisionRef.id);
         const question = questionById.get(result.activeQuestionRef.clarificationQuestionId);

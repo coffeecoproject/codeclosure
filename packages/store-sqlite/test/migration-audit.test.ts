@@ -44,6 +44,8 @@ const migrationNames = Object.freeze([
   '0025_local_verification_recovery_barrier.sql',
   '0026_intake_authority.sql',
   '0027_intake_project_correction.sql',
+  '0028_rejected_clarification_reservation.sql',
+  '0029_intent_projection_schema_v2.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -145,6 +147,7 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
   const database = new Database(filename);
   database.pragma('foreign_keys = ON');
   const firstApplication = applyMigrations(database, migrationsDirectory, () => appliedAt);
+  assert.equal(database.pragma('foreign_keys', { simple: true }), 1);
   const firstInspection = inspectDatabase(database);
   database.close();
 
@@ -161,7 +164,7 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:278945c5b78727f79760dd7d04029151c9e397d7eaa579e4460c8890326a20f0',
+    schemaDigest: 'sha256:e4c2d25c8671f1d02ad0ce7e3d29d29e8b9137e2422d0604bbf9e3c18ee594cd',
   });
 
   const reopened = new Database(filename);
@@ -169,6 +172,7 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
   const replayedApplication = applyMigrations(reopened, migrationsDirectory, () =>
     isoTimestamp('2026-07-30T00:00:01.000Z'),
   );
+  assert.equal(reopened.pragma('foreign_keys', { simple: true }), 1);
   const reopenedInspection = inspectDatabase(reopened);
   reopened.close();
 

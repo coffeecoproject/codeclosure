@@ -22,10 +22,12 @@ import {
   IntentAdmissionReasonCode,
   IntentAdmissionRuleTraceOutcome,
   IntentExecutionDisposition,
+  IntentProjectionCanonicalProfileVersion,
   IntentProjectionField,
   MaterialAmbiguityReasonCode,
   MaterialAmbiguityStatus,
   SourceAuthorityClass,
+  assertIntentProjectionAmbiguityClosure,
   abandonClarificationReservationBindingProjection,
   abandonmentBindingProjection,
   answerOnlyResponseId,
@@ -763,6 +765,123 @@ void test('[I-006][I-018] Intake codecs verify closed records and exact digest p
       createdAt: NOW,
       updatedAt: LATER,
     }),
+  );
+});
+
+void test('[I-006][I-018] projection profile v2 represents a missing objective only through exact ambiguity closure', () => {
+  const fixtures = createFixtures();
+  const {
+    proposedObjective: ignoredObjective,
+    proposalDigest: ignoredProposalDigest,
+    ...retainedProposal
+  } = fixtures.proposal;
+  void ignoredObjective;
+  void ignoredProposalDigest;
+  const proposal = decodeIntentAnalysisProposal(
+    {
+      ...retainedProposal,
+      proposalDigest: digest(
+        intentAnalysisProposalProjection(retainedProposal as unknown as IntentAnalysisProposal),
+      ),
+    },
+    digests,
+  );
+  const {
+    objective: ignoredProjectionObjective,
+    projectionDigest: ignoredProjectionDigest,
+    ...retainedProjection
+  } = fixtures.projection;
+  void ignoredProjectionObjective;
+  void ignoredProjectionDigest;
+  const projectionBase = {
+    ...retainedProjection,
+    schemaVersion: 2 as const,
+    intentAnalysisProposalRef: { id: proposal.id, digest: proposal.proposalDigest },
+    sourceBindings: retainedProjection.sourceBindings.filter(
+      (binding) => binding.projectionFieldRef !== IntentProjectionField.OBJECTIVE,
+    ),
+    canonicalProfileVersion: IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2,
+  };
+  const projection = decodeIntentProjectionRevision(
+    {
+      ...projectionBase,
+      projectionDigest: digest(
+        intentProjectionRevisionProjection(
+          projectionBase as unknown as IntentProjectionRevisionRecord,
+        ),
+      ),
+    },
+    digests,
+  );
+  const ambiguitySetBase = {
+    ...fixtures.ambiguitySet,
+    intentProjectionDigest: projection.projectionDigest,
+    ambiguities: fixtures.ambiguitySet.ambiguities.map((ambiguity) => ({
+      ...ambiguity,
+      reasonCode: MaterialAmbiguityReasonCode.OBJECTIVE_UNRESOLVED,
+      affectedFields: [IntentProjectionField.OBJECTIVE],
+      sourceRefs: [proposal.proposalDigest],
+    })),
+  };
+  const ambiguitySet = decodeMaterialAmbiguitySet(
+    {
+      ...ambiguitySetBase,
+      ambiguitySetDigest: digest(materialAmbiguitySetProjection(ambiguitySetBase)),
+    },
+    digests,
+  );
+
+  assert.equal(projection.objective, undefined);
+  assert.equal(
+    projection.projectionDigest,
+    'sha256:32cdf4323071b1f5969409d2d78e34eda469d5e2d1c93d9767dd70e147fdc0e9',
+  );
+  assert.equal(
+    Object.hasOwn(intentProjectionRevisionProjection(projection) as object, 'objective'),
+    false,
+  );
+  assert.doesNotThrow(() =>
+    assertIntentProjectionAmbiguityClosure(proposal, projection, ambiguitySet),
+  );
+
+  const v1ProjectionBase = {
+    ...projectionBase,
+    schemaVersion: 1 as const,
+    canonicalProfileVersion: IntentProjectionCanonicalProfileVersion.M25_LOCAL_V1,
+  };
+  assert.throws(
+    () =>
+      decodeIntentProjectionRevision(
+        {
+          ...v1ProjectionBase,
+          projectionDigest: digest(
+            intentProjectionRevisionProjection(
+              v1ProjectionBase as unknown as IntentProjectionRevisionRecord,
+            ),
+          ),
+        },
+        digests,
+      ),
+    /Invalid input/,
+  );
+
+  const substitutedSetBase = {
+    ...ambiguitySet,
+    ambiguities: ambiguitySet.ambiguities.map((ambiguity) => ({
+      ...ambiguity,
+      reasonCode: MaterialAmbiguityReasonCode.REQUIRED_CRITERION_UNRESOLVED,
+    })),
+  };
+  const substitutedSet = decodeMaterialAmbiguitySet(
+    {
+      ...substitutedSetBase,
+      ambiguitySetDigest: digest(materialAmbiguitySetProjection(substitutedSetBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () => assertIntentProjectionAmbiguityClosure(proposal, projection, substitutedSet),
+    /one exact Proposal-sourced OBJECTIVE_UNRESOLVED ambiguity/,
   );
 });
 

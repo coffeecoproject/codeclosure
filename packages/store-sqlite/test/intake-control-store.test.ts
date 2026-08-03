@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -90,6 +90,7 @@ import {
   type ClarificationQuestion,
   type ClarificationQuestionSpec,
   type ClarificationAnswerBinding,
+  type AppliedClarificationIntakeCommandReservation,
   type AnswerOnlyResponse,
   type GoalMaterializationRecord,
   type GoalStartAuthorization,
@@ -97,6 +98,8 @@ import {
   type IntentAnalysisProposal,
   type IntentProjectionRevisionRecord,
   type IntakeCommandReservation,
+  type IntakeCommandOutcome,
+  type IntakeExternalOperationBinding,
   type IntakeFailureRecord,
   type IntakeManifest,
   type MaterialAmbiguitySet,
@@ -118,6 +121,7 @@ import {
   IntakeTransactionStep,
   SqliteControlStore,
   SqliteAuthorityDatabaseState,
+  defaultMigrationsDirectory,
   type SqliteAuthorityIsolationSnapshot,
   type SqliteControlStoreOptions,
 } from '@codeclosure/store-sqlite';
@@ -150,6 +154,15 @@ function audit(
     payloadDigest: FIXTURE_DIGEST,
     occurredAt,
   });
+}
+
+function requiredExternalBinding(
+  reservation: IntakeCommandReservation,
+): IntakeExternalOperationBinding {
+  if (!('externalOperationBinding' in reservation)) {
+    throw new TypeError('Fixture reservation lacks its external operation binding');
+  }
+  return reservation.externalOperationBinding;
 }
 
 function fixtures(namespace: string) {
@@ -369,7 +382,7 @@ function clarifyFixtures(base: ReturnType<typeof fixtures>, namespace: string) {
     sourceRecordRef: proposal.id,
     sourceRevision: 1,
     sourceDigest: proposal.proposalDigest,
-    sourceFieldPath: 'proposedObjective',
+    sourceFieldPath: '/proposedObjective',
     bindingDigest: FIXTURE_DIGEST,
   };
   const source = decodeSourceBinding(
@@ -595,6 +608,93 @@ function clarifyFixtures(base: ReturnType<typeof fixtures>, namespace: string) {
   };
 }
 
+function substituteClarifyProposalEnvelope(
+  clarify: ReturnType<typeof clarifyFixtures>,
+  changes: Partial<
+    Pick<
+      IntentAnalysisProposal,
+      'assistantAdapterId' | 'assistantAdapterVersion' | 'responseContractDigest'
+    >
+  >,
+) {
+  const proposalBase: IntentAnalysisProposal = {
+    ...clarify.proposal,
+    ...changes,
+    proposalDigest: FIXTURE_DIGEST,
+  };
+  const proposal = decodeIntentAnalysisProposal(
+    {
+      ...proposalBase,
+      proposalDigest: digests.digest(intentAnalysisProposalProjection(proposalBase)),
+    },
+    digests,
+  );
+  const sourceBase: SourceBinding = {
+    ...clarify.source,
+    sourceDigest: proposal.proposalDigest,
+    bindingDigest: FIXTURE_DIGEST,
+  };
+  const source = decodeSourceBinding(
+    {
+      ...sourceBase,
+      bindingDigest: digests.digest(sourceBindingProjection(sourceBase)),
+    },
+    digests,
+  );
+  const projectionBase: IntentProjectionRevisionRecord = {
+    ...clarify.projection,
+    intentAnalysisProposalRef: { id: proposal.id, digest: proposal.proposalDigest },
+    sourceBindings: [source],
+    projectionDigest: FIXTURE_DIGEST,
+  };
+  const projection = decodeIntentProjectionRevision(
+    {
+      ...projectionBase,
+      projectionDigest: digests.digest(intentProjectionRevisionProjection(projectionBase)),
+    },
+    digests,
+  );
+  const ambiguitySetBase: MaterialAmbiguitySet = {
+    ...clarify.ambiguitySet,
+    intentProjectionDigest: projection.projectionDigest,
+    ambiguities: clarify.ambiguitySet.ambiguities.map((ambiguity) => ({
+      ...ambiguity,
+      sourceRefs: ambiguity.sourceRefs.map((sourceRef) =>
+        sourceRef === clarify.source.bindingDigest ? source.bindingDigest : sourceRef,
+      ),
+    })),
+    ambiguitySetDigest: FIXTURE_DIGEST,
+  };
+  const ambiguitySet = decodeMaterialAmbiguitySet(
+    {
+      ...ambiguitySetBase,
+      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
+    },
+    digests,
+  );
+  const decisionBase: IntentAdmissionDecision = {
+    ...clarify.decision,
+    projectionBinding: {
+      ...clarify.decision.projectionBinding,
+      intentAnalysisProposalDigest: proposal.proposalDigest,
+      intentProjectionDigest: projection.projectionDigest,
+      sourceBindingDigests: [source.bindingDigest],
+    },
+    decisionDigest: FIXTURE_DIGEST,
+  };
+  const decision = decodeIntentAdmissionDecision(
+    {
+      ...decisionBase,
+      decisionDigest: digests.digest(intentAdmissionDecisionProjection(decisionBase)),
+    },
+    digests,
+  );
+  if (decision.kind !== IntentAdmissionDecisionKind.CLARIFY) {
+    throw new Error('Substituted fixture did not retain a CLARIFY Decision');
+  }
+  return { proposal, projection, ambiguitySet, decision };
+}
+
 function projectIdentityClarifyFixtures(base: ReturnType<typeof fixtures>, namespace: string) {
   const original = clarifyFixtures(base, namespace);
   const originalAmbiguity = original.ambiguitySet.ambiguities[0];
@@ -783,7 +883,7 @@ function clarificationAnswerFixtures(
     intakeRunId: base.analyzingRun.id,
     canonicalCommandInputDigest,
     expectedIntakeRunVersion: clarify.needsRun.version,
-    observedIntakeRunVersion: clarify.needsRun.version,
+    observedIntakeRunVersion: intakeRunVersion(clarify.needsRun.version + 1),
     operationId: intakeOperationId(`intake-operation_${namespace}-answer`),
     clarificationBinding: {
       clarificationQuestionId: clarify.question.id,
@@ -921,10 +1021,10 @@ function projectCorrectionAnswerFixtures(
     },
     digests,
   );
-  const reservationBase: IntakeCommandReservation = {
+  const reservationBase: AppliedClarificationIntakeCommandReservation = {
     ...original.reservation,
     externalOperationBinding: {
-      ...original.reservation.externalOperationBinding,
+      ...requiredExternalBinding(original.reservation),
       manifestId: manifest.id,
       manifestDigest: manifest.manifestDigest,
     },
@@ -1529,10 +1629,14 @@ function materializationFixtures(
   if (decision.kind !== IntentAdmissionDecisionKind.MATERIALIZE) {
     throw new Error('Fixture did not create a MATERIALIZE Decision');
   }
+  const materializedObjective = projection.objective;
+  if (materializedObjective === undefined) {
+    throw new Error('Materialization fixture requires an objective');
+  }
   const goal = createGoal({
     id: goalId(`goal_${namespace}`),
     revision: goalRevision(1),
-    objective: projection.objective,
+    objective: materializedObjective,
     successCriteria: [
       {
         id: successCriterionId(`criterion_${namespace}`),
@@ -1740,6 +1844,41 @@ function persistClarification(
     'APPLIED',
   );
 }
+
+void test('[I-006][I-009][I-018] migration 0029 preserves schema-v1 Projection bytes and digest', (t) => {
+  const filename = temporaryDatabase(t);
+  const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-intake-v1-migrations-'));
+  t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
+  const defaultDirectory = defaultMigrationsDirectory();
+  const migrationNames = readdirSync(defaultDirectory)
+    .filter((name) => /^\d{4}_.+\.sql$/u.test(name))
+    .sort();
+  for (const name of migrationNames) {
+    if (Number.parseInt(name.slice(0, 4), 10) <= 28) {
+      copyFileSync(join(defaultDirectory, name), join(migrationsDirectory, name));
+    }
+  }
+
+  const base = fixtures('projection-v1-migration');
+  const clarify = clarifyFixtures(base, 'projection-v1-migration');
+  const store = openStore(filename, { migrationsDirectory });
+  installPolicy(store, 'projection-v1-migration', base.policy);
+  persistClarification(store, base, clarify);
+  const before = store.getIntakeAuthority(base.analyzingRun.id)?.projections[0];
+  assert.ok(before);
+  assert.equal(before.schemaVersion, 1);
+  assert.equal(before.canonicalProfileVersion, 'codeclosure-m2-5-projection-v1');
+  store.close();
+
+  const migration0029 = migrationNames.find((name) => name.startsWith('0029_'));
+  assert.ok(migration0029);
+  copyFileSync(join(defaultDirectory, migration0029), join(migrationsDirectory, migration0029));
+  const reopened = openStore(filename, { migrationsDirectory });
+  t.after(() => reopened.close());
+  const after = reopened.getIntakeAuthority(base.analyzingRun.id)?.projections[0];
+  assert.deepEqual(after, before);
+  assert.equal(reopened.appliedMigrations().at(-1)?.name, migration0029);
+});
 
 void test('[I-006][I-008][I-009] Admission Policy install is atomic and replay-safe', (t) => {
   const filename = temporaryDatabase(t);
@@ -2059,6 +2198,71 @@ void test('[I-006][I-008][I-009] analyzed CLARIFY authority commits Decision, Qu
   assert.equal(authority.outcomes.length, 1);
 });
 
+void test('[I-006][I-008][I-032] analyzed commit rejects Proposal identity substituted from its reservation and Manifest', async (t) => {
+  const cases = [
+    {
+      suffix: 'adapter-id',
+      changes: { assistantAdapterId: 'intake-adapter_substituted' },
+    },
+    {
+      suffix: 'adapter-version',
+      changes: { assistantAdapterVersion: 'substituted-v1' },
+    },
+    {
+      suffix: 'response-contract',
+      changes: {
+        responseContractDigest: digests.digest({ substituted: 'response-contract' }),
+      },
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    await t.test(scenario.suffix, (scenarioTest) => {
+      const namespace = `proposal-envelope-${scenario.suffix}`;
+      const base = fixtures(namespace);
+      const clarify = clarifyFixtures(base, namespace);
+      const substituted = substituteClarifyProposalEnvelope(clarify, scenario.changes);
+      const store = openStore(temporaryDatabase(scenarioTest));
+      scenarioTest.after(() => store.close());
+      installPolicy(store, namespace, base.policy);
+      assert.equal(
+        store.reserveInitialIntake({
+          rawRequest: base.rawRequest,
+          rawRequestRevision: base.revision,
+          intakeRun: base.analyzingRun,
+          manifest: base.manifest,
+          reservation: base.reservation,
+          auditEvents: base.reservationAudits,
+        }).status,
+        'RESERVED',
+      );
+
+      assert.throws(
+        () =>
+          store.commitAnalyzedIntake({
+            kind: 'CLARIFY',
+            commandId: base.reservation.commandId,
+            proposal: substituted.proposal,
+            projection: substituted.projection,
+            ambiguitySet: substituted.ambiguitySet,
+            decision: substituted.decision,
+            questionSpec: clarify.questionSpec,
+            question: clarify.question,
+            intakeRun: clarify.needsRun,
+            completedAt: LAST,
+            auditEvents: clarify.audits,
+          }),
+        /no exact reservation\/Manifest authority/,
+      );
+      const authority = store.getIntakeAuthority(base.analyzingRun.id);
+      assert.ok(authority);
+      assert.deepEqual(authority.proposals, []);
+      assert.deepEqual(authority.projections, []);
+      assert.deepEqual(authority.decisions, []);
+    });
+  }
+});
+
 void test('[I-006][I-008][I-032] Intake commit rejects a digest-valid substituted project identity', (t) => {
   const filename = temporaryDatabase(t);
   const base = fixtures('substituted-decision-project');
@@ -2293,10 +2497,10 @@ void test('[I-006][I-008][I-012] clarification reservation rejects a digest-vali
     },
     digests,
   );
-  const reservationBase: IntakeCommandReservation = {
+  const reservationBase: AppliedClarificationIntakeCommandReservation = {
     ...answer.reservation,
     externalOperationBinding: {
-      ...answer.reservation.externalOperationBinding,
+      ...requiredExternalBinding(answer.reservation),
       manifestDigest: manifest.manifestDigest,
     },
     reservationDigest: FIXTURE_DIGEST,
@@ -3321,6 +3525,101 @@ void test('[I-006][I-008][I-012] strict reopen rejects Intake audit time before 
   }
 
   assert.throws(() => openStore(filename), /audit.*source|audit.*causal|strict reopen/i);
+});
+
+void test('[I-006][I-008][I-009][I-032] strict reopen rejects separately valid Manifest/reservation identity substituted from its Proposal', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('proposal-envelope-reopen');
+  const clarify = clarifyFixtures(base, 'proposal-envelope-reopen');
+  const store = openStore(filename);
+  installPolicy(store, 'proposal-envelope-reopen', base.policy);
+  persistClarification(store, base, clarify);
+  const retainedOutcome = store.getIntakeCommandOutcome(base.reservation.commandId);
+  assert.ok(retainedOutcome);
+  store.close();
+
+  const manifestBase: IntakeManifest = {
+    ...base.manifest,
+    assistantAdapter: {
+      ...base.manifest.assistantAdapter,
+      id: 'intake-adapter_substituted-reopen',
+    },
+    manifestDigest: FIXTURE_DIGEST,
+  };
+  const manifest = decodeIntakeManifest(
+    {
+      ...manifestBase,
+      manifestDigest: digests.digest(intakeManifestProjection(manifestBase)),
+    },
+    digests,
+  );
+  const reservationBase: IntakeCommandReservation = {
+    ...base.reservation,
+    externalOperationBinding: {
+      ...base.reservation.externalOperationBinding,
+      manifestDigest: manifest.manifestDigest,
+      assistantAdapterId: manifest.assistantAdapter.id,
+    },
+    reservationDigest: FIXTURE_DIGEST,
+  };
+  const reservation = decodeIntakeCommandReservation(
+    {
+      ...reservationBase,
+      reservationDigest: digests.digest(intakeCommandReservationProjection(reservationBase)),
+    },
+    digests,
+  );
+  const outcomeBase: IntakeCommandOutcome = {
+    ...retainedOutcome,
+    reservationDigest: reservation.reservationDigest,
+    outcomeDigest: FIXTURE_DIGEST,
+  };
+  const outcome = decodeIntakeCommandOutcome(
+    {
+      ...outcomeBase,
+      outcomeDigest: digests.digest(intakeCommandOutcomeProjection(outcomeBase)),
+    },
+    digests,
+  );
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = OFF');
+    database.exec('DROP TRIGGER intake_manifests_no_update');
+    database.exec('DROP TRIGGER intake_command_reservations_no_update');
+    database.exec('DROP TRIGGER intake_command_outcomes_no_update');
+    database
+      .prepare('UPDATE intake_manifests SET manifest_digest = ?, record_json = ? WHERE id = ?')
+      .run(manifest.manifestDigest, JSON.stringify(manifest), manifest.id);
+    database
+      .prepare(
+        `UPDATE intake_command_reservations
+            SET manifest_digest = ?, reservation_digest = ?, record_json = ?
+          WHERE command_id = ?`,
+      )
+      .run(
+        manifest.manifestDigest,
+        reservation.reservationDigest,
+        JSON.stringify(reservation),
+        reservation.commandId,
+      );
+    database
+      .prepare(
+        `UPDATE intake_command_outcomes
+            SET reservation_digest = ?, outcome_digest = ?, record_json = ?
+          WHERE command_id = ?`,
+      )
+      .run(
+        reservation.reservationDigest,
+        outcome.outcomeDigest,
+        JSON.stringify(outcome),
+        outcome.commandId,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => openStore(filename), /no exact reservation\/Manifest authority/);
 });
 
 void test('[I-006][I-008][I-009] strict reopen rejects codec-invalid retained Intake authority', (t) => {

@@ -13,7 +13,17 @@ import {
   externalExecutionId,
   externalExecutionObservationId,
   externalMaintenanceIntentId,
+  clarificationAnswerBindingId,
+  clarificationQuestionId,
+  intakeManifestId,
+  intakeOperationId,
+  intakeRunId,
+  intentAdmissionDecisionId,
+  intentAnalysisProposalId,
+  intentProjectionId,
   isoTimestamp,
+  materialAmbiguityId,
+  rawRequestId,
   recoveryReconciliationId,
   successCriterionId,
   workerEventId,
@@ -34,7 +44,17 @@ import {
   type ExternalExecutionId,
   type ExternalExecutionObservationId,
   type ExternalMaintenanceIntentId,
+  type ClarificationAnswerBindingId,
+  type ClarificationQuestionId,
+  type IntakeManifestId,
+  type IntakeOperationId,
+  type IntakeRunId,
+  type IntentAdmissionDecisionId,
+  type IntentAnalysisProposalId,
+  type IntentProjectionId,
   type IsoTimestamp,
+  type MaterialAmbiguityId,
+  type RawRequestId,
   type RecoveryReconciliationId,
   type SuccessCriterionId,
   type WorkerEventId,
@@ -101,6 +121,46 @@ export class DeterministicIds {
 
   public nextAuditEventId(): AuditEventId {
     return auditEventId(`audit_${this.nextSuffix()}`);
+  }
+
+  public nextRawRequestId(): RawRequestId {
+    return rawRequestId(`raw-request_${this.nextSuffix()}`);
+  }
+
+  public nextIntakeRunId(): IntakeRunId {
+    return intakeRunId(`intake_${this.nextSuffix()}`);
+  }
+
+  public nextIntakeManifestId(): IntakeManifestId {
+    return intakeManifestId(`intake-manifest_${this.nextSuffix()}`);
+  }
+
+  public nextIntakeOperationId(): IntakeOperationId {
+    return intakeOperationId(`intake-operation_${this.nextSuffix()}`);
+  }
+
+  public nextIntentAnalysisProposalId(): IntentAnalysisProposalId {
+    return intentAnalysisProposalId(`intent-proposal_${this.nextSuffix()}`);
+  }
+
+  public nextIntentProjectionId(): IntentProjectionId {
+    return intentProjectionId(`intent-projection_${this.nextSuffix()}`);
+  }
+
+  public nextMaterialAmbiguityId(): MaterialAmbiguityId {
+    return materialAmbiguityId(`ambiguity_${this.nextSuffix()}`);
+  }
+
+  public nextIntentAdmissionDecisionId(): IntentAdmissionDecisionId {
+    return intentAdmissionDecisionId(`intent-admission_${this.nextSuffix()}`);
+  }
+
+  public nextClarificationQuestionId(): ClarificationQuestionId {
+    return clarificationQuestionId(`clarification-question_${this.nextSuffix()}`);
+  }
+
+  public nextClarificationAnswerBindingId(): ClarificationAnswerBindingId {
+    return clarificationAnswerBindingId(`clarification-answer_${this.nextSuffix()}`);
   }
 
   public nextAcceptanceDecisionId(): AcceptanceDecisionId {

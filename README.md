@@ -16,13 +16,10 @@ M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
 green on one source identity. M2.5 Goal Intake remains unimplemented as an
-operational loop; its closed Domain, Policy, SQLite authority, and deterministic
-package compiler plus isolated read-only Intake Assistant Adapter are
-implemented. The adapter grants no CodeClosure authority
-capability, fails an operation when tool use is observed, and does not claim
-that the pinned App Server exposes an empty model-visible tool set. No
-Coordinator, Admission evaluator, CLI, Materialization, or Start execution is
-implemented. This foundation does not prove Goal Intake, product
+operational loop. Its Domain, Policy, SQLite, package, isolated Adapter,
+source-bound Projection, deterministic Admission, and non-Answer Coordinator
+foundations are implemented. Answer-only/failure recovery, CLI, Goal
+Materialization, and Start execution remain unimplemented. This does not prove Goal Intake, product
 completion, or authority to merge, release, deploy, or perform another external
 effect.
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
@@ -150,8 +147,10 @@ M2.5 Goal Intake is the current implementation milestone. Its detailed
 [implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the work. The
 initial implementation decisions and dependency expectations are closed. The
-Domain, SQLite, and package foundations are implemented; the Intake Assistant
-Adapter proof, Runtime coordination, and the product loop remain incomplete.
+Domain, SQLite, package, Intake Assistant Adapter, Projection, deterministic
+Admission, clarification, abandonment, and non-Answer no-execution foundations
+are implemented; later terminal handling, Materialization, CLI, and the product
+loop remain incomplete.
 
 ## Non-Goals
 

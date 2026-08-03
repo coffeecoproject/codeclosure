@@ -52,6 +52,7 @@ import {
   IntentAdmissionReasonCode,
   IntentAdmissionRuleTraceOutcome,
   IntentExecutionDisposition,
+  IntentProjectionCanonicalProfileVersion,
   IntentProjectionField,
   MaterialAmbiguityReasonCode,
   MaterialAmbiguityStatus,
@@ -449,37 +450,50 @@ export function decodeSourceBinding(value: unknown, verifier: IntakeDigestVerifi
   return binding;
 }
 
-const projectionSchema = z
-  .object({
-    id: projectionIdSchema,
-    schemaVersion: z.literal(1),
-    intakeRunId: intakeRunIdSchema,
-    revision: projectionRevisionSchema,
-    parentRevision: projectionRevisionSchema.optional(),
-    rawRequestRevision: rawRevisionSchema,
-    intentAnalysisProposalRef: z.object({ id: proposalIdSchema, digest: sha256Schema }).strict(),
-    objective: nonBlankStringSchema,
-    requiredCriteria: z.array(nonBlankStringSchema),
-    optionalCriteria: z.array(nonBlankStringSchema),
-    scope: z
-      .object({
-        projectPath: nonBlankStringSchema.optional(),
-        allowedPaths: z.array(nonBlankStringSchema),
-      })
-      .strict(),
-    nonGoals: z.array(nonBlankStringSchema),
-    assumptions: z.array(nonBlankStringSchema),
-    requestedExecutionDisposition: z.enum([
-      IntentExecutionDisposition.LEAVE_READY,
-      IntentExecutionDisposition.AUTHORIZE_START,
-    ]),
-    sourceBindings: z.array(sourceBindingSchema),
-    materialAmbiguityRefs: z.array(ambiguityIdSchema),
-    canonicalProfileVersion: nonBlankStringSchema,
-    projectionDigest: sha256Schema,
-    createdAt: timestampSchema,
-  })
-  .strict();
+const projectionSchemaBase = {
+  id: projectionIdSchema,
+  intakeRunId: intakeRunIdSchema,
+  revision: projectionRevisionSchema,
+  parentRevision: projectionRevisionSchema.optional(),
+  rawRequestRevision: rawRevisionSchema,
+  intentAnalysisProposalRef: z.object({ id: proposalIdSchema, digest: sha256Schema }).strict(),
+  requiredCriteria: z.array(nonBlankStringSchema),
+  optionalCriteria: z.array(nonBlankStringSchema),
+  scope: z
+    .object({
+      projectPath: nonBlankStringSchema.optional(),
+      allowedPaths: z.array(nonBlankStringSchema),
+    })
+    .strict(),
+  nonGoals: z.array(nonBlankStringSchema),
+  assumptions: z.array(nonBlankStringSchema),
+  requestedExecutionDisposition: z.enum([
+    IntentExecutionDisposition.LEAVE_READY,
+    IntentExecutionDisposition.AUTHORIZE_START,
+  ]),
+  sourceBindings: z.array(sourceBindingSchema),
+  materialAmbiguityRefs: z.array(ambiguityIdSchema),
+  projectionDigest: sha256Schema,
+  createdAt: timestampSchema,
+};
+const projectionSchema = z.discriminatedUnion('schemaVersion', [
+  z
+    .object({
+      ...projectionSchemaBase,
+      schemaVersion: z.literal(1),
+      objective: nonBlankStringSchema,
+      canonicalProfileVersion: z.literal(IntentProjectionCanonicalProfileVersion.M25_LOCAL_V1),
+    })
+    .strict(),
+  z
+    .object({
+      ...projectionSchemaBase,
+      schemaVersion: z.literal(2),
+      objective: nonBlankStringSchema.optional(),
+      canonicalProfileVersion: z.literal(IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2),
+    })
+    .strict(),
+]);
 
 export function decodeIntentProjectionRevision(
   value: unknown,
@@ -1183,7 +1197,7 @@ const reservationBase = {
   reservedAt: timestampSchema,
   reservationDigest: sha256Schema,
 };
-const reservationSchema = z.discriminatedUnion('operationKind', [
+const reservationSchema = z.union([
   z
     .object({
       ...reservationBase,
@@ -1205,6 +1219,14 @@ const reservationSchema = z.discriminatedUnion('operationKind', [
       expectedIntakeRunVersion: intakeVersionSchema,
       clarificationBinding: clarificationBindingSchema,
       externalOperationBinding: externalOperationBindingSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...reservationBase,
+      operationKind: z.literal(IntakeCommandOperationKind.CLARIFICATION_ANALYSIS),
+      expectedIntakeRunVersion: intakeVersionSchema,
+      clarificationBinding: clarificationBindingSchema,
     })
     .strict(),
   z

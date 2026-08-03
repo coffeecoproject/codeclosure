@@ -94,6 +94,13 @@ export const IntentProjectionField = {
 export type IntentProjectionField =
   (typeof IntentProjectionField)[keyof typeof IntentProjectionField];
 
+export const IntentProjectionCanonicalProfileVersion = {
+  M25_LOCAL_V1: 'codeclosure-m2-5-projection-v1',
+  M25_LOCAL_V2: 'codeclosure-m2-5-projection-v2',
+} as const;
+export type IntentProjectionCanonicalProfileVersion =
+  (typeof IntentProjectionCanonicalProfileVersion)[keyof typeof IntentProjectionCanonicalProfileVersion];
+
 export const SourceAuthorityClass = {
   USER_STATED: 'USER_STATED',
   POLICY_DERIVED: 'POLICY_DERIVED',
@@ -409,15 +416,13 @@ export interface IntentAnalysisProposalRef {
   readonly digest: Sha256Digest;
 }
 
-export interface IntentProjectionRevisionRecord {
+interface IntentProjectionRevisionRecordCommon {
   readonly id: IntentProjectionId;
-  readonly schemaVersion: 1;
   readonly intakeRunId: IntakeRunId;
   readonly revision: IntentProjectionRevision;
   readonly parentRevision?: IntentProjectionRevision;
   readonly rawRequestRevision: RawRequestRevision;
   readonly intentAnalysisProposalRef: IntentAnalysisProposalRef;
-  readonly objective: string;
   readonly requiredCriteria: readonly string[];
   readonly optionalCriteria: readonly string[];
   readonly scope: IntentProjectionScope;
@@ -428,10 +433,24 @@ export interface IntentProjectionRevisionRecord {
     | typeof IntentExecutionDisposition.AUTHORIZE_START;
   readonly sourceBindings: readonly SourceBinding[];
   readonly materialAmbiguityRefs: readonly MaterialAmbiguityId[];
-  readonly canonicalProfileVersion: string;
   readonly projectionDigest: Sha256Digest;
   readonly createdAt: IsoTimestamp;
 }
+
+export interface IntentProjectionRevisionV1 extends IntentProjectionRevisionRecordCommon {
+  readonly schemaVersion: 1;
+  readonly objective: string;
+  readonly canonicalProfileVersion: typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V1;
+}
+
+export interface IntentProjectionRevisionV2 extends IntentProjectionRevisionRecordCommon {
+  readonly schemaVersion: 2;
+  readonly objective?: string;
+  readonly canonicalProfileVersion: typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2;
+}
+
+export type IntentProjectionRevisionRecord =
+  IntentProjectionRevisionV1 | IntentProjectionRevisionV2;
 
 export type MaterialityPolicyRef = VersionedDigestRef;
 
@@ -899,12 +918,22 @@ export interface ExternalIntakeCommandReservation extends IntakeCommandReservati
   readonly externalOperationBinding: IntakeExternalOperationBinding;
 }
 
-export interface ClarificationIntakeCommandReservation extends IntakeCommandReservationBase {
+export interface AppliedClarificationIntakeCommandReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.CLARIFICATION_ANALYSIS;
   readonly expectedIntakeRunVersion: IntakeRunVersion;
   readonly clarificationBinding: ClarificationCommandBinding;
   readonly externalOperationBinding: IntakeExternalOperationBinding;
 }
+
+export interface RejectedClarificationIntakeCommandReservation extends IntakeCommandReservationBase {
+  readonly operationKind: typeof IntakeCommandOperationKind.CLARIFICATION_ANALYSIS;
+  readonly expectedIntakeRunVersion: IntakeRunVersion;
+  readonly clarificationBinding: ClarificationCommandBinding;
+  readonly externalOperationBinding?: never;
+}
+
+export type ClarificationIntakeCommandReservation =
+  AppliedClarificationIntakeCommandReservation | RejectedClarificationIntakeCommandReservation;
 
 export interface ImmediateNoExecutionReservation extends IntakeCommandReservationBase {
   readonly operationKind: typeof IntakeCommandOperationKind.IMMEDIATE_NO_EXECUTION;
@@ -1266,7 +1295,16 @@ export function assertIntentProjectionInvariant(record: IntentProjectionRevision
   rawRequestRevision(record.rawRequestRevision);
   intentAnalysisProposalId(record.intentAnalysisProposalRef.id);
   sha256Digest(record.intentAnalysisProposalRef.digest);
-  assertNonBlank(record.objective, 'Intent Projection objective');
+  switch (record.schemaVersion) {
+    case 1:
+      assertNonBlank(record.objective, 'Intent Projection objective');
+      break;
+    case 2:
+      if (record.objective !== undefined) {
+        assertNonBlank(record.objective, 'Intent Projection objective');
+      }
+      break;
+  }
   assertUnique(record.requiredCriteria, 'Intent Projection required Criterion');
   assertUnique(record.optionalCriteria, 'Intent Projection optional Criterion');
   if (record.scope.projectPath !== undefined) {
@@ -1294,6 +1332,15 @@ export function assertIntentProjectionInvariant(record: IntentProjectionRevision
   }
   if (new Set(record.materialAmbiguityRefs).size !== record.materialAmbiguityRefs.length) {
     throw new DomainInvariantError('Intent Projection ambiguity references must be unique');
+  }
+  if (
+    record.schemaVersion === 2 &&
+    record.objective === undefined &&
+    record.materialAmbiguityRefs.length === 0
+  ) {
+    throw new DomainInvariantError(
+      'Intent Projection without an objective must retain an unresolved ambiguity reference',
+    );
   }
   assertNonBlank(record.canonicalProfileVersion, 'Intent Projection canonical profile version');
   sha256Digest(record.projectionDigest);
@@ -1330,6 +1377,56 @@ export function assertMaterialAmbiguityInvariant(ambiguity: MaterialAmbiguity): 
   }
   if (ambiguity.resolvedByRawRequestRevision !== undefined) {
     rawRequestRevision(ambiguity.resolvedByRawRequestRevision);
+  }
+}
+
+/**
+ * Closes the only canonical-profile-v2 omission introduced by M2.5: a missing
+ * objective remains explicit Proposal-bound ambiguity and cannot become a
+ * placeholder Projection value or an unowned Source Binding.
+ */
+export function assertIntentProjectionAmbiguityClosure(
+  proposal: IntentAnalysisProposal,
+  projection: IntentProjectionRevisionRecord,
+  ambiguitySet: MaterialAmbiguitySet,
+): void {
+  if (projection.objective !== undefined) {
+    return;
+  }
+  const objectiveAmbiguities = ambiguitySet.ambiguities.filter(
+    (ambiguity) =>
+      projection.materialAmbiguityRefs.includes(ambiguity.id) &&
+      ambiguity.intakeRunId === projection.intakeRunId &&
+      ambiguity.basedOnProjectionRevision === projection.revision &&
+      ambiguity.reasonCode === MaterialAmbiguityReasonCode.OBJECTIVE_UNRESOLVED &&
+      ambiguity.affectedFields.length === 1 &&
+      ambiguity.affectedFields[0] === IntentProjectionField.OBJECTIVE &&
+      ambiguity.sourceRefs.length === 1 &&
+      ambiguity.sourceRefs[0] === proposal.proposalDigest &&
+      ambiguity.status === MaterialAmbiguityStatus.UNRESOLVED &&
+      ambiguity.resolvedByRawRequestRevision === undefined,
+  );
+  if (
+    projection.schemaVersion !== 2 ||
+    projection.intentAnalysisProposalRef.id !== proposal.id ||
+    projection.intentAnalysisProposalRef.digest !== proposal.proposalDigest ||
+    proposal.intakeRunId !== projection.intakeRunId ||
+    ambiguitySet.intakeRunId !== projection.intakeRunId ||
+    ambiguitySet.intentProjectionId !== projection.id ||
+    ambiguitySet.intentProjectionRevision !== projection.revision ||
+    ambiguitySet.intentProjectionDigest !== projection.projectionDigest ||
+    projection.sourceBindings.some(
+      (binding) => binding.projectionFieldRef === IntentProjectionField.OBJECTIVE,
+    ) ||
+    projection.materialAmbiguityRefs.length !== ambiguitySet.ambiguities.length ||
+    projection.materialAmbiguityRefs.some(
+      (ambiguityId, index) => ambiguityId !== ambiguitySet.ambiguities[index]?.id,
+    ) ||
+    objectiveAmbiguities.length !== 1
+  ) {
+    throw new DomainInvariantError(
+      'Intent Projection without an objective must bind one exact Proposal-sourced OBJECTIVE_UNRESOLVED ambiguity',
+    );
   }
 }
 
@@ -1759,7 +1856,7 @@ export function intentProjectionRevisionProjection(
     ...(record.parentRevision === undefined ? {} : { parentRevision: record.parentRevision }),
     rawRequestRevision: record.rawRequestRevision,
     intentAnalysisProposalRef: record.intentAnalysisProposalRef,
-    objective: record.objective,
+    ...(record.objective === undefined ? {} : { objective: record.objective }),
     requiredCriteria: record.requiredCriteria,
     optionalCriteria: record.optionalCriteria,
     scope: record.scope,

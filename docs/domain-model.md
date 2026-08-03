@@ -12,8 +12,11 @@ outside that subset remain planned behavior. The accepted pre-Goal Intake
 records below have closed Domain types, codecs, semantic invariants, canonical
 projections, and strict SQLite persistence in M2.5 Slices 1 and 2. Slice 3 adds
 only protocol-neutral public Runtime package and assistant contracts plus an
-adapter candidate outside the Domain; that adapter is not accepted and no
-operational Runtime coordination path exists.
+implemented isolated read-only adapter outside the Domain. Slice 4 adds no new
+Domain authority shape; it implements Runtime-owned non-Answer coordination,
+source-bound Projection construction, deterministic Admission evaluation,
+clarification, abandonment, non-Answer no-execution, and typed status views over
+the accepted records.
 M2 Slice 0 accepted the planned external-execution,
 controlled-copy workspace-lease, and real local-verification contracts in ADR
 0028 through ADR 0030. ADR 0031 fixes the planned acceptance-critical
@@ -61,8 +64,10 @@ compilation and an isolated read-only Intake Adapter without adding Domain
 authority. Its empty `selectedAuthorityCapabilities` binding describes
 CodeClosure grants, not the App Server's model-visible tool inventory; observed
 tool use fails the operation under
-[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md).
-Coordinator, Projection construction, Admission evaluation, CLI, and execution
+[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). Slice 4 adds
+Coordinator, Projection, clarification, abandonment, and Admission behavior
+without adding Goal, Workflow, Start, Candidate, Evidence, or Acceptance
+authority. Answer-only/failure recovery, Materialization, CLI, and Start
 behavior remain planned for later slices.
 
 ## Design Rules
@@ -135,7 +140,7 @@ The M2.5 Slice 1 Intake Domain boundary adds distinct `RawRequestId`,
 interchanged with Goal, Workflow, Attempt, Worker, Command, or Acceptance
 identity.
 
-## Pre-Goal Intake — Domain contracts implemented; behavior planned for M2.5
+## Pre-Goal Intake — Domain contracts and Slice 4 behavior implemented
 
 Goal Intake records the path from user input to source-bound admitted formal
 intent without creating Workflow authority early. Its minimal record
@@ -211,6 +216,17 @@ canonical digests. A change to user content, trusted interaction action,
 objective, criteria, scope, non-goals, assumptions, requested execution
 disposition, or a material Source Binding creates a new revision and makes an
 earlier Projection/Admission chain stale for new Materialization.
+
+Intent Projection has two closed record-schema variants. Schema version 1 is
+paired with canonical profile `codeclosure-m2-5-projection-v1` and requires a
+non-blank objective. The Slice 4 compiler emits schema version 2 paired with
+`codeclosure-m2-5-projection-v2`; an absent objective is legal only as one exact
+Proposal-digest-bound unresolved `OBJECTIVE_UNRESOLVED` ambiguity, with no
+objective Source Binding or placeholder text. Admission and Store
+commit/reopen enforce that closure; Goal Materialization continues to require
+one non-blank `USER_STATED` objective. Migration
+`0029_intent_projection_schema_v2.sql` preserves existing schema-version-1
+records and digests byte-for-byte while admitting the new variant.
 
 A clarification Raw Request revision also embeds the exact answered Question
 ID, question-spec/record digests, and issuing Decision ID/digest in its semantic
@@ -1560,18 +1576,18 @@ describes.
 
 | Record | Proposal source | Validation owner | Mutation owner |
 | --- | --- | --- | --- |
-| Raw Request revision — planned M2.5 | identified user / trusted interaction surface | Intake input and retention policy | Goal Intake Coordinator, immutable persistence |
-| Intake Run — planned M2.5 | user command / Intake policy | Goal Intake Coordinator | Goal Intake Coordinator through audited versioned transaction |
-| Intake Command Reservation — planned M2.5 | trusted application command with exact principal, target, version, and canonical input digest | Goal Intake Coordinator plus Store uniqueness, target, and digest backstops | Runtime transaction plan; immutable Store persistence before external work |
-| Intake Manifest — planned M2.5 | Runtime compiler over exact retained Intake, policy, adapter, response-contract, provenance, omission, and budget inputs | Goal Intake Coordinator canonical binding and Store digest/relationship backstops | Runtime transaction plan; immutable Store persistence with the owning reservation before external work |
-| Intake Command Outcome — planned M2.5 | Runtime compound-transaction result, never caller or assistant output | Store exact reservation, digest, version, disposition, causal-time, and authority-binding validation | Store-authored immutable persistence in the owning result transaction |
-| Intent Analysis Proposal — planned M2.5 | Intake Assistant | Goal Intake Coordinator closed-schema and binding validation | Goal Intake Coordinator, immutable untrusted-observation persistence |
-| Intent Projection revision — planned M2.5 | current Raw Request plus validated Proposal and observations | Goal Intake Coordinator and Projection policy | Goal Intake Coordinator, immutable revision persistence |
-| Source Binding / Material Ambiguity — planned M2.5 | exact source records and policy | Goal Intake Coordinator and source/materiality policy | Goal Intake Coordinator, immutable persistence |
-| Clarification Question — planned M2.5 | exact current Material Ambiguity plus Engine-issued `CLARIFY` Question-plan binding and question policy | Goal Intake Coordinator schema/current-question validation; Store recomputation of spec/Decision/record digests and exact bidirectional references | Runtime Admission transaction atomically persists Decision, Question, active reference, lifecycle, audit, and outcome; at most one active question in M2.5 |
-| Clarification Answer Binding — planned M2.5 | exact admitted clarification command plus Question-bound Raw Request revision | Goal Intake Coordinator schema/command/current-question validation; Store digest, parent, uniqueness, and cross-reference backstops | Runtime clarification transaction atomically persists Raw Request revision, immutable Answer Binding, cleared active reference, lifecycle, Manifest, audit, and outcome |
-| Intent Admission Policy — planned M2.5 | trusted composition definition | Runtime and Store canonical policy validation | Runtime installer, immutable Store persistence |
-| Intent Admission Decision — planned M2.5 | exact pre-analysis Raw Request or complete source-bound Projection view | deterministic Intent Admission Engine plus Store backstop | Admission Engine issuance; immutable Store persistence |
+| Raw Request revision — implemented through M2.5 Slice 4 | identified user / trusted interaction surface | Intake input and retention policy | Goal Intake Coordinator, immutable persistence |
+| Intake Run — implemented through M2.5 Slice 4 | user command / Intake policy | Goal Intake Coordinator | Goal Intake Coordinator through audited versioned transaction |
+| Intake Command Reservation — implemented through M2.5 Slice 4 | trusted application command with exact principal, target, version, and canonical input digest | Goal Intake Coordinator plus Store uniqueness, target, and digest backstops | Runtime transaction plan; immutable Store persistence before external work |
+| Intake Manifest — implemented M2.5 Slice 3 | Runtime compiler over exact retained Intake, policy, adapter, response-contract, provenance, omission, and budget inputs | Goal Intake Coordinator canonical binding and Store digest/relationship backstops | Runtime transaction plan; immutable Store persistence with the owning reservation before external work |
+| Intake Command Outcome — implemented through M2.5 Slice 4 | Runtime compound-transaction result, never caller or assistant output | Store exact reservation, digest, version, disposition, causal-time, and authority-binding validation | Store-authored immutable persistence in the owning result transaction |
+| Intent Analysis Proposal — implemented M2.5 Slice 4 | Intake Assistant | Goal Intake Coordinator closed-schema and binding validation | Goal Intake Coordinator, immutable untrusted-observation persistence |
+| Intent Projection revision — implemented M2.5 Slice 4 | current Raw Request plus validated Proposal and observations | Goal Intake Coordinator and Projection policy | Goal Intake Coordinator, immutable revision persistence |
+| Source Binding / Material Ambiguity — implemented M2.5 Slice 4 | exact source records and policy | Goal Intake Coordinator and source/materiality policy | Goal Intake Coordinator, immutable persistence |
+| Clarification Question — implemented M2.5 Slice 4 | exact current Material Ambiguity plus Engine-issued `CLARIFY` Question-plan binding and question policy | Goal Intake Coordinator schema/current-question validation; Store recomputation of spec/Decision/record digests and exact bidirectional references | Runtime Admission transaction atomically persists Decision, Question, active reference, lifecycle, audit, and outcome; at most one active question in M2.5 |
+| Clarification Answer Binding — implemented M2.5 Slice 4 | exact admitted clarification command plus Question-bound Raw Request revision | Goal Intake Coordinator schema/command/current-question validation; Store digest, parent, uniqueness, and cross-reference backstops | Runtime clarification transaction atomically persists Raw Request revision, immutable Answer Binding, cleared active reference, lifecycle, Manifest, audit, and outcome |
+| Intent Admission Policy — implemented M2.5 Slice 1 | trusted composition definition | Runtime and Store canonical policy validation | Runtime installer, immutable Store persistence |
+| Intent Admission Decision — implemented M2.5 Slice 4 for non-Answer paths | exact pre-analysis Raw Request or complete source-bound Projection view | deterministic Intent Admission Engine plus Store backstop | Admission Engine issuance; immutable Store persistence |
 | Answer-only Response — planned M2.5 | Intake Assistant answer content or Runtime-classified delivery failure | Goal Intake Coordinator closed-schema, budget, binding, and retention validation | Goal Intake Coordinator, immutable non-authoritative response persistence |
 | Intake Failure Record — planned M2.5 | Runtime observation of bounded Intake operation failure or startup interruption | Goal Intake Coordinator and Store version/failure backstops | Goal Intake Coordinator through audited terminal transaction |
 | Goal Materialization — planned M2.5 | current `MATERIALIZE` decision | Goal Manager, Workflow Runtime, and Store backstops | Runtime application compound transaction, immutable record |
