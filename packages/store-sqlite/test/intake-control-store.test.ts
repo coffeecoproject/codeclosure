@@ -124,6 +124,7 @@ import {
 import { createWorkflowStartAuthorityRuntime } from '@codeclosure/testing';
 
 const digests = new CanonicalJsonSha256DigestProvider();
+const EARLIER = isoTimestamp('2026-08-03T05:59:59.999Z');
 const NOW = isoTimestamp('2026-08-03T06:00:00.000Z');
 const LATER = isoTimestamp('2026-08-03T06:00:00.001Z');
 const LAST = isoTimestamp('2026-08-03T06:00:00.002Z');
@@ -594,6 +595,94 @@ function clarifyFixtures(base: ReturnType<typeof fixtures>, namespace: string) {
   };
 }
 
+function projectIdentityClarifyFixtures(base: ReturnType<typeof fixtures>, namespace: string) {
+  const original = clarifyFixtures(base, namespace);
+  const originalAmbiguity = original.ambiguitySet.ambiguities[0];
+  if (originalAmbiguity === undefined) {
+    throw new Error('Fixture did not create a material ambiguity');
+  }
+  const ambiguitySetBase: MaterialAmbiguitySet = {
+    ...original.ambiguitySet,
+    ambiguities: [
+      {
+        ...originalAmbiguity,
+        reasonCode: MaterialAmbiguityReasonCode.PROJECT_IDENTITY_UNRESOLVED,
+        affectedFields: [IntentProjectionField.PROJECT_IDENTITY],
+      },
+    ],
+    ambiguitySetDigest: FIXTURE_DIGEST,
+  };
+  const ambiguitySet = decodeMaterialAmbiguitySet(
+    {
+      ...ambiguitySetBase,
+      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
+    },
+    digests,
+  );
+  const questionSpecBase: ClarificationQuestionSpec = {
+    ...original.questionSpec,
+    prompt: 'Which exact project path should this Intake govern?',
+    affectedFields: [IntentProjectionField.PROJECT_IDENTITY],
+    answerSchema: { schemaVersion: 1, kind: ClarificationAnswerSchemaKind.PROJECT_PATH },
+    questionSpecDigest: FIXTURE_DIGEST,
+  };
+  const questionSpec = decodeClarificationQuestionSpec(
+    {
+      ...questionSpecBase,
+      questionSpecDigest: digests.digest(clarificationQuestionSpecProjection(questionSpecBase)),
+    },
+    digests,
+  );
+  const decisionBase: IntentAdmissionDecision = {
+    ...original.decision,
+    questionPlanBinding: {
+      questionId: original.question.id,
+      questionSpecDigest: questionSpec.questionSpecDigest,
+    },
+    decisionDigest: FIXTURE_DIGEST,
+  };
+  const decision = decodeIntentAdmissionDecision(
+    {
+      ...decisionBase,
+      decisionDigest: digests.digest(intentAdmissionDecisionProjection(decisionBase)),
+    },
+    digests,
+  );
+  if (decision.kind !== IntentAdmissionDecisionKind.CLARIFY) {
+    throw new Error('Fixture did not retain a CLARIFY Decision');
+  }
+  const questionBase: ClarificationQuestion = {
+    ...original.question,
+    intentAdmissionDecisionDigest: decision.decisionDigest,
+    prompt: questionSpec.prompt,
+    affectedFields: questionSpec.affectedFields,
+    answerSchema: questionSpec.answerSchema,
+    questionSpecDigest: questionSpec.questionSpecDigest,
+    questionDigest: FIXTURE_DIGEST,
+  };
+  const question = decodeClarificationQuestion(
+    {
+      ...questionBase,
+      questionDigest: digests.digest(clarificationQuestionProjection(questionBase)),
+    },
+    digests,
+  );
+  const needsRun = decodeIntakeRun({
+    ...original.needsRun,
+    activeQuestionRef: {
+      clarificationQuestionId: question.id,
+      questionSpecDigest: question.questionSpecDigest,
+      questionDigest: question.questionDigest,
+      issuingDecisionId: decision.id,
+      issuingDecisionDigest: decision.decisionDigest,
+    },
+  });
+  if (needsRun.status !== IntakeRunStatus.NEEDS_CLARIFICATION) {
+    throw new Error('Fixture did not retain a NEEDS_CLARIFICATION Intake Run');
+  }
+  return { ...original, ambiguitySet, questionSpec, decision, question, needsRun };
+}
+
 function clarificationAnswerFixtures(
   base: ReturnType<typeof fixtures>,
   clarify: ReturnType<typeof clarifyFixtures>,
@@ -764,6 +853,106 @@ function clarificationAnswerFixtures(
     ),
   ]);
   return { command, revision, answerBinding, manifest, reservation, analyzingRun, audits };
+}
+
+function projectCorrectionAnswerFixtures(
+  base: ReturnType<typeof fixtures>,
+  clarify: ReturnType<typeof clarifyFixtures>,
+  namespace: string,
+) {
+  const original = clarificationAnswerFixtures(base, clarify, namespace);
+  const projectRef = Object.freeze({
+    schemaVersion: 1 as const,
+    normalizedPath: `/fixture/${namespace}-corrected`,
+    identityDigest: sha256Digest(`sha256:${'c'.repeat(64)}`),
+  });
+  const revisionBase: RawRequestRevisionRecord = {
+    ...original.revision,
+    admittedUserContent: projectRef.normalizedPath,
+    admittedContentDigest: digests.digestUtf8(projectRef.normalizedPath),
+    declaredProjectRef: projectRef,
+    rawRequestDigest: FIXTURE_DIGEST,
+  };
+  const revision = decodeRawRequestRevision(
+    {
+      ...revisionBase,
+      rawRequestDigest: digests.digest(rawRequestRevisionProjection(revisionBase)),
+    },
+    digests,
+  );
+  const answerBindingBase: ClarificationAnswerBinding = {
+    ...original.answerBinding,
+    rawRequestDigest: revision.rawRequestDigest,
+    answerBindingDigest: FIXTURE_DIGEST,
+  };
+  const answerBinding = decodeClarificationAnswerBinding(
+    {
+      ...answerBindingBase,
+      answerBindingDigest: digests.digest(clarificationAnswerBindingProjection(answerBindingBase)),
+    },
+    digests,
+  );
+  const manifestBase: IntakeManifest = {
+    ...original.manifest,
+    rawRequestRevisions: [
+      original.manifest.rawRequestRevisions[0] ?? {
+        rawRequestId: base.revision.rawRequestId,
+        revision: base.revision.revision,
+        digest: base.revision.rawRequestDigest,
+      },
+      {
+        rawRequestId: revision.rawRequestId,
+        revision: revision.revision,
+        digest: revision.rawRequestDigest,
+      },
+    ],
+    declaredProjectRef: projectRef,
+    answerBindingDigests: [answerBinding.answerBindingDigest],
+    packageDigest: digests.digest({
+      command: original.command,
+      revision: revision.rawRequestDigest,
+    }),
+    manifestDigest: FIXTURE_DIGEST,
+  };
+  const manifest = decodeIntakeManifest(
+    {
+      ...manifestBase,
+      manifestDigest: digests.digest(intakeManifestProjection(manifestBase)),
+    },
+    digests,
+  );
+  const reservationBase: IntakeCommandReservation = {
+    ...original.reservation,
+    externalOperationBinding: {
+      ...original.reservation.externalOperationBinding,
+      manifestId: manifest.id,
+      manifestDigest: manifest.manifestDigest,
+    },
+    reservationDigest: FIXTURE_DIGEST,
+  };
+  const reservation = decodeIntakeCommandReservation(
+    {
+      ...reservationBase,
+      reservationDigest: digests.digest(intakeCommandReservationProjection(reservationBase)),
+    },
+    digests,
+  );
+  if (reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) {
+    throw new Error('Fixture did not retain a CLARIFICATION_ANALYSIS reservation');
+  }
+  const analyzingRun = decodeIntakeRun({
+    ...original.analyzingRun,
+    projectRef,
+    activeRawRequestRevision: {
+      rawRequestId: revision.rawRequestId,
+      revision: revision.revision,
+      digest: revision.rawRequestDigest,
+    },
+  });
+  if (analyzingRun.status !== IntakeRunStatus.ANALYZING) {
+    throw new Error('Fixture did not retain an ANALYZING Intake Run');
+  }
+  return { ...original, projectRef, revision, answerBinding, manifest, reservation, analyzingRun };
 }
 
 function abandonmentFixtures(
@@ -1870,6 +2059,93 @@ void test('[I-006][I-008][I-009] analyzed CLARIFY authority commits Decision, Qu
   assert.equal(authority.outcomes.length, 1);
 });
 
+void test('[I-006][I-008][I-032] Intake commit rejects a digest-valid substituted project identity', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('substituted-decision-project');
+  const immediate = immediateNoExecutionFixtures(base, 'substituted-decision-project');
+  const substitutedProjectRef = Object.freeze({
+    schemaVersion: 1 as const,
+    normalizedPath: '/fixture/substituted-decision-project-foreign',
+    identityDigest: sha256Digest(`sha256:${'b'.repeat(64)}`),
+  });
+  const decisionBase: IntentAdmissionDecision = {
+    ...immediate.decision,
+    projectOrScopeRef: substitutedProjectRef,
+    decisionDigest: FIXTURE_DIGEST,
+  };
+  const decision = decodeIntentAdmissionDecision(
+    {
+      ...decisionBase,
+      decisionDigest: digests.digest(intentAdmissionDecisionProjection(decisionBase)),
+    },
+    digests,
+  );
+  if (decision.kind !== IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION) {
+    throw new Error('Substituted fixture did not retain a pre-analysis NO_EXECUTION Decision');
+  }
+  const noExecutionRun = decodeIntakeRun({
+    ...immediate.noExecutionRun,
+    terminalDecisionRef: {
+      ...immediate.noExecutionRun.terminalDecisionRef,
+      id: decision.id,
+      digest: decision.decisionDigest,
+    },
+  });
+  if (noExecutionRun.status !== IntakeRunStatus.NO_EXECUTION) {
+    throw new Error('Fixture did not retain a NO_EXECUTION Intake Run');
+  }
+  const store = openStore(filename);
+  t.after(() => store.close());
+  installPolicy(store, 'substituted-decision-project', immediate.policy);
+
+  assert.throws(
+    () =>
+      store.commitIntakeNoExecution({
+        kind: 'IMMEDIATE',
+        rawRequest: base.rawRequest,
+        rawRequestRevision: base.revision,
+        reservation: immediate.reservation,
+        decision,
+        intakeRun: noExecutionRun,
+        completedAt: LATER,
+        auditEvents: immediate.audits,
+      }),
+    /project|scope|source chain|authority/i,
+  );
+  assert.equal(store.getIntakeAuthority(base.analyzingRun.id), undefined);
+});
+
+void test('[I-008][I-012] Intake write rejects audit time before its source authority', (t) => {
+  const filename = temporaryDatabase(t);
+  const fixture = fixtures('audit-source-floor-write');
+  const store = openStore(filename);
+  t.after(() => store.close());
+  installPolicy(store, 'audit-source-floor-write', fixture.policy);
+  const [rawAudit, runAudit, reservationAudit] = fixture.reservationAudits;
+  if (rawAudit === undefined || runAudit === undefined || reservationAudit === undefined) {
+    throw new Error('Fixture did not create the exact reservation audit plan');
+  }
+  const regressedAudits: readonly IntakeAuditWrite[] = Object.freeze([
+    { ...rawAudit, occurredAt: EARLIER },
+    runAudit,
+    reservationAudit,
+  ]);
+
+  assert.throws(
+    () =>
+      store.reserveInitialIntake({
+        rawRequest: fixture.rawRequest,
+        rawRequestRevision: fixture.revision,
+        intakeRun: fixture.analyzingRun,
+        manifest: fixture.manifest,
+        reservation: fixture.reservation,
+        auditEvents: regressedAudits,
+      }),
+    /audit plan|causal|source/i,
+  );
+  assert.equal(store.getIntakeAuthority(fixture.analyzingRun.id), undefined);
+});
+
 void test('[I-006][I-008][I-009] clarification reservation binds one exact Question and one immutable Answer Binding', (t) => {
   const filename = temporaryDatabase(t);
   const base = fixtures('clarification-answer');
@@ -1936,6 +2212,126 @@ void test('[I-006][I-008][I-009] clarification reservation binds one exact Quest
   assert.equal(authority.questions.length, 1);
   assert.equal(authority.reservations.length, 2);
   assert.equal(authority.outcomes.length, 1);
+});
+
+void test('[I-006][I-008][I-009][I-032] project-identity clarification retains historical Manifest authority across correction', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('project-correction');
+  const clarify = projectIdentityClarifyFixtures(base, 'project-correction');
+  const answer = projectCorrectionAnswerFixtures(base, clarify, 'project-correction');
+  const store = openStore(filename);
+  installPolicy(store, 'project-correction', base.policy);
+  persistClarification(store, base, clarify);
+
+  assert.equal(
+    store.reserveClarificationIntake({
+      rawRequestRevision: answer.revision,
+      answerBinding: answer.answerBinding,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: answer.audits,
+    }).status,
+    'RESERVED',
+  );
+  store.close();
+
+  const reopened = openStore(filename);
+  t.after(() => reopened.close());
+  const authority = reopened.getIntakeAuthority(base.analyzingRun.id);
+  assert.ok(authority);
+  assert.deepEqual(authority.intakeRun.projectRef, answer.projectRef);
+  assert.deepEqual(authority.rawRequestRevisions, [base.revision, answer.revision]);
+  assert.deepEqual(
+    authority.manifests.map((manifest) => manifest.declaredProjectRef),
+    [base.projectRef, answer.projectRef],
+  );
+});
+
+void test('[I-006][I-008][I-009][I-032] non-project clarification cannot replace retained project identity', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('unauthorized-project-correction');
+  const clarify = clarifyFixtures(base, 'unauthorized-project-correction');
+  const answer = projectCorrectionAnswerFixtures(base, clarify, 'unauthorized-project-correction');
+  const store = openStore(filename);
+  t.after(() => store.close());
+  installPolicy(store, 'unauthorized-project-correction', base.policy);
+  persistClarification(store, base, clarify);
+
+  assert.throws(
+    () =>
+      store.reserveClarificationIntake({
+        rawRequestRevision: answer.revision,
+        answerBinding: answer.answerBinding,
+        intakeRun: answer.analyzingRun,
+        manifest: answer.manifest,
+        reservation: answer.reservation,
+        auditEvents: answer.audits,
+      }),
+    /invalid versioned Intake Run update|replace project identity|project.identity Question|Question\/Answer authority/i,
+  );
+  const authority = store.getIntakeAuthority(base.analyzingRun.id);
+  assert.ok(authority);
+  assert.deepEqual(authority.intakeRun, clarify.needsRun);
+  assert.deepEqual(authority.rawRequestRevisions, [base.revision]);
+});
+
+void test('[I-006][I-008][I-012] clarification reservation rejects a digest-valid reordered Manifest revision chain', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('reordered-manifest-revisions');
+  const clarify = clarifyFixtures(base, 'reordered-manifest-revisions');
+  const answer = clarificationAnswerFixtures(base, clarify, 'reordered-manifest-revisions');
+  const manifestBase: IntakeManifest = {
+    ...answer.manifest,
+    rawRequestRevisions: [...answer.manifest.rawRequestRevisions].reverse(),
+    manifestDigest: FIXTURE_DIGEST,
+  };
+  const manifest = decodeIntakeManifest(
+    {
+      ...manifestBase,
+      manifestDigest: digests.digest(intakeManifestProjection(manifestBase)),
+    },
+    digests,
+  );
+  const reservationBase: IntakeCommandReservation = {
+    ...answer.reservation,
+    externalOperationBinding: {
+      ...answer.reservation.externalOperationBinding,
+      manifestDigest: manifest.manifestDigest,
+    },
+    reservationDigest: FIXTURE_DIGEST,
+  };
+  const reservation = decodeIntakeCommandReservation(
+    {
+      ...reservationBase,
+      reservationDigest: digests.digest(intakeCommandReservationProjection(reservationBase)),
+    },
+    digests,
+  );
+  if (reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) {
+    throw new Error('Fixture did not retain a CLARIFICATION_ANALYSIS reservation');
+  }
+  const store = openStore(filename);
+  t.after(() => store.close());
+  installPolicy(store, 'reordered-manifest-revisions', base.policy);
+  persistClarification(store, base, clarify);
+
+  assert.throws(
+    () =>
+      store.reserveClarificationIntake({
+        rawRequestRevision: answer.revision,
+        answerBinding: answer.answerBinding,
+        intakeRun: answer.analyzingRun,
+        manifest,
+        reservation,
+        auditEvents: answer.audits,
+      }),
+    /Manifest.*revision|Raw Request.*order|authority/i,
+  );
+  const authority = store.getIntakeAuthority(base.analyzingRun.id);
+  assert.ok(authority);
+  assert.deepEqual(authority.intakeRun, clarify.needsRun);
+  assert.deepEqual(authority.rawRequestRevisions, [base.revision]);
 });
 
 void test('[I-006][I-008][I-009] competing clarification answers retain one revision and return a typed stale loser', (t) => {
@@ -2786,6 +3182,147 @@ void test('[I-006][I-008][I-009] strict reopen rejects a missing Intake audit re
   );
 });
 
+void test('[I-006][I-008][I-009] strict reopen rejects Intake audit relationships moved across reserved Runs', (t) => {
+  const filename = temporaryDatabase(t);
+  const first = fixtures('cross-run-audit-first');
+  const second = fixtures('cross-run-audit-second');
+  const store = openStore(filename);
+  installPolicy(store, 'cross-run-audit', first.policy);
+  for (const fixture of [first, second]) {
+    assert.equal(
+      store.reserveInitialIntake({
+        rawRequest: fixture.rawRequest,
+        rawRequestRevision: fixture.revision,
+        intakeRun: fixture.analyzingRun,
+        manifest: fixture.manifest,
+        reservation: fixture.reservation,
+        auditEvents: fixture.reservationAudits,
+      }).status,
+      'RESERVED',
+    );
+  }
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = OFF');
+    database.exec('DROP TRIGGER intake_audit_events_no_update');
+    database.exec('DROP TRIGGER audit_events_no_update');
+    database
+      .prepare(
+        `UPDATE intake_audit_events
+            SET intake_run_id = CASE
+              WHEN command_id = ? THEN 'intake_audit-swap-first'
+              WHEN command_id = ? THEN 'intake_audit-swap-second'
+            END
+          WHERE command_id IN (?, ?)`,
+      )
+      .run(
+        first.reservation.commandId,
+        second.reservation.commandId,
+        first.reservation.commandId,
+        second.reservation.commandId,
+      );
+    database
+      .prepare(
+        `UPDATE intake_audit_events
+            SET intake_run_id = CASE
+              WHEN intake_run_id = 'intake_audit-swap-first' THEN ?
+              WHEN intake_run_id = 'intake_audit-swap-second' THEN ?
+            END
+          WHERE intake_run_id IN ('intake_audit-swap-first', 'intake_audit-swap-second')`,
+      )
+      .run(second.analyzingRun.id, first.analyzingRun.id);
+    database
+      .prepare(
+        `UPDATE audit_events
+            SET aggregate_id = CASE
+              WHEN command_id = ? THEN ?
+              WHEN command_id = ? THEN ?
+            END
+          WHERE command_id IN (?, ?)`,
+      )
+      .run(
+        first.reservation.commandId,
+        second.analyzingRun.id,
+        second.reservation.commandId,
+        first.analyzingRun.id,
+        first.reservation.commandId,
+        second.reservation.commandId,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => openStore(filename), /audit relationship|reservation|strict reopen/i);
+});
+
+void test('[I-006][I-008][I-012] strict reopen rejects reordered Intake command audit blocks', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('reordered-command-audits');
+  const clarify = clarifyFixtures(base, 'reordered-command-audits');
+  const answer = clarificationAnswerFixtures(base, clarify, 'reordered-command-audits');
+  const store = openStore(filename);
+  installPolicy(store, 'reordered-command-audits', base.policy);
+  persistClarification(store, base, clarify);
+  assert.equal(
+    store.reserveClarificationIntake({
+      rawRequestRevision: answer.revision,
+      answerBinding: answer.answerBinding,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: answer.audits,
+    }).status,
+    'RESERVED',
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER intake_audit_events_no_update');
+    database
+      .prepare('UPDATE intake_audit_events SET position = position + 100 WHERE intake_run_id = ?')
+      .run(base.analyzingRun.id);
+    database
+      .prepare(
+        `UPDATE intake_audit_events
+            SET position = CASE
+              WHEN command_id = ? THEN position - 100 + 3
+              WHEN command_id = ? THEN position - 100 - 8
+            END
+          WHERE intake_run_id = ?`,
+      )
+      .run(base.reservation.commandId, answer.reservation.commandId, base.analyzingRun.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => openStore(filename), /audit sequence|audit relationship|strict reopen/i);
+});
+
+void test('[I-006][I-008][I-012] strict reopen rejects Intake audit time before proposal authority', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('audit-source-floor-reopen');
+  const clarify = clarifyFixtures(base, 'audit-source-floor-reopen');
+  const store = openStore(filename);
+  installPolicy(store, 'audit-source-floor-reopen', base.policy);
+  persistClarification(store, base, clarify);
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER audit_events_no_update');
+    database
+      .prepare('UPDATE audit_events SET occurred_at = ? WHERE id = ?')
+      .run(NOW, clarify.audits[0]?.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => openStore(filename), /audit.*source|audit.*causal|strict reopen/i);
+});
+
 void test('[I-006][I-008][I-009] strict reopen rejects codec-invalid retained Intake authority', (t) => {
   const filename = temporaryDatabase(t);
   const fixture = fixtures('poisoned-reopen');
@@ -2860,7 +3397,10 @@ void test('[I-006][I-008][I-009] strict reopen rejects an answered Raw Request w
   } finally {
     database.close();
   }
-  assert.throws(() => openStore(filename), /Answer Binding|strict reopen/);
+  assert.throws(
+    () => openStore(filename),
+    /Answer Binding|Raw Request time authority|strict reopen/,
+  );
 });
 
 void test('[I-006][I-008][I-009] strict reopen rejects a codec-valid Answer Binding moved across Intake Runs', (t) => {

@@ -20,14 +20,17 @@ import {
   ExternalMaintenanceState,
   GoalStatus,
   GuardOutcome,
+  ClarificationAnswerSchemaKind,
   IntakeCommandDisposition,
   IntakeCommandOperationKind,
   IntakeInteractionAction,
+  IntakeManifestOperation,
   IntakeRunStatus,
   IntentAdmissionDecisionKind,
   IntentAdmissionOutcome,
   IntentAdmissionReasonCode,
   IntentExecutionDisposition,
+  IntentProjectionField,
   RecoveryReconciliationDisposition,
   RecoveryReconciliationPurpose,
   RunStatus,
@@ -186,6 +189,7 @@ import {
   type ClarificationAnswerBinding,
   type ClarificationQuestion,
   type ClarificationQuestionSpec,
+  type DeclaredProjectRef,
   type GoalMaterializationRecord,
   type GoalStartAuthorization,
   type IntakeCommandOutcome,
@@ -679,6 +683,69 @@ function sameCanonicalAuthority(left: unknown, right: unknown): boolean {
   return canonicalizeJson(decodeJsonValue(left)) === canonicalizeJson(decodeJsonValue(right));
 }
 
+function sameOptionalProjectRef(
+  left: DeclaredProjectRef | undefined,
+  right: DeclaredProjectRef | undefined,
+): boolean {
+  return left === undefined
+    ? right === undefined
+    : right !== undefined && sameCanonicalAuthority(left, right);
+}
+
+function assertExactIntakeProjectChain(
+  run: IntakeRun,
+  revision: RawRequestRevisionRecord,
+  projection?: IntentProjectionRevisionRecord,
+  decision?: IntentAdmissionDecision,
+): void {
+  const declaredProject = revision.declaredProjectRef;
+  if (
+    revision.intakeRunId !== run.id ||
+    revision.rawRequestId !== run.activeRawRequestRevision.rawRequestId ||
+    revision.revision !== run.activeRawRequestRevision.revision ||
+    revision.rawRequestDigest !== run.activeRawRequestRevision.digest ||
+    !sameOptionalProjectRef(run.projectRef, declaredProject) ||
+    (projection !== undefined &&
+      (projection.intakeRunId !== run.id ||
+        projection.rawRequestRevision !== revision.revision ||
+        projection.scope.projectPath !== declaredProject?.normalizedPath)) ||
+    (decision?.projectOrScopeRef !== undefined &&
+      (declaredProject === undefined ||
+        !sameCanonicalAuthority(decision.projectOrScopeRef, declaredProject)))
+  ) {
+    throw new StoreInvariantError(`Intake Run ${run.id} has a substituted project/scope chain`);
+  }
+}
+
+function assertExactIntakeManifestRevisionChain(
+  manifest: IntakeManifest,
+  revision: RawRequestRevisionRecord,
+): void {
+  const currentReference = manifest.rawRequestRevisions.at(-1);
+  if (
+    manifest.intakeRunId !== revision.intakeRunId ||
+    manifest.rawRequestRevisions.length !== revision.revision ||
+    manifest.rawRequestRevisions.some(
+      (reference, index) =>
+        reference.rawRequestId !== revision.rawRequestId || reference.revision !== index + 1,
+    ) ||
+    currentReference?.revision !== revision.revision ||
+    currentReference.digest !== revision.rawRequestDigest ||
+    !sameOptionalProjectRef(manifest.declaredProjectRef, revision.declaredProjectRef)
+  ) {
+    throw new StoreInvariantError(
+      `Intake Manifest ${manifest.id} has no exact current Raw Request revision`,
+    );
+  }
+}
+
+function isExactProjectIdentityQuestion(question: ClarificationQuestion | undefined): boolean {
+  return (
+    question?.answerSchema.kind === ClarificationAnswerSchemaKind.PROJECT_PATH &&
+    sameCanonicalAuthority(question.affectedFields, [IntentProjectionField.PROJECT_IDENTITY])
+  );
+}
+
 const intakeAuthorityTableNames = Object.freeze([
   'intent_admission_policies',
   'raw_requests',
@@ -1168,15 +1235,18 @@ function assertExactIntakeAuditPlan(
   writes: readonly IntakeAuditWrite[],
   runIdentifier: string,
   expectedEventTypes: readonly IntakeAuditEventName[],
+  causalFloors: readonly IsoTimestamp[],
   terminalAt: IsoTimestamp,
 ): void {
   if (
     writes.length !== expectedEventTypes.length ||
+    causalFloors.length !== expectedEventTypes.length ||
     writes.some(
       (write, index) =>
         write.aggregateType !== IntakeAuditAggregateType.INTAKE_RUN ||
         write.aggregateId !== runIdentifier ||
         write.eventType !== expectedEventTypes[index] ||
+        write.occurredAt < (causalFloors[index] ?? terminalAt) ||
         (index > 0 && write.occurredAt < (writes[index - 1]?.occurredAt ?? write.occurredAt)),
     ) ||
     writes.at(-1)?.occurredAt !== terminalAt
@@ -2501,6 +2571,41 @@ export class SqliteControlStore
     return decodeIntakeRun(parseJson(parsed.record_json, 'Intake Run'));
   }
 
+  private getRawRequestRevisionInsideTransaction(
+    rawRequestIdentifier: string,
+    revision: number,
+  ): RawRequestRevisionRecord | undefined {
+    const row = this.#database
+      .prepare(
+        'SELECT record_json FROM raw_request_revisions WHERE raw_request_id = ? AND revision = ?',
+      )
+      .get(rawRequestIdentifier, revision);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z.object({ record_json: z.string() }).strict().parse(row);
+    return decodeRawRequestRevision(
+      parseJson(parsed.record_json, 'Raw Request revision'),
+      canonicalAuthorityDigests,
+    );
+  }
+
+  private getClarificationQuestionInsideTransaction(
+    questionIdentifier: string,
+  ): ClarificationQuestion | undefined {
+    const row = this.#database
+      .prepare('SELECT record_json FROM clarification_questions WHERE id = ?')
+      .get(questionIdentifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z.object({ record_json: z.string() }).strict().parse(row);
+    return decodeClarificationQuestion(
+      parseJson(parsed.record_json, 'Clarification Question'),
+      canonicalAuthorityDigests,
+    );
+  }
+
   public getIntakeAuthority(rawIntakeRunId: string): IntakeAuthorityView | undefined {
     this.assertOpen();
     const runIdentifier = intakeRunId(rawIntakeRunId);
@@ -3342,6 +3447,7 @@ export class SqliteControlStore
       auditEvents,
       run.id,
       initialIntakeReservationAuditEvents,
+      [revision.submittedAt, run.createdAt, reservation.reservedAt],
       reservation.reservedAt,
     );
     if (
@@ -3363,12 +3469,18 @@ export class SqliteControlStore
       reservation.observedIntakeRunVersion !== run.version ||
       reservation.externalOperationBinding.manifestId !== manifest.id ||
       reservation.externalOperationBinding.manifestDigest !== manifest.manifestDigest ||
+      manifest.operation !==
+        (reservation.operationKind === IntakeCommandOperationKind.ANSWER_ONLY
+          ? IntakeManifestOperation.ANSWER_ONLY
+          : IntakeManifestOperation.INTENT_ANALYSIS) ||
       rawRequest.createdAt > revision.submittedAt ||
       revision.submittedAt > run.updatedAt ||
       manifest.createdAt > reservation.reservedAt
     ) {
       throw new StoreInvariantError('Initial Intake reservation has inconsistent authority');
     }
+    assertExactIntakeManifestRevisionChain(manifest, revision);
+    assertExactIntakeProjectChain(run, revision);
     if (revision.declaredProjectRef !== undefined) {
       this.#authorityIsolationLease?.assertProjectPathAllowed(
         revision.declaredProjectRef.normalizedPath,
@@ -3432,6 +3544,7 @@ export class SqliteControlStore
       auditEvents,
       nextRun.id,
       clarificationIntakeReservationAuditEvents,
+      [revision.submittedAt, answerBinding.answeredAt, reservation.reservedAt],
       reservation.reservedAt,
     );
     if (
@@ -3456,10 +3569,13 @@ export class SqliteControlStore
       manifest.intakeRunId !== reservation.intakeRunId ||
       reservation.externalOperationBinding.manifestId !== manifest.id ||
       reservation.externalOperationBinding.manifestDigest !== manifest.manifestDigest ||
+      manifest.operation !== IntakeManifestOperation.INTENT_ANALYSIS ||
       answerBinding.answeredAt < reservation.reservedAt
     ) {
       throw new StoreInvariantError('Clarification reservation has inconsistent authority');
     }
+    assertExactIntakeManifestRevisionChain(manifest, revision);
+    assertExactIntakeProjectChain(nextRun, revision);
     if (revision.declaredProjectRef !== undefined) {
       this.#authorityIsolationLease?.assertProjectPathAllowed(
         revision.declaredProjectRef.normalizedPath,
@@ -3513,6 +3629,17 @@ export class SqliteControlStore
       ) {
         throw new OptimisticConcurrencyError('INTAKE_RUN', reservation.intakeRunId);
       }
+      const activeQuestion = this.getClarificationQuestionInsideTransaction(
+        current.activeQuestionRef.clarificationQuestionId,
+      );
+      if (
+        !sameOptionalProjectRef(current.projectRef, revision.declaredProjectRef) &&
+        !isExactProjectIdentityQuestion(activeQuestion)
+      ) {
+        throw new StoreInvariantError(
+          `Clarification reservation ${reservation.commandId} cannot replace project identity`,
+        );
+      }
       this.insertRawRequestRevision(revision);
       this.insertClarificationAnswerBinding(answerBinding);
       this.updateIntakeRun(current, nextRun);
@@ -3541,12 +3668,6 @@ export class SqliteControlStore
     const nextRun = decodeIntakeRun(rawInput.intakeRun);
     const completedAt = isoTimestamp(rawInput.completedAt);
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
-    assertExactIntakeAuditPlan(
-      auditEvents,
-      nextRun.id,
-      rawInput.kind === 'CLARIFY' ? clarifyIntakeCommitAuditEvents : analyzedNoExecutionAuditEvents,
-      completedAt,
-    );
     const questionSpec =
       rawInput.kind === 'CLARIFY'
         ? decodeClarificationQuestionSpec(rawInput.questionSpec, canonicalAuthorityDigests)
@@ -3555,6 +3676,21 @@ export class SqliteControlStore
       rawInput.kind === 'CLARIFY'
         ? decodeClarificationQuestion(rawInput.question, canonicalAuthorityDigests)
         : undefined;
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      nextRun.id,
+      rawInput.kind === 'CLARIFY' ? clarifyIntakeCommitAuditEvents : analyzedNoExecutionAuditEvents,
+      rawInput.kind === 'CLARIFY' && question !== undefined
+        ? [
+            proposal.observedAt,
+            projection.createdAt,
+            decision.decidedAt,
+            question.createdAt,
+            completedAt,
+          ]
+        : [proposal.observedAt, projection.createdAt, decision.decidedAt, completedAt],
+      completedAt,
+    );
     if (
       proposal.intakeRunId !== nextRun.id ||
       projection.intakeRunId !== nextRun.id ||
@@ -3660,6 +3796,16 @@ export class SqliteControlStore
       ) {
         throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
       }
+      const revision = this.getRawRequestRevisionInsideTransaction(
+        current.activeRawRequestRevision.rawRequestId,
+        current.activeRawRequestRevision.revision,
+      );
+      if (revision === undefined) {
+        throw new StoreInvariantError(
+          `Intake Run ${current.id} has no active Raw Request revision`,
+        );
+      }
+      assertExactIntakeProjectChain(current, revision, projection, decision);
       if (rawInput.kind === 'CLARIFY' && questionSpec !== undefined && question !== undefined) {
         if (
           decision.kind !== IntentAdmissionDecisionKind.CLARIFY ||
@@ -3706,6 +3852,12 @@ export class SqliteControlStore
       rawInput.kind === 'ANSWER_ONLY'
         ? undefined
         : decodeIntakeCommandReservation(rawInput.reservation, canonicalAuthorityDigests);
+    const immediateRawRequest =
+      rawInput.kind === 'IMMEDIATE' ? decodeRawRequest(rawInput.rawRequest) : undefined;
+    const immediateRevision =
+      rawInput.kind === 'IMMEDIATE'
+        ? decodeRawRequestRevision(rawInput.rawRequestRevision, canonicalAuthorityDigests)
+        : undefined;
     const commandIdentifier =
       rawInput.kind === 'ANSWER_ONLY'
         ? commandId(rawInput.commandId)
@@ -3718,6 +3870,13 @@ export class SqliteControlStore
         : rawInput.kind === 'ABANDONMENT'
           ? abandonmentAuditEvents
           : answerOnlyAuditEvents,
+      rawInput.kind === 'IMMEDIATE' && immediateRevision !== undefined
+        ? [immediateRevision.submittedAt, decision.decidedAt, completedAt]
+        : rawInput.kind === 'ABANDONMENT'
+          ? [decision.decidedAt, nextRun.updatedAt, completedAt]
+          : response === undefined
+            ? []
+            : [decision.decidedAt, response.observedAt, completedAt],
       completedAt,
     );
     if (
@@ -3811,27 +3970,28 @@ export class SqliteControlStore
       }
 
       if (rawInput.kind === 'IMMEDIATE') {
-        if (existingReservation !== undefined || suppliedReservation === undefined) {
+        if (
+          existingReservation !== undefined ||
+          suppliedReservation === undefined ||
+          immediateRawRequest === undefined ||
+          immediateRevision === undefined
+        ) {
           throw new CommandIdConflictError(commandIdentifier);
         }
-        const rawRequest = decodeRawRequest(rawInput.rawRequest);
-        const revision = decodeRawRequestRevision(
-          rawInput.rawRequestRevision,
-          canonicalAuthorityDigests,
-        );
         if (
           nextRun.version !== 1 ||
           decision.intakeRunVersion !== nextRun.version ||
           suppliedReservation.observedIntakeRunVersion !== nextRun.version ||
-          rawRequest.id !== revision.rawRequestId ||
-          rawRequest.intakeRunId !== nextRun.id ||
-          revision.intakeRunId !== nextRun.id ||
-          nextRun.activeRawRequestRevision.digest !== revision.rawRequestDigest
+          immediateRawRequest.id !== immediateRevision.rawRequestId ||
+          immediateRawRequest.intakeRunId !== nextRun.id ||
+          immediateRevision.intakeRunId !== nextRun.id ||
+          nextRun.activeRawRequestRevision.digest !== immediateRevision.rawRequestDigest
         ) {
           throw new StoreInvariantError('Immediate NO_EXECUTION source chain is inconsistent');
         }
-        this.insertRawRequest(rawRequest);
-        this.insertRawRequestRevision(revision);
+        assertExactIntakeProjectChain(nextRun, immediateRevision, undefined, decision);
+        this.insertRawRequest(immediateRawRequest);
+        this.insertRawRequestRevision(immediateRevision);
         this.insertIntakeRun(nextRun);
         this.insertIntakeCommandReservation(suppliedReservation);
       } else {
@@ -3858,6 +4018,16 @@ export class SqliteControlStore
         ) {
           throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
         }
+        const revision = this.getRawRequestRevisionInsideTransaction(
+          current.activeRawRequestRevision.rawRequestId,
+          decision.rawRequestRevision,
+        );
+        if (revision === undefined) {
+          throw new StoreInvariantError(
+            `Admission Decision ${decision.id} has no Raw Request revision`,
+          );
+        }
+        assertExactIntakeProjectChain(current, revision, undefined, decision);
         if (rawInput.kind === 'ABANDONMENT') {
           if (
             reservation.operationKind !== IntakeCommandOperationKind.ABANDON_CLARIFICATION ||
@@ -3898,7 +4068,13 @@ export class SqliteControlStore
     const nextRun = decodeIntakeRun(rawInput.intakeRun);
     const completedAt = isoTimestamp(rawInput.completedAt);
     const auditEvents = validateIntakeAuditWrites(rawInput.auditEvents);
-    assertExactIntakeAuditPlan(auditEvents, nextRun.id, intakeFailureAuditEvents, completedAt);
+    assertExactIntakeAuditPlan(
+      auditEvents,
+      nextRun.id,
+      intakeFailureAuditEvents,
+      [failure.failedAt, nextRun.updatedAt, completedAt],
+      completedAt,
+    );
     if (
       nextRun.status !== IntakeRunStatus.FAILED ||
       failure.commandId !== commandIdentifier ||
@@ -3967,6 +4143,7 @@ export class SqliteControlStore
       auditEvents,
       observedRun.id,
       intakeCommandRejectionAuditEvents,
+      [completedAt],
       completedAt,
     );
     if (typeof rawInput.detailCode !== 'string' || rawInput.detailCode.trim().length === 0) {
@@ -4068,6 +4245,14 @@ export class SqliteControlStore
       auditEvents,
       nextRun.id,
       materializationAuditEventsFor(startAuthorization !== undefined),
+      [
+        proposal.observedAt,
+        projection.createdAt,
+        decision.decidedAt,
+        materialization.materializedAt,
+        ...(startAuthorization === undefined ? [] : [startAuthorization.authorizedAt]),
+        completedAt,
+      ],
       completedAt,
     );
     if (
@@ -4192,6 +4377,16 @@ export class SqliteControlStore
       ) {
         throw new OptimisticConcurrencyError('INTAKE_RUN', nextRun.id);
       }
+      const revision = this.getRawRequestRevisionInsideTransaction(
+        current.activeRawRequestRevision.rawRequestId,
+        current.activeRawRequestRevision.revision,
+      );
+      if (revision === undefined) {
+        throw new StoreInvariantError(
+          `Intake Run ${current.id} has no active Raw Request revision`,
+        );
+      }
+      assertExactIntakeProjectChain(current, revision, projection, decision);
       this.insertIntentAnalysisAuthority(proposal, projection, ambiguitySet);
       this.insertIntentAdmissionDecision(decision);
       this.insertInitialGoalAndWorkflowForIntake(goal, workflow);
@@ -4462,6 +4657,11 @@ export class SqliteControlStore
       (record) => record.answerBindingDigest,
       'Clarification Answer Binding digest',
     );
+    const answerBindingByCommandId = uniqueMap(
+      answerBindings,
+      (record) => record.commandId,
+      'Clarification Answer Binding command',
+    );
     const answerResponseById = uniqueMap(
       answerResponses,
       (record) => record.id,
@@ -4490,8 +4690,54 @@ export class SqliteControlStore
     );
     const runById = uniqueMap(runs, (record) => record.id, 'Intake Run');
 
+    const reservationByManifestId = new Map<string, IntakeCommandReservation>();
+    for (const reservation of reservations) {
+      if (!('externalOperationBinding' in reservation)) {
+        continue;
+      }
+      const manifestIdentifier = reservation.externalOperationBinding.manifestId;
+      if (reservationByManifestId.has(manifestIdentifier)) {
+        throw new StoreInvariantError(
+          `Intake Manifest ${manifestIdentifier} has multiple command reservations`,
+        );
+      }
+      reservationByManifestId.set(manifestIdentifier, reservation);
+    }
+
+    const exactReservationRawRequestRevision = (
+      reservation: IntakeCommandReservation,
+    ): RawRequestRevisionRecord | undefined => {
+      if (reservation.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) {
+        const binding = answerBindingByCommandId.get(reservation.commandId);
+        return binding === undefined
+          ? undefined
+          : revisionByKey.get(intakeRevisionKey(binding.rawRequestId, binding.rawRequestRevision));
+      }
+      if (
+        reservation.operationKind === IntakeCommandOperationKind.INTENT_ANALYSIS ||
+        reservation.operationKind === IntakeCommandOperationKind.ANSWER_ONLY
+      ) {
+        return revisionByKey.get(intakeRevisionKey(reservation.rawRequestId, 1));
+      }
+      const outcome = outcomeByCommandId.get(reservation.commandId);
+      const result = outcome?.result;
+      const decision =
+        result !== undefined &&
+        (result.kind === 'CLARIFICATION_REQUIRED' ||
+          result.kind === 'NO_EXECUTION' ||
+          result.kind === 'MATERIALIZED')
+          ? decisionById.get(result.decisionRef.id)
+          : undefined;
+      return decision === undefined
+        ? undefined
+        : revisionByKey.get(
+            intakeRevisionKey(reservation.rawRequestId, decision.rawRequestRevision),
+          );
+    };
+
     const auditEventsByCommand = new Map<CommandId, AuditEventRecord[]>();
     const nextAuditPositionByRun = new Map<string, number>();
+    const lastAuditSequenceByRun = new Map<string, number>();
     try {
       for (const row of retainedIntakeAuditRowsSchema.parse(
         this.#database
@@ -4511,10 +4757,14 @@ export class SqliteControlStore
       )) {
         const event = decodeAuditEvent(row);
         const relationshipCommandId = commandId(row.relationship_command_id);
+        const reservation = reservationByCommandId.get(relationshipCommandId);
         const nextPosition = nextAuditPositionByRun.get(row.intake_run_id) ?? 0;
+        const lastSequence = lastAuditSequenceByRun.get(row.intake_run_id);
         if (
           !runById.has(row.intake_run_id) ||
+          reservation?.intakeRunId !== row.intake_run_id ||
           row.position !== nextPosition ||
+          (lastSequence !== undefined && event.sequence <= lastSequence) ||
           event.actorType !== 'RUNTIME' ||
           event.aggregateType !== IntakeAuditAggregateType.INTAKE_RUN ||
           event.aggregateId !== row.intake_run_id ||
@@ -4524,6 +4774,7 @@ export class SqliteControlStore
           throw new StoreInvariantError('Retained Intake audit relationship is substituted');
         }
         nextAuditPositionByRun.set(row.intake_run_id, nextPosition + 1);
+        lastAuditSequenceByRun.set(row.intake_run_id, event.sequence);
         const commandEvents = auditEventsByCommand.get(relationshipCommandId) ?? [];
         if (
           commandEvents.length > 0 &&
@@ -4546,6 +4797,100 @@ export class SqliteControlStore
       });
     }
 
+    const retainedIntakeAuditCausalFloor = (
+      reservation: IntakeCommandReservation,
+      outcome: IntakeCommandOutcome | undefined,
+      eventType: IntakeAuditEventName,
+    ): IsoTimestamp => {
+      const run = runById.get(reservation.intakeRunId);
+      const result = outcome?.result;
+      const decision =
+        result !== undefined &&
+        (result.kind === 'CLARIFICATION_REQUIRED' ||
+          result.kind === 'NO_EXECUTION' ||
+          result.kind === 'MATERIALIZED')
+          ? decisionById.get(result.decisionRef.id)
+          : undefined;
+      const projection =
+        decision !== undefined && 'projectionBinding' in decision
+          ? projectionByKey.get(
+              intakeRevisionKey(
+                decision.projectionBinding.intentProjectionId,
+                decision.projectionBinding.intentProjectionRevision,
+              ),
+            )
+          : undefined;
+      const proposal =
+        decision !== undefined && 'projectionBinding' in decision
+          ? proposalById.get(decision.projectionBinding.intentAnalysisProposalId)
+          : undefined;
+      const revision = exactReservationRawRequestRevision(reservation);
+      const answerBinding = answerBindingByCommandId.get(reservation.commandId);
+      const question =
+        result?.kind === 'CLARIFICATION_REQUIRED'
+          ? questionById.get(result.activeQuestionRef.clarificationQuestionId)
+          : undefined;
+      const response =
+        result?.kind === 'NO_EXECUTION' && 'answerOnlyResponseRef' in result
+          ? answerResponseById.get(result.answerOnlyResponseRef.id)
+          : undefined;
+      const failure = result?.kind === 'FAILED' ? failureById.get(result.failureRef.id) : undefined;
+      const materialization =
+        result?.kind === 'MATERIALIZED'
+          ? materializationById.get(result.materializedGoalRef.goalMaterializationId)
+          : undefined;
+      const startAuthorization =
+        result?.kind === 'MATERIALIZED' && 'goalStartAuthorizationRef' in result
+          ? startAuthorizations.find(
+              (authorization) => authorization.id === result.goalStartAuthorizationRef.id,
+            )
+          : undefined;
+
+      const requireTime = (value: IsoTimestamp | undefined, source: string): IsoTimestamp => {
+        if (value === undefined) {
+          throw new StoreInvariantError(
+            `Intake command ${reservation.commandId} audit has no ${source} time authority`,
+          );
+        }
+        return value;
+      };
+
+      switch (eventType) {
+        case IntakeAuditEventType.RAW_REQUEST_ADMITTED:
+          return requireTime(revision?.submittedAt, 'Raw Request');
+        case IntakeAuditEventType.INTAKE_RUN_CREATED:
+          return requireTime(run?.createdAt, 'Intake Run creation');
+        case IntakeAuditEventType.INTAKE_COMMAND_RESERVED:
+          return reservation.reservedAt;
+        case IntakeAuditEventType.CLARIFICATION_ANSWER_BOUND:
+          return requireTime(answerBinding?.answeredAt, 'Clarification Answer Binding');
+        case IntakeAuditEventType.INTENT_ANALYSIS_RECORDED:
+          return requireTime(proposal?.observedAt, 'Intent Analysis Proposal');
+        case IntakeAuditEventType.INTENT_PROJECTION_RECORDED:
+          return requireTime(projection?.createdAt, 'Intent Projection');
+        case IntakeAuditEventType.INTENT_ADMISSION_DECIDED:
+          return requireTime(decision?.decidedAt, 'Admission Decision');
+        case IntakeAuditEventType.CLARIFICATION_QUESTION_ACTIVATED:
+          return requireTime(question?.createdAt, 'Clarification Question');
+        case IntakeAuditEventType.ANSWER_ONLY_RESPONSE_RECORDED:
+          return requireTime(response?.observedAt, 'Answer-only Response');
+        case IntakeAuditEventType.INTAKE_FAILURE_RECORDED:
+          return requireTime(failure?.failedAt, 'Intake Failure');
+        case IntakeAuditEventType.INTAKE_RUN_UPDATED:
+          return requireTime(run?.updatedAt, 'Intake Run update');
+        case IntakeAuditEventType.GOAL_MATERIALIZED:
+          return requireTime(materialization?.materializedAt, 'Goal Materialization');
+        case IntakeAuditEventType.GOAL_START_AUTHORIZED:
+          return requireTime(startAuthorization?.authorizedAt, 'Goal Start Authorization');
+        case IntakeAuditEventType.INTAKE_COMMAND_COMPLETED:
+        case IntakeAuditEventType.INTAKE_COMMAND_REJECTED:
+          return requireTime(outcome?.completedAt, 'Intake command outcome');
+      }
+      throw new StoreInvariantError(
+        `Intake command ${reservation.commandId} has an unknown audit event ${eventType}`,
+      );
+    };
+
     for (const reservation of reservations) {
       const outcome = outcomeByCommandId.get(reservation.commandId);
       const events = auditEventsByCommand.get(reservation.commandId);
@@ -4553,7 +4898,12 @@ export class SqliteControlStore
       const terminalAt = outcome?.completedAt ?? reservation.reservedAt;
       if (
         events?.length !== expected.length ||
-        events.some((event, index) => event.eventType !== expected[index]) ||
+        events.some(
+          (event, index) =>
+            event.eventType !== expected[index] ||
+            event.occurredAt <
+              retainedIntakeAuditCausalFloor(reservation, outcome, event.eventType),
+        ) ||
         events.at(-1)?.occurredAt !== terminalAt
       ) {
         throw new StoreInvariantError(
@@ -4617,12 +4967,26 @@ export class SqliteControlStore
     for (const projection of projections) {
       const key = intakeRevisionKey(projection.id, projection.revision);
       const proposal = proposalById.get(projection.intentAnalysisProposalRef.id);
+      const run = runById.get(projection.intakeRunId);
+      const revision =
+        run === undefined
+          ? undefined
+          : revisionByKey.get(
+              intakeRevisionKey(
+                run.activeRawRequestRevision.rawRequestId,
+                projection.rawRequestRevision,
+              ),
+            );
       if (
         proposal?.proposalDigest !== projection.intentAnalysisProposalRef.digest ||
         proposal.intakeRunId !== projection.intakeRunId ||
-        proposal.rawRequestRevision !== projection.rawRequestRevision
+        proposal.rawRequestRevision !== projection.rawRequestRevision ||
+        revision?.intakeRunId !== projection.intakeRunId ||
+        projection.scope.projectPath !== revision.declaredProjectRef?.normalizedPath
       ) {
-        throw new StoreInvariantError(`Intent Projection ${key} has no exact Proposal`);
+        throw new StoreInvariantError(
+          `Intent Projection ${key} has no exact Proposal/project authority`,
+        );
       }
       const membership = projectionMembership.get(key) ?? [];
       if (
@@ -4681,9 +5045,24 @@ export class SqliteControlStore
 
     for (const manifest of manifests) {
       const run = runById.get(manifest.intakeRunId);
-      if (run === undefined) {
-        throw new StoreInvariantError(`Intake Manifest ${manifest.id} has no Intake Run`);
+      const reservation = reservationByManifestId.get(manifest.id);
+      const revision =
+        reservation === undefined ? undefined : exactReservationRawRequestRevision(reservation);
+      const expectedOperation =
+        reservation?.operationKind === IntakeCommandOperationKind.ANSWER_ONLY
+          ? IntakeManifestOperation.ANSWER_ONLY
+          : IntakeManifestOperation.INTENT_ANALYSIS;
+      if (
+        run === undefined ||
+        reservation === undefined ||
+        revision === undefined ||
+        manifest.operation !== expectedOperation
+      ) {
+        throw new StoreInvariantError(
+          `Intake Manifest ${manifest.id} has no exact Intake operation owner`,
+        );
       }
+      assertExactIntakeManifestRevisionChain(manifest, revision);
       const policy = policyById.get(manifest.admissionPolicy.id);
       if (
         policy?.version !== manifest.admissionPolicy.version ||
@@ -4701,13 +5080,6 @@ export class SqliteControlStore
         ) {
           throw new StoreInvariantError(`Intake Manifest ${manifest.id} has a false Raw Request`);
         }
-      }
-      if (
-        (manifest.declaredProjectRef === undefined) !== (run.projectRef === undefined) ||
-        (manifest.declaredProjectRef !== undefined &&
-          !sameCanonicalAuthority(manifest.declaredProjectRef, run.projectRef))
-      ) {
-        throw new StoreInvariantError(`Intake Manifest ${manifest.id} has a false project binding`);
       }
       if (manifest.currentProjectionRef !== undefined) {
         const projection = projectionByKey.get(
@@ -4761,7 +5133,10 @@ export class SqliteControlStore
         policy?.version !== decision.admissionPolicyVersion ||
         policy.digest !== decision.admissionPolicyDigest ||
         decision.intakeRunVersion > (run?.version ?? 0) ||
-        decision.decidedAt < revision.submittedAt
+        decision.decidedAt < revision.submittedAt ||
+        (decision.projectOrScopeRef !== undefined &&
+          (revision.declaredProjectRef === undefined ||
+            !sameCanonicalAuthority(decision.projectOrScopeRef, revision.declaredProjectRef)))
       ) {
         throw new StoreInvariantError(
           `Admission Decision ${decision.id} has false source authority`,
@@ -4943,6 +5318,26 @@ export class SqliteControlStore
         const answerBinding = answerBindingByQuestionId.get(
           reservation.clarificationBinding.clarificationQuestionId,
         );
+        const answeredRevision =
+          answerBinding === undefined
+            ? undefined
+            : revisionByKey.get(
+                intakeRevisionKey(answerBinding.rawRequestId, answerBinding.rawRequestRevision),
+              );
+        const parentRevision =
+          answeredRevision?.parentRevision === undefined
+            ? undefined
+            : revisionByKey.get(
+                intakeRevisionKey(answeredRevision.rawRequestId, answeredRevision.parentRevision),
+              );
+        const changesProject =
+          answeredRevision !== undefined &&
+          parentRevision !== undefined &&
+          !sameOptionalProjectRef(
+            answeredRevision.declaredProjectRef,
+            parentRevision.declaredProjectRef,
+          );
+        const exactProjectIdentityQuestion = isExactProjectIdentityQuestion(question);
         if (
           question?.intakeRunId !== reservation.intakeRunId ||
           question.questionSpecDigest !== reservation.clarificationBinding.questionSpecDigest ||
@@ -4957,7 +5352,8 @@ export class SqliteControlStore
           ) ||
           answerBinding?.commandId !== reservation.commandId ||
           answerBinding.canonicalCommandInputDigest !== reservation.canonicalCommandInputDigest ||
-          answerBinding.answeredAt < reservation.reservedAt
+          answerBinding.answeredAt < reservation.reservedAt ||
+          (changesProject && !exactProjectIdentityQuestion)
         ) {
           throw new StoreInvariantError(
             `Clarification reservation ${reservation.commandId} has false Question/Answer authority`,
@@ -5222,9 +5618,7 @@ export class SqliteControlStore
         revision?.rawRequestDigest !== run.activeRawRequestRevision.digest ||
         revision.intakeRunId !== run.id ||
         run.updatedAt < revision.submittedAt ||
-        (run.projectRef !== undefined &&
-          (revision.declaredProjectRef === undefined ||
-            !sameCanonicalAuthority(run.projectRef, revision.declaredProjectRef)))
+        !sameOptionalProjectRef(run.projectRef, revision.declaredProjectRef)
       ) {
         throw new StoreInvariantError(
           `Intake Run ${run.id} has false active Raw Request authority`,

@@ -191,7 +191,7 @@ void test('[I-006][I-007][I-008] verified activation gates new Goal project admi
   assert.ok(snapshot);
   assert.equal(snapshot.databaseState, SqliteAuthorityDatabaseState.EMPTY);
   assert.deepEqual(snapshot.projectReferences, []);
-  assert.equal(store.appliedMigrations().length, 26);
+  assert.equal(store.appliedMigrations().length, 27);
   assert.ok(currentAssertions >= 3);
 
   assert.equal(
@@ -403,7 +403,7 @@ void test('[I-006][I-008] migration cannot rewrite an inspected project binding'
     copyFileSync(join(defaultMigrationsDirectory(), name), join(migrationsDirectory, name));
   }
   writeFileSync(
-    join(migrationsDirectory, '0027_rewrite_project_binding.sql'),
+    join(migrationsDirectory, '0028_rewrite_project_binding.sql'),
     "UPDATE goals SET project_path = '/fixture/rewritten-by-migration';\n",
   );
 
@@ -430,7 +430,7 @@ void test('[I-006][I-008] migration cannot rewrite an inspected project binding'
       projectPath,
     );
     assert.equal(
-      inspected.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 27').pluck().get(),
+      inspected.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 28').pluck().get(),
       0,
     );
   } finally {

@@ -26,11 +26,11 @@ The final reviewed working-tree source identity excludes only this review file
 to avoid self-reference:
 
 ```text
-Base Git revision: 8e3f076c4350792e4182b014743af5dc4f4b57dd
+Base Git revision: 28615ad93ee6427600ac0ffe056b7a13145fa452
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
-Source manifest paths: 950
-Source manifest digest: sha256:9c679642cbdbc8d270fb0e89e0cf70f688ddfd4828adafb22041f1afb77253f6
+Source manifest paths: 951
+Source manifest digest: sha256:ec0e2ab7f1d2a39670fdf3f88555a766cc8e4fa416aa3c84d968a331e6df1c83
 Self-referential review exclusion: docs/reviews/m2-5-slice2-sqlite-intake-authority.md
 ```
 
@@ -42,14 +42,15 @@ not establish supported-Node evidence.
 ## Implemented authority surface
 
 Slice 2 adds migration `0026_intake_authority.sql` after the exact M1/M2
-baseline. It persistently represents installed Admission Policy, Raw Request
-and revision, versioned Intake Run, durable Manifest, Proposal, Source Binding,
-Projection, Material Ambiguity, Question specification and record, Answer
-Binding, Answer-only Response, Failure, command reservation/outcome,
-Materialization, optional Start Authorization, and Intake-to-audit
-relationships. Authority tables are strict and immutable, with relational and
-shape backstops for terminal, clarification, abandonment, Materialization, and
-Start-Authorization closure.
+baseline and follow-up migration `0027_intake_project_correction.sql` for the
+bounded project-identity clarification transition. It persistently represents
+installed Admission Policy, Raw Request and revision, versioned Intake Run,
+durable Manifest, Proposal, Source Binding, Projection, Material Ambiguity,
+Question specification and record, Answer Binding, Answer-only Response,
+Failure, command reservation/outcome, Materialization, optional Start
+Authorization, and Intake-to-audit relationships. Authority tables are strict
+and immutable, with relational and shape backstops for terminal,
+clarification, abandonment, Materialization, and Start-Authorization closure.
 
 The public Runtime Store port separates reservation from completion. SQLite
 authors result and outcome digests inside the completion transaction; callers
@@ -59,11 +60,13 @@ losers, policy installation, deterministic read ordering, and one complete
 read view reconstructed from retained authority.
 
 Each public Intake write now validates the operation-specific ordered audit
-plan, Intake Run aggregate identity, causal timestamp order, and terminal
-timestamp before entering its transaction. Strict reopen independently
+plan, Intake Run aggregate identity, event-specific source causal floor, and
+terminal timestamp before entering its transaction. Strict reopen independently
 reconstructs the complete per-command audit sequence from the immutable Intake
-relationship and Runtime audit tables; missing, reordered, foreign, or
-substituted relationships fail closed.
+relationship and Runtime audit tables, binds every relationship to its owning
+reservation and Intake Run, and requires retained global audit sequence to
+advance with relationship position. Missing, reordered, foreign, or substituted
+relationships fail closed.
 
 Compound transactions cover:
 
@@ -84,8 +87,16 @@ versions, timestamps, and payload digest agree.
 ## Reopen and activation review
 
 Store open strictly decodes every retained Intake record, recomputes canonical
-digests, and validates the complete cross-record chain. It rejects missing,
-cross-Intake, or substituted Answer Bindings; active answered Questions;
+digests, and validates the complete cross-record chain. Each Manifest is bound
+to its one owning operation and exact ordered Raw Request revision chain, so a
+historical Manifest retains its historical declared project instead of being
+compared with the Intake Run's later active project. The active Raw Request
+revision is the exact project-identity source for its Intake Run; each
+Projection project path and every present Decision project/scope reference must
+match that source exactly. A clarification may replace the retained project
+only when its exact active Question has `PROJECT_PATH` answer shape and affects
+only `PROJECT_IDENTITY`. Store open also rejects missing, cross-Intake, or
+substituted Answer Bindings; active answered Questions;
 missing, unbound, or reservation-less abandonment outcomes; false Manifest,
 Policy, Proposal, Projection, ambiguity, Decision, Materialization, Goal,
 Workflow, Start-Authorization, and terminal references; and codec-invalid
@@ -102,7 +113,7 @@ reopen applies the same closure.
 
 The final migration fingerprint is 60 tables, 25 indexes, 209 triggers, no
 views, and
-`sha256:5408eb294737e281f2a600e5fe78e03624e686eb434ec018734184c5b413b08a`.
+`sha256:278945c5b78727f79760dd7d04029151c9e397d7eaa579e4460c8890326a20f0`.
 Migration `0001` through `0025` meaning and direct `CreateGoal` compatibility
 remain regression-tested.
 
@@ -127,7 +138,7 @@ govern the implemented decisions, so no new ADR is required.
 identity. It recorded 75/75 documentation-structure tests over 73 Markdown
 sources, 28/28 boundary/dependency tests over 823 JavaScript/TypeScript
 sources, 296/296 staged unit tests, 44/44 digest tests, 99/99 migration tests,
-385/385 authority tests, 62/62 CLI integration tests, 8/8 adversarial demos,
+393/393 authority tests, 62/62 CLI integration tests, 8/8 adversarial demos,
 4/4 invariant-checker tests with 32/32 invariant coverage, and the final clean
 production build. Every invoked Node test stage reported zero failed,
 cancelled, skipped, and todo tests.
@@ -137,9 +148,15 @@ replay, and reopen tests are included in those stages. The added coverage
 includes both Policy-install write probes, exact install replay, substituted
 audit write rejection, missing-audit reopen rejection, project-column/JSON
 activation rejection before verifier use, and one competing Materialization
-loser that creates no second Goal or Workflow. The source manifest above was
-generated after the non-review tree reached its final content and excludes only
-this review file.
+loser that creates no second Goal or Workflow. It also covers a digest-valid
+substituted Decision project identity, a write-time audit before its source,
+cross-Run audit-relationship movement, reordered complete command audit blocks,
+and a retained Proposal audit before its source authority. Project-identity
+coverage proves a valid correction while retaining both historical Manifest
+bindings, rejects the same change from an ordinary clarification Question, and
+rejects a digest-valid reordered Manifest revision chain. The source manifest
+above was generated after the non-review tree reached its final content and
+excludes only this review file.
 
 ## Remaining boundary
 
