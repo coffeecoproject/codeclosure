@@ -7,6 +7,7 @@ import {
   auditPackageDependencies,
   collectModuleSpecifiers,
   importViolation,
+  m25CodexIntakeAdapterAllowedNodeBuiltins,
   m25CodexIntakeAdapterDependencyExpectation,
   m25CodexIntakeAdapterImportViolation,
   modulePackageName,
@@ -176,6 +177,12 @@ void test('the planned Codex Intake adapter has one closed future package edge',
     },
     devDependencies: {},
   });
+  assert.deepEqual(m25CodexIntakeAdapterAllowedNodeBuiltins, [
+    'node:buffer',
+    'node:crypto',
+    'node:path',
+    'node:timers',
+  ]);
 
   const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex-intake');
   const sourcePath = resolve(packageRoot, 'src/adapter.ts');
@@ -184,6 +191,8 @@ void test('the planned Codex Intake adapter has one closed future package edge',
     '@codeclosure/runtime',
     'node:buffer',
     'node:crypto',
+    'node:path',
+    'node:timers',
   ]) {
     assert.equal(m25CodexIntakeAdapterImportViolation(allowed, sourcePath, packageRoot), undefined);
   }
@@ -198,6 +207,13 @@ void test('the planned Codex Intake adapter has one closed future package edge',
     '@codeclosure/runtime/composition',
     '@codeclosure/runtime/testing/workflow-runtime',
     '@codeclosure/codex-app-server-client/testing',
+    'node:child_process',
+    'node:fs',
+    'node:http',
+    'node:https',
+    'node:net',
+    'node:tls',
+    'node:worker_threads',
   ]) {
     assert.notEqual(
       m25CodexIntakeAdapterImportViolation(forbidden, sourcePath, packageRoot),

@@ -123,6 +123,13 @@ export const m25CodexIntakeAdapterDependencyExpectation = Object.freeze({
   devDependencies: Object.freeze({}),
 });
 
+export const m25CodexIntakeAdapterAllowedNodeBuiltins = Object.freeze([
+  'node:buffer',
+  'node:crypto',
+  'node:path',
+  'node:timers',
+]);
+
 function repositoryPath(repositoryRoot, filePath) {
   return relative(repositoryRoot, filePath).split(sep).join('/');
 }
@@ -383,8 +390,15 @@ export function importViolation(specifier, filePath, packageRoot, availableDepen
   return undefined;
 }
 
+/** Future production-source import contract; Slice 3 test sources keep the ordinary test policy. */
 export function m25CodexIntakeAdapterImportViolation(specifier, filePath, packageRoot) {
   const expectation = m25CodexIntakeAdapterDependencyExpectation;
+  if (
+    specifier.startsWith('node:') &&
+    !m25CodexIntakeAdapterAllowedNodeBuiltins.includes(specifier)
+  ) {
+    return `Node built-in is outside the Intake adapter capability contract (${specifier})`;
+  }
   const violation = importViolation(
     specifier,
     filePath,

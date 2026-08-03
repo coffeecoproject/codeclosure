@@ -355,6 +355,15 @@ Planned `IntakeRunStatus` values are:
 Abandonment is a `NO_EXECUTION` outcome with reason `ABANDONED`. These values
 must not be added to `WorkflowPhase` or `RunStatus`.
 
+For the bounded local M2.5 surface, abandonment is an explicit
+`intake abandon <intake-run-id> --expected-version <number>` action. It is
+available only for the exact current `NEEDS_CLARIFICATION` version with one
+unanswered active Question and no external operation in flight. Runtime binds
+the current Projection, Question, and issuing Decision, clears only the active
+reference, and atomically records `PROJECTED_NO_EXECUTION / ABANDONED`, terminal
+state, command outcome, and audits. It creates no Raw Request revision and does
+not infer abandonment from silence, answer text, timeout, or assistant output.
+
 `MATERIALIZED`, `NO_EXECUTION`, and `FAILED` are terminal for one Intake Run.
 `NO_EXECUTION` means policy intentionally created no governed Goal. `FAILED`
 means Intake processing could not safely finish and carries one exact terminal
@@ -467,6 +476,40 @@ either `ANSWER_FAILED` or Intake `FAILED`.
 `IntentAnalysisProposal` is a strictly bounded, immutable record of assistant
 output after transport and schema validation. It is still untrusted.
 
+The bounded M2.5 local assistant wire contract is exactly:
+
+```text
+IntentAnalysisAssistantResponseV1
+  proposedObjective?: non-blank string
+  proposedCriteria: non-blank string[]
+  proposedScope?: non-blank string
+  proposedNonGoals: non-blank string[]
+  proposedAssumptions: non-blank string[]
+  proposedQuestions: non-blank string[]
+  candidateSourceSpanSuggestions: CandidateSourceSpanSuggestionV1[]
+  proposedClassification?: non-blank string
+
+CandidateSourceSpanSuggestionV1
+  projectionFieldRef = OBJECTIVE | REQUIRED_CRITERION | SCOPE | NON_GOAL | ASSUMPTION
+  itemIndex?: non-negative integer
+  rawRequestRevision: positive integer
+  startByte: non-negative integer
+  endByte: positive integer greater than startByte
+```
+
+Every array key is present even when empty. Optional scalar keys are omitted,
+never `null`. `itemIndex` is required for a collection field and forbidden for
+`OBJECTIVE` and `SCOPE`. It addresses the corresponding response-array item,
+not a later Projection revision. Array order is semantic; duplicate
+byte-identical items, duplicate or unknown JSON keys, unknown enum values,
+non-integer coordinates, invalid UTF-8, blank strings, and budget overflow
+reject the entire response. No string is trimmed, normalized, or rewritten.
+`proposedCriteria` contains candidate required Criteria only; the local profile
+has no model-authored optional-Criterion field.
+
+After validation, the Coordinator adds the trusted envelope below. The
+assistant never supplies those envelope fields.
+
 ```text
 IntentAnalysisProposal
   id
@@ -488,12 +531,10 @@ IntentAnalysisProposal
   observedAt
 ```
 
-Each `candidateSourceSpanSuggestion` contains only a closed Projection-field
-reference, one Manifest-selected Raw Request revision, and zero-based,
-end-exclusive UTF-8 byte offsets. It is an untrusted lookup suggestion, not a
-`SourceBinding`; the Coordinator independently resolves the exact retained
-revision/content digests and validates the coordinates before constructing any
-binding.
+Each `candidateSourceSpanSuggestion` remains an untrusted lookup suggestion,
+not a `SourceBinding`; the Coordinator independently resolves the exact
+Manifest-selected retained revision/content digests and validates the field,
+item, and byte coordinates before constructing any binding.
 
 The assistant may propose interpretations and candidate source spans. It cannot
 author the trusted interaction action, Projection identity, Source Binding
@@ -915,6 +956,17 @@ receives no answer. The application coordinator may call the Intake Assistant
 outside the control-store transaction through a separate bounded Answer-only
 contract. It then persists exactly one closed non-authoritative result with the
 `NO_EXECUTION / ANSWER_ONLY` Decision:
+
+```text
+AnswerOnlyAssistantResponseV1
+  answerContent: non-blank string
+```
+
+This is the complete assistant wire object. `answerContent` is required and
+`null`, blank content, duplicate or unknown keys, invalid UTF-8, and budget
+overflow reject the whole response. The canonical response is bounded at
+131,072 bytes and the retained content at 16,384 UTF-8 bytes, so JSON escaping
+cannot silently reduce the declared content boundary.
 
 ```text
 AnswerOnlyResponse = AnswerReturned | AnswerFailed
@@ -1370,7 +1422,11 @@ define separate retention policy for:
 - Admission and Materialization records; and
 - diagnostic transcripts and worker-session state.
 
-Secrets and unrecognized fields MUST NOT enter authoritative records or audit.
+CodeClosure-owned credentials, content deterministically classified as
+prohibited by the installed retention policy, and unrecognized client-envelope
+fields MUST NOT enter authoritative records or audit. This is a fail-closed
+handling rule for known protected inputs, not a claim that arbitrary natural
+language can be semantically proven secret-free.
 A redacted display is a derived view and cannot replace authority-bearing Raw
 Request bytes. A digest alone does not preserve `USER_STATED` eligibility after
 those bytes become unavailable. The bounded M2.5 retention profile therefore
@@ -1382,6 +1438,20 @@ Content-addressed storage alone does not imply indefinite retention.
 
 M2.5 requires a bounded local policy. Long-term business knowledge and richer
 privacy UX remain later milestone work.
+
+The initial local profile makes “safe admitted source” deterministic rather
+than heuristic. It accepts only well-formed UTF-8 with no NUL, no unpaired
+surrogate, and no C0/C1 control character other than TAB, LF, and CR. Before
+creating a revision it rejects a PEM private-key boundary or a
+case-insensitive line whose first non-whitespace field name is
+`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `password`,
+`passwd`, `secret`, `client_secret`, `api_key`, `apikey`, `access_token`,
+`refresh_token`, or `private_key` followed by `:` or `=`. Rejection retains
+only the profile identity, typed reason, byte count, and command/audit identity;
+it retains neither submitted bytes nor their digest. This is a closed
+syntactic local policy, not a claim that CodeClosure can infer every semantic
+secret. A rejected request must be safely restated; masking never preserves
+`USER_STATED` authority.
 
 ## Failure and Invalidation
 
@@ -1488,6 +1558,9 @@ Before M2.5 can claim completion, tests must cover at least:
    results with `answerDisposition = NOT_REQUESTED`, and a dispositive
    no-external preflight commits its reservation, Decision, terminal state,
    `APPLIED` outcome, and audits without an intermediate `ANALYZING` state;
+   exact-version abandonment is accepted only from `NEEDS_CLARIFICATION`,
+   clears the active Question reference, and creates no revision or assistant
+   call;
 5. a governed read-only repository investigation is not incorrectly treated as
    answer-only;
 6. assistant output claiming Admission, Goal identity, user action, or formal

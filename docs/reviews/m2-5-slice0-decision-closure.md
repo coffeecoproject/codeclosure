@@ -3,15 +3,19 @@
 - Review date: 2026-08-03
 - Scope: M2.5 Slice 0 only
 - Status: Complete
-- Verdict: `PASS`; the bounded interfaces and implementation choices are
-  closed, so Slice 1 may begin
+- Verdict: `PASS`; the bounded cross-slice interfaces and ownership choices are
+  closed, so Slice 1 may implement the exact typed Policy definition assigned
+  to it
 
 ## Review question
 
 This review asks whether M2.5 can begin authority implementation without a
 later slice having to invent or reinterpret package ownership, assistant
 capability, response shape, budgets, persistence meaning, replay, automatic
-Start, or public action semantics.
+Start, or public action semantics. Slice 1 still owns the exact typed Admission
+rule registry and digest within the fixed material-field matrix and aggregation
+order; that is implementation of its declared scope, not permission to change
+the outer authority contract.
 
 It does not claim that Goal Intake works. It adds no Intake domain type,
 Runtime handler, Store method, SQLite migration, CLI command, App Server call,
@@ -30,27 +34,35 @@ The final reviewed working-tree source identity excludes only this review file
 to avoid self-reference:
 
 ```text
-Base Git revision: caadc2f4a9ec68333b7a037800a80e2291a6cc0a
+Base Git revision: a324dd82de699886cd4de05f8cf6b60e480457a6
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 939
-Source manifest digest: sha256:da28badcd1e75d424393e2be9ace9f54cf58b50d22441f93861bddb682321db0
+Source manifest digest: sha256:96e1df0c8061dd3bfdeae899b17ac0c8ac69a8dc459c2996aafd4bb5fff4dc33
 Self-referential review exclusion: docs/reviews/m2-5-slice0-decision-closure.md
 ```
 
-The implementation branch is `m2.5-goal-intake`, based at
-`caadc2f4a9ec68333b7a037800a80e2291a6cc0a`; it opened clean with no inherited
-working-tree changes. Node `v22.22.3` and pnpm `11.1.3` satisfy the manifest.
+The implementation branch is `m2.5-goal-intake`. This bounded correction is
+based at the clean Slice 0 decision-closure commit
+`a324dd82de699886cd4de05f8cf6b60e480457a6`. Node `v22.22.3` and pnpm `11.1.3`
+satisfy the manifest.
 
-Before Slice 0 edits, the complete M1 gate passed. The canonical
-`corepack pnpm accept:m2` procedure then ran with explicit bounded live
-authorization and passed all `93/93` rows with zero failures, blocks, skips, or
-todos. Its opening and closing source identity matched at 938 paths and
-`sha256:9c00f59ee6524871d4165c592e298930c3ef7b868610a39bfcb74434bf09cbed`.
-The M2 procedure included the complete 892-test quality aggregate, M1 black-box
-`8/8`, deterministic protected repair, failed-repair stop, adapter failure,
-scope review, live compatibility preflight, live repair handoff, and live
-natural branch.
+The canonical `corepack pnpm accept:m1` procedure ran on the final modified
+source and passed its complete quality gate, all eight adversarial demos, and
+independent black-box acceptance `8/8`. Its opening and closing source identity
+matched at 939 paths and
+`sha256:06c481db49c3550ca88c85f8960204a37427c35f0f64297962beea5c85548b7c`
+with only the M1 completion review excluded.
+
+The canonical `corepack pnpm accept:m2` procedure then ran on the same final
+modified source with explicit bounded live authorization. It passed all
+`93/93` rows with zero failures or blocks. Its opening and closing source
+identity matched at 939 paths and
+`sha256:7c2e5ce4cff0f013b2fbabbc29fbedacca0f4e1f669fc15cb5c598e15822b5ec`
+with only the M2 completion review excluded. The procedure included the
+complete 893-test quality aggregate, M1 black-box `8/8`, deterministic
+protected repair, failed-repair stop, adapter failure, scope review, live
+compatibility preflight, live repair handoff, and live natural branch.
 
 On the final modified tree, `corepack pnpm gate:quality` passed its complete
 893-test aggregate with zero failures, cancellations, skips, or todos; format,
@@ -149,12 +161,17 @@ The important boundary choices are:
   principal override;
 - each assistant operation gets one fresh process, Thread, and Turn with no
   tool or fallback capability;
-- Intent analysis and Answer-only have different closed response contracts;
+- Intent analysis and Answer-only have different exact closed wire schemas,
+  including omission/null, collection-index, byte-span, duplicate, and unknown-
+  field behavior;
 - required exact input that exceeds a fixed budget fails preparation instead
   of being silently truncated;
-- exact safe source bytes remain retained while dependent authority is usable,
-  while raw transcripts, secrets, exceptions, and private reasoning do not
-  enter authority or audit; and
+- the local retention profile has one exact UTF-8/control-character and
+  credential-marker classifier, rejects before retaining prohibited bytes, and
+  keeps admitted exact source while dependent authority is usable;
+- the built-in Policy has a fixed material-field/source matrix, complete
+  `POLICY_DERIVED` rule set, decision ordering, and explicit trusted
+  abandonment action; and
 - governed automatic Start uses the existing exact M1 Policy/Profile only for
   the deterministic M2.5 proof and still crosses ordinary `StartGoal`.
 
@@ -239,7 +256,10 @@ The dependency gate now contains a pre-package expectation for exactly
 future production dependencies are the public lower App Server client and the
 public Runtime package. The focused reverse fixture rejects the Worker adapter,
 Domain, Store, CLI, testing, workspace, verification, Runtime subpaths, and
-lower-client testing subpath.
+lower-client testing subpath. Its only allowed Node built-ins are
+`node:buffer`, `node:crypto`, `node:path`, and `node:timers`; filesystem,
+child-process, network, module-loader, and worker-thread imports fail the
+preflight.
 
 The package does not exist in Slice 0, so the current nine-package lockfile and
 graph remain unchanged. Slice 3 must promote this exact expectation into the
@@ -261,9 +281,11 @@ contracts.
 
 ## Verdict and next boundary
 
-`PASS`. No unresolved decision remains that can change authority ownership,
-persistence/replay meaning, assistant retry, automatic Start, or public action
-semantics in a later slice.
+`PASS`. No unresolved cross-slice decision remains that can change authority
+ownership, persistence/replay meaning, assistant capability/response shape,
+automatic Start, or public action semantics. Slice 1 may define and digest only
+the exact typed Admission rule registry already bounded by the fixed field
+matrix and aggregation order.
 
 The next permitted work is M2.5 Slice 1: typed Domain identifiers and closed
 records, codecs, canonical projections and golden vectors, deterministic
