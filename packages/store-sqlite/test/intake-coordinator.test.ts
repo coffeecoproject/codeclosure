@@ -18,7 +18,9 @@ import {
   IntentProjectionCanonicalProfileVersion,
   IntentProjectionField,
   MaterialAmbiguityReasonCode,
+  RunStatus,
   SourceAuthorityClass,
+  WorkflowPhase,
   auditEventId,
   clarificationQuestionId,
   commandId,
@@ -30,6 +32,7 @@ import {
   intentProjectionRevisionProjection,
   materialAmbiguitySetProjection,
   sourceBindingProjection,
+  workflowVersion,
   type DeclaredProjectRef,
   type IntentAnalysisProposal,
   type IntentProjectionRevisionRecord,
@@ -44,19 +47,30 @@ import {
   M25IntentAdmissionEngine,
   M25IntentProjectionCompiler,
   Rfc8785Canonicalizer,
+  RuntimeErrorCode,
+  createM1PolicyBundleDefinition,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
   createM25TestUnsupportedAdmissionPolicyDefinition,
+  goalAndWorkflowCreationPayloadProjection,
   type IntakeAssistantOperationResult,
   type IntakeAssistantPort,
   type AnswerOnlyAssistantResponseV1,
   type CommitAnalyzedIntake,
   type IntakeControlStore,
+  type GovernedExecutionPreflight,
+  type IntakeStartCompositionPort,
   type IntentAnalysisAssistantResponseV1,
   type ProjectIntentAnalysisInput,
   type ProjectedIntentAnalysis,
 } from '@codeclosure/runtime';
-import { DeterministicClock, DeterministicIds } from '@codeclosure/testing';
+import {
+  DeterministicClock,
+  DeterministicIds,
+  M1FakeExecutionProfileName,
+  createWorkflowStartAuthorityRuntime,
+  m1FakeExecutionProfileRecipe,
+} from '@codeclosure/testing';
 
 import { SqliteControlStore } from '@codeclosure/store-sqlite';
 
@@ -213,6 +227,10 @@ function coordinator(
     canonicalizer,
     digests,
   }),
+  governed?: Readonly<{
+    preflight: GovernedExecutionPreflight;
+    startComposition: IntakeStartCompositionPort;
+  }>,
 ): M25IntakeCoordinator {
   return new M25IntakeCoordinator({
     store,
@@ -221,10 +239,60 @@ function coordinator(
     projectionCompiler,
     admissionEngine: new M25IntentAdmissionEngine(digests),
     admissionPolicyId,
+    ...(governed === undefined
+      ? {}
+      : {
+          governedExecutionPreflight: governed.preflight,
+          startComposition: governed.startComposition,
+        }),
     clock,
     digests,
     ids,
   });
+}
+
+function governedStart(
+  store: SqliteControlStore,
+  namespace: string,
+  startGoal?: IntakeStartCompositionPort['startGoal'],
+) {
+  const authority = createWorkflowStartAuthorityRuntime({
+    store,
+    namespace,
+    clock: Object.freeze({ now: () => '2026-08-03T08:00:00.000Z' as never }),
+    policyDefinition: createM1PolicyBundleDefinition(digests),
+    executionProfileDefinition: m1FakeExecutionProfileRecipe(M1FakeExecutionProfileName.HAPPY_PATH)
+      .definition,
+  });
+  const preflight: GovernedExecutionPreflight = Object.freeze({
+    schemaVersion: 1,
+    workflowPolicyId: authority.policy.id,
+    workflowPolicyVersion: authority.policy.version,
+    workflowPolicyDigest: authority.policy.digest,
+    executionProfileId: authority.profile.id,
+    executionProfileVersion: authority.profile.version,
+    executionProfileDigest: authority.profile.digest,
+  });
+  const submitStart: IntakeStartCompositionPort['startGoal'] =
+    startGoal ?? ((input) => Promise.resolve({ command: authority.kernel.startGoal(input) }));
+  const readProcessed: IntakeStartCompositionPort['getProcessedCommand'] = (commandIdentifier) =>
+    store.getProcessedCommand(commandIdentifier);
+  const readWorkflow: IntakeStartCompositionPort['getWorkflow'] = (workflowIdentifier) =>
+    store.getWorkflow(workflowIdentifier);
+  const readExecutionProfileBinding: IntakeStartCompositionPort['getExecutionProfileBinding'] = (
+    workflowIdentifier,
+  ) => store.getExecutionProfileBinding(workflowIdentifier);
+  const readWorkflowPolicyBinding: IntakeStartCompositionPort['getWorkflowPolicyBinding'] = (
+    workflowIdentifier,
+  ) => store.getWorkflowPolicyBinding(workflowIdentifier);
+  const startComposition: IntakeStartCompositionPort = Object.freeze({
+    startGoal: submitStart,
+    getProcessedCommand: readProcessed,
+    getWorkflow: readWorkflow,
+    getExecutionProfileBinding: readExecutionProfileBinding,
+    getWorkflowPolicyBinding: readWorkflowPolicyBinding,
+  });
+  return Object.freeze({ authority, preflight, startComposition });
 }
 
 function rehashProjection(
@@ -1082,18 +1150,28 @@ void test('ineligible abandonment records only a deterministic rejection and uns
   assert.equal(store.getIntakeAuthority(submitted.outcome.intakeRunId)?.decisions.length, 1);
 });
 
-void test('complete Slice 4 Admission remains non-durable until Slice 6 materialization and active replay makes no second call', async (t) => {
+void test('Slice 6 materialize-only atomically creates one READY Goal and exact replay makes no second call', async (t) => {
   const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
   t.after(() => store.close());
   const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
   installPolicy(store, policy, 'slice4-ready-boundary');
-  const assistant = new QueueAssistant([exactSourceResponse]);
+  const governed = governedStart(store, 'slice6-materialize-only-manual-authority');
+  const assistant = new QueueAssistant([exactSourceResponse, exactSourceResponse]);
   const runtime = coordinator(
     store,
     assistant,
     new DeterministicIds('slice4-ready-boundary'),
-    new DeterministicClock(['2026-08-03T08:03:01.000Z', '2026-08-03T08:03:02.000Z']),
+    new DeterministicClock([
+      '2026-08-03T08:03:01.000Z',
+      '2026-08-03T08:03:02.000Z',
+      '2026-08-03T08:03:03.000Z',
+      '2026-08-03T08:03:04.000Z',
+      '2026-08-03T08:03:05.000Z',
+      '2026-08-03T08:03:06.000Z',
+    ]),
     policy.id,
+    undefined,
+    governed,
   );
   const input = {
     commandId: commandId('command_slice4-ready-boundary'),
@@ -1102,17 +1180,633 @@ void test('complete Slice 4 Admission remains non-durable until Slice 6 material
     declaredProjectRef: project('/fixture/ready-boundary'),
   } as const;
   const prepared = await runtime.submit(input);
-  assert.equal(prepared.kind, 'MATERIALIZATION_REQUIRED');
-  const authority = store.getIntakeAuthority(prepared.intakeRunId);
+  assert.equal(prepared.kind, 'OUTCOME');
+  assert.equal(prepared.outcome.result.kind, 'MATERIALIZED');
+  assert.equal(prepared.startDisposition, 'NOT_AUTHORIZED');
+  const authority = store.getIntakeAuthority(prepared.outcome.intakeRunId);
   assert.ok(authority);
-  assert.equal(authority.intakeRun.status, IntakeRunStatus.ANALYZING);
-  assert.equal(authority.proposals.length, 0);
-  assert.equal(authority.projections.length, 0);
-  assert.equal(authority.decisions.length, 0);
-  assert.equal(store.getIntakeCommandOutcome(input.commandId), undefined);
+  assert.equal(authority.intakeRun.status, IntakeRunStatus.MATERIALIZED);
+  assert.equal(authority.proposals.length, 1);
+  assert.equal(authority.projections.length, 1);
+  assert.equal(authority.decisions.length, 1);
+  assert.ok(authority.materialization);
+  assert.equal(authority.startAuthorization, undefined);
+  const materializedGoal = store.getGoal(authority.materialization.goalId);
+  const materializedWorkflow = store.getWorkflow(authority.materialization.workflowId);
+  assert.ok(materializedGoal);
+  assert.ok(materializedWorkflow);
+  const expectedCreationPayloadDigest = digests.digest(
+    goalAndWorkflowCreationPayloadProjection(materializedGoal, materializedWorkflow),
+  );
+  assert.deepEqual(
+    store
+      .listAuditEvents('GOAL', materializedGoal.id)
+      .filter((event) => event.eventType === 'GOAL_CREATED')
+      .map((event) => event.payloadDigest),
+    [expectedCreationPayloadDigest],
+  );
+  assert.deepEqual(
+    store
+      .listAuditEvents('WORKFLOW', materializedWorkflow.id)
+      .filter((event) => event.eventType === 'WORKFLOW_CREATED')
+      .map((event) => event.payloadDigest),
+    [expectedCreationPayloadDigest],
+  );
+  assert.equal(materializedWorkflow.runStatus, 'READY');
+  assert.equal(materializedWorkflow.activeAttemptId, undefined);
+  assert.ok(store.getIntakeCommandOutcome(input.commandId));
 
   const replay = await runtime.submit(input);
-  assert.equal(replay.kind, 'IN_PROGRESS');
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.startDisposition, 'NOT_AUTHORIZED');
+  assert.equal(
+    store.getIntakeAuthority(prepared.outcome.intakeRunId)?.materialization?.id,
+    authority.materialization.id,
+  );
+  assert.equal(assistant.analyzeCalls, 1);
+
+  const manualStart = governed.authority.kernel.startGoal({
+    commandId: commandId('command_slice6-materialize-only-manual-start'),
+    goalId: authority.materialization.goalId,
+    expectedGoalRevision: authority.materialization.goalRevision,
+    expectedWorkflowVersion: authority.materialization.workflowVersion,
+  });
+  assert.equal(manualStart.status, 'APPLIED');
+  const manualStatus = runtime.getStatus(prepared.outcome.intakeRunId);
+  assert.equal(manualStatus?.status, IntakeRunStatus.MATERIALIZED);
+  assert.equal(manualStatus.startDisposition, 'NOT_AUTHORIZED');
+  const runningWorkflow = store.getWorkflow(authority.materialization.workflowId);
+  assert.ok(runningWorkflow);
+  const cancelled = governed.authority.kernel.cancelGoal({
+    commandId: commandId('command_slice6-materialize-only-cancel'),
+    goalId: authority.materialization.goalId,
+    expectedGoalRevision: authority.materialization.goalRevision,
+    expectedWorkflowVersion: runningWorkflow.version,
+    reason: 'Explicit correction requires cancellation before a new Intake',
+  });
+  assert.equal(cancelled.status, 'APPLIED');
+  assert.equal(store.getWorkflow(runningWorkflow.id)?.runStatus, 'CANCELLED');
+  assert.equal(
+    store.getIntakeAuthority(prepared.outcome.intakeRunId)?.materialization?.id,
+    authority.materialization.id,
+  );
+
+  const corrected = await runtime.submit({
+    ...input,
+    commandId: commandId('command_slice6-materialize-only-corrected-intake'),
+  });
+  assert.equal(corrected.kind, 'OUTCOME');
+  assert.equal(corrected.outcome.result.kind, 'MATERIALIZED');
+  assert.notEqual(corrected.outcome.intakeRunId, prepared.outcome.intakeRunId);
+  const correctedAuthority = store.getIntakeAuthority(corrected.outcome.intakeRunId);
+  assert.ok(correctedAuthority?.materialization);
+  assert.notEqual(correctedAuthority.materialization.id, authority.materialization.id);
+  assert.notEqual(correctedAuthority.materialization.goalId, authority.materialization.goalId);
+  assert.equal(
+    store.getIntakeAuthority(prepared.outcome.intakeRunId)?.materialization?.id,
+    authority.materialization.id,
+  );
+  assert.equal(store.getWorkflow(authority.materialization.workflowId)?.runStatus, 'CANCELLED');
+  assert.equal(assistant.analyzeCalls, 2);
+});
+
+void test('[I-006][I-008][I-009] Slice 6 Materialization preserves exact admitted Goal text and scope', async (t) => {
+  const filename = temporaryDatabase(t);
+  const store = SqliteControlStore.open({ filename });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'slice6-exact-materialized-text');
+  const exactObjective = '  Ship slice 6 exactly  ';
+  const exactProjectPath = '/fixture/slice6-exact-materialized-text ';
+  const exactByteLength = Buffer.byteLength(exactObjective, 'utf8');
+  const assistant = new QueueAssistant([
+    {
+      proposedObjective: exactObjective,
+      proposedCriteria: [exactObjective],
+      proposedNonGoals: [],
+      proposedAssumptions: [],
+      proposedQuestions: [],
+      candidateSourceSpanSuggestions: [
+        {
+          projectionFieldRef: IntentProjectionField.OBJECTIVE,
+          rawRequestRevision: 1 as never,
+          startByte: 0,
+          endByte: exactByteLength,
+        },
+        {
+          projectionFieldRef: IntentProjectionField.REQUIRED_CRITERION,
+          itemIndex: 0,
+          rawRequestRevision: 1 as never,
+          startByte: 0,
+          endByte: exactByteLength,
+        },
+      ],
+    },
+  ]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('slice6-exact-materialized-text'),
+    new DeterministicClock([
+      '2026-08-03T08:03:11.000Z',
+      '2026-08-03T08:03:12.000Z',
+      '2026-08-03T08:03:13.000Z',
+    ]),
+    policy.id,
+  );
+
+  const result = await runtime.submit({
+    commandId: commandId('command_slice6-exact-materialized-text'),
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: exactObjective,
+    declaredProjectRef: project(exactProjectPath),
+  });
+  assert.equal(result.kind, 'OUTCOME');
+  assert.equal(result.outcome.result.kind, 'MATERIALIZED');
+  assert.equal(result.startDisposition, 'NOT_AUTHORIZED');
+  const authority = store.getIntakeAuthority(result.outcome.intakeRunId);
+  assert.ok(authority?.materialization);
+  assert.equal(store.getGoal(authority.materialization.goalId)?.objective, exactObjective);
+  assert.equal(
+    store.getGoal(authority.materialization.goalId)?.scope.projectPath,
+    exactProjectPath,
+  );
+
+  const reopened = SqliteControlStore.open({ filename });
+  t.after(() => reopened.close());
+  assert.equal(reopened.getGoal(authority.materialization.goalId)?.objective, exactObjective);
+  assert.equal(
+    reopened.getGoal(authority.materialization.goalId)?.scope.projectPath,
+    exactProjectPath,
+  );
+  assert.equal(reopened.getWorkflow(authority.materialization.workflowId)?.runStatus, 'READY');
+});
+
+void test('Slice 6 governed execution commits Materialization before ordinary Start and replays one first Attempt', async (t) => {
+  const filename = temporaryDatabase(t);
+  const store = SqliteControlStore.open({ filename });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'slice6-governed');
+  const governed = governedStart(store, 'slice6-governed-authority');
+  const assistant = new QueueAssistant([exactSourceResponse]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('slice6-governed'),
+    new DeterministicClock([
+      '2026-08-03T08:04:01.000Z',
+      '2026-08-03T08:04:02.000Z',
+      '2026-08-03T08:04:03.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+  const input = {
+    commandId: commandId('command_slice6-governed'),
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef: project('/fixture/slice6-governed'),
+  } as const;
+
+  const result = await runtime.submit(input);
+  assert.equal(result.kind, 'OUTCOME');
+  assert.equal(result.outcome.result.kind, 'MATERIALIZED');
+  assert.equal(result.outcome.result.startDisposition, 'READY_PENDING_START');
+  assert.equal(result.startDisposition, 'START_COMMAND_APPLIED');
+  const authority = store.getIntakeAuthority(result.outcome.intakeRunId);
+  assert.ok(authority?.materialization);
+  assert.ok(authority.startAuthorization);
+  const startedWorkflow = store.getWorkflow(authority.materialization.workflowId);
+  assert.ok(startedWorkflow);
+  assert.equal(startedWorkflow.runStatus, 'RUNNING');
+  assert.ok(startedWorkflow.activeAttemptId);
+  assert.equal(store.nextAttemptSequence(startedWorkflow.id), 2);
+  assert.ok(store.getProcessedCommand(authority.startAuthorization.startCommandId));
+
+  const status = runtime.getStatus(result.outcome.intakeRunId);
+  assert.equal(status?.status, IntakeRunStatus.MATERIALIZED);
+  assert.ok(status);
+  assert.equal(status.startDisposition, 'START_COMMAND_APPLIED');
+  assert.equal(status.materializedGoalRef.goalId, authority.materialization.goalId);
+
+  const replay = await runtime.submit(input);
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.startDisposition, 'START_COMMAND_APPLIED');
+  assert.equal(store.nextAttemptSequence(startedWorkflow.id), 2);
+  assert.equal(assistant.analyzeCalls, 1);
+
+  const reopened = SqliteControlStore.open({ filename });
+  t.after(() => reopened.close());
+  assert.equal(
+    reopened.getWorkflow(authority.materialization.workflowId)?.activeAttemptId,
+    startedWorkflow.activeAttemptId,
+  );
+  assert.equal(
+    reopened.getProcessedCommand(authority.startAuthorization.startCommandId)?.commandId,
+    authority.startAuthorization.startCommandId,
+  );
+});
+
+void test('Slice 6 cannot report an applied Start without retained Workflow authority', async (t) => {
+  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'slice6-false-applied-start');
+  let automaticStartCalls = 0;
+  const governed = governedStart(store, 'slice6-false-applied-start-authority', (startInput) => {
+    automaticStartCalls += 1;
+    return Promise.resolve({
+      command: {
+        status: 'APPLIED',
+        output: {
+          schemaVersion: 1,
+          commandId: startInput.commandId,
+          ok: true,
+          goalId: startInput.goalId,
+          workflowVersion: workflowVersion(startInput.expectedWorkflowVersion + 1),
+          phase: WorkflowPhase.DISCOVERY,
+          runStatus: RunStatus.RUNNING,
+        },
+      },
+    });
+  });
+  const assistant = new QueueAssistant([exactSourceResponse]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('slice6-false-applied-start'),
+    new DeterministicClock([
+      '2026-08-03T08:04:11.000Z',
+      '2026-08-03T08:04:12.000Z',
+      '2026-08-03T08:04:13.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+  const input = {
+    commandId: commandId('command_slice6-false-applied-start'),
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef: project('/fixture/slice6-false-applied-start'),
+  } as const;
+
+  const result = await runtime.submit(input);
+  assert.equal(result.kind, 'OUTCOME');
+  assert.equal(result.startDisposition, 'START_INFRASTRUCTURE_FAILURE');
+  const authority = store.getIntakeAuthority(result.outcome.intakeRunId);
+  assert.ok(authority?.materialization);
+  assert.ok(authority.startAuthorization);
+  assert.equal(store.getProcessedCommand(authority.startAuthorization.startCommandId), undefined);
+  assert.equal(store.getWorkflow(authority.materialization.workflowId)?.runStatus, 'READY');
+  assert.equal(store.nextAttemptSequence(authority.materialization.workflowId), 1);
+  const status = runtime.getStatus(result.outcome.intakeRunId);
+  assert.equal(
+    status?.status === IntakeRunStatus.MATERIALIZED ? status.startDisposition : undefined,
+    'READY_PENDING_START',
+  );
+  assert.equal(automaticStartCalls, 1);
+  assert.equal(assistant.analyzeCalls, 1);
+});
+
+void test('Slice 6 Start infrastructure failure preserves READY Materialization and a later manual Start wins once', async (t) => {
+  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'slice6-start-race');
+  let automaticStartCalls = 0;
+  const actualStart: { current?: IntakeStartCompositionPort['startGoal'] } = {};
+  const governed = governedStart(store, 'slice6-start-race-authority', (input) => {
+    automaticStartCalls += 1;
+    if (automaticStartCalls === 1) {
+      throw new Error('injected failure between Materialization and Start');
+    }
+    if (actualStart.current === undefined) {
+      throw new Error('ordinary StartGoal runtime is unavailable');
+    }
+    return actualStart.current(input);
+  });
+  actualStart.current = (input) =>
+    Promise.resolve({ command: governed.authority.kernel.startGoal(input) });
+  const assistant = new QueueAssistant([exactSourceResponse]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('slice6-start-race'),
+    new DeterministicClock([
+      '2026-08-03T08:05:01.000Z',
+      '2026-08-03T08:05:02.000Z',
+      '2026-08-03T08:05:03.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+  const input = {
+    commandId: commandId('command_slice6-start-race'),
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef: project('/fixture/slice6-start-race'),
+  } as const;
+
+  const failedStart = await runtime.submit(input);
+  assert.equal(failedStart.kind, 'OUTCOME');
+  assert.equal(failedStart.startDisposition, 'START_INFRASTRUCTURE_FAILURE');
+  const authority = store.getIntakeAuthority(failedStart.outcome.intakeRunId);
+  assert.ok(authority?.materialization);
+  assert.ok(authority.startAuthorization);
+  const readyWorkflow = store.getWorkflow(authority.materialization.workflowId);
+  assert.ok(readyWorkflow);
+  assert.equal(readyWorkflow.runStatus, 'READY');
+  assert.equal(readyWorkflow.activeAttemptId, undefined);
+  assert.equal(store.getProcessedCommand(authority.startAuthorization.startCommandId), undefined);
+  const pendingStatus = runtime.getStatus(failedStart.outcome.intakeRunId);
+  assert.equal(
+    pendingStatus?.status === IntakeRunStatus.MATERIALIZED
+      ? pendingStatus.startDisposition
+      : undefined,
+    'READY_PENDING_START',
+  );
+
+  const manualStart = governed.authority.kernel.startGoal({
+    commandId: commandId('command_slice6-manual-winner'),
+    goalId: authority.materialization.goalId,
+    expectedGoalRevision: authority.materialization.goalRevision,
+    expectedWorkflowVersion: authority.materialization.workflowVersion,
+  });
+  assert.equal(manualStart.status, 'APPLIED');
+
+  const replay = await runtime.submit(input);
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.startDisposition, 'START_COMMAND_REJECTED');
+  assert.equal(store.nextAttemptSequence(authority.materialization.workflowId), 2);
+  assert.ok(store.getProcessedCommand(authority.startAuthorization.startCommandId));
+  const racedStatus = runtime.getStatus(failedStart.outcome.intakeRunId);
+  assert.equal(
+    racedStatus?.status === IntakeRunStatus.MATERIALIZED ? racedStatus.startDisposition : undefined,
+    'START_COMMAND_REJECTED',
+  );
+  assert.equal(automaticStartCalls, 2);
+  assert.equal(assistant.analyzeCalls, 1);
+});
+
+void test(
+  'Slice 6 overlapping automatic and manual Start commands retain one first-Start authority',
+  { timeout: 30_000 },
+  async (t) => {
+    const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+    t.after(() => store.close());
+    const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+    installPolicy(store, policy, 'slice6-overlapping-start');
+
+    let markAutomaticEntered: (() => void) | undefined;
+    const automaticEntered = new Promise<void>((resolve) => {
+      markAutomaticEntered = resolve;
+    });
+    let releaseAutomaticStart: (() => void) | undefined;
+    const automaticRelease = new Promise<void>((resolve) => {
+      releaseAutomaticStart = resolve;
+    });
+    t.after(() => releaseAutomaticStart?.());
+    let automaticStartCalls = 0;
+    const actualStart: { current?: IntakeStartCompositionPort['startGoal'] } = {};
+    const governed = governedStart(
+      store,
+      'slice6-overlapping-start-authority',
+      async (startInput) => {
+        automaticStartCalls += 1;
+        markAutomaticEntered?.();
+        await automaticRelease;
+        if (actualStart.current === undefined) {
+          throw new Error('ordinary StartGoal runtime is unavailable');
+        }
+        return actualStart.current(startInput);
+      },
+    );
+    actualStart.current = (startInput) =>
+      Promise.resolve({ command: governed.authority.kernel.startGoal(startInput) });
+    const assistant = new QueueAssistant([exactSourceResponse]);
+    const runtime = coordinator(
+      store,
+      assistant,
+      new DeterministicIds('slice6-overlapping-start'),
+      new DeterministicClock([
+        '2026-08-03T08:05:11.000Z',
+        '2026-08-03T08:05:12.000Z',
+        '2026-08-03T08:05:13.000Z',
+      ]),
+      policy.id,
+      undefined,
+      governed,
+    );
+    const input = {
+      commandId: commandId('command_slice6-overlapping-start'),
+      interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+      admittedUserContent: 'Ship slice 4',
+      declaredProjectRef: project('/fixture/slice6-overlapping-start'),
+    } as const;
+
+    const automaticSubmission = runtime.submit(input);
+    await automaticEntered;
+    const committedOutcome = store.getIntakeCommandOutcome(input.commandId);
+    assert.ok(committedOutcome);
+    assert.equal(committedOutcome.result.kind, 'MATERIALIZED');
+    const authority = store.getIntakeAuthority(committedOutcome.intakeRunId);
+    assert.ok(authority?.materialization);
+    assert.ok(authority.startAuthorization);
+    assert.equal(store.getWorkflow(authority.materialization.workflowId)?.runStatus, 'READY');
+
+    const manualCommandId = commandId('command_slice6-overlapping-manual-winner');
+    const manualStart = governed.authority.kernel.startGoal({
+      commandId: manualCommandId,
+      goalId: authority.materialization.goalId,
+      expectedGoalRevision: authority.materialization.goalRevision,
+      expectedWorkflowVersion: authority.materialization.workflowVersion,
+    });
+    assert.equal(manualStart.status, 'APPLIED');
+    releaseAutomaticStart?.();
+
+    const automaticResult = await automaticSubmission;
+    assert.equal(automaticResult.kind, 'OUTCOME');
+    assert.equal(automaticResult.startDisposition, 'START_COMMAND_REJECTED');
+    const workflow = store.getWorkflow(authority.materialization.workflowId);
+    assert.ok(workflow?.activeAttemptId);
+    assert.equal(store.nextAttemptSequence(workflow.id), 2);
+    const policyBinding = store.getWorkflowPolicyBinding(workflow.id);
+    const profileBinding = store.getExecutionProfileBinding(workflow.id);
+    assert.equal(policyBinding?.startCommandId, manualCommandId);
+    assert.equal(profileBinding?.startCommandId, manualCommandId);
+    const attempt = store.getAttempt(workflow.activeAttemptId);
+    assert.ok(attempt?.contextManifestId);
+    assert.ok(store.getContextManifest(attempt.contextManifestId));
+    assert.equal(
+      store.getProcessedCommand(authority.startAuthorization.startCommandId)?.commandId,
+      authority.startAuthorization.startCommandId,
+    );
+    assert.equal(automaticStartCalls, 1);
+    assert.equal(assistant.analyzeCalls, 1);
+  },
+);
+
+void test('Slice 6 rejects a preallocated Start applied with substituted Policy and Profile authority', async (t) => {
+  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'slice6-policy-profile-substitution');
+  let automaticStartCalls = 0;
+  const actualStart: { current?: IntakeStartCompositionPort['startGoal'] } = {};
+  const governed = governedStart(
+    store,
+    'slice6-policy-profile-substitution-authority',
+    (startInput) => {
+      automaticStartCalls += 1;
+      if (automaticStartCalls === 1) {
+        throw new Error('injected Start infrastructure failure');
+      }
+      if (actualStart.current === undefined) {
+        throw new Error('ordinary StartGoal runtime is unavailable');
+      }
+      return actualStart.current(startInput);
+    },
+  );
+  actualStart.current = (startInput) =>
+    Promise.resolve({ command: governed.authority.kernel.startGoal(startInput) });
+  const assistant = new QueueAssistant([exactSourceResponse]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('slice6-policy-profile-substitution'),
+    new DeterministicClock([
+      '2026-08-03T08:05:21.000Z',
+      '2026-08-03T08:05:22.000Z',
+      '2026-08-03T08:05:23.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+  const input = {
+    commandId: commandId('command_slice6-policy-profile-substitution'),
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef: project('/fixture/slice6-policy-profile-substitution'),
+  } as const;
+
+  const initial = await runtime.submit(input);
+  assert.equal(initial.kind, 'OUTCOME');
+  assert.equal(initial.startDisposition, 'START_INFRASTRUCTURE_FAILURE');
+  const authority = store.getIntakeAuthority(initial.outcome.intakeRunId);
+  assert.ok(authority?.materialization);
+  assert.ok(authority.startAuthorization);
+
+  const substitutedAuthority = createWorkflowStartAuthorityRuntime({
+    store,
+    namespace: 'slice6-substituted-start-composition',
+    clock: Object.freeze({ now: () => '2026-08-03T08:05:24.000Z' as never }),
+  });
+  const substitutedStart = substitutedAuthority.kernel.startGoal({
+    commandId: authority.startAuthorization.startCommandId,
+    goalId: authority.materialization.goalId,
+    expectedGoalRevision: authority.materialization.goalRevision,
+    expectedWorkflowVersion: authority.materialization.workflowVersion,
+  });
+  assert.equal(substitutedStart.status, 'REJECTED');
+  assert.equal(substitutedStart.output.error.code, RuntimeErrorCode.PERSISTENCE_FAILURE);
+  assert.equal(store.getProcessedCommand(authority.startAuthorization.startCommandId), undefined);
+  assert.equal(store.getWorkflow(authority.materialization.workflowId)?.runStatus, 'READY');
+  assert.equal(store.getWorkflowPolicyBinding(authority.materialization.workflowId), undefined);
+  assert.equal(store.getExecutionProfileBinding(authority.materialization.workflowId), undefined);
+
+  const replay = await runtime.submit(input);
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.startDisposition, 'START_COMMAND_APPLIED');
+  assert.equal(
+    store.getWorkflowPolicyBinding(authority.materialization.workflowId)?.policyBundleId,
+    authority.startAuthorization.policyBundleId,
+  );
+  assert.equal(
+    store.getExecutionProfileBinding(authority.materialization.workflowId)?.profileId,
+    authority.startAuthorization.executionProfileId,
+  );
+  assert.equal(store.nextAttemptSequence(authority.materialization.workflowId), 2);
+  assert.equal(automaticStartCalls, 2);
+  assert.equal(assistant.analyzeCalls, 1);
+});
+
+void test('Slice 6 status rejects a non-Start command that occupies the preallocated Start identity', async (t) => {
+  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'slice6-start-substitution');
+  let automaticStartCalls = 0;
+  const actualStart: { current?: IntakeStartCompositionPort['startGoal'] } = {};
+  const governed = governedStart(store, 'slice6-start-substitution-authority', (startInput) => {
+    automaticStartCalls += 1;
+    if (automaticStartCalls === 1) {
+      throw new Error('injected Start infrastructure failure');
+    }
+    if (actualStart.current === undefined) {
+      throw new Error('ordinary StartGoal runtime is unavailable');
+    }
+    return actualStart.current(startInput);
+  });
+  actualStart.current = (startInput) =>
+    Promise.resolve({ command: governed.authority.kernel.startGoal(startInput) });
+  const assistant = new QueueAssistant([exactSourceResponse]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('slice6-start-substitution'),
+    new DeterministicClock([
+      '2026-08-03T08:06:01.000Z',
+      '2026-08-03T08:06:02.000Z',
+      '2026-08-03T08:06:03.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+  const input = {
+    commandId: commandId('command_slice6-start-substitution'),
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef: project('/fixture/slice6-start-substitution'),
+  } as const;
+
+  const initial = await runtime.submit(input);
+  assert.equal(initial.kind, 'OUTCOME');
+  assert.equal(initial.startDisposition, 'START_INFRASTRUCTURE_FAILURE');
+  const authority = store.getIntakeAuthority(initial.outcome.intakeRunId);
+  assert.ok(authority?.materialization);
+  assert.ok(authority.startAuthorization);
+
+  const substituted = governed.authority.kernel.cancelGoal({
+    commandId: authority.startAuthorization.startCommandId,
+    goalId: authority.materialization.goalId,
+    expectedGoalRevision: authority.materialization.goalRevision,
+    expectedWorkflowVersion: authority.materialization.workflowVersion,
+    reason: 'Occupy the preallocated identity with a non-Start command',
+  });
+  assert.equal(substituted.status, 'APPLIED');
+  assert.equal(store.getWorkflow(authority.materialization.workflowId)?.runStatus, 'CANCELLED');
+
+  const status = runtime.getStatus(initial.outcome.intakeRunId);
+  assert.equal(
+    status?.status === IntakeRunStatus.MATERIALIZED ? status.startDisposition : undefined,
+    'START_COMMAND_REJECTED',
+  );
+  const replay = await runtime.submit(input);
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.startDisposition, 'START_COMMAND_REJECTED');
+  assert.equal(store.nextAttemptSequence(authority.materialization.workflowId), 1);
+  assert.equal(automaticStartCalls, 2);
   assert.equal(assistant.analyzeCalls, 1);
 });
 

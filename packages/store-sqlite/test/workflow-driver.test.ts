@@ -84,6 +84,7 @@ import {
   candidateWorkspaceAllowedPathProjection,
   candidateWorkspaceLeaseProjection,
   deriveContextManifestEntries,
+  goalAndWorkflowCreationPayloadProjection,
   validateCandidateWorkspaceLeaseRequest,
   type CandidateWorkspaceLease,
   type CandidateWorkspaceLeaseAuthorityPort,
@@ -799,7 +800,7 @@ function createHarness(
     workflow,
     auditEventId: ids.nextAuditEventId(),
     workflowAuditEventId: ids.nextAuditEventId(),
-    payloadDigest: digests.digest({ goal, workflow }),
+    payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
   });
   assert.equal(creation.status, 'APPLIED');
 

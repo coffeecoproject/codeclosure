@@ -21,6 +21,7 @@ import {
   commandId,
   createGoal,
   createWorkflow,
+  decodeGoalSnapshot,
   decideAttempt,
   decideWorkflow,
   deriveCapabilityGrant,
@@ -57,6 +58,7 @@ import {
   RuntimeErrorCode,
   createRejectedStoredCommandOutcome,
   decodeStoredCommandOutcome,
+  goalAndWorkflowCreationPayloadProjection,
   StoredCommandDisposition,
   CanonicalJsonSha256DigestProvider,
   storedCommandOutcomeToJson,
@@ -81,6 +83,7 @@ const attemptStartedAt = isoTimestamp('2026-07-27T00:00:00.002Z');
 const attemptFinishedAt = isoTimestamp('2026-07-27T00:00:00.003Z');
 const afterCancellationAt = isoTimestamp('2026-07-27T00:00:00.004Z');
 const legacyRetryFinishedAt = isoTimestamp('2026-07-27T00:00:00.005Z');
+const canonicalDigests = new CanonicalJsonSha256DigestProvider();
 
 function digest(character: string): Sha256Digest {
   return sha256Digest(`sha256:${character.repeat(64)}`);
@@ -266,7 +269,9 @@ function creationInput(namespace: string): CreateGoalWithWorkflowInput {
     workflow,
     auditEventId: auditEventId(`audit_goal-${namespace}`),
     workflowAuditEventId: auditEventId(`audit_workflow-${namespace}`),
-    payloadDigest: digest('b'),
+    payloadDigest: canonicalDigests.digest(
+      goalAndWorkflowCreationPayloadProjection(goal, workflow),
+    ),
     correlationId: `correlation-${namespace}`,
   };
 }
@@ -3356,6 +3361,101 @@ void test('[I-006][I-008] processed command outcomes are immutable after inserti
       raw.prepare('DELETE FROM processed_commands WHERE command_id = ?').run(creation.commandId),
     /processed commands are immutable/,
   );
+});
+
+void test('[I-006][I-008][I-009] direct Goal creation requires one exact canonical audit payload', (t) => {
+  const filename = temporaryDatabase(t, 'direct-creation-payload-closure.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const input = creationInput('direct-creation-payload-closure');
+  assert.throws(
+    () => store.createGoalWithWorkflow({ ...input, payloadDigest: digest('b') }),
+    /Goal creation has an inconsistent payload digest/,
+  );
+  assert.equal(store.getGoal(input.goal.id), undefined);
+  assert.equal(store.createGoalWithWorkflow(input).status, 'APPLIED');
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER audit_events_no_update');
+    const poisoned = database
+      .prepare(
+        `UPDATE audit_events
+            SET payload_digest = ?
+          WHERE (aggregate_type = 'GOAL' AND aggregate_id = ?)
+             OR (aggregate_type = 'WORKFLOW' AND aggregate_id = ?)`,
+      )
+      .run(digest('b'), input.goal.id, input.workflow.id);
+    assert.equal(poisoned.changes, 2);
+  } finally {
+    database.close();
+  }
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => createdAt }),
+    /current state has no exact command and audit authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009] direct Goal creation audit authority survives Workflow Start', (t) => {
+  const filename = temporaryDatabase(t, 'started-direct-creation-payload-closure.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const { creation, authority } = seedRunning(store, 'started-direct-creation-payload-closure');
+  assert.equal(authority.workflow.version, workflowVersion(2));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER audit_events_no_update');
+    const poisoned = database
+      .prepare(
+        `UPDATE audit_events
+            SET payload_digest = ?
+          WHERE (aggregate_type = 'GOAL' AND aggregate_id = ? AND event_type = 'GOAL_CREATED')
+             OR (aggregate_type = 'WORKFLOW' AND aggregate_id = ? AND event_type = 'WORKFLOW_CREATED')`,
+      )
+      .run(digest('b'), creation.goal.id, creation.workflow.id);
+    assert.equal(poisoned.changes, 2);
+  } finally {
+    database.close();
+  }
+  assert.throws(
+    () => openSqliteControlStore({ filename, now: () => createdAt }),
+    /current state has no exact command and audit authority/,
+  );
+});
+
+void test('[I-006][I-008][I-009] historical creation closure preserves codec-valid Goal text', (t) => {
+  const filename = temporaryDatabase(t, 'creation-payload-codec-text.sqlite');
+  const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const base = creationInput('creation-payload-codec-text');
+  const goal = decodeGoalSnapshot({
+    ...base.goal,
+    objective: `  ${base.goal.objective}  `,
+  });
+  const creation = Object.freeze({
+    ...base,
+    goal,
+    payloadDigest: canonicalDigests.digest(
+      goalAndWorkflowCreationPayloadProjection(goal, base.workflow),
+    ),
+  });
+  assert.equal(store.createGoalWithWorkflow(creation).status, 'APPLIED');
+  const authority = startWorkflowAuthorityFixture({
+    store,
+    goal,
+    workflow: creation.workflow,
+    namespace: 'creation-payload-codec-text',
+  });
+  assert.equal(authority.workflow.version, workflowVersion(2));
+  store.close();
+
+  const reopened = openSqliteControlStore({ filename, now: () => transitionedAt });
+  try {
+    assert.equal(reopened.getGoal(goal.id)?.objective, goal.objective);
+    assert.equal(reopened.getWorkflow(creation.workflow.id)?.version, workflowVersion(2));
+  } finally {
+    reopened.close();
+  }
 });
 
 void test('[I-006][I-008] Store write boundaries reject malformed branded and nested authority', async (t) => {

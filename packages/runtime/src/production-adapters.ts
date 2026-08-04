@@ -15,6 +15,8 @@ import {
   externalExecutionObservationId,
   externalMaintenanceIntentId,
   goalId,
+  goalMaterializationId,
+  goalStartAuthorizationId,
   isoTimestamp,
   recoveryReconciliationId,
   successCriterionId,
@@ -35,6 +37,8 @@ import {
   type ExternalExecutionObservationId,
   type ExternalMaintenanceIntentId,
   type GoalId,
+  type GoalMaterializationId,
+  type GoalStartAuthorizationId,
   type IsoTimestamp,
   type RecoveryReconciliationId,
   type SuccessCriterionId,
@@ -78,6 +82,14 @@ export class CryptographicIdentityGenerator
 {
   public nextGoalId(): GoalId {
     return goalId(`goal_${this.nextSuffix()}`);
+  }
+
+  public nextGoalMaterializationId(): GoalMaterializationId {
+    return goalMaterializationId(`materialization_${this.nextSuffix()}`);
+  }
+
+  public nextGoalStartAuthorizationId(): GoalStartAuthorizationId {
+    return goalStartAuthorizationId(`start-authorization_${this.nextSuffix()}`);
   }
 
   public nextWorkflowId(): WorkflowId {

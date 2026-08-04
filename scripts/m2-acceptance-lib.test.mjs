@@ -351,6 +351,7 @@ void test('matrix and verdict preserve FAIL over BLOCKED and never omit a mandat
 void test('the bounded semantic review keeps M2 complete while M2.5 contracts remain separate', () => {
   const root = resolve(import.meta.dirname, '..');
   const read = (path) => readFileSync(resolve(root, path), 'utf8');
+  const completionReview = read('docs/reviews/m2-completion-review.md');
   const documents = {
     agents: read('AGENTS.md'),
     readme: read('README.md'),
@@ -365,6 +366,22 @@ void test('the bounded semantic review keeps M2 complete while M2.5 contracts re
     implementationPlan: read('docs/plans/m2-codex-vertical-slice.md'),
     acceptancePlan: read('docs/plans/m2-acceptance-plan.md'),
   };
+  assert.doesNotMatch(
+    documents.agents,
+    /next milestone boundary is M2\.5 and its implementation has not started/u,
+  );
+  assert.match(
+    documents.agents,
+    /Slices 1 through 6 implement[\s\S]{0,300}Slice 7 is the next implementation\s+boundary/u,
+  );
+  assert.match(
+    completionReview,
+    /M2\.5 remains not started;[\s\S]{0,200}no Raw Request[\s\S]{0,200}entered product source/u,
+  );
+  assert.match(
+    completionReview,
+    /M2\.5 may be planned next, but its implementation has\s+not started and requires its own detailed implementation and acceptance plans/u,
+  );
   const evidence = validateM2ScopeReview(documents, '');
   assert.equal(evidence.goalIntakeBoundary, 'NOT_M2_SCOPE');
   assert.equal(evidence.goalIntakeSlice1ContractTokens, 0);

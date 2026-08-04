@@ -9,6 +9,7 @@ import {
   workflowId,
   workflowVersion,
   type CommandId,
+  type Goal,
   type GoalId,
   type WorkflowId,
   type WorkflowInstance,
@@ -18,6 +19,28 @@ import {
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue =
   JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+/**
+ * The shared audit projection for every atomic Goal/Workflow creation path.
+ * Intake Materialization and direct CreateGoal must retain identical lifecycle
+ * payload semantics even though their surrounding command authority differs.
+ */
+export function goalAndWorkflowCreationPayloadProjection(
+  goal: Goal,
+  workflow: WorkflowInstance,
+): Readonly<{
+  schemaVersion: 1;
+  type: 'GOAL_AND_WORKFLOW_CREATED';
+  goal: Goal;
+  workflow: WorkflowInstance;
+}> {
+  return Object.freeze({
+    schemaVersion: 1,
+    type: 'GOAL_AND_WORKFLOW_CREATED',
+    goal,
+    workflow,
+  });
+}
 
 export const RuntimeErrorCode = {
   NOT_FOUND: 'NOT_FOUND',

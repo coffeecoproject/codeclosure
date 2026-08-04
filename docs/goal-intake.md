@@ -27,11 +27,16 @@ implements bounded Answer-only success/failure and exact replay, terminal
 analysis failure, operation-kind-aware startup reconciliation, the exact local
 retention classifier, non-retention of rejected payloads, and redacted
 status/audit projections. The persistence layer includes the later compound
-Goal/Workflow/Materialization/Start-Authorization write but does not yet provide
-CLI, the Materialization application path, or an ordinary Start invocation. The
+Goal/Workflow/Materialization/Start-Authorization write. Slice 6 implements the
+trusted Runtime Materializer, atomic Goal/Workflow creation, optional Start
+Authorization, post-commit submission of only its preallocated ordinary
+`StartGoal`, all five Start dispositions, and composite in-process status. A
+failed Start leaves the committed Goal visibly `READY`, while exact replay and
+automatic/manual competition retain one first-Start winner. The Intake CLI is
+not yet implemented. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 6 is the next implementation
+contract into the current bounded milestone; Slice 7 is the next implementation
 boundary and has not begun.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
@@ -163,9 +168,9 @@ content.
 
 ### Goal Intake Coordinator
 
-The Slice 4 Coordinator owns non-Answer `IntakeRun` sequencing and validated
-creation of Intake records. The later Answer-only, failure, recovery,
-Materialization, and CLI slices complete the remaining behavior. It:
+The Coordinator implemented through Slice 6 owns `IntakeRun` sequencing and
+validated creation of Intake records. The CLI slice completes the remaining
+operational surface. It:
 
 - persists Raw Request revisions outside model and project authority;
 - constructs Intake Packages;
@@ -177,8 +182,9 @@ Materialization, and CLI slices complete the remaining behavior. It:
 - computes canonical digests;
 - constructs immutable clarification Answer Bindings from exact admitted
   commands and Raw Request revisions;
-- will classify and persist bounded Answer-only results and Intake failures in
-  Slice 5;
+- classifies and persists bounded Answer-only results and Intake failures;
+- submits current admitted input to the trusted Runtime Materializer and, only
+  after commit, submits the exact preallocated ordinary `StartGoal` command;
 - persists records, status changes, and audit atomically; and
 - exposes typed read views and next actions, including the exact current
   question ID, specification/record digests, and answer schema for verifying
@@ -1209,7 +1215,7 @@ being rewritten as an ordinary failure.
 Goal Materialization consumes current pre-Goal authority and creates formal
 Goal/Workflow authority.
 
-The planned application request binds:
+The implemented Runtime Materialization input consumes exact records that bind:
 
 ```text
 MaterializeGoalRequest
@@ -1381,7 +1387,8 @@ Goal-bound Context requires Goal, Workflow, phase, Attempt, Policy, and
 Execution Profile identities. Intake has none before Materialization and uses a
 distinct contract.
 
-The planned `IntakePackage` contains only policy-authorized inputs such as:
+The implemented bounded `IntakePackage` contains only policy-authorized inputs
+such as:
 
 - exact Raw Request revisions and digests;
 - the current Intent Projection revision and digest, when one exists;

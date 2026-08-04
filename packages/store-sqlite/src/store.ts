@@ -315,6 +315,7 @@ import {
   IntakeAuditAggregateType,
   IntakeAuditEventType,
   classifyM25IntakeRetainedText,
+  goalAndWorkflowCreationPayloadProjection,
   type IntakeAuditWrite,
   type IntakeAuthorityView,
   type IntakeCommitStoreResult,
@@ -1331,14 +1332,23 @@ function validateCreateGoalWithWorkflowInput(
 ): CreateGoalWithWorkflowInput {
   const correlationId = validateOptionalMetadata(rawInput.correlationId, 'correlationId');
   const causationId = validateOptionalMetadata(rawInput.causationId, 'causationId');
+  const goal = decodeGoalSnapshot(rawInput.goal);
+  const workflow = decodeWorkflowSnapshot(rawInput.workflow);
+  const payloadDigest = sha256Digest(rawInput.payloadDigest);
+  if (
+    payloadDigest !==
+    canonicalAuthorityDigests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow))
+  ) {
+    throw new StoreInvariantError('Goal creation has an inconsistent payload digest');
+  }
   return Object.freeze({
     commandId: commandId(rawInput.commandId),
     inputDigest: sha256Digest(rawInput.inputDigest),
-    goal: decodeGoalSnapshot(rawInput.goal),
-    workflow: decodeWorkflowSnapshot(rawInput.workflow),
+    goal,
+    workflow,
     workflowAuditEventId: auditEventId(rawInput.workflowAuditEventId),
     auditEventId: auditEventId(rawInput.auditEventId),
-    payloadDigest: sha256Digest(rawInput.payloadDigest),
+    payloadDigest,
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(causationId === undefined ? {} : { causationId }),
   });
@@ -4435,6 +4445,10 @@ export class SqliteControlStore
       materialization.workflowId !== workflow.id ||
       materialization.workflowVersion !== workflow.version ||
       materialization.projectOrScopeRef.normalizedPath !== goal.scope.projectPath ||
+      goalCreationPayloadDigest !==
+        canonicalAuthorityDigests.digest(
+          goalAndWorkflowCreationPayloadProjection(goal, workflow),
+        ) ||
       nextRun.materializedGoalRef.goalMaterializationId !== materialization.id ||
       nextRun.materializedGoalRef.materializationDigest !== materialization.materializationDigest ||
       completedAt < materialization.materializedAt ||
@@ -5922,9 +5936,10 @@ export class SqliteControlStore
         run.activeRawRequestRevision.revision !== materialization.rawRequestRevision ||
         run.activeRawRequestRevision.digest !== materialization.rawRequestDigest ||
         owner.workflow.id !== materialization.workflowId ||
-        owner.workflow.version !== materialization.workflowVersion ||
-        owner.workflow.phase !== WorkflowPhase.DISCOVERY ||
-        owner.workflow.runStatus !== RunStatus.READY ||
+        materialization.workflowVersion !== 1 ||
+        owner.workflow.version < materialization.workflowVersion ||
+        owner.goal.createdAt !== materialization.materializedAt ||
+        owner.workflow.createdAt !== materialization.materializedAt ||
         materialization.materializedAt < decision.decidedAt ||
         (decision.executionDisposition === IntentExecutionDisposition.AUTHORIZE_START) !==
           (authorization !== undefined)
@@ -5939,6 +5954,26 @@ export class SqliteControlStore
       const decision = decisionById.get(authorization.intentAdmissionDecisionId);
       const policy = this.getPolicyBundle(authorization.policyBundleId);
       const profile = this.getExecutionProfile(authorization.executionProfileId);
+      const processedStart = this.getProcessedCommand(authorization.startCommandId);
+      const processedStartOutcome =
+        processedStart === undefined
+          ? undefined
+          : decodeStoredCommandOutcome(processedStart.outcome);
+      const appliedAsAuthorizedFirstStart =
+        processedStart?.aggregateType === 'GOAL' &&
+        processedStart.aggregateId === authorization.goalId &&
+        processedStartOutcome?.disposition === StoredCommandDisposition.APPLIED &&
+        processedStartOutcome.goalId === authorization.goalId &&
+        processedStartOutcome.workflow.id === authorization.workflowId &&
+        processedStartOutcome.workflow.version === authorization.workflowVersion + 1 &&
+        processedStartOutcome.workflow.phase === WorkflowPhase.DISCOVERY &&
+        processedStartOutcome.workflow.runStatus === RunStatus.RUNNING;
+      const policyBinding = appliedAsAuthorizedFirstStart
+        ? this.getWorkflowPolicyBinding(authorization.workflowId)
+        : undefined;
+      const profileBinding = appliedAsAuthorizedFirstStart
+        ? this.getExecutionProfileBinding(authorization.workflowId)
+        : undefined;
       const materializationOutcome =
         materialization === undefined
           ? undefined
@@ -5971,6 +6006,17 @@ export class SqliteControlStore
         authorization.startCommandId === materializationOutcome.commandId ||
         policy?.bundle.digest !== authorization.policyBundleDigest ||
         profile?.profile.digest !== authorization.executionProfileDigest ||
+        (appliedAsAuthorizedFirstStart &&
+          (policyBinding?.goalId !== authorization.goalId ||
+            policyBinding.workflowId !== authorization.workflowId ||
+            policyBinding.startCommandId !== authorization.startCommandId ||
+            policyBinding.policyBundleId !== authorization.policyBundleId ||
+            policyBinding.policyBundleDigest !== authorization.policyBundleDigest ||
+            profileBinding?.goalId !== authorization.goalId ||
+            profileBinding.workflowId !== authorization.workflowId ||
+            profileBinding.startCommandId !== authorization.startCommandId ||
+            profileBinding.profileId !== authorization.executionProfileId ||
+            profileBinding.profileDigest !== authorization.executionProfileDigest)) ||
         authorization.authorizedAt < materialization.materializedAt
       ) {
         throw new StoreInvariantError(
@@ -14002,6 +14048,77 @@ export class SqliteControlStore
     );
   }
 
+  private hasExactInitialGoalAndWorkflowCreationClosure(workflow: WorkflowInstance): boolean {
+    const owner = this.getGoalWithWorkflow(workflow.goalId);
+    if (owner === undefined || !sameCanonicalAuthority(owner.workflow, workflow)) {
+      return false;
+    }
+    let initialGoal: Goal;
+    let initialWorkflow: WorkflowInstance;
+    try {
+      initialGoal = decodeGoalSnapshot({
+        ...owner.goal,
+        status: GoalStatus.ACTIVE,
+        updatedAt: owner.goal.createdAt,
+      });
+      initialWorkflow = decodeWorkflowSnapshot({
+        id: workflow.id,
+        goalId: workflow.goalId,
+        goalRevision: workflow.goalRevision,
+        phase: WorkflowPhase.DISCOVERY,
+        runStatus: RunStatus.READY,
+        version: workflowVersion(1),
+        createdAt: workflow.createdAt,
+        updatedAt: workflow.createdAt,
+      });
+      this.validateInitialGoalAndWorkflow(initialGoal, initialWorkflow);
+    } catch {
+      return false;
+    }
+    if (
+      workflow.version === workflowVersion(1) &&
+      (!sameCanonicalAuthority(owner.goal, initialGoal) ||
+        !sameCanonicalAuthority(workflow, initialWorkflow))
+    ) {
+      return false;
+    }
+    const workflowAudits = this.listAuditEvents('WORKFLOW', workflow.id).filter(
+      (audit) => audit.afterVersion === initialWorkflow.version,
+    );
+    const workflowAudit = workflowAudits[0];
+    const goalAudits = this.listAuditEvents('GOAL', owner.goal.id).filter(
+      (audit) => audit.afterVersion === initialGoal.revision,
+    );
+    const goalAudit = goalAudits[0];
+    const expectedPayloadDigest = canonicalAuthorityDigests.digest(
+      goalAndWorkflowCreationPayloadProjection(initialGoal, initialWorkflow),
+    );
+    return (
+      workflowAudits.length === 1 &&
+      goalAudits.length === 1 &&
+      workflowAudit?.aggregateType === 'WORKFLOW' &&
+      workflowAudit.aggregateId === workflow.id &&
+      workflowAudit.eventType === 'WORKFLOW_CREATED' &&
+      workflowAudit.actorType === 'RUNTIME' &&
+      workflowAudit.commandId !== undefined &&
+      workflowAudit.beforeVersion === undefined &&
+      workflowAudit.afterVersion === initialWorkflow.version &&
+      workflowAudit.occurredAt === initialWorkflow.createdAt &&
+      goalAudit?.aggregateType === 'GOAL' &&
+      goalAudit.aggregateId === owner.goal.id &&
+      goalAudit.eventType === 'GOAL_CREATED' &&
+      goalAudit.actorType === 'RUNTIME' &&
+      goalAudit.commandId === workflowAudit.commandId &&
+      goalAudit.beforeVersion === undefined &&
+      goalAudit.afterVersion === initialGoal.revision &&
+      goalAudit.occurredAt === initialGoal.createdAt &&
+      goalAudit.payloadDigest === expectedPayloadDigest &&
+      workflowAudit.payloadDigest === expectedPayloadDigest &&
+      goalAudit.correlationId === workflowAudit.correlationId &&
+      goalAudit.causationId === workflowAudit.causationId
+    );
+  }
+
   private hasExactIntakeMaterializationWorkflowClosure(
     workflow: WorkflowInstance,
     workflowAudit: AuditEventRecord | undefined,
@@ -14031,16 +14148,18 @@ export class SqliteControlStore
       canonicalAuthorityDigests,
     );
     const outcome = this.getIntakeCommandOutcomeInsideTransaction(workflowAudit.commandId);
-    const goalAudits = this.listAuditEvents('GOAL', workflow.goalId).filter(
-      (audit) => audit.afterVersion === workflow.goalRevision,
-    );
-    const goalAudit = goalAudits[0];
+    const owner = this.getGoalWithWorkflow(workflow.goalId);
     return (
+      owner !== undefined &&
       materialization.goalId === workflow.goalId &&
       materialization.goalRevision === workflow.goalRevision &&
       materialization.workflowId === workflow.id &&
       materialization.workflowVersion === workflow.version &&
       materialization.materializedAt === workflow.updatedAt &&
+      workflowAudit.payloadDigest ===
+        canonicalAuthorityDigests.digest(
+          goalAndWorkflowCreationPayloadProjection(owner.goal, workflow),
+        ) &&
       outcome?.disposition === IntakeCommandDisposition.APPLIED &&
       outcome.completedAt === workflow.updatedAt &&
       outcome.result.kind === 'MATERIALIZED' &&
@@ -14050,13 +14169,7 @@ export class SqliteControlStore
       outcome.result.materializedGoalRef.goalId === workflow.goalId &&
       outcome.result.materializedGoalRef.goalRevision === workflow.goalRevision &&
       outcome.result.materializedGoalRef.workflowId === workflow.id &&
-      outcome.result.materializedGoalRef.workflowVersion === workflow.version &&
-      goalAudits.length === 1 &&
-      goalAudit?.actorType === 'RUNTIME' &&
-      goalAudit.commandId === workflowAudit.commandId &&
-      goalAudit.beforeVersion === undefined &&
-      goalAudit.occurredAt === workflow.updatedAt &&
-      goalAudit.payloadDigest === workflowAudit.payloadDigest
+      outcome.result.materializedGoalRef.workflowVersion === workflow.version
     );
   }
 
@@ -14071,10 +14184,12 @@ export class SqliteControlStore
     const command =
       audit?.commandId === undefined ? undefined : this.getProcessedCommand(audit.commandId);
     const outcome = command === undefined ? undefined : decodeStoredCommandOutcome(command.outcome);
+    const hasInitialCreationClosure = this.hasExactInitialGoalAndWorkflowCreationClosure(workflow);
     const hasIntakeMaterializationClosure =
       command === undefined && this.hasExactIntakeMaterializationWorkflowClosure(workflow, audit);
     if (
       currentAudits.length !== 1 ||
+      !hasInitialCreationClosure ||
       audit?.actorType !== 'RUNTIME' ||
       audit.commandId === undefined ||
       audit.occurredAt !== workflow.updatedAt ||

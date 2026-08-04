@@ -115,6 +115,7 @@ import {
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
   createM25TestUnsupportedAdmissionPolicyDefinition,
+  goalAndWorkflowCreationPayloadProjection,
   type IntakeAuditWrite,
   type IntakeAuditEventType as RuntimeIntakeAuditEventType,
 } from '@codeclosure/runtime';
@@ -1896,9 +1897,61 @@ function materializationFixtures(
     materialization,
     startAuthorization,
     materializedRun,
-    goalCreationPayloadDigest: digests.digest({ goal, workflow }),
+    goalCreationPayloadDigest: digests.digest(
+      goalAndWorkflowCreationPayloadProjection(goal, workflow),
+    ),
     audits,
   };
+}
+
+function persistReadyMaterialization(t: TestContext, namespace: string) {
+  const filename = temporaryDatabase(t);
+  const base = fixtures(namespace);
+  const store = openStore(filename);
+  try {
+    installPolicy(store, namespace, base.policy);
+    const startAuthority = createWorkflowStartAuthorityRuntime({
+      store,
+      namespace,
+      clock: Object.freeze({ now: () => LAST }),
+    });
+    const materialized = materializationFixtures(base, startAuthority, namespace);
+    assert.equal(
+      store.reserveInitialIntake({
+        rawRequest: base.rawRequest,
+        rawRequestRevision: base.revision,
+        intakeRun: base.analyzingRun,
+        manifest: base.manifest,
+        reservation: base.reservation,
+        auditEvents: base.reservationAudits,
+      }).status,
+      'RESERVED',
+    );
+    assert.equal(
+      store.commitIntakeMaterialization({
+        kind: 'MATERIALIZE',
+        commandId: base.reservation.commandId,
+        proposal: materialized.proposal,
+        projection: materialized.projection,
+        ambiguitySet: materialized.ambiguitySet,
+        decision: materialized.decision,
+        goal: materialized.goal,
+        workflow: materialized.workflow,
+        materialization: materialized.materialization,
+        startAuthorization: materialized.startAuthorization,
+        intakeRun: materialized.materializedRun,
+        goalAuditEventId: auditEventId(`audit_${namespace}-goal`),
+        workflowAuditEventId: auditEventId(`audit_${namespace}-workflow`),
+        goalCreationPayloadDigest: materialized.goalCreationPayloadDigest,
+        completedAt: LAST,
+        auditEvents: materialized.audits,
+      }).status,
+      'APPLIED',
+    );
+    return Object.freeze({ filename, materialized });
+  } finally {
+    store.close();
+  }
 }
 
 function openStore(filename: string, options: Partial<SqliteControlStoreOptions> = {}) {
@@ -3339,7 +3392,7 @@ void test('[I-006][I-008][I-009] Materialization atomically creates READY Goal/W
     }).status,
     'RESERVED',
   );
-  const committed = store.commitIntakeMaterialization({
+  const commitInput = {
     kind: 'MATERIALIZE',
     commandId: base.reservation.commandId,
     proposal: materialized.proposal,
@@ -3356,34 +3409,23 @@ void test('[I-006][I-008][I-009] Materialization atomically creates READY Goal/W
     goalCreationPayloadDigest: materialized.goalCreationPayloadDigest,
     completedAt: LAST,
     auditEvents: materialized.audits,
-  });
+  } as const;
+  assert.throws(
+    () =>
+      store.commitIntakeMaterialization({
+        ...commitInput,
+        goalCreationPayloadDigest: FIXTURE_DIGEST,
+      }),
+    /Materialization commit has inconsistent authority/,
+  );
+  const committed = store.commitIntakeMaterialization(commitInput);
   assert.equal(committed.status, 'APPLIED');
   assert.equal(committed.outcome.result.kind, 'MATERIALIZED');
   assert.equal(committed.outcome.result.startDisposition, 'READY_PENDING_START');
   assert.deepEqual(store.getGoal(materialized.goal.id), materialized.goal);
   assert.deepEqual(store.getWorkflow(materialized.workflow.id), materialized.workflow);
   assert.equal(store.getWorkflow(materialized.workflow.id)?.activeAttemptId, undefined);
-  assert.equal(
-    store.commitIntakeMaterialization({
-      kind: 'MATERIALIZE',
-      commandId: base.reservation.commandId,
-      proposal: materialized.proposal,
-      projection: materialized.projection,
-      ambiguitySet: materialized.ambiguitySet,
-      decision: materialized.decision,
-      goal: materialized.goal,
-      workflow: materialized.workflow,
-      materialization: materialized.materialization,
-      startAuthorization: materialized.startAuthorization,
-      intakeRun: materialized.materializedRun,
-      goalAuditEventId: auditEventId('audit_intake-materialization-goal'),
-      workflowAuditEventId: auditEventId('audit_intake-materialization-workflow'),
-      goalCreationPayloadDigest: materialized.goalCreationPayloadDigest,
-      completedAt: LAST,
-      auditEvents: materialized.audits,
-    }).status,
-    'REPLAYED',
-  );
+  assert.equal(store.commitIntakeMaterialization(commitInput).status, 'REPLAYED');
   const competing = materializationFixtures(base, startAuthority, 'materialization-competing');
   const competingResult = store.commitIntakeMaterialization({
     kind: 'MATERIALIZE',
@@ -3430,6 +3472,135 @@ void test('[I-006][I-008][I-009] Materialization atomically creates READY Goal/W
   assert.deepEqual(authority.startAuthorization, materialized.startAuthorization);
   assert.deepEqual(reopened.getGoal(materialized.goal.id), materialized.goal);
   assert.deepEqual(reopened.getWorkflow(materialized.workflow.id), materialized.workflow);
+});
+
+void test('[I-001][I-006][I-009] strict reopen requires exact version-1 Materialization creation authority', async (t) => {
+  await t.test('rejects a Goal creation time substituted from its initial Workflow', (subtest) => {
+    const { filename, materialized } = persistReadyMaterialization(
+      subtest,
+      'materialization-reopen-goal-time-substitution',
+    );
+    const database = new Database(filename);
+    try {
+      const substitutedPayloadDigest = digests.digest(
+        goalAndWorkflowCreationPayloadProjection(
+          { ...materialized.goal, createdAt: EARLIER },
+          materialized.workflow,
+        ),
+      );
+      database.exec('DROP TRIGGER audit_events_no_update');
+      database
+        .prepare('UPDATE goals SET created_at = ? WHERE id = ?')
+        .run(EARLIER, materialized.goal.id);
+      const poisonedAudits = database
+        .prepare(
+          `UPDATE audit_events
+              SET payload_digest = ?
+            WHERE (aggregate_type = 'GOAL' AND aggregate_id = ?)
+               OR (aggregate_type = 'WORKFLOW' AND aggregate_id = ?)`,
+        )
+        .run(substitutedPayloadDigest, materialized.goal.id, materialized.workflow.id);
+      assert.equal(poisonedAudits.changes, 2);
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /current state has no exact command and audit authority/,
+    );
+  });
+
+  await t.test('rejects substituted Goal and Workflow creation audit semantics', (subtest) => {
+    const { filename, materialized } = persistReadyMaterialization(
+      subtest,
+      'materialization-reopen-audit-type-substitution',
+    );
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER audit_events_no_update');
+      database
+        .prepare(
+          `UPDATE audit_events
+              SET event_type = ?
+            WHERE aggregate_type = 'WORKFLOW' AND aggregate_id = ?`,
+        )
+        .run('WORKFLOW_PHASE_TRANSITIONED', materialized.workflow.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /current state has no exact command and audit authority|strict reopen/,
+    );
+  });
+
+  await t.test('rejects a consistently substituted Intake creation audit digest', (subtest) => {
+    const { filename, materialized } = persistReadyMaterialization(
+      subtest,
+      'materialization-reopen-audit-digest-substitution',
+    );
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER audit_events_no_update');
+      database
+        .prepare(
+          `UPDATE audit_events
+              SET payload_digest = ?
+            WHERE (aggregate_type = 'GOAL' AND aggregate_id = ?)
+               OR (aggregate_type = 'WORKFLOW' AND aggregate_id = ?)`,
+        )
+        .run(FIXTURE_DIGEST, materialized.goal.id, materialized.workflow.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /current state has no exact command and audit authority|strict reopen/,
+    );
+  });
+
+  await t.test('rejects paired creation-audit poisoning after Workflow Start', (subtest) => {
+    const namespace = 'materialization-reopen-started-audit-digest-substitution';
+    const { filename, materialized } = persistReadyMaterialization(subtest, namespace);
+    const startedStore = openStore(filename);
+    try {
+      const startAuthority = createWorkflowStartAuthorityRuntime({
+        store: startedStore,
+        namespace,
+        clock: Object.freeze({ now: () => LAST }),
+      });
+      const started = startAuthority.kernel.startGoal({
+        commandId: materialized.startAuthorization.startCommandId,
+        goalId: materialized.goal.id,
+        expectedGoalRevision: materialized.goal.revision,
+        expectedWorkflowVersion: materialized.workflow.version,
+      });
+      assert.equal(started.status, 'APPLIED');
+      assert.equal(startedStore.getWorkflow(materialized.workflow.id)?.version, 2);
+    } finally {
+      startedStore.close();
+    }
+
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER audit_events_no_update');
+      const poisoned = database
+        .prepare(
+          `UPDATE audit_events
+              SET payload_digest = ?
+            WHERE (aggregate_type = 'GOAL' AND aggregate_id = ? AND event_type = 'GOAL_CREATED')
+               OR (aggregate_type = 'WORKFLOW' AND aggregate_id = ? AND event_type = 'WORKFLOW_CREATED')`,
+        )
+        .run(FIXTURE_DIGEST, materialized.goal.id, materialized.workflow.id);
+      assert.equal(poisoned.changes, 2);
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /current state has no exact command and audit authority|strict reopen/,
+    );
+  });
 });
 
 const reservationFailureSteps = Object.freeze([

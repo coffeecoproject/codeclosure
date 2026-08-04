@@ -2159,7 +2159,9 @@ export function intakeCommandOutcomeProjection(
   };
 }
 
-export function goalMaterializationProjection(record: GoalMaterializationRecord): unknown {
+export function goalMaterializationProjection(
+  record: Omit<GoalMaterializationRecord, 'id' | 'materializedAt' | 'materializationDigest'>,
+): unknown {
   return {
     schemaVersion: record.schemaVersion,
     intakeRunId: record.intakeRunId,
@@ -2178,7 +2180,9 @@ export function goalMaterializationProjection(record: GoalMaterializationRecord)
   };
 }
 
-export function goalStartAuthorizationProjection(record: GoalStartAuthorization): unknown {
+export function goalStartAuthorizationProjection(
+  record: Omit<GoalStartAuthorization, 'id' | 'authorizedAt' | 'authorizationDigest'>,
+): unknown {
   return {
     schemaVersion: record.schemaVersion,
     principalRef: record.principalRef,

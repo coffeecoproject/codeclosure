@@ -11,6 +11,7 @@ export * from './execution-profile-installer.js';
 export * from './intake-admission.js';
 export * from './intake-assistant.js';
 export * from './intake-coordinator.js';
+export * from './intake-materialization.js';
 export * from './intake-packages.js';
 export * from './intake-policy.js';
 export * from './intake-projection.js';

@@ -59,6 +59,7 @@ import {
   createExecutionProfileInstaller,
   createM1AcceptanceCheckerIdentity,
   createPolicyInstaller,
+  goalAndWorkflowCreationPayloadProjection,
   type Clock,
   type LocalCommandVerificationPort,
   type RecoveryCommandCapability,
@@ -338,7 +339,7 @@ function createFixture(
     workflow,
     auditEventId: ids.nextAuditEventId(),
     workflowAuditEventId: ids.nextAuditEventId(),
-    payloadDigest: digests.digest({ goal, workflow }),
+    payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
   });
   assert.equal(creation.status, 'APPLIED');
 

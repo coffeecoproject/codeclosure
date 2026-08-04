@@ -60,6 +60,7 @@ import {
   decodeCommandTarget,
   decodeJsonValue,
   decodeStoredCommandOutcome,
+  goalAndWorkflowCreationPayloadProjection,
   type CommandError,
   type FailedCommandOutput,
   type JsonValue,
@@ -990,12 +991,7 @@ class CodeClosureApplicationCoordinator implements CodeClosureApplication {
         'CREATE_GOAL_PAYLOAD_DIGEST_FAILURE',
         () =>
           sha256Digest(
-            this.#digests.digest({
-              schemaVersion: 1,
-              type: 'GOAL_AND_WORKFLOW_CREATED',
-              goal,
-              workflow,
-            }),
+            this.#digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
           ),
       );
       const rawStored = this.storeOperation(input.commandId, 'CREATE_GOAL_COMMIT_FAILURE', () =>

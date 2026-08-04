@@ -301,7 +301,10 @@ source-bound Projection, clarification, abandonment, deterministic Admission,
 and non-Answer `NO_EXECUTION` behavior are implemented. Slice 5 bounded
 Answer-only delivery, terminal failure, restart reconciliation, replay,
 retention, and redacted in-process status/audit behavior are implemented. Slice
-6 is the next implementation boundary and has not begun.
+6 atomic Goal/Workflow Materialization, optional Start Authorization, separate
+ordinary `StartGoal` composition, replay, race, failure isolation, strict
+reopen, and composite Start status are implemented. Slice 7 is the next
+implementation boundary and has not begun.
 The operational scope below remains planned behavior governed by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and
@@ -311,8 +314,8 @@ M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. At the
-current post-Slice-5 boundary, no CLI, Materialization application path, or
-ordinary Start invocation is implemented.
+current post-Slice-6 boundary, no Intake CLI or M2.5 acceptance harness is
+implemented. The implementation work does not issue an M2.5 verdict.
 
 ### Objective
 

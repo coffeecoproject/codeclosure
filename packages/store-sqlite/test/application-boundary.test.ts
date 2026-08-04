@@ -12,6 +12,7 @@ import {
   GoalNextSafeAction,
   createCodeClosureApplication,
   createExecutionProfileInstaller,
+  goalAndWorkflowCreationPayloadProjection,
   type CodeClosureApplication,
   type NormalizedProjectPathPort,
 } from '@codeclosure/runtime';
@@ -88,8 +89,9 @@ const createRequest = Object.freeze({
 });
 
 void test('[I-002][I-006][I-008] CreateGoal owns exact atomic creation and read views', (t) => {
+  const filename = temporaryDatabase(t, 'create-and-query.sqlite');
   const store = openSqliteControlStore({
-    filename: temporaryDatabase(t, 'create-and-query.sqlite'),
+    filename,
     now: () => isoTimestamp(createdAt),
   });
   t.after(() => store.close());
@@ -130,6 +132,9 @@ void test('[I-002][I-006][I-008] CreateGoal owns exact atomic creation and read 
   assert.deepEqual(goal.scope.allowedPaths, []);
   assert.deepEqual(goal.nonGoals, []);
   assert.equal(goal.createdAt, workflow.createdAt);
+  const expectedCreationPayloadDigest = digests.digest(
+    goalAndWorkflowCreationPayloadProjection(goal, workflow),
+  );
 
   const status = app.getGoalStatus(goal.id);
   assert.equal(status.status, 'FOUND');
@@ -153,6 +158,10 @@ void test('[I-002][I-006][I-008] CreateGoal owns exact atomic creation and read 
     audit.view.events.map((event) => event.eventType),
     ['GOAL_CREATED', 'WORKFLOW_CREATED'],
   );
+  assert.deepEqual(
+    audit.view.events.map((event) => event.payloadDigest),
+    [expectedCreationPayloadDigest, expectedCreationPayloadDigest],
+  );
   const lastAuditEvent = audit.view.events.at(-1);
   assert.ok(lastAuditEvent);
   assert.ok(audit.view.throughSequence > lastAuditEvent.sequence);
@@ -162,6 +171,23 @@ void test('[I-002][I-006][I-008] CreateGoal owns exact atomic creation and read 
   );
   assert.equal(app.getGoalStatus(goalId('goal_application-missing')).status, 'NOT_FOUND');
   assert.equal(app.getGoalAudit(goalId('goal_application-missing')).status, 'NOT_FOUND');
+
+  const database = new Database(filename, { readonly: true });
+  t.after(() => database.close());
+  for (const table of [
+    'raw_requests',
+    'intake_runs',
+    'intent_analysis_proposals',
+    'intent_projection_revisions',
+    'intent_admission_decisions',
+    'goal_materializations',
+    'goal_start_authorizations',
+  ]) {
+    const row = database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as {
+      count: number;
+    };
+    assert.equal(row.count, 0, `Direct CreateGoal must not synthesize ${table}`);
+  }
 });
 
 void test('[I-006][I-008] CreateGoal replay is stable across fresh process identities', (t) => {
@@ -216,7 +242,9 @@ void test('[I-006][I-008] CreateGoal replay is stable across fresh process ident
     workflow: alternateWorkflow,
     auditEventId: auditEventId('audit_concurrent-create-goal'),
     workflowAuditEventId: auditEventId('audit_concurrent-create-workflow'),
-    payloadDigest: digests.digest({ alternateGoal, alternateWorkflow }),
+    payloadDigest: digests.digest(
+      goalAndWorkflowCreationPayloadProjection(alternateGoal, alternateWorkflow),
+    ),
   });
   assert.equal(raced.status, 'REPLAYED');
   assert.equal(store.getGoal(alternateGoal.id), undefined);

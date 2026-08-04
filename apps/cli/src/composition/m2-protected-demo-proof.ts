@@ -52,6 +52,7 @@ import {
   createPolicyInstaller,
   externalExecutionAbandonReasonCode,
   externalWorkerFailureCode,
+  goalAndWorkflowCreationPayloadProjection,
   type Clock,
   type ExternalFailureCodeView,
   type GoalAuditView,
@@ -640,7 +641,7 @@ export async function runM2ProtectedDemoProof(
       workflow,
       auditEventId: ids.nextAuditEventId(),
       workflowAuditEventId: ids.nextAuditEventId(),
-      payloadDigest: digests.digest({ goal, workflow }),
+      payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
     });
     if (creation.status !== 'APPLIED') {
       throw new TypeError('M2 demo Goal creation was not applied');

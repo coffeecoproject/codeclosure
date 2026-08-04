@@ -32,6 +32,7 @@ import {
   Rfc8785Canonicalizer,
   createExecutionProfileInstaller,
   createPolicyInstaller,
+  goalAndWorkflowCreationPayloadProjection,
   type Clock,
 } from '@codeclosure/runtime';
 import { openSqliteControlStore } from '@codeclosure/store-sqlite';
@@ -174,7 +175,7 @@ void test('[I-005][I-008][I-009][I-012][I-015] Candidate and Evidence authority 
     workflow: initialWorkflow,
     auditEventId: ids.nextAuditEventId(),
     workflowAuditEventId: ids.nextAuditEventId(),
-    payloadDigest: digests.digest({ goal, workflow: initialWorkflow }),
+    payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, initialWorkflow)),
   });
   assert.equal(creation.status, 'APPLIED');
 

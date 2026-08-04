@@ -33,7 +33,10 @@ selects no CodeClosure authority capability and fails on observed tool use; it
 does not claim an empty model-visible App Server tool inventory.
 M2.5 Slice 5 revalidates retained Answer-only Manifest and prepared-Decision
 bindings during startup reconciliation without resuming a Thread or making an
-assistant call; it does not change Goal-bound Context authority.
+assistant call; it does not change Goal-bound Context authority. Slice 6 adds no
+Context schema or compiler authority: automatic execution crosses the existing
+ordinary `StartGoal` boundary, which remains the sole owner of first Context
+and Attempt creation.
 Slice 8 adds no Context authority and completed the bounded M2 exit review on
 2026-08-02.
 

@@ -10,6 +10,8 @@ import {
   commandId,
   contextManifestId,
   goalId,
+  goalMaterializationId,
+  goalStartAuthorizationId,
   evidenceId,
   externalExecutionId,
   externalExecutionObservationId,
@@ -43,6 +45,8 @@ import {
   type CommandId,
   type ContextManifestId,
   type GoalId,
+  type GoalMaterializationId,
+  type GoalStartAuthorizationId,
   type EvidenceId,
   type ExternalExecutionId,
   type ExternalExecutionObservationId,
@@ -101,6 +105,14 @@ export class DeterministicIds {
 
   public nextGoalId(): GoalId {
     return goalId(`goal_${this.nextSuffix()}`);
+  }
+
+  public nextGoalMaterializationId(): GoalMaterializationId {
+    return goalMaterializationId(`materialization_${this.nextSuffix()}`);
+  }
+
+  public nextGoalStartAuthorizationId(): GoalStartAuthorizationId {
+    return goalStartAuthorizationId(`start-authorization_${this.nextSuffix()}`);
   }
 
   public nextAcceptanceCriticalVerificationPlanId(): AcceptanceCriticalVerificationPlanId {

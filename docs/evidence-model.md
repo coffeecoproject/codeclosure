@@ -31,7 +31,9 @@ M2.5 Slices 1 and 2 add no Evidence kind or eligibility rule; their Proposal,
 Answer-only, persistence, and reopen boundaries do not promote Intake content
 into Evidence or Acceptance authority. Slice 5 implements bounded Answer-only
 and failure/restart results without making either an Evidence or Acceptance
-input.
+input. Slice 6 adds no Evidence kind or eligibility path; Materialization
+creates no Candidate, Evidence, or Acceptance authority, and any post-Start
+evidence still follows the existing Workflow and Acceptance boundaries.
 
 ## Purpose
 

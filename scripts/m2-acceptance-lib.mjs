@@ -642,8 +642,13 @@ export function validateM2ScopeReview(documents, productSources) {
   }
   requirePattern(
     documents.agents,
-    /next milestone boundary is M2\.5[\s\S]{0,200}implementation has not started[\s\S]*M2\.5 implementation MUST NOT begin until[\s\S]{0,100}independent M2 exit review passes; that gate passed on 2026-08-02[\s\S]{0,100}does not itself begin M2\.5 implementation/u,
-    'AGENTS does not preserve the M2/M2.5 gate',
+    /M2\.5 — Goal Intake and Materialization — is the current milestone boundary/u,
+    'AGENTS does not record M2.5 as the current milestone boundary',
+  );
+  requirePattern(
+    documents.agents,
+    /independent M2 exit review was a\s+prerequisite for M2\.5 implementation and passed on 2026-08-02/u,
+    'AGENTS does not preserve the satisfied independent M2 prerequisite',
   );
   requirePattern(
     documents.readme,

@@ -55,8 +55,10 @@ Slices 1 and 2 implement its separate Domain/Admission contracts and atomic
 SQLite creation of a `DISCOVERY / READY` Workflow through the Intake Store
 boundary. Slices 3 through 5 add the isolated Intake Adapter, Coordinator,
 source-bound Admission, clarification, bounded terminal handling, and restart
-reconciliation without creating a Workflow or adding a Workflow phase. No
-Materialization application path or automatic Start invocation is operational.
+reconciliation without creating a Workflow or adding a Workflow phase. Slice 6
+implements the Materialization application path and submits an authorized
+preallocated command only through ordinary `StartGoal`; it adds no Workflow
+phase or second Workflow writer. The Intake CLI is not operational.
 Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
 2026-08-02.
 
@@ -79,10 +81,10 @@ CodeClosure separates:
 This prevents an operational failure or user wait from being confused with a
 new engineering phase.
 
-## Pre-Goal Flow — planned M2.5
+## Pre-Goal Flow — implemented through M2.5 Slice 6
 
 Goal Intake precedes this state machine and owns no `WorkflowPhase`,
-`RunStatus`, or `Attempt`. Its independent planned flow is:
+`RunStatus`, or `Attempt`. Its independent bounded flow is:
 
 ```text
 Raw Request Revision
@@ -167,7 +169,7 @@ Goal plus its unique `DISCOVERY`/`READY` Workflow; it does not dispatch work.
 The first Context-bound `StartGoal` transaction binds one installed Execution
 Profile. Resume cannot select another profile.
 
-The planned M2.5 `MaterializeGoal` application command adds exact Raw Request
+The implemented M2.5 Slice 6 Materialization primitive adds exact Raw Request
 revision/digest, Intent Analysis Proposal, Intent Projection revision/digest,
 Source Binding, Material Ambiguity, Admission Policy, Intake version, and
 project/scope guards before converging on the same Goal Manager validation and

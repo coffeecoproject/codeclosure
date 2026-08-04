@@ -64,6 +64,7 @@ import {
   decodeWorkerEventReceipt,
   decodeWorkerRequest,
   deriveContextManifestEntries,
+  goalAndWorkflowCreationPayloadProjection,
   storedCommandOutcomeToJson,
   type Clock,
   type ResumeGoalRequest,
@@ -205,7 +206,7 @@ function seedAuthority(
     workflow,
     auditEventId: new DeterministicIds(`goal-${namespace}`).nextAuditEventId(),
     workflowAuditEventId: new DeterministicIds(`workflow-${namespace}`).nextAuditEventId(),
-    payloadDigest: digests.digest({ schemaVersion: 1, goal, workflow }),
+    payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
   });
   assert.equal(creation.status, 'APPLIED');
   return Object.freeze({ goal, workflow, policy, profile });

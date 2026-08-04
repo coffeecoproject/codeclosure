@@ -30,8 +30,13 @@ import {
   type SqliteAuthorityIsolationLease,
   type SqliteAuthorityIsolationSnapshot,
 } from '@codeclosure/store-sqlite';
+import {
+  CanonicalJsonSha256DigestProvider,
+  goalAndWorkflowCreationPayloadProjection,
+} from '@codeclosure/runtime';
 
 const createdAt = isoTimestamp('2026-07-29T00:00:00.000Z');
+const canonicalDigests = new CanonicalJsonSha256DigestProvider();
 
 function digest(character: string): Sha256Digest {
   return sha256Digest(`sha256:${character.repeat(64)}`);
@@ -72,7 +77,9 @@ function creationInput(namespace: string, projectPath: string): CreateGoalWithWo
     workflow,
     auditEventId: auditEventId(`audit_goal-${namespace}`),
     workflowAuditEventId: auditEventId(`audit_workflow-${namespace}`),
-    payloadDigest: digest('b'),
+    payloadDigest: canonicalDigests.digest(
+      goalAndWorkflowCreationPayloadProjection(goal, workflow),
+    ),
   });
 }
 
@@ -93,16 +100,19 @@ function isolationLease(
   });
 }
 
-function seedRetainedGoal(filename: string, namespace: string, projectPath: string): void {
+function seedRetainedGoal(
+  filename: string,
+  namespace: string,
+  projectPath: string,
+): CreateGoalWithWorkflowInput {
   const store = openSqliteControlStore({ filename, now: () => createdAt });
+  const input = creationInput(namespace, projectPath);
   try {
-    assert.equal(
-      store.createGoalWithWorkflow(creationInput(namespace, projectPath)).status,
-      'APPLIED',
-    );
+    assert.equal(store.createGoalWithWorkflow(input).status, 'APPLIED');
   } finally {
     store.close();
   }
+  return input;
 }
 
 void test('[I-006][I-008] verified activation rejects a partial Intake schema before migration or verifier activation', (t) => {
@@ -394,7 +404,17 @@ void test('[I-007][I-008] a lease change before commit rolls back the authority 
 void test('[I-006][I-008] migration cannot rewrite an inspected project binding', (t) => {
   const filename = temporaryDatabase(t);
   const projectPath = '/fixture/migration-binding';
-  seedRetainedGoal(filename, 'migration-binding', projectPath);
+  const retained = seedRetainedGoal(filename, 'migration-binding', projectPath);
+  const rewrittenProjectPath = '/fixture/rewritten-by-migration';
+  const rewrittenPayloadDigest = canonicalDigests.digest(
+    goalAndWorkflowCreationPayloadProjection(
+      {
+        ...retained.goal,
+        scope: { ...retained.goal.scope, projectPath: rewrittenProjectPath },
+      },
+      retained.workflow,
+    ),
+  );
   const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-activation-migrations-'));
   t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
   for (const name of readdirSync(defaultMigrationsDirectory()).filter((name) =>
@@ -404,7 +424,18 @@ void test('[I-006][I-008] migration cannot rewrite an inspected project binding'
   }
   writeFileSync(
     join(migrationsDirectory, '0030_rewrite_project_binding.sql'),
-    "UPDATE goals SET project_path = '/fixture/rewritten-by-migration';\n",
+    `DROP TRIGGER audit_events_no_update;
+UPDATE goals SET project_path = '${rewrittenProjectPath}';
+UPDATE audit_events
+   SET payload_digest = '${rewrittenPayloadDigest}'
+ WHERE (aggregate_type = 'GOAL' AND aggregate_id = '${retained.goal.id}')
+    OR (aggregate_type = 'WORKFLOW' AND aggregate_id = '${retained.workflow.id}');
+CREATE TRIGGER audit_events_no_update
+BEFORE UPDATE ON audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'audit events are immutable');
+END;
+`,
   );
 
   assert.throws(

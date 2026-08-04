@@ -81,6 +81,7 @@ import {
   deriveM1WorkspaceIdentity,
   digestCandidateWorkspaceValue,
   executeLocalCommandVerification,
+  goalAndWorkflowCreationPayloadProjection,
   validateCandidateWorkspaceLeaseRequest,
   verifyEvidenceSetAuthority,
   type CandidateWorkspaceLease,
@@ -371,7 +372,7 @@ function createHarness(
     workflow: initialWorkflow,
     auditEventId: ids.nextAuditEventId(),
     workflowAuditEventId: ids.nextAuditEventId(),
-    payloadDigest: digests.digest({ goal, workflow: initialWorkflow }),
+    payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, initialWorkflow)),
   });
   assert.equal(creation.status, 'APPLIED');
 
@@ -2707,7 +2708,7 @@ void test('[I-006][I-008] migration 0011 refuses legacy placeholder Candidate au
       workflow,
       auditEventId: ids.nextAuditEventId(),
       workflowAuditEventId: ids.nextAuditEventId(),
-      payloadDigest: digests.digest({ goal, workflow }),
+      payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
     }).status,
     'APPLIED',
   );
@@ -2810,7 +2811,7 @@ void test('[I-006][I-008] migration 0013 refuses placeholder Acceptance authorit
       workflow,
       auditEventId: ids.nextAuditEventId(),
       workflowAuditEventId: ids.nextAuditEventId(),
-      payloadDigest: digests.digest({ goal, workflow }),
+      payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
     }).status,
     'APPLIED',
   );
@@ -3037,7 +3038,7 @@ void test('[I-006][I-008][I-027] migration 0011 refuses a retained Goal with no 
       workflow,
       auditEventId: ids.nextAuditEventId(),
       workflowAuditEventId: ids.nextAuditEventId(),
-      payloadDigest: digests.digest({ goal, workflow }),
+      payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
     }).status,
     'APPLIED',
   );

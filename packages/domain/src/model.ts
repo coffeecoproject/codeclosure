@@ -176,14 +176,11 @@ export function assertGoalInvariant(goal: Goal): void {
   }
 }
 
-export function createGoal(input: CreateGoalInput): Goal {
-  const objective = input.objective.trim();
-  const projectPath = input.scope.projectPath.trim();
-
-  if (objective.length === 0) {
+function createGoalWithText(input: CreateGoalInput, objective: string, projectPath: string): Goal {
+  if (objective.trim().length === 0) {
     throw new TypeError('Goal objective must not be empty');
   }
-  if (projectPath.length === 0) {
+  if (projectPath.trim().length === 0) {
     throw new TypeError('Goal projectPath must not be empty');
   }
   if (input.successCriteria.length === 0) {
@@ -220,4 +217,13 @@ export function createGoal(input: CreateGoalInput): Goal {
   });
   assertGoalInvariant(goal);
   return goal;
+}
+
+export function createGoal(input: CreateGoalInput): Goal {
+  return createGoalWithText(input, input.objective.trim(), input.scope.projectPath.trim());
+}
+
+/** Creates a Goal from already-admitted exact text without boundary normalization. */
+export function createGoalPreservingExactText(input: CreateGoalInput): Goal {
+  return createGoalWithText(input, input.objective, input.scope.projectPath);
 }

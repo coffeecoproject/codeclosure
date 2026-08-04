@@ -18,3 +18,7 @@ runtime evidence.
 - [M2.5 Slice 0 decision-closure review](m2-5-slice0-decision-closure.md)
 - [M2.5 Slice 1 domain, policy, and invariant review](m2-5-slice1-domain-policy-invariant.md)
 - [M2.5 Slice 2 SQLite Intake authority review](m2-5-slice2-sqlite-intake-authority.md)
+- [M2.5 Slice 3 Intake packages and Adapter review](m2-5-slice3-intake-packages-adapter.md)
+- [M2.5 Slice 4 Coordinator, Projection, and Admission review](m2-5-slice4-coordinator-projection-admission.md)
+- [M2.5 Slice 5 Answer-only, failure, and restart review](m2-5-slice5-answer-failure-restart.md)
+- [M2.5 Slice 6 Materialization and Start review](m2-5-slice6-materialization-start.md)

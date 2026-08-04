@@ -8,6 +8,7 @@ import {
   IntakeCommandOperationKind,
   IntakeInteractionAction,
   IntakeRunStatus,
+  IntakeStartDisposition,
   IntentAdmissionDecisionKind,
   IntentAdmissionReasonCode,
   IntentProjectionField,
@@ -55,6 +56,7 @@ import {
   type IntentAdmissionDecisionId,
   type IntentAdmissionPolicy,
   type IsoTimestamp,
+  type GoalStartAuthorizationId,
   type PrincipalId,
   type RawRequestId,
   type Sha256Digest,
@@ -90,12 +92,21 @@ import {
   type IntakeReservationStoreResult,
 } from './intake-store.js';
 import type { Clock, DigestProvider } from './ports.js';
+import {
+  M25IntakeMaterializer,
+  classifyIntakeStartResult,
+  readIntakeStartDisposition,
+  type IntakeMaterializationCapability,
+  type IntakeMaterializationIdentityGenerator,
+  type IntakeStartCompositionPort,
+} from './intake-materialization.js';
 
 export const M25_LOCAL_PRINCIPAL_ID = 'principal_local-user' as PrincipalId;
 export const M25_LOCAL_RETENTION_PROFILE_ID = 'intake-retention_codeclosure-m2-5-local';
 export const M25_LOCAL_RETENTION_PROFILE_VERSION = 'codeclosure-m2-5-local-retention-v1';
 
-export interface IntakeCoordinatorIdentityGenerator extends IntentProjectionIdentityGenerator {
+export interface IntakeCoordinatorIdentityGenerator
+  extends IntentProjectionIdentityGenerator, IntakeMaterializationIdentityGenerator {
   nextRawRequestId(): RawRequestId;
   nextIntakeRunId(): IntakeRunId;
   nextIntakeManifestId(): IntakeManifestId;
@@ -139,6 +150,7 @@ export type IntakeCoordinatorCommandResult =
       kind: 'OUTCOME';
       outcome: IntakeCommandOutcome;
       replayed: boolean;
+      startDisposition: (typeof IntakeStartDisposition)[keyof typeof IntakeStartDisposition];
       answerOnlyContent?: string;
     }>
   | Readonly<{
@@ -146,14 +158,6 @@ export type IntakeCoordinatorCommandResult =
       intakeRunId: IntakeRunId;
       intakeRunVersion: number;
       operationKind: IntakeCommandReservation['operationKind'];
-    }>
-  | Readonly<{
-      kind: 'MATERIALIZATION_REQUIRED';
-      intakeRunId: IntakeRunId;
-      intakeRunVersion: number;
-      reasonCode:
-        | typeof IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED
-        | typeof IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED;
     }>
   | Readonly<{
       kind: 'CONTENT_REJECTED';
@@ -209,6 +213,16 @@ export type IntakeStatusView =
       intakeRunId: IntakeRunId;
       intakeRunVersion: number;
       status: typeof IntakeRunStatus.MATERIALIZED;
+      materializedGoalRef: Extract<
+        IntakeRun,
+        { readonly status: typeof IntakeRunStatus.MATERIALIZED }
+      >['materializedGoalRef'];
+      goalStartAuthorizationRef?: Readonly<{
+        id: GoalStartAuthorizationId;
+        digest: Sha256Digest;
+        startCommandId: CommandId;
+      }>;
+      startDisposition: (typeof IntakeStartDisposition)[keyof typeof IntakeStartDisposition];
     }>
   | Readonly<{
       schemaVersion: 1;
@@ -278,6 +292,8 @@ export interface M25IntakeCoordinatorOptions {
   readonly clock: Clock;
   readonly digests: Utf8DigestProvider;
   readonly ids: IntakeCoordinatorIdentityGenerator;
+  readonly materializer?: IntakeMaterializationCapability;
+  readonly startComposition?: IntakeStartCompositionPort;
 }
 
 function mapStoreResult(
@@ -285,9 +301,25 @@ function mapStoreResult(
 ): IntakeCoordinatorCommandResult {
   switch (result.status) {
     case 'REPLAYED':
-      return { kind: 'OUTCOME', outcome: result.outcome, replayed: true };
+      return {
+        kind: 'OUTCOME',
+        outcome: result.outcome,
+        replayed: true,
+        startDisposition:
+          'startDisposition' in result.outcome.result
+            ? result.outcome.result.startDisposition
+            : IntakeStartDisposition.NOT_AUTHORIZED,
+      };
     case 'APPLIED':
-      return { kind: 'OUTCOME', outcome: result.outcome, replayed: false };
+      return {
+        kind: 'OUTCOME',
+        outcome: result.outcome,
+        replayed: false,
+        startDisposition:
+          'startDisposition' in result.outcome.result
+            ? result.outcome.result.startDisposition
+            : IntakeStartDisposition.NOT_AUTHORIZED,
+      };
     case 'ACTIVE':
     case 'RESERVED':
       return {
@@ -324,6 +356,8 @@ export class M25IntakeCoordinator {
   readonly #clock: Clock;
   readonly #digests: Utf8DigestProvider;
   readonly #ids: IntakeCoordinatorIdentityGenerator;
+  readonly #materializer: IntakeMaterializationCapability;
+  readonly #startComposition: IntakeStartCompositionPort | undefined;
 
   public constructor(options: M25IntakeCoordinatorOptions) {
     this.#store = options.store;
@@ -337,6 +371,18 @@ export class M25IntakeCoordinator {
     this.#clock = options.clock;
     this.#digests = options.digests;
     this.#ids = options.ids;
+    this.#materializer =
+      options.materializer ??
+      new M25IntakeMaterializer({
+        store: options.store,
+        clock: options.clock,
+        digests: options.digests,
+        ids: options.ids,
+      });
+    this.#startComposition = options.startComposition;
+    if (this.#governedExecutionPreflight !== undefined && this.#startComposition === undefined) {
+      throw new TypeError('Governed execution preflight requires ordinary StartGoal composition');
+    }
   }
 
   public async submit(
@@ -376,7 +422,7 @@ export class M25IntakeCoordinator {
     }
     const replay = this.#existingCommand(command.commandId, command.canonicalCommandInputDigest);
     if (replay !== undefined) {
-      return replay;
+      return this.#composeStartForResult(replay);
     }
     if (
       Buffer.byteLength(command.admittedUserContent, 'utf8') >
@@ -653,7 +699,7 @@ export class M25IntakeCoordinator {
       if (replay === undefined) {
         throw new TypeError('Existing clarification reservation disappeared during replay');
       }
-      return replay;
+      return this.#composeStartForResult(replay);
     }
     const authority = this.#store.getIntakeAuthority(targetIntakeRunId);
     if (authority === undefined) {
@@ -1305,19 +1351,43 @@ export class M25IntakeCoordinator {
         },
       };
     }
+    if (run.status === IntakeRunStatus.MATERIALIZED) {
+      const materialization = authority.materialization;
+      if (
+        materialization?.id !== run.materializedGoalRef.goalMaterializationId ||
+        materialization.materializationDigest !== run.materializedGoalRef.materializationDigest
+      ) {
+        throw new TypeError('Terminal Intake Materialization authority is missing');
+      }
+      const startAuthorization = authority.startAuthorization;
+      return {
+        schemaVersion: 1,
+        intakeRunId: run.id,
+        intakeRunVersion: run.version,
+        status: run.status,
+        materializedGoalRef: run.materializedGoalRef,
+        ...(startAuthorization === undefined
+          ? {}
+          : {
+              goalStartAuthorizationRef: {
+                id: startAuthorization.id,
+                digest: startAuthorization.authorizationDigest,
+                startCommandId: startAuthorization.startCommandId,
+              },
+            }),
+        startDisposition: readIntakeStartDisposition(startAuthorization, this.#startComposition),
+      };
+    }
+    const operationKind = authority.reservations.find(
+      ({ observedIntakeRunVersion }) => observedIntakeRunVersion === run.version,
+    )?.operationKind;
     return {
       schemaVersion: 1,
       intakeRunId: run.id,
       intakeRunVersion: run.version,
       status: run.status,
-      ...(run.status === IntakeRunStatus.ANALYZING
-        ? {
-            operationKind: authority.reservations.find(
-              ({ observedIntakeRunVersion }) => observedIntakeRunVersion === run.version,
-            )?.operationKind,
-          }
-        : {}),
-    } as IntakeStatusView;
+      ...(operationKind === undefined ? {} : { operationKind }),
+    };
   }
 
   public getAudit(intakeRunIdentifier: string): IntakeAuditView | undefined {
@@ -1601,12 +1671,21 @@ export class M25IntakeCoordinator {
       },
     });
     if (decision.kind === IntentAdmissionDecisionKind.MATERIALIZE) {
-      return {
-        kind: 'MATERIALIZATION_REQUIRED',
-        intakeRunId: input.authority.intakeRun.id,
-        intakeRunVersion: input.authority.intakeRun.version,
-        reasonCode: decision.reasonCode,
-      };
+      const committed = this.#materializer.materialize({
+        commandId: input.commandId,
+        intakeRun: requireRunStatus(input.authority.intakeRun, IntakeRunStatus.ANALYZING),
+        proposal: projected.proposal,
+        projection: projected.projection,
+        ambiguitySet: projected.ambiguitySet,
+        decision,
+        ...(this.#governedExecutionPreflight === undefined
+          ? {}
+          : { governedExecutionPreflight: this.#governedExecutionPreflight }),
+      });
+      if (committed.status !== 'APPLIED' && committed.status !== 'REPLAYED') {
+        return mapStoreResult(committed);
+      }
+      return this.#composeMaterializedStart(committed.outcome, committed.status === 'REPLAYED');
     }
     if (
       decision.kind !== IntentAdmissionDecisionKind.CLARIFY ||
@@ -1866,13 +1945,103 @@ export class M25IntakeCoordinator {
       : { kind: 'COMMAND_CONFLICT', message: 'Command ID is bound to another canonical input' };
   }
 
-  #outcomeResult(outcome: IntakeCommandOutcome, replayed: boolean): IntakeCoordinatorCommandResult {
+  async #composeStartForResult(
+    result: IntakeCoordinatorCommandResult,
+  ): Promise<IntakeCoordinatorCommandResult> {
+    return result.kind === 'OUTCOME' && result.outcome.result.kind === 'MATERIALIZED'
+      ? this.#composeMaterializedStart(result.outcome, result.replayed)
+      : result;
+  }
+
+  async #composeMaterializedStart(
+    outcome: IntakeCommandOutcome,
+    replayed: boolean,
+  ): Promise<IntakeCoordinatorCommandResult> {
+    if (outcome.result.kind !== 'MATERIALIZED') {
+      throw new TypeError('Start composition requires a MATERIALIZED Intake outcome');
+    }
+    const authority = this.#store.getIntakeAuthority(outcome.intakeRunId);
+    const materialization = authority?.materialization;
+    if (
+      materialization?.id !== outcome.result.materializedGoalRef.goalMaterializationId ||
+      materialization.materializationDigest !==
+        outcome.result.materializedGoalRef.materializationDigest
+    ) {
+      throw new TypeError('Committed Intake outcome has no exact Materialization authority');
+    }
+    const authorization = authority?.startAuthorization;
+    if (!('goalStartAuthorizationRef' in outcome.result)) {
+      if (authorization !== undefined) {
+        throw new TypeError('Leave-ready Materialization retained unexpected Start authority');
+      }
+      return this.#outcomeResult(outcome, replayed, IntakeStartDisposition.NOT_AUTHORIZED);
+    }
+    if (
+      authorization?.id !== outcome.result.goalStartAuthorizationRef.id ||
+      authorization.authorizationDigest !== outcome.result.goalStartAuthorizationRef.digest ||
+      authorization.startCommandId !== outcome.result.goalStartAuthorizationRef.startCommandId
+    ) {
+      throw new TypeError('Committed Intake outcome has no exact Start Authorization');
+    }
+    const preflight = this.#governedExecutionPreflight;
+    const start = this.#startComposition;
+    if (
+      preflight === undefined ||
+      start === undefined ||
+      authorization.policyBundleId !== preflight.workflowPolicyId ||
+      authorization.policyBundleDigest !== preflight.workflowPolicyDigest ||
+      authorization.executionProfileId !== preflight.executionProfileId ||
+      authorization.executionProfileDigest !== preflight.executionProfileDigest
+    ) {
+      return this.#outcomeResult(
+        outcome,
+        replayed,
+        IntakeStartDisposition.START_INFRASTRUCTURE_FAILURE,
+      );
+    }
+    let startDisposition: (typeof IntakeStartDisposition)[keyof typeof IntakeStartDisposition];
+    try {
+      startDisposition = classifyIntakeStartResult(
+        await start.startGoal({
+          commandId: authorization.startCommandId,
+          goalId: authorization.goalId,
+          expectedGoalRevision: authorization.goalRevision,
+          expectedWorkflowVersion: authorization.workflowVersion,
+        }),
+      );
+    } catch {
+      startDisposition = IntakeStartDisposition.START_INFRASTRUCTURE_FAILURE;
+    }
+    try {
+      const retainedDisposition = readIntakeStartDisposition(authorization, start);
+      if (
+        retainedDisposition === IntakeStartDisposition.START_COMMAND_APPLIED ||
+        retainedDisposition === IntakeStartDisposition.START_COMMAND_REJECTED
+      ) {
+        startDisposition = retainedDisposition;
+      } else if (startDisposition === IntakeStartDisposition.START_COMMAND_APPLIED) {
+        startDisposition = IntakeStartDisposition.START_INFRASTRUCTURE_FAILURE;
+      }
+    } catch {
+      startDisposition = IntakeStartDisposition.START_INFRASTRUCTURE_FAILURE;
+    }
+    return this.#outcomeResult(outcome, replayed, startDisposition);
+  }
+
+  #outcomeResult(
+    outcome: IntakeCommandOutcome,
+    replayed: boolean,
+    startDisposition: (typeof IntakeStartDisposition)[keyof typeof IntakeStartDisposition] = 'startDisposition' in
+    outcome.result
+      ? outcome.result.startDisposition
+      : IntakeStartDisposition.NOT_AUTHORIZED,
+  ): IntakeCoordinatorCommandResult {
     if (
       outcome.result.kind !== 'NO_EXECUTION' ||
       outcome.result.answerDisposition !== 'ANSWER_RETURNED' ||
       !('answerOnlyResponseRef' in outcome.result)
     ) {
-      return { kind: 'OUTCOME', outcome, replayed };
+      return { kind: 'OUTCOME', outcome, replayed, startDisposition };
     }
     const responseRef = outcome.result.answerOnlyResponseRef;
     const authority = this.#store.getIntakeAuthority(outcome.intakeRunId);
@@ -1880,7 +2049,13 @@ export class M25IntakeCoordinator {
     if (response?.kind !== AnswerOnlyResponseKind.ANSWER_RETURNED) {
       throw new TypeError('Committed Answer-only outcome has no deliverable response');
     }
-    return { kind: 'OUTCOME', outcome, replayed, answerOnlyContent: response.answerContent };
+    return {
+      kind: 'OUTCOME',
+      outcome,
+      replayed,
+      startDisposition,
+      answerOnlyContent: response.answerContent,
+    };
   }
 
   #externalBinding(manifest: IntakeManifest, policy: IntentAdmissionPolicy) {

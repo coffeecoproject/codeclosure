@@ -47,9 +47,12 @@ MUST NOT become Goal, Workflow, Acceptance, or closeout authority. A correct
 first-pass Codex edit MUST NOT be forced through an artificial failure merely
 to exercise repair.
 
-The next milestone boundary is M2.5 — Goal Intake and Materialization. Its
-implementation has not started and requires its own detailed implementation
-plan before code changes begin. Goal Intake MUST remain separate from the
+M2.5 — Goal Intake and Materialization — is the current milestone boundary.
+Slices 1 through 6 implement the bounded Domain, SQLite, Intake package and
+Adapter, Projection and Admission, Answer/failure/recovery, Materialization,
+and separate ordinary Start foundations. Slice 7 is the next implementation
+boundary; the Intake CLI, canonical M2.5 acceptance harness, and independent
+milestone verdict have not begun. Goal Intake MUST remain separate from the
 Goal-bound WorkerPort and MUST NOT reinterpret the completed M2 execution path
 as intent, Goal, Start, or Admission authority. Do not expand M2.5 into a rich
 TUI, multiple agents, cloud or multi-user execution, full Fact Graph traversal,
@@ -58,9 +61,12 @@ or release and deployment authority.
 The completed M2 implementation and exit evidence remain in
 `docs/plans/m2-codex-vertical-slice.md`,
 `docs/plans/m2-acceptance-plan.md`, and
-`docs/reviews/m2-completion-review.md`. M2.5 implementation MUST NOT begin until
-the independent M2 exit review passes; that gate passed on 2026-08-02, but this
-status transition does not itself begin M2.5 implementation.
+`docs/reviews/m2-completion-review.md`. The independent M2 exit review was a
+prerequisite for M2.5 implementation and passed on 2026-08-02. That review is
+historical evidence for the prerequisite, not the current implementation-status
+record. Current implementation follows
+`docs/plans/m2.5-goal-intake-materialization.md`, and its exit claim follows
+`docs/plans/m2.5-acceptance-plan.md`.
 
 ## Engineering Rules
 
