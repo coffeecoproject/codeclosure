@@ -1656,6 +1656,26 @@ export function assertIntakeFailureRecordInvariant(record: IntakeFailureRecord):
     sha256Digest(record.responseContractDigest ?? '');
   }
   assertKnown(IntakeFailureReasonCode, record.reasonCode, 'Intake failure reason');
+  const analysisReasons = new Set<IntakeFailureReasonCode>([
+    IntakeFailureReasonCode.ASSISTANT_UNAVAILABLE,
+    IntakeFailureReasonCode.ASSISTANT_TIMEOUT,
+    IntakeFailureReasonCode.ASSISTANT_PROTOCOL_ERROR,
+    IntakeFailureReasonCode.RESPONSE_REJECTED,
+    IntakeFailureReasonCode.INTERRUPTED_ANALYSIS,
+  ]);
+  const isAnalysisFailure = record.failedOperation === IntakeFailedOperation.INTENT_ANALYSIS;
+  const hasAssistantBinding = record.assistantAdapterId !== undefined;
+  if (
+    (isAnalysisFailure && (!analysisReasons.has(record.reasonCode) || !hasAssistantBinding)) ||
+    (record.failedOperation === IntakeFailedOperation.PROJECT_OBSERVATION &&
+      (record.reasonCode !== IntakeFailureReasonCode.PROJECT_OBSERVATION_FAILED ||
+        hasAssistantBinding)) ||
+    (record.failedOperation === IntakeFailedOperation.ADMISSION_PREPARATION &&
+      (record.reasonCode !== IntakeFailureReasonCode.INTAKE_PREPARATION_FAILED ||
+        hasAssistantBinding))
+  ) {
+    throw new DomainInvariantError('Intake Failure operation and reason mapping is invalid');
+  }
   isoTimestamp(record.failedAt);
   sha256Digest(record.failureDigest);
 }
@@ -1704,6 +1724,29 @@ export function assertIntakeCommandClosureInvariant(
     outcome.result.observedIntakeRunVersion !== outcome.observedIntakeRunVersion
   ) {
     throw new DomainInvariantError('Rejected result must bind the exact observed Intake version');
+  }
+  const hasAnswerOnlyResult =
+    outcome.result.kind === 'NO_EXECUTION' && 'answerOnlyResponseRef' in outcome.result;
+  if (reservation.operationKind === IntakeCommandOperationKind.ANSWER_ONLY) {
+    if (outcome.disposition !== IntakeCommandDisposition.APPLIED || !hasAnswerOnlyResult) {
+      throw new DomainInvariantError(
+        'Answer-only reservation must retain an applied Answer-only result',
+      );
+    }
+  } else if (hasAnswerOnlyResult) {
+    throw new DomainInvariantError(
+      'Only an Answer-only reservation may retain an Answer-only result',
+    );
+  }
+  if (
+    outcome.disposition === IntakeCommandDisposition.FAILED &&
+    (!('externalOperationBinding' in reservation) ||
+      (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+        reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS))
+  ) {
+    throw new DomainInvariantError(
+      'Only a reserved external Intake analysis may retain a FAILED outcome',
+    );
   }
   if (reservation.operationKind === IntakeCommandOperationKind.ABANDON_CLARIFICATION) {
     const hasBinding = 'abandonClarificationBinding' in reservation;

@@ -1,6 +1,10 @@
 import { Buffer } from 'node:buffer';
 
 import {
+  AnswerOnlyFailureReasonCode,
+  AnswerOnlyResponseKind,
+  IntakeFailedOperation,
+  IntakeFailureReasonCode,
   IntakeCommandOperationKind,
   IntakeInteractionAction,
   IntakeRunStatus,
@@ -11,21 +15,28 @@ import {
   clarificationQuestionId,
   clarificationQuestionProjection,
   commandId,
+  decodeAnswerOnlyResponse,
   decodeClarificationAnswerBinding,
   decodeClarificationQuestion,
   decodeIntakeCommandInput,
   decodeIntakeCommandReservation,
+  decodeIntakeFailureRecord,
   decodeIntakeRun,
   decodeRawRequest,
   decodeRawRequestRevision,
   intakeCommandInputProjection,
   intakeCommandReservationProjection,
+  intakeFailureRecordProjection,
   intakeRunId,
   intakeRunVersion,
+  intentAdmissionDecisionId,
+  isoTimestamp,
   rawRequestRevision,
   rawRequestRevisionProjection,
+  answerOnlyResponseProjection,
   type AbandonmentBinding,
   type AuditEventId,
+  type AnswerOnlyResponseId,
   type ClarificationAnswerBindingId,
   type ClarificationCommandBinding,
   type ClarificationQuestionId,
@@ -36,6 +47,7 @@ import {
   type IntakeDigestVerifier,
   type IntakeExternalOperationBinding,
   type IntakeManifestId,
+  type IntakeFailureRecordId,
   type IntakeManifest,
   type IntakeOperationId,
   type IntakeRun,
@@ -52,6 +64,7 @@ import {
   M25_INTAKE_ASSISTANT_ADAPTER_ID,
   M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
   m25IntakeBudgetDefinition,
+  type IntakeAssistantFailureReasonCode,
   type IntakeAssistantPort,
 } from './intake-assistant.js';
 import type { GovernedExecutionPreflight, IntentAdmissionEngine } from './intake-admission.js';
@@ -60,10 +73,18 @@ import type {
   IntentProjectionIdentityGenerator,
   M25IntentProjectionCompiler,
 } from './intake-projection.js';
+import { IntakeAnalysisResponseRejectedError } from './intake-projection.js';
+import {
+  classifyM25IntakeRetainedText,
+  firstRejectedM25IntentAnalysisString,
+  rejectedM25AnswerOnlyString,
+  type M25IntakeRetentionRejectionReason,
+} from './intake-retention.js';
 import {
   IntakeAuditAggregateType,
   IntakeAuditEventType,
   type IntakeAuditWrite,
+  type IntakeAuditRecord,
   type IntakeCommitStoreResult,
   type IntakeControlStore,
   type IntakeReservationStoreResult,
@@ -82,6 +103,8 @@ export interface IntakeCoordinatorIdentityGenerator extends IntentProjectionIden
   nextIntentAdmissionDecisionId(): IntentAdmissionDecisionId;
   nextClarificationQuestionId(): ClarificationQuestionId;
   nextClarificationAnswerBindingId(): ClarificationAnswerBindingId;
+  nextAnswerOnlyResponseId(): AnswerOnlyResponseId;
+  nextIntakeFailureRecordId(): IntakeFailureRecordId;
   nextAuditEventId(): AuditEventId;
 }
 
@@ -112,7 +135,12 @@ export interface AbandonIntakeCommand {
 }
 
 export type IntakeCoordinatorCommandResult =
-  | Readonly<{ kind: 'OUTCOME'; outcome: IntakeCommandOutcome; replayed: boolean }>
+  | Readonly<{
+      kind: 'OUTCOME';
+      outcome: IntakeCommandOutcome;
+      replayed: boolean;
+      answerOnlyContent?: string;
+    }>
   | Readonly<{
       kind: 'IN_PROGRESS';
       intakeRunId: IntakeRunId;
@@ -127,7 +155,15 @@ export type IntakeCoordinatorCommandResult =
         | typeof IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED
         | typeof IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED;
     }>
-  | Readonly<{ kind: 'DEFERRED_TO_SLICE_5'; operation: 'ANSWER_ONLY' | 'FAILURE' }>
+  | Readonly<{
+      kind: 'CONTENT_REJECTED';
+      commandId: CommandId;
+      retentionProfileId: typeof M25_LOCAL_RETENTION_PROFILE_ID;
+      retentionProfileVersion: typeof M25_LOCAL_RETENTION_PROFILE_VERSION;
+      reasonCode: M25IntakeRetentionRejectionReason;
+      observedByteCount: number;
+      rejectionDigest: Sha256Digest;
+    }>
   | Readonly<{ kind: 'NOT_FOUND'; intakeRunId: string }>
   | Readonly<{ kind: 'COMMAND_CONFLICT' | 'VERSION_CONFLICT'; message: string }>;
 
@@ -161,13 +197,70 @@ export type IntakeStatusView =
       intakeRunVersion: number;
       status: typeof IntakeRunStatus.NO_EXECUTION;
       reasonCode: string;
+      answerOnlyResponse?: Readonly<{
+        id: AnswerOnlyResponseId;
+        digest: Sha256Digest;
+        kind: AnswerOnlyResponseKind;
+        failureReasonCode?: AnswerOnlyFailureReasonCode;
+      }>;
     }>
   | Readonly<{
       schemaVersion: 1;
       intakeRunId: IntakeRunId;
       intakeRunVersion: number;
-      status: typeof IntakeRunStatus.MATERIALIZED | typeof IntakeRunStatus.FAILED;
+      status: typeof IntakeRunStatus.MATERIALIZED;
+    }>
+  | Readonly<{
+      schemaVersion: 1;
+      intakeRunId: IntakeRunId;
+      intakeRunVersion: number;
+      status: typeof IntakeRunStatus.FAILED;
+      failure: Readonly<{
+        id: IntakeFailureRecordId;
+        digest: Sha256Digest;
+        failedOperation: IntakeFailedOperation;
+        reasonCode: IntakeFailureReasonCode;
+        retryDisposition: 'NEW_INTAKE_RUN_REQUIRED';
+      }>;
     }>;
+
+export interface IntakeAuditView {
+  readonly schemaVersion: 1;
+  readonly intakeRunId: IntakeRunId;
+  readonly events: readonly Readonly<{
+    id: AuditEventId;
+    sequence: number;
+    eventType: string;
+    commandId?: CommandId;
+    beforeVersion?: number;
+    afterVersion?: number;
+    payloadDigest: Sha256Digest;
+    occurredAt: IsoTimestamp;
+  }>[];
+  readonly questionHistory: readonly Readonly<{
+    id: ClarificationQuestionId;
+    questionSpecDigest: Sha256Digest;
+    questionDigest: Sha256Digest;
+    issuingDecisionId: IntentAdmissionDecisionId;
+    issuingDecisionDigest: Sha256Digest;
+    answerSchema: ClarificationCommandBinding['answerSchema'];
+    answerBinding?: Readonly<{
+      id: ClarificationAnswerBindingId;
+      digest: Sha256Digest;
+      commandId: CommandId;
+      rawRequestId: RawRequestId;
+      rawRequestRevision: number;
+      rawRequestDigest: Sha256Digest;
+      answeredAt: IsoTimestamp;
+    }>;
+  }>[];
+}
+
+export interface M25IntakeStartupRecoverySummary {
+  readonly scanned: number;
+  readonly reconciledAnalysisFailures: number;
+  readonly reconciledAnswerFailures: number;
+}
 
 interface Utf8DigestProvider extends DigestProvider, IntakeDigestVerifier {
   digestUtf8(value: string): Sha256Digest;
@@ -250,7 +343,13 @@ export class M25IntakeCoordinator {
     raw: SubmitIntakeCommand,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<IntakeCoordinatorCommandResult> {
-    commandId(raw.commandId);
+    const commandIdentifier = commandId(raw.commandId);
+    for (const value of [raw.admittedUserContent, ...(raw.declaredConstraints ?? [])]) {
+      const retention = classifyM25IntakeRetainedText(value);
+      if (!retention.accepted) {
+        return this.#contentRejected(commandIdentifier, retention);
+      }
+    }
     const commandBase = {
       schemaVersion: 1 as const,
       kind: 'SUBMIT' as const,
@@ -294,9 +393,6 @@ export class M25IntakeCoordinator {
       )
     ) {
       throw new TypeError('Raw Request constraints exceed the fixed Intake budget');
-    }
-    if (command.interactionAction === IntakeInteractionAction.ANSWER_ONLY) {
-      return { kind: 'DEFERRED_TO_SLICE_5', operation: 'ANSWER_ONLY' };
     }
     const policy = this.#requiredPolicy();
     const createdAt = this.#clock.now();
@@ -353,9 +449,18 @@ export class M25IntakeCoordinator {
       IntakeRunStatus.ANALYZING,
     );
 
+    let answerOnlyDecision:
+      | Extract<
+          ReturnType<IntentAdmissionEngine['issueDecision']>,
+          { kind: typeof IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION }
+        >
+      | undefined;
     try {
       const immediateDecision = this.#admissionEngine.issueDecision({
-        decisionId: this.#ids.nextIntentAdmissionDecisionId(),
+        decisionId:
+          command.interactionAction === IntakeInteractionAction.ANSWER_ONLY
+            ? this.#answerOnlyDecisionId(command.canonicalCommandInputDigest)
+            : this.#ids.nextIntentAdmissionDecisionId(),
         decidedAt: createdAt,
         input: {
           kind: 'PRE_ANALYSIS',
@@ -364,7 +469,9 @@ export class M25IntakeCoordinator {
           admissionPolicy: policy,
         },
       });
-      if (immediateDecision.reasonCode !== IntentAdmissionReasonCode.ANSWER_ONLY) {
+      if (immediateDecision.reasonCode === IntentAdmissionReasonCode.ANSWER_ONLY) {
+        answerOnlyDecision = immediateDecision;
+      } else {
         return this.#commitImmediateNoExecution(
           command.commandId,
           command.canonicalCommandInputDigest,
@@ -382,6 +489,61 @@ export class M25IntakeCoordinator {
       ) {
         throw error;
       }
+    }
+
+    if (command.interactionAction === IntakeInteractionAction.ANSWER_ONLY) {
+      if (answerOnlyDecision === undefined) {
+        throw new TypeError('Answer-only pre-analysis Decision was not produced');
+      }
+      const compilation = this.#packageCompiler.compileAnswerOnly({
+        manifestId: this.#ids.nextIntakeManifestId(),
+        createdAt,
+        intakeRunId,
+        rawRequestRevision: revision,
+        preparedDecision: answerOnlyDecision,
+        admissionPolicy: policy,
+      });
+      const reservation = this.#externalReservation({
+        commandId: command.commandId,
+        canonicalCommandInputDigest: command.canonicalCommandInputDigest,
+        rawRequestId,
+        intakeRun: analyzing,
+        operationKind: IntakeCommandOperationKind.ANSWER_ONLY,
+        manifest: compilation.manifest,
+        reservedAt: createdAt,
+      });
+      const reserved = this.#store.reserveInitialIntake({
+        rawRequest: root,
+        rawRequestRevision: revision,
+        intakeRun: analyzing,
+        manifest: compilation.manifest,
+        reservation,
+        auditEvents: this.#audits(
+          intakeRunId,
+          [
+            IntakeAuditEventType.RAW_REQUEST_ADMITTED,
+            IntakeAuditEventType.INTAKE_RUN_CREATED,
+            IntakeAuditEventType.INTAKE_COMMAND_RESERVED,
+          ],
+          createdAt,
+          [
+            revision.rawRequestDigest,
+            this.#digests.digest(analyzing),
+            reservation.reservationDigest,
+          ],
+        ),
+      });
+      if (reserved.status !== 'RESERVED') {
+        return mapStoreResult(reserved);
+      }
+      return this.#answerAndCommit({
+        commandId: command.commandId,
+        authority: this.#store.getIntakeAuthority(intakeRunId),
+        package: compilation.package,
+        manifest: compilation.manifest,
+        decision: answerOnlyDecision,
+        signal,
+      });
     }
 
     const compilation = this.#packageCompiler.compileIntentAnalysis({
@@ -434,7 +596,11 @@ export class M25IntakeCoordinator {
     raw: ClarifyIntakeCommand,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<IntakeCoordinatorCommandResult> {
-    commandId(raw.commandId);
+    const commandIdentifier = commandId(raw.commandId);
+    const retention = classifyM25IntakeRetainedText(raw.answer);
+    if (!retention.accepted) {
+      return this.#contentRejected(commandIdentifier, retention);
+    }
     const targetIntakeRunId = intakeRunId(raw.intakeRunId);
     const questionIdentifier = clarificationQuestionId(raw.clarificationQuestionId);
     const expectedIntakeRunVersion = intakeRunVersion(raw.expectedIntakeRunVersion);
@@ -884,6 +1050,184 @@ export class M25IntakeCoordinator {
     );
   }
 
+  /**
+   * Reconciles non-resumable Intake operations after strict Store validation.
+   * Composition must call this before publishing any Intake capability.
+   */
+  public reconcileStartup(): M25IntakeStartupRecoverySummary {
+    const orphanIds = this.#store.listOrphanedIntakeRunIds();
+    let reconciledAnalysisFailures = 0;
+    let reconciledAnswerFailures = 0;
+    for (const orphanId of orphanIds) {
+      const authority = this.#store.getIntakeAuthority(orphanId);
+      if (authority?.intakeRun.status !== IntakeRunStatus.ANALYZING) {
+        throw new TypeError(`Orphaned Intake Run ${orphanId} is not reproducible`);
+      }
+      const activeReservations = authority.reservations.filter(
+        (reservation) =>
+          reservation.observedIntakeRunVersion === authority.intakeRun.version &&
+          authority.outcomes.every((outcome) => outcome.commandId !== reservation.commandId),
+      );
+      const reservation = activeReservations[0];
+      if (
+        activeReservations.length !== 1 ||
+        reservation === undefined ||
+        !('externalOperationBinding' in reservation)
+      ) {
+        throw new TypeError(`Orphaned Intake Run ${orphanId} has no unique external reservation`);
+      }
+      if (reservation.operationKind === IntakeCommandOperationKind.ANSWER_ONLY) {
+        this.#reconcileInterruptedAnswer(authority, reservation);
+        reconciledAnswerFailures += 1;
+      } else {
+        const result = this.#commitAnalysisFailure(
+          reservation.commandId,
+          authority,
+          reservation,
+          IntakeFailureReasonCode.INTERRUPTED_ANALYSIS,
+        );
+        if (result.kind !== 'OUTCOME' || result.outcome.disposition !== 'FAILED') {
+          throw new TypeError(`Orphaned Intake Run ${orphanId} did not close as FAILED`);
+        }
+        reconciledAnalysisFailures += 1;
+      }
+    }
+    return {
+      scanned: orphanIds.length,
+      reconciledAnalysisFailures,
+      reconciledAnswerFailures,
+    };
+  }
+
+  #reconcileInterruptedAnswer(
+    authority: NonNullable<ReturnType<IntakeControlStore['getIntakeAuthority']>>,
+    reservation: IntakeCommandReservation,
+  ): void {
+    if (
+      reservation.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY ||
+      !('externalOperationBinding' in reservation)
+    ) {
+      throw new TypeError('Interrupted Answer-only reservation shape is invalid');
+    }
+    const revision = authority.rawRequestRevisions.at(-1);
+    const manifest = authority.manifests.find(
+      ({ id }) => id === reservation.externalOperationBinding.manifestId,
+    );
+    const policy = this.#store.getIntentAdmissionPolicy(
+      reservation.externalOperationBinding.admissionPolicyId,
+    );
+    if (
+      revision === undefined ||
+      manifest === undefined ||
+      policy?.version !== reservation.externalOperationBinding.admissionPolicyVersion ||
+      policy.digest !== reservation.externalOperationBinding.admissionPolicyDigest
+    ) {
+      throw new TypeError('Interrupted Answer-only input is not reproducible');
+    }
+    const decidedAt = this.#causalNow(
+      revision.submittedAt,
+      reservation.reservedAt,
+      authority.intakeRun.updatedAt,
+    );
+    const decision = this.#admissionEngine.issueDecision({
+      decisionId: this.#answerOnlyDecisionId(reservation.canonicalCommandInputDigest),
+      decidedAt,
+      input: {
+        kind: 'PRE_ANALYSIS',
+        intakeRun: authority.intakeRun,
+        rawRequestRevision: revision,
+        admissionPolicy: policy,
+      },
+    });
+    if (
+      decision.kind !== IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION ||
+      decision.reasonCode !== IntentAdmissionReasonCode.ANSWER_ONLY
+    ) {
+      throw new TypeError('Interrupted Answer-only Decision cannot be reproduced');
+    }
+    const compilation = this.#packageCompiler.compileAnswerOnly({
+      manifestId: manifest.id,
+      createdAt: manifest.createdAt,
+      intakeRunId: authority.intakeRun.id,
+      rawRequestRevision: revision,
+      preparedDecision: decision,
+      admissionPolicy: policy,
+      omissions: manifest.omissions,
+    });
+    if (
+      compilation.manifest.manifestDigest !== manifest.manifestDigest ||
+      compilation.manifest.packageDigest !== manifest.packageDigest ||
+      compilation.package.preparedDecisionBinding.decisionDigest !== decision.decisionDigest
+    ) {
+      throw new TypeError('Interrupted Answer-only Package cannot be reproduced');
+    }
+    const responseBase = {
+      id: this.#ids.nextAnswerOnlyResponseId(),
+      schemaVersion: 1 as const,
+      intakeRunId: authority.intakeRun.id,
+      rawRequestRevision: revision.revision,
+      rawRequestDigest: revision.rawRequestDigest,
+      intentAdmissionDecisionId: decision.id,
+      intentAdmissionDecisionDigest: decision.decisionDigest,
+      assistantAdapterId: reservation.externalOperationBinding.assistantAdapterId,
+      assistantAdapterVersion: reservation.externalOperationBinding.assistantAdapterVersion,
+      responseContractDigest: reservation.externalOperationBinding.responseContractDigest,
+      kind: AnswerOnlyResponseKind.ANSWER_FAILED,
+      failureReasonCode: AnswerOnlyFailureReasonCode.INTERRUPTED_ANSWER_DELIVERY,
+      observedAt: decidedAt,
+    };
+    const response = decodeAnswerOnlyResponse(
+      {
+        ...responseBase,
+        responseDigest: this.#digests.digest(answerOnlyResponseProjection(responseBase as never)),
+      },
+      this.#digests,
+    );
+    const terminalRun = requireRunStatus(
+      decodeIntakeRun({
+        ...authority.intakeRun,
+        version: intakeRunVersion(authority.intakeRun.version + 1),
+        status: IntakeRunStatus.NO_EXECUTION,
+        terminalDecisionRef: {
+          id: decision.id,
+          digest: decision.decisionDigest,
+          outcome: decision.outcome,
+          reasonCode: decision.reasonCode,
+        },
+        answerOnlyResponseRef: {
+          id: response.id,
+          digest: response.responseDigest,
+          kind: response.kind,
+        },
+        updatedAt: decidedAt,
+      }),
+      IntakeRunStatus.NO_EXECUTION,
+    );
+    const result = mapStoreResult(
+      this.#store.commitIntakeNoExecution({
+        kind: 'ANSWER_ONLY',
+        commandId: reservation.commandId,
+        decision,
+        response,
+        intakeRun: terminalRun,
+        completedAt: decidedAt,
+        auditEvents: this.#audits(
+          terminalRun.id,
+          [
+            IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+            IntakeAuditEventType.ANSWER_ONLY_RESPONSE_RECORDED,
+            IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+          ],
+          decidedAt,
+          [decision.decisionDigest, response.responseDigest, response.responseDigest],
+        ),
+      }),
+    );
+    if (result.kind !== 'OUTCOME' || result.outcome.disposition !== 'APPLIED') {
+      throw new TypeError('Interrupted Answer-only operation did not close as APPLIED');
+    }
+  }
+
   public getStatus(intakeRunIdentifier: string): IntakeStatusView | undefined {
     const authority = this.#store.getIntakeAuthority(intakeRunIdentifier);
     if (authority === undefined) {
@@ -915,12 +1259,50 @@ export class M25IntakeCoordinator {
       };
     }
     if (run.status === IntakeRunStatus.NO_EXECUTION) {
+      const response =
+        'answerOnlyResponseRef' in run
+          ? authority.answerOnlyResponses.find(({ id }) => id === run.answerOnlyResponseRef.id)
+          : undefined;
+      if ('answerOnlyResponseRef' in run && response === undefined) {
+        throw new TypeError('Terminal Answer-only Response is missing');
+      }
       return {
         schemaVersion: 1,
         intakeRunId: run.id,
         intakeRunVersion: run.version,
         status: run.status,
         reasonCode: run.terminalDecisionRef.reasonCode,
+        ...(response === undefined
+          ? {}
+          : {
+              answerOnlyResponse: {
+                id: response.id,
+                digest: response.responseDigest,
+                kind: response.kind,
+                ...(response.kind === AnswerOnlyResponseKind.ANSWER_FAILED
+                  ? { failureReasonCode: response.failureReasonCode }
+                  : {}),
+              },
+            }),
+      };
+    }
+    if (run.status === IntakeRunStatus.FAILED) {
+      const failure = authority.failures.find(({ id }) => id === run.terminalFailureRef.id);
+      if (failure === undefined) {
+        throw new TypeError('Terminal Intake Failure is missing');
+      }
+      return {
+        schemaVersion: 1,
+        intakeRunId: run.id,
+        intakeRunVersion: run.version,
+        status: run.status,
+        failure: {
+          id: failure.id,
+          digest: failure.failureDigest,
+          failedOperation: failure.failedOperation,
+          reasonCode: failure.reasonCode,
+          retryDisposition: failure.retryDisposition,
+        },
       };
     }
     return {
@@ -936,6 +1318,178 @@ export class M25IntakeCoordinator {
           }
         : {}),
     } as IntakeStatusView;
+  }
+
+  public getAudit(intakeRunIdentifier: string): IntakeAuditView | undefined {
+    const authority = this.#store.getIntakeAuthority(intakeRunIdentifier);
+    if (authority === undefined) {
+      return undefined;
+    }
+    return {
+      schemaVersion: 1,
+      intakeRunId: authority.intakeRun.id,
+      events: Object.freeze(
+        this.#store.getIntakeAudit(authority.intakeRun.id).map((event: IntakeAuditRecord) => ({
+          id: event.id,
+          sequence: event.sequence,
+          eventType: event.eventType,
+          ...(event.commandId === undefined ? {} : { commandId: event.commandId }),
+          ...(event.beforeVersion === undefined ? {} : { beforeVersion: event.beforeVersion }),
+          ...(event.afterVersion === undefined ? {} : { afterVersion: event.afterVersion }),
+          payloadDigest: event.payloadDigest,
+          occurredAt: event.occurredAt,
+        })),
+      ),
+      questionHistory: Object.freeze(
+        authority.questions.map((question) => {
+          const binding = authority.answerBindings.find(
+            ({ clarificationQuestionId: questionId }) => questionId === question.id,
+          );
+          return {
+            id: question.id,
+            questionSpecDigest: question.questionSpecDigest,
+            questionDigest: question.questionDigest,
+            issuingDecisionId: question.intentAdmissionDecisionId,
+            issuingDecisionDigest: question.intentAdmissionDecisionDigest,
+            answerSchema: question.answerSchema,
+            ...(binding === undefined
+              ? {}
+              : {
+                  answerBinding: {
+                    id: binding.id,
+                    digest: binding.answerBindingDigest,
+                    commandId: binding.commandId,
+                    rawRequestId: binding.rawRequestId,
+                    rawRequestRevision: binding.rawRequestRevision,
+                    rawRequestDigest: binding.rawRequestDigest,
+                    answeredAt: binding.answeredAt,
+                  },
+                }),
+          };
+        }),
+      ),
+    };
+  }
+
+  async #answerAndCommit(input: {
+    readonly commandId: CommandId;
+    readonly authority: ReturnType<IntakeControlStore['getIntakeAuthority']>;
+    readonly package: Parameters<IntakeAssistantPort['answer']>[0]['package'];
+    readonly manifest: Parameters<IntakeAssistantPort['answer']>[0]['manifest'];
+    readonly decision: Extract<
+      ReturnType<IntentAdmissionEngine['issueDecision']>,
+      { kind: typeof IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION }
+    >;
+    readonly signal: AbortSignal;
+  }): Promise<IntakeCoordinatorCommandResult> {
+    if (input.authority === undefined) {
+      throw new TypeError('Reserved Answer-only authority disappeared before delivery');
+    }
+    const reservation = input.authority.reservations.find(
+      ({ commandId: reservedCommandId }) => reservedCommandId === input.commandId,
+    );
+    const revision = input.authority.rawRequestRevisions.at(-1);
+    if (
+      reservation?.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY ||
+      revision === undefined ||
+      reservation.externalOperationBinding.manifestId !== input.manifest.id ||
+      reservation.externalOperationBinding.manifestDigest !== input.manifest.manifestDigest ||
+      input.decision.reasonCode !== IntentAdmissionReasonCode.ANSWER_ONLY
+    ) {
+      throw new TypeError('Answer-only delivery does not bind exact retained authority');
+    }
+    const operation = await this.#assistant.answer(
+      { package: input.package, manifest: input.manifest },
+      input.signal,
+    );
+    const observedAt = this.#causalNow(
+      input.authority.intakeRun.updatedAt,
+      input.decision.decidedAt,
+      reservation.reservedAt,
+    );
+    const common = {
+      id: this.#ids.nextAnswerOnlyResponseId(),
+      schemaVersion: 1 as const,
+      intakeRunId: input.authority.intakeRun.id,
+      rawRequestRevision: revision.revision,
+      rawRequestDigest: revision.rawRequestDigest,
+      intentAdmissionDecisionId: input.decision.id,
+      intentAdmissionDecisionDigest: input.decision.decisionDigest,
+      assistantAdapterId: reservation.externalOperationBinding.assistantAdapterId,
+      assistantAdapterVersion: reservation.externalOperationBinding.assistantAdapterVersion,
+      responseContractDigest: reservation.externalOperationBinding.responseContractDigest,
+      observedAt,
+    };
+    const retainedRejection =
+      operation.kind === 'COMPLETED' ? rejectedM25AnswerOnlyString(operation.response) : undefined;
+    const answerTooLarge =
+      operation.kind === 'COMPLETED' &&
+      Buffer.byteLength(operation.response.answerContent, 'utf8') >
+        m25IntakeBudgetDefinition.maximumRetainedAnswerContentBytes;
+    const responseBase =
+      operation.kind === 'COMPLETED' && retainedRejection === undefined && !answerTooLarge
+        ? {
+            ...common,
+            kind: AnswerOnlyResponseKind.ANSWER_RETURNED,
+            answerContent: operation.response.answerContent,
+            answerContentDigest: this.#digests.digestUtf8(operation.response.answerContent),
+          }
+        : {
+            ...common,
+            kind: AnswerOnlyResponseKind.ANSWER_FAILED,
+            failureReasonCode:
+              operation.kind === 'FAILED'
+                ? operation.failureReasonCode
+                : AnswerOnlyFailureReasonCode.RESPONSE_REJECTED,
+          };
+    const response = decodeAnswerOnlyResponse(
+      {
+        ...responseBase,
+        responseDigest: this.#digests.digest(answerOnlyResponseProjection(responseBase as never)),
+      },
+      this.#digests,
+    );
+    const terminalRun = requireRunStatus(
+      decodeIntakeRun({
+        ...input.authority.intakeRun,
+        version: intakeRunVersion(input.authority.intakeRun.version + 1),
+        status: IntakeRunStatus.NO_EXECUTION,
+        terminalDecisionRef: {
+          id: input.decision.id,
+          digest: input.decision.decisionDigest,
+          outcome: input.decision.outcome,
+          reasonCode: input.decision.reasonCode,
+        },
+        answerOnlyResponseRef: {
+          id: response.id,
+          digest: response.responseDigest,
+          kind: response.kind,
+        },
+        updatedAt: observedAt,
+      }),
+      IntakeRunStatus.NO_EXECUTION,
+    );
+    const committed = this.#store.commitIntakeNoExecution({
+      kind: 'ANSWER_ONLY',
+      commandId: input.commandId,
+      decision: input.decision,
+      response,
+      intakeRun: terminalRun,
+      completedAt: observedAt,
+      auditEvents: this.#audits(
+        terminalRun.id,
+        [
+          IntakeAuditEventType.INTENT_ADMISSION_DECIDED,
+          IntakeAuditEventType.ANSWER_ONLY_RESPONSE_RECORDED,
+          IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+        ],
+        observedAt,
+        [input.decision.decisionDigest, response.responseDigest, response.responseDigest],
+      ),
+    });
+    return committed.status === 'APPLIED' || committed.status === 'REPLAYED'
+      ? this.#outcomeResult(committed.outcome, committed.status === 'REPLAYED')
+      : mapStoreResult(committed);
   }
 
   async #analyzeAndCommit(input: {
@@ -958,6 +1512,8 @@ export class M25IntakeCoordinator {
     if (
       reservation === undefined ||
       !('externalOperationBinding' in reservation) ||
+      (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+        reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS) ||
       reservation.externalOperationBinding.manifestId !== input.manifest.id ||
       reservation.externalOperationBinding.manifestDigest !== input.manifest.manifestDigest
     ) {
@@ -969,21 +1525,48 @@ export class M25IntakeCoordinator {
       input.signal,
     );
     if (operation.kind === 'FAILED') {
-      return { kind: 'DEFERRED_TO_SLICE_5', operation: 'FAILURE' };
+      return this.#commitAnalysisFailure(
+        input.commandId,
+        input.authority,
+        reservation,
+        this.#analysisFailureReason(operation.failureReasonCode),
+      );
     }
-    const observedAt = this.#clock.now();
-    const projected = this.#projectionCompiler.project({
-      intakeRunId: input.authority.intakeRun.id,
-      rawRequestRevisions: input.authority.rawRequestRevisions,
-      ...(input.parentProjection === undefined
-        ? {}
-        : { currentProjection: input.parentProjection }),
-      admissionPolicy: input.policy,
-      responseContractDigest: input.manifest.responseContract.digest,
-      response: operation.response,
-      observedAt,
-      ids: this.#ids,
-    });
+    if (firstRejectedM25IntentAnalysisString(operation.response) !== undefined) {
+      return this.#commitAnalysisFailure(
+        input.commandId,
+        input.authority,
+        reservation,
+        IntakeFailureReasonCode.RESPONSE_REJECTED,
+      );
+    }
+    const observedAt = this.#causalNow(input.authority.intakeRun.updatedAt, reservation.reservedAt);
+    let projected: ReturnType<M25IntentProjectionCompiler['project']>;
+    try {
+      projected = this.#projectionCompiler.project({
+        intakeRunId: input.authority.intakeRun.id,
+        rawRequestRevisions: input.authority.rawRequestRevisions,
+        ...(input.parentProjection === undefined
+          ? {}
+          : { currentProjection: input.parentProjection }),
+        admissionPolicy: input.policy,
+        responseContractDigest: input.manifest.responseContract.digest,
+        response: operation.response,
+        observedAt,
+        ids: this.#ids,
+      });
+    } catch (error) {
+      if (error instanceof IntakeAnalysisResponseRejectedError) {
+        return this.#commitAnalysisFailure(
+          input.commandId,
+          input.authority,
+          reservation,
+          IntakeFailureReasonCode.RESPONSE_REJECTED,
+          observedAt,
+        );
+      }
+      throw error;
+    }
     const questionId =
       projected.clarificationQuestionSpec === undefined
         ? undefined
@@ -1117,12 +1700,129 @@ export class M25IntakeCoordinator {
     );
   }
 
+  #commitAnalysisFailure(
+    commandIdentifier: CommandId,
+    authority: NonNullable<ReturnType<IntakeControlStore['getIntakeAuthority']>>,
+    reservation: IntakeCommandReservation,
+    reasonCode: IntakeFailureReasonCode,
+    observedFailureAt?: IsoTimestamp,
+  ): IntakeCoordinatorCommandResult {
+    const revision = authority.rawRequestRevisions.at(-1);
+    if (
+      revision === undefined ||
+      !('externalOperationBinding' in reservation) ||
+      (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+        reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS)
+    ) {
+      throw new TypeError('Failed analysis has no exact retained source authority');
+    }
+    const failedAt =
+      observedFailureAt ?? this.#causalNow(authority.intakeRun.updatedAt, reservation.reservedAt);
+    const failureBase = {
+      id: this.#ids.nextIntakeFailureRecordId(),
+      schemaVersion: 1 as const,
+      commandId: commandIdentifier,
+      intakeRunId: authority.intakeRun.id,
+      intakeRunVersion: authority.intakeRun.version,
+      rawRequestRevision: revision.revision,
+      rawRequestDigest: revision.rawRequestDigest,
+      failedOperation: IntakeFailedOperation.INTENT_ANALYSIS,
+      assistantAdapterId: reservation.externalOperationBinding.assistantAdapterId,
+      assistantAdapterVersion: reservation.externalOperationBinding.assistantAdapterVersion,
+      responseContractDigest: reservation.externalOperationBinding.responseContractDigest,
+      reasonCode,
+      retryDisposition: 'NEW_INTAKE_RUN_REQUIRED' as const,
+      failedAt,
+    };
+    const failure = decodeIntakeFailureRecord(
+      {
+        ...failureBase,
+        failureDigest: this.#digests.digest(intakeFailureRecordProjection(failureBase as never)),
+      },
+      this.#digests,
+    );
+    const terminalRun = requireRunStatus(
+      decodeIntakeRun({
+        ...authority.intakeRun,
+        version: intakeRunVersion(authority.intakeRun.version + 1),
+        status: IntakeRunStatus.FAILED,
+        terminalFailureRef: { id: failure.id, digest: failure.failureDigest },
+        updatedAt: failedAt,
+      }),
+      IntakeRunStatus.FAILED,
+    );
+    return mapStoreResult(
+      this.#store.commitIntakeFailure({
+        commandId: commandIdentifier,
+        failure,
+        intakeRun: terminalRun,
+        completedAt: failedAt,
+        auditEvents: this.#audits(
+          terminalRun.id,
+          [
+            IntakeAuditEventType.INTAKE_FAILURE_RECORDED,
+            IntakeAuditEventType.INTAKE_RUN_UPDATED,
+            IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+          ],
+          failedAt,
+          [failure.failureDigest, this.#digests.digest(terminalRun), failure.failureDigest],
+        ),
+      }),
+    );
+  }
+
   #requiredPolicy() {
     const policy = this.#store.getIntentAdmissionPolicy(this.#admissionPolicyId);
     if (policy === undefined) {
       throw new TypeError(`Required Admission Policy ${this.#admissionPolicyId} is not installed`);
     }
     return policy;
+  }
+
+  #contentRejected(
+    commandIdentifier: CommandId,
+    classification: Readonly<{
+      reasonCode: M25IntakeRetentionRejectionReason;
+      observedByteCount: number;
+    }>,
+  ): IntakeCoordinatorCommandResult {
+    const projection = {
+      schemaVersion: 1 as const,
+      commandId: commandIdentifier,
+      retentionProfileId: M25_LOCAL_RETENTION_PROFILE_ID,
+      retentionProfileVersion: M25_LOCAL_RETENTION_PROFILE_VERSION,
+      reasonCode: classification.reasonCode,
+      observedByteCount: classification.observedByteCount,
+    } as const;
+    return {
+      kind: 'CONTENT_REJECTED',
+      ...projection,
+      rejectionDigest: this.#digests.digest(projection),
+    };
+  }
+
+  #answerOnlyDecisionId(inputDigest: Sha256Digest): IntentAdmissionDecisionId {
+    return intentAdmissionDecisionId(
+      `intent-admission_answer-${inputDigest.slice('sha256:'.length)}`,
+    );
+  }
+
+  #analysisFailureReason(reasonCode: IntakeAssistantFailureReasonCode): IntakeFailureReasonCode {
+    switch (reasonCode) {
+      case 'ASSISTANT_UNAVAILABLE':
+        return IntakeFailureReasonCode.ASSISTANT_UNAVAILABLE;
+      case 'ASSISTANT_TIMEOUT':
+        return IntakeFailureReasonCode.ASSISTANT_TIMEOUT;
+      case 'ASSISTANT_PROTOCOL_ERROR':
+        return IntakeFailureReasonCode.ASSISTANT_PROTOCOL_ERROR;
+      case 'RESPONSE_REJECTED':
+        return IntakeFailureReasonCode.RESPONSE_REJECTED;
+    }
+  }
+
+  #causalNow(...floors: readonly IsoTimestamp[]): IsoTimestamp {
+    const observed = isoTimestamp(this.#clock.now());
+    return floors.reduce((latest, floor) => (floor > latest ? floor : latest), observed);
   }
 
   #retentionProfile() {
@@ -1149,7 +1849,7 @@ export class M25IntakeCoordinator {
     const outcome = this.#store.getIntakeCommandOutcome(commandIdentifier);
     if (outcome !== undefined) {
       return outcome.canonicalCommandInputDigest === inputDigest
-        ? { kind: 'OUTCOME', outcome, replayed: true }
+        ? this.#outcomeResult(outcome, true)
         : { kind: 'COMMAND_CONFLICT', message: 'Command ID is bound to another canonical input' };
     }
     const reservation = this.#store.getIntakeCommandReservation(commandIdentifier);
@@ -1164,6 +1864,23 @@ export class M25IntakeCoordinator {
           operationKind: reservation.operationKind,
         }
       : { kind: 'COMMAND_CONFLICT', message: 'Command ID is bound to another canonical input' };
+  }
+
+  #outcomeResult(outcome: IntakeCommandOutcome, replayed: boolean): IntakeCoordinatorCommandResult {
+    if (
+      outcome.result.kind !== 'NO_EXECUTION' ||
+      outcome.result.answerDisposition !== 'ANSWER_RETURNED' ||
+      !('answerOnlyResponseRef' in outcome.result)
+    ) {
+      return { kind: 'OUTCOME', outcome, replayed };
+    }
+    const responseRef = outcome.result.answerOnlyResponseRef;
+    const authority = this.#store.getIntakeAuthority(outcome.intakeRunId);
+    const response = authority?.answerOnlyResponses.find(({ id }) => id === responseRef.id);
+    if (response?.kind !== AnswerOnlyResponseKind.ANSWER_RETURNED) {
+      throw new TypeError('Committed Answer-only outcome has no deliverable response');
+    }
+    return { kind: 'OUTCOME', outcome, replayed, answerOnlyContent: response.answerContent };
   }
 
   #externalBinding(manifest: IntakeManifest, policy: IntentAdmissionPolicy) {
@@ -1226,7 +1943,9 @@ export class M25IntakeCoordinator {
     readonly canonicalCommandInputDigest: Sha256Digest;
     readonly rawRequestId: RawRequestId;
     readonly intakeRun: Extract<IntakeRun, { status: 'ANALYZING' }>;
-    readonly operationKind: typeof IntakeCommandOperationKind.INTENT_ANALYSIS;
+    readonly operationKind:
+      | typeof IntakeCommandOperationKind.INTENT_ANALYSIS
+      | typeof IntakeCommandOperationKind.ANSWER_ONLY;
     readonly manifest: IntakeManifest;
     readonly reservedAt: IsoTimestamp;
   }) {
@@ -1251,7 +1970,7 @@ export class M25IntakeCoordinator {
       },
       this.#digests,
     );
-    if (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS) {
+    if (reservation.operationKind !== input.operationKind) {
       throw new TypeError('Initial reservation kind was substituted');
     }
     return reservation;

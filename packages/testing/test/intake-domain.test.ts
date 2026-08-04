@@ -511,6 +511,36 @@ function createFixtures() {
     { ...failureBase, failureDigest: digest(intakeFailureRecordProjection(failureBase)) },
     digests,
   );
+  assert.throws(
+    () =>
+      decodeIntakeFailureRecord(
+        {
+          ...failureBase,
+          failedOperation: IntakeFailedOperation.PROJECT_OBSERVATION,
+          failureDigest: digest({ substituted: 'project-observation-timeout' }),
+        },
+        digests,
+      ),
+    /operation and reason mapping is invalid/,
+  );
+  assert.throws(() => {
+    const {
+      assistantAdapterId: omittedAssistantId,
+      assistantAdapterVersion: omittedAssistantVersion,
+      responseContractDigest: omittedContract,
+      ...unboundFailure
+    } = failureBase;
+    void omittedAssistantId;
+    void omittedAssistantVersion;
+    void omittedContract;
+    return decodeIntakeFailureRecord(
+      {
+        ...unboundFailure,
+        failureDigest: digest({ substituted: 'unbound-analysis-failure' }),
+      },
+      digests,
+    );
+  }, /operation and reason mapping is invalid/);
 
   const manifestBase: IntakeManifest = {
     id: intakeManifestId('intake-manifest_golden'),
@@ -765,6 +795,83 @@ void test('[I-006][I-018] Intake codecs verify closed records and exact digest p
       createdAt: NOW,
       updatedAt: LATER,
     }),
+  );
+});
+
+void test('[I-006][I-008][I-009] only a reserved external analysis may retain a FAILED Intake outcome', () => {
+  const fixtures = createFixtures();
+  const reservation = (operationKind: 'INTENT_ANALYSIS' | 'ANSWER_ONLY') => {
+    const base: IntakeCommandReservation = {
+      schemaVersion: 1,
+      commandId: fixtures.failure.commandId,
+      operationKind,
+      principalRef: fixtures.raw.principalRef,
+      rawRequestId: fixtures.raw.rawRequestId,
+      intakeRunId: fixtures.failure.intakeRunId,
+      canonicalCommandInputDigest: ONE,
+      observedIntakeRunVersion: fixtures.failure.intakeRunVersion,
+      operationId: intakeOperationId(
+        `intake-operation_failure-${operationKind.toLowerCase().replaceAll('_', '-')}`,
+      ),
+      externalOperationBinding: {
+        manifestId: fixtures.manifest.id,
+        manifestDigest: fixtures.manifest.manifestDigest,
+        admissionPolicyId: fixtures.localPolicy.id,
+        admissionPolicyVersion: fixtures.localPolicy.version,
+        admissionPolicyDigest: fixtures.localPolicy.digest,
+        assistantAdapterId: fixtures.failure.assistantAdapterId ?? '',
+        assistantAdapterVersion: fixtures.failure.assistantAdapterVersion ?? '',
+        responseContractDigest: fixtures.failure.responseContractDigest ?? ZERO,
+      },
+      reservedAt: NOW,
+      reservationDigest: ZERO,
+    };
+    return decodeIntakeCommandReservation(
+      {
+        ...base,
+        reservationDigest: digest(intakeCommandReservationProjection(base)),
+      },
+      digests,
+    );
+  };
+  const analysisReservation = reservation(IntakeCommandOperationKind.INTENT_ANALYSIS);
+  const failedResult = decodeIntakeCommandResult({
+    schemaVersion: 1,
+    kind: 'FAILED',
+    intakeRunId: fixtures.failure.intakeRunId,
+    intakeRunVersion: intakeRunVersion(fixtures.failure.intakeRunVersion + 1),
+    failureRef: { id: fixtures.failure.id, digest: fixtures.failure.failureDigest },
+  });
+  if (failedResult.kind !== 'FAILED') {
+    throw new Error('Fixture did not create a FAILED Intake result');
+  }
+  const outcomeFor = (retainedReservation: IntakeCommandReservation) => {
+    const base: IntakeCommandOutcome = {
+      schemaVersion: 1,
+      disposition: IntakeCommandDisposition.FAILED,
+      commandId: retainedReservation.commandId,
+      intakeRunId: retainedReservation.intakeRunId,
+      canonicalCommandInputDigest: retainedReservation.canonicalCommandInputDigest,
+      reservationDigest: retainedReservation.reservationDigest,
+      observedIntakeRunVersion: retainedReservation.observedIntakeRunVersion,
+      result: failedResult,
+      resultDigest: digest(intakeCommandResultProjection(failedResult)),
+      completedAt: LATER,
+      outcomeDigest: ZERO,
+    };
+    return decodeIntakeCommandOutcome(
+      { ...base, outcomeDigest: digest(intakeCommandOutcomeProjection(base)) },
+      digests,
+    );
+  };
+
+  assert.doesNotThrow(() =>
+    decodeIntakeCommandClosure(analysisReservation, outcomeFor(analysisReservation), digests),
+  );
+  const answerReservation = reservation(IntakeCommandOperationKind.ANSWER_ONLY);
+  assert.throws(
+    () => decodeIntakeCommandClosure(answerReservation, outcomeFor(answerReservation), digests),
+    /Answer-only reservation must retain an applied Answer-only result/,
   );
 });
 

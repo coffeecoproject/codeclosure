@@ -22,14 +22,16 @@ discards an operation after observed tool use, and does not claim pre-selection
 tool denial. Slice 4 implements Runtime-owned non-Answer submission,
 clarification and abandonment coordination, exact source-bound Projection and
 Question construction, deterministic Admission evaluation, atomic `CLARIFY`
-and non-Answer `NO_EXECUTION`, and typed in-process status views. The
-persistence layer includes the later compound
+and non-Answer `NO_EXECUTION`, and typed in-process status views. Slice 5
+implements bounded Answer-only success/failure and exact replay, terminal
+analysis failure, operation-kind-aware startup reconciliation, the exact local
+retention classifier, non-retention of rejected payloads, and redacted
+status/audit projections. The persistence layer includes the later compound
 Goal/Workflow/Materialization/Start-Authorization write but does not yet provide
-Answer-only/failure recovery, CLI, the Materialization application path, or an
-ordinary Start invocation. The
+CLI, the Materialization application path, or an ordinary Start invocation. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 5 is the next implementation
+contract into the current bounded milestone; Slice 6 is the next implementation
 boundary and has not begun.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the

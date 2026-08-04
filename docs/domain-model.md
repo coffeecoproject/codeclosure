@@ -65,10 +65,11 @@ authority. Its empty `selectedAuthorityCapabilities` binding describes
 CodeClosure grants, not the App Server's model-visible tool inventory; observed
 tool use fails the operation under
 [ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). Slice 4 adds
-Coordinator, Projection, clarification, abandonment, and Admission behavior
-without adding Goal, Workflow, Start, Candidate, Evidence, or Acceptance
-authority. Answer-only/failure recovery, Materialization, CLI, and Start
-behavior remain planned for later slices.
+Coordinator, Projection, clarification, abandonment, and Admission behavior.
+Slice 5 uses the existing Answer-only and Failure unions for bounded terminal
+results, closed operation/reason mapping, replay, and restart reconciliation;
+it adds no Goal, Workflow, Start, Candidate, Evidence, or Acceptance authority.
+Materialization, CLI, and Start behavior remain planned for later slices.
 
 ## Design Rules
 

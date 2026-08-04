@@ -51,6 +51,13 @@ export const M25_INTENT_PROJECTION_PROFILE_VERSION =
   IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2;
 export const M25_DERIVATION_RULE_VERSION = 'codeclosure-m2-5-v1';
 
+export class IntakeAnalysisResponseRejectedError extends TypeError {
+  public constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'IntakeAnalysisResponseRejectedError';
+  }
+}
+
 const nonBlank = z.string().refine((value) => value.trim().length > 0, {
   message: 'must not be blank',
 });
@@ -331,7 +338,15 @@ export class M25IntentProjectionCompiler {
   }
 
   public project(input: ProjectIntentAnalysisInput): ProjectedIntentAnalysis {
-    const response = validateResponse(input.response, this.#canonicalizer);
+    let response: IntentAnalysisAssistantResponseV1;
+    try {
+      response = validateResponse(input.response, this.#canonicalizer);
+    } catch (error) {
+      throw new IntakeAnalysisResponseRejectedError(
+        'Intent-analysis response failed bounded semantic validation',
+        { cause: error },
+      );
+    }
     const revisions = input.rawRequestRevisions.map((revision) =>
       decodeRawRequestRevision(revision, this.#digests),
     );
@@ -402,7 +417,7 @@ export class M25IntentProjectionCompiler {
       );
       const revision = revisionsByNumber.get(suggestion.rawRequestRevision);
       if (value === undefined || revision === undefined) {
-        throw new TypeError(
+        throw new IntakeAnalysisResponseRejectedError(
           'Candidate Source Span addresses an absent field or unselected revision',
         );
       }
@@ -414,7 +429,9 @@ export class M25IntentProjectionCompiler {
         !boundaries.has(suggestion.endByte) ||
         bytes.subarray(suggestion.startByte, suggestion.endByte).toString('utf8') !== value
       ) {
-        throw new TypeError('Candidate Source Span does not match exact retained user bytes');
+        throw new IntakeAnalysisResponseRejectedError(
+          'Candidate Source Span does not match exact retained user bytes',
+        );
       }
       const bindingBase = {
         schemaVersion: 1 as const,
@@ -681,7 +698,9 @@ export class M25IntentProjectionCompiler {
     if (
       new Set(allBindings.map(({ bindingDigest }) => bindingDigest)).size !== allBindings.length
     ) {
-      throw new TypeError('Projection contains duplicate Source Bindings');
+      throw new IntakeAnalysisResponseRejectedError(
+        'Intent-analysis response creates duplicate Source Bindings',
+      );
     }
     const projectionBase = {
       id: currentProjection?.id ?? input.ids.nextIntentProjectionId(),

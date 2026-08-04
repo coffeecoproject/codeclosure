@@ -13,6 +13,7 @@ import type {
   IntakeFailureRecord,
   IntakeManifest,
   IntakeRun,
+  IntakeRunId,
   IntentAdmissionDecision,
   IntentAdmissionPolicy,
   IntentAdmissionPolicyInstallInput,
@@ -70,6 +71,22 @@ export interface IntakeAuditWrite {
   readonly afterVersion?: number;
   readonly correlationId?: string;
   readonly causationId?: string;
+}
+
+export interface IntakeAuditRecord {
+  readonly id: AuditEventId;
+  readonly sequence: number;
+  readonly aggregateType: string;
+  readonly aggregateId: string;
+  readonly eventType: string;
+  readonly actorType: string;
+  readonly commandId?: CommandId;
+  readonly beforeVersion?: number;
+  readonly afterVersion?: number;
+  readonly correlationId?: string;
+  readonly causationId?: string;
+  readonly payloadDigest: Sha256Digest;
+  readonly occurredAt: IsoTimestamp;
 }
 
 export type IntentAdmissionPolicyInstallResult =
@@ -251,6 +268,8 @@ export interface IntakeControlStore {
   commitIntakeCommandRejection(input: CommitIntakeCommandRejection): IntakeCommitStoreResult;
   commitIntakeMaterialization(input: CommitIntakeMaterialization): IntakeCommitStoreResult;
   getIntakeAuthority(intakeRunId: string): IntakeAuthorityView | undefined;
+  listOrphanedIntakeRunIds(): readonly IntakeRunId[];
+  getIntakeAudit(intakeRunId: string): readonly IntakeAuditRecord[];
   getIntakeCommandReservation(commandId: CommandId): IntakeCommandReservation | undefined;
   getIntakeCommandOutcome(commandId: CommandId): IntakeCommandOutcome | undefined;
 }

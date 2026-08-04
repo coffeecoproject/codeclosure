@@ -53,8 +53,10 @@ an accepted pre-Goal target for M2.5 and does not add another Workflow phase.
 At the M2 boundary, no Intake transition or Workflow mutation was operational.
 Slices 1 and 2 implement its separate Domain/Admission contracts and atomic
 SQLite creation of a `DISCOVERY / READY` Workflow through the Intake Store
-boundary. No Coordinator, public Intake transition, automatic Start invocation,
-or new Workflow phase is operational.
+boundary. Slices 3 through 5 add the isolated Intake Adapter, Coordinator,
+source-bound Admission, clarification, bounded terminal handling, and restart
+reconciliation without creating a Workflow or adding a Workflow phase. No
+Materialization application path or automatic Start invocation is operational.
 Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
 2026-08-02.
 

@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import {
   AcceptanceOutcome,
+  AnswerOnlyResponseKind,
   AttemptInterruptionReason,
   AttemptFailureClass,
   AttemptStatus,
@@ -22,6 +23,7 @@ import {
   GuardOutcome,
   ClarificationAnswerSchemaKind,
   IntakeCommandDisposition,
+  IntakeFailedOperation,
   IntakeCommandOperationKind,
   IntakeInteractionAction,
   IntakeManifestOperation,
@@ -199,6 +201,7 @@ import {
   type IntakeFailureRecord,
   type IntakeManifest,
   type IntakeRun,
+  type IntakeRunId,
   type IntentAdmissionDecision,
   type IntentAdmissionPolicy,
   type IntentAdmissionPolicyInstallInput,
@@ -311,6 +314,7 @@ import {
   type InstallExternalBackendCapabilityRecord,
   IntakeAuditAggregateType,
   IntakeAuditEventType,
+  classifyM25IntakeRetainedText,
   type IntakeAuditWrite,
   type IntakeAuthorityView,
   type IntakeCommitStoreResult,
@@ -2827,6 +2831,51 @@ export class SqliteControlStore
     });
   }
 
+  public listOrphanedIntakeRunIds(): readonly IntakeRunId[] {
+    this.assertOpen();
+    return this.runRead(() => {
+      this.assertRetainedIntakeAuthorityClosure();
+      const rows = z.array(z.object({ intake_run_id: z.string() }).strict()).parse(
+        this.#database
+          .prepare(
+            `SELECT DISTINCT reservation.intake_run_id
+                 FROM intake_command_reservations AS reservation
+                 JOIN intake_runs AS run ON run.id = reservation.intake_run_id
+                 LEFT JOIN intake_command_outcomes AS outcome
+                   ON outcome.command_id = reservation.command_id
+                WHERE run.status = 'ANALYZING'
+                  AND outcome.command_id IS NULL
+                ORDER BY reservation.intake_run_id`,
+          )
+          .all(),
+      );
+      return Object.freeze(rows.map((row) => intakeRunId(row.intake_run_id)));
+    });
+  }
+
+  public getIntakeAudit(rawIntakeRunId: string): readonly AuditEventRecord[] {
+    this.assertOpen();
+    const runIdentifier = intakeRunId(rawIntakeRunId);
+    return this.runRead(() => {
+      this.assertRetainedIntakeAuthorityClosure();
+      return Object.freeze(
+        this.#database
+          .prepare(
+            `SELECT audit.id, audit.sequence, audit.aggregate_type, audit.aggregate_id,
+                    audit.event_type, audit.actor_type, audit.command_id,
+                    audit.before_version, audit.after_version, audit.correlation_id,
+                    audit.causation_id, audit.payload_digest, audit.occurred_at
+               FROM intake_audit_events AS relationship
+               JOIN audit_events AS audit ON audit.id = relationship.audit_event_id
+              WHERE relationship.intake_run_id = ?
+              ORDER BY relationship.position`,
+          )
+          .all(runIdentifier)
+          .map((row) => decodeAuditEvent(row)),
+      );
+    });
+  }
+
   private insertRawRequest(record: RawRequest): void {
     this.#database
       .prepare(
@@ -3914,6 +3963,16 @@ export class SqliteControlStore
       rawInput.kind === 'ANSWER_ONLY'
         ? commandId(rawInput.commandId)
         : suppliedReservation?.commandId;
+    const expectedTerminalDecisionRef = {
+      id: decision.id,
+      digest: decision.decisionDigest,
+      outcome: decision.outcome,
+      reasonCode: decision.reasonCode,
+    };
+    const expectedAnswerOnlyResponseRef =
+      response === undefined
+        ? undefined
+        : { id: response.id, digest: response.responseDigest, kind: response.kind };
     assertExactIntakeAuditPlan(
       auditEvents,
       nextRun.id,
@@ -3936,6 +3995,11 @@ export class SqliteControlStore
       nextRun.status !== IntakeRunStatus.NO_EXECUTION ||
       decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION ||
       decision.intakeRunId !== nextRun.id ||
+      !sameCanonicalAuthority(nextRun.terminalDecisionRef, expectedTerminalDecisionRef) ||
+      (expectedAnswerOnlyResponseRef === undefined
+        ? 'answerOnlyResponseRef' in nextRun
+        : !('answerOnlyResponseRef' in nextRun) ||
+          !sameCanonicalAuthority(nextRun.answerOnlyResponseRef, expectedAnswerOnlyResponseRef)) ||
       completedAt < decision.decidedAt ||
       (rawInput.kind === 'ANSWER_ONLY' &&
         (response === undefined ||
@@ -4057,6 +4121,19 @@ export class SqliteControlStore
         if (reservation === undefined) {
           throw new StoreInvariantError('NO_EXECUTION reservation could not be resolved');
         }
+        if (
+          rawInput.kind === 'ANSWER_ONLY' &&
+          (response === undefined ||
+            reservation.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY ||
+            reservation.externalOperationBinding.assistantAdapterId !==
+              response.assistantAdapterId ||
+            reservation.externalOperationBinding.assistantAdapterVersion !==
+              response.assistantAdapterVersion ||
+            reservation.externalOperationBinding.responseContractDigest !==
+              response.responseContractDigest)
+        ) {
+          throw new StoreInvariantError('Answer-only commit has false reservation authority');
+        }
         const current = this.getIntakeRunInsideTransaction(nextRun.id);
         const expectedStatus =
           rawInput.kind === 'ABANDONMENT'
@@ -4148,6 +4225,25 @@ export class SqliteControlStore
       const reservation = this.getIntakeCommandReservationInsideTransaction(commandIdentifier);
       if (reservation === undefined) {
         throw new StoreInvariantError(`Intake command ${commandIdentifier} has no reservation`);
+      }
+      if (
+        !('externalOperationBinding' in reservation) ||
+        (reservation.operationKind !== IntakeCommandOperationKind.INTENT_ANALYSIS &&
+          reservation.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS)
+      ) {
+        throw new StoreInvariantError(
+          'Only a reserved external Intake analysis may commit an Intake failure',
+        );
+      }
+      if (
+        failure.failedOperation === IntakeFailedOperation.INTENT_ANALYSIS &&
+        (reservation.externalOperationBinding.assistantAdapterId !== failure.assistantAdapterId ||
+          reservation.externalOperationBinding.assistantAdapterVersion !==
+            failure.assistantAdapterVersion ||
+          reservation.externalOperationBinding.responseContractDigest !==
+            failure.responseContractDigest)
+      ) {
+        throw new StoreInvariantError('Intake analysis failure has false assistant authority');
       }
       const existingOutcome = this.getIntakeCommandOutcomeInsideTransaction(commandIdentifier);
       if (existingOutcome !== undefined) {
@@ -4721,7 +4817,81 @@ export class SqliteControlStore
       (record) => record.id,
       'Answer-only Response',
     );
+    const answerResponseColumnRows = z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            intake_run_id: z.string(),
+            response_kind: z.string(),
+            decision_id: z.string(),
+            decision_digest: z.string(),
+            response_digest: z.string(),
+            observed_at: z.string(),
+          })
+          .strict(),
+      )
+      .parse(
+        this.#database
+          .prepare(
+            `SELECT id, intake_run_id, response_kind, decision_id, decision_digest,
+                    response_digest, observed_at
+               FROM answer_only_responses`,
+          )
+          .all(),
+      );
+    for (const row of answerResponseColumnRows) {
+      const response = answerResponseById.get(row.id);
+      if (
+        response?.intakeRunId !== row.intake_run_id ||
+        response.kind !== row.response_kind ||
+        response.intentAdmissionDecisionId !== row.decision_id ||
+        response.intentAdmissionDecisionDigest !== row.decision_digest ||
+        response.responseDigest !== row.response_digest ||
+        response.observedAt !== row.observed_at
+      ) {
+        throw new StoreInvariantError(`Answer-only Response ${row.id} has substituted columns`);
+      }
+    }
     const failureById = uniqueMap(failures, (record) => record.id, 'Intake Failure Record');
+    const failureColumnRows = z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            command_id: z.string(),
+            intake_run_id: z.string(),
+            intake_run_version: z.number().int(),
+            failed_operation: z.string(),
+            reason_code: z.string(),
+            failure_digest: z.string(),
+            failed_at: z.string(),
+          })
+          .strict(),
+      )
+      .parse(
+        this.#database
+          .prepare(
+            `SELECT id, command_id, intake_run_id, intake_run_version,
+                    failed_operation, reason_code, failure_digest, failed_at
+               FROM intake_failure_records`,
+          )
+          .all(),
+      );
+    for (const row of failureColumnRows) {
+      const failure = failureById.get(row.id);
+      if (
+        failure?.commandId !== row.command_id ||
+        failure.intakeRunId !== row.intake_run_id ||
+        failure.intakeRunVersion !== row.intake_run_version ||
+        failure.failedOperation !== row.failed_operation ||
+        failure.reasonCode !== row.reason_code ||
+        failure.failureDigest !== row.failure_digest ||
+        failure.failedAt !== row.failed_at
+      ) {
+        throw new StoreInvariantError(`Intake Failure ${row.id} has substituted columns`);
+      }
+    }
     const reservationByCommandId = uniqueMap(
       reservations,
       (record) => record.commandId,
@@ -4985,6 +5155,16 @@ export class SqliteControlStore
           `Raw Request revision ${revision.rawRequestId}@${String(revision.revision)} has no exact root`,
         );
       }
+      if (
+        !classifyM25IntakeRetainedText(revision.admittedUserContent).accepted ||
+        revision.declaredConstraints.some(
+          (constraint) => !classifyM25IntakeRetainedText(constraint).accepted,
+        )
+      ) {
+        throw new StoreInvariantError(
+          `Raw Request revision ${revision.rawRequestId}@${String(revision.revision)} violates its retention profile`,
+        );
+      }
       if (revision.revision > 1) {
         const parent = revisionByKey.get(
           intakeRevisionKey(revision.rawRequestId, revision.revision - 1),
@@ -4994,6 +5174,23 @@ export class SqliteControlStore
             `Raw Request revision ${revision.rawRequestId}@${String(revision.revision)} has no exact parent`,
           );
         }
+      }
+    }
+
+    for (const proposal of proposals) {
+      const assistantStrings = [
+        ...(proposal.proposedObjective === undefined ? [] : [proposal.proposedObjective]),
+        ...proposal.proposedCriteria,
+        ...(proposal.proposedScope === undefined ? [] : [proposal.proposedScope]),
+        ...proposal.proposedNonGoals,
+        ...proposal.proposedAssumptions,
+        ...proposal.proposedQuestions,
+        ...(proposal.proposedClassification === undefined ? [] : [proposal.proposedClassification]),
+      ];
+      if (assistantStrings.some((value) => !classifyM25IntakeRetainedText(value).accepted)) {
+        throw new StoreInvariantError(
+          `Intent Analysis Proposal ${proposal.id} violates its retention profile`,
+        );
       }
     }
 
@@ -5299,14 +5496,21 @@ export class SqliteControlStore
     for (const response of answerResponses) {
       const decision = decisionById.get(response.intentAdmissionDecisionId);
       const run = runById.get(response.intakeRunId);
-      const outcome = outcomes.find(
+      const responseOutcomes = outcomes.filter(
         (candidate) =>
           candidate.result.kind === 'NO_EXECUTION' &&
           'answerOnlyResponseRef' in candidate.result &&
           candidate.result.answerOnlyResponseRef.id === response.id,
       );
+      const outcome = responseOutcomes[0];
       const reservation =
         outcome === undefined ? undefined : reservationByCommandId.get(outcome.commandId);
+      const outcomeResponseRef =
+        outcome?.result.kind === 'NO_EXECUTION' && 'answerOnlyResponseRef' in outcome.result
+          ? outcome.result.answerOnlyResponseRef
+          : undefined;
+      const outcomeDecisionRef =
+        outcome?.result.kind === 'NO_EXECUTION' ? outcome.result.decisionRef : undefined;
       const revision =
         run === undefined
           ? undefined
@@ -5317,11 +5521,24 @@ export class SqliteControlStore
               ),
             );
       if (
+        responseOutcomes.length !== 1 ||
+        run?.status !== IntakeRunStatus.NO_EXECUTION ||
+        run.activeRawRequestRevision.revision !== response.rawRequestRevision ||
+        run.activeRawRequestRevision.digest !== response.rawRequestDigest ||
+        outcome?.intakeRunId !== response.intakeRunId ||
+        outcomeDecisionRef?.id !== response.intentAdmissionDecisionId ||
+        outcomeDecisionRef.digest !== response.intentAdmissionDecisionDigest ||
         decision?.decisionDigest !== response.intentAdmissionDecisionDigest ||
+        decision.intakeRunId !== response.intakeRunId ||
+        decision.rawRequestRevision !== response.rawRequestRevision ||
+        decision.rawRequestDigest !== response.rawRequestDigest ||
         decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION ||
         decision.interactionAction !== IntakeInteractionAction.ANSWER_ONLY ||
         revision?.rawRequestDigest !== response.rawRequestDigest ||
-        reservation?.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY ||
+        outcomeResponseRef?.digest !== response.responseDigest ||
+        outcomeResponseRef.kind !== response.kind ||
+        reservation?.intakeRunId !== response.intakeRunId ||
+        reservation.operationKind !== IntakeCommandOperationKind.ANSWER_ONLY ||
         reservation.externalOperationBinding.assistantAdapterId !== response.assistantAdapterId ||
         reservation.externalOperationBinding.assistantAdapterVersion !==
           response.assistantAdapterVersion ||
@@ -5331,9 +5548,30 @@ export class SqliteControlStore
       ) {
         throw new StoreInvariantError(`Answer-only Response ${response.id} is falsely bound`);
       }
+      if (
+        response.kind === AnswerOnlyResponseKind.ANSWER_RETURNED &&
+        !classifyM25IntakeRetainedText(response.answerContent).accepted
+      ) {
+        throw new StoreInvariantError(
+          `Answer-only Response ${response.id} violates its retention profile`,
+        );
+      }
     }
     for (const failure of failures) {
       const run = runById.get(failure.intakeRunId);
+      const outcome = outcomeByCommandId.get(failure.commandId);
+      const failureOutcomes = outcomes.filter(
+        (candidate) =>
+          candidate.result.kind === 'FAILED' && candidate.result.failureRef.id === failure.id,
+      );
+      const reservation = reservationByCommandId.get(failure.commandId);
+      const externalOperationBinding =
+        reservation !== undefined && 'externalOperationBinding' in reservation
+          ? reservation.externalOperationBinding
+          : undefined;
+      const failureReservationKind =
+        reservation?.operationKind === IntakeCommandOperationKind.INTENT_ANALYSIS ||
+        reservation?.operationKind === IntakeCommandOperationKind.CLARIFICATION_ANALYSIS;
       const revision =
         run === undefined
           ? undefined
@@ -5344,8 +5582,27 @@ export class SqliteControlStore
               ),
             );
       if (
+        failureOutcomes.length !== 1 ||
+        failureOutcomes[0]?.commandId !== failure.commandId ||
+        run?.status !== IntakeRunStatus.FAILED ||
+        run.terminalFailureRef.id !== failure.id ||
+        run.terminalFailureRef.digest !== failure.failureDigest ||
         revision?.rawRequestDigest !== failure.rawRequestDigest ||
-        failure.failedAt < revision.submittedAt
+        failure.failedAt < revision.submittedAt ||
+        outcome?.disposition !== IntakeCommandDisposition.FAILED ||
+        outcome.intakeRunId !== failure.intakeRunId ||
+        outcome.result.failureRef.id !== failure.id ||
+        outcome.result.failureRef.digest !== failure.failureDigest ||
+        outcome.result.intakeRunVersion !== failure.intakeRunVersion + 1 ||
+        outcome.completedAt < failure.failedAt ||
+        reservation?.intakeRunId !== failure.intakeRunId ||
+        !failureReservationKind ||
+        externalOperationBinding === undefined ||
+        failure.failedAt < reservation.reservedAt ||
+        (failure.failedOperation === IntakeFailedOperation.INTENT_ANALYSIS &&
+          (externalOperationBinding.assistantAdapterId !== failure.assistantAdapterId ||
+            externalOperationBinding.assistantAdapterVersion !== failure.assistantAdapterVersion ||
+            externalOperationBinding.responseContractDigest !== failure.responseContractDigest))
       ) {
         throw new StoreInvariantError(`Intake Failure ${failure.id} is falsely bound`);
       }
@@ -5548,20 +5805,26 @@ export class SqliteControlStore
         const decision = decisionById.get(result.decisionRef.id);
         if (
           decision?.decisionDigest !== result.decisionRef.digest ||
+          decision.intakeRunId !== outcome.intakeRunId ||
           decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION
         ) {
           throw new StoreInvariantError(
             `Intake outcome ${outcome.commandId} has false NO_EXECUTION result`,
           );
         }
-        if (
-          'answerOnlyResponseRef' in result &&
-          answerResponseById.get(result.answerOnlyResponseRef.id)?.responseDigest !==
-            result.answerOnlyResponseRef.digest
-        ) {
-          throw new StoreInvariantError(
-            `Intake outcome ${outcome.commandId} has a false Answer-only result`,
-          );
+        if ('answerOnlyResponseRef' in result) {
+          const response = answerResponseById.get(result.answerOnlyResponseRef.id);
+          if (
+            response?.responseDigest !== result.answerOnlyResponseRef.digest ||
+            response.kind !== result.answerOnlyResponseRef.kind ||
+            response.intakeRunId !== outcome.intakeRunId ||
+            response.intentAdmissionDecisionId !== result.decisionRef.id ||
+            response.intentAdmissionDecisionDigest !== result.decisionRef.digest
+          ) {
+            throw new StoreInvariantError(
+              `Intake outcome ${outcome.commandId} has a false Answer-only result`,
+            );
+          }
         }
       } else if (result.kind === 'MATERIALIZED') {
         const decision = decisionById.get(result.decisionRef.id);
@@ -5592,7 +5855,12 @@ export class SqliteControlStore
           );
         }
       } else if (result.kind === 'FAILED') {
-        if (failureById.get(result.failureRef.id)?.failureDigest !== result.failureRef.digest) {
+        const failure = failureById.get(result.failureRef.id);
+        if (
+          failure?.failureDigest !== result.failureRef.digest ||
+          failure.intakeRunId !== outcome.intakeRunId ||
+          failure.commandId !== outcome.commandId
+        ) {
           throw new StoreInvariantError(
             `Intake outcome ${outcome.commandId} has false Failure result`,
           );
@@ -5753,7 +6021,22 @@ export class SqliteControlStore
             outcome.result.kind === 'NO_EXECUTION' ||
             outcome.result.kind === 'FAILED'),
       );
-      if (run.status === IntakeRunStatus.NEEDS_CLARIFICATION) {
+      if (run.status === IntakeRunStatus.ANALYZING) {
+        const activeReservations = reservations.filter(
+          (reservation) =>
+            reservation.intakeRunId === run.id &&
+            reservation.observedIntakeRunVersion === run.version &&
+            !outcomeByCommandId.has(reservation.commandId),
+        );
+        if (
+          activeReservations.length !== 1 ||
+          !('externalOperationBinding' in (activeReservations[0] ?? {}))
+        ) {
+          throw new StoreInvariantError(
+            `Intake Run ${run.id} has no unique active external operation`,
+          );
+        }
+      } else if (run.status === IntakeRunStatus.NEEDS_CLARIFICATION) {
         const question = questionById.get(run.activeQuestionRef.clarificationQuestionId);
         if (
           question?.intakeRunId !== run.id ||
@@ -5783,27 +6066,51 @@ export class SqliteControlStore
         }
       } else if (run.status === IntakeRunStatus.NO_EXECUTION) {
         const decision = decisionById.get(run.terminalDecisionRef.id);
+        const terminalOutcome = terminalOutcomes[0];
+        const terminalResult =
+          terminalOutcome?.result.kind === 'NO_EXECUTION' ? terminalOutcome.result : undefined;
         if (
           terminalOutcomes.length !== 1 ||
-          terminalOutcomes[0]?.result.kind !== 'NO_EXECUTION' ||
+          terminalResult?.intakeRunVersion !== run.version ||
+          !sameCanonicalAuthority(terminalResult.decisionRef, run.terminalDecisionRef) ||
           decision?.decisionDigest !== run.terminalDecisionRef.digest ||
+          decision.intakeRunId !== run.id ||
           decision.outcome !== IntentAdmissionOutcome.NO_EXECUTION
         ) {
           throw new StoreInvariantError(`Intake Run ${run.id} has a false terminal Decision`);
         }
-        if (
-          'answerOnlyResponseRef' in run &&
-          answerResponseById.get(run.answerOnlyResponseRef.id)?.responseDigest !==
-            run.answerOnlyResponseRef.digest
-        ) {
-          throw new StoreInvariantError(`Intake Run ${run.id} has a false Answer-only Response`);
+        if ('answerOnlyResponseRef' in run) {
+          const response = answerResponseById.get(run.answerOnlyResponseRef.id);
+          if (
+            !('answerOnlyResponseRef' in terminalResult) ||
+            !sameCanonicalAuthority(
+              terminalResult.answerOnlyResponseRef,
+              run.answerOnlyResponseRef,
+            ) ||
+            response?.responseDigest !== run.answerOnlyResponseRef.digest ||
+            response.kind !== run.answerOnlyResponseRef.kind ||
+            response.intakeRunId !== run.id ||
+            response.intentAdmissionDecisionId !== run.terminalDecisionRef.id ||
+            response.intentAdmissionDecisionDigest !== run.terminalDecisionRef.digest
+          ) {
+            throw new StoreInvariantError(`Intake Run ${run.id} has a false Answer-only Response`);
+          }
+        } else if ('answerOnlyResponseRef' in terminalResult) {
+          throw new StoreInvariantError(`Intake Run ${run.id} has a mixed Answer-only Response`);
         }
-      } else if (run.status === IntakeRunStatus.FAILED) {
+      } else {
+        const terminalOutcome = terminalOutcomes[0];
+        const terminalResult =
+          terminalOutcome?.result.kind === 'FAILED' ? terminalOutcome.result : undefined;
+        const failure = failureById.get(run.terminalFailureRef.id);
         if (
           terminalOutcomes.length !== 1 ||
-          terminalOutcomes[0]?.result.kind !== 'FAILED' ||
-          failureById.get(run.terminalFailureRef.id)?.failureDigest !==
-            run.terminalFailureRef.digest
+          terminalResult?.intakeRunVersion !== run.version ||
+          !sameCanonicalAuthority(terminalResult.failureRef, run.terminalFailureRef) ||
+          failure?.failureDigest !== run.terminalFailureRef.digest ||
+          failure.intakeRunId !== run.id ||
+          failure.commandId !== terminalOutcome?.commandId ||
+          failure.intakeRunVersion + 1 !== run.version
         ) {
           throw new StoreInvariantError(`Intake Run ${run.id} has a false terminal Failure`);
         }

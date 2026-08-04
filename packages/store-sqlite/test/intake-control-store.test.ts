@@ -41,6 +41,7 @@ import {
   decodeClarificationQuestionSpec,
   decodeIntakeCommandReservation,
   decodeIntakeCommandOutcome,
+  decodeIntakeCommandResult,
   decodeIntakeFailureRecord,
   decodeIntakeManifest,
   decodeIntakeRun,
@@ -63,6 +64,7 @@ import {
   intakeRunVersion,
   intakeCommandReservationProjection,
   intakeCommandOutcomeProjection,
+  intakeCommandResultProjection,
   goalId,
   goalMaterializationId,
   goalMaterializationProjection,
@@ -1477,6 +1479,112 @@ function answerOnlyFixtures(base: ReturnType<typeof fixtures>, namespace: string
   };
 }
 
+function persistAnswerOnlyAuthority(t: TestContext, namespace: string) {
+  const filename = temporaryDatabase(t);
+  const base = fixtures(namespace);
+  const answer = answerOnlyFixtures(base, namespace);
+  const store = openStore(filename);
+  installPolicy(store, namespace, base.policy);
+  assert.equal(
+    store.reserveInitialIntake({
+      rawRequest: base.rawRequest,
+      rawRequestRevision: answer.revision,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: base.reservationAudits,
+    }).status,
+    'RESERVED',
+  );
+  const committed = store.commitIntakeNoExecution({
+    kind: 'ANSWER_ONLY',
+    commandId: answer.reservation.commandId,
+    decision: answer.decision,
+    response: answer.response,
+    intakeRun: answer.noExecutionRun,
+    completedAt: LAST,
+    auditEvents: answer.audits,
+  });
+  assert.equal(committed.status, 'APPLIED');
+  store.close();
+  return { filename, answer, outcome: committed.outcome };
+}
+
+function persistAnswerOnlyAuthorityPair(t: TestContext, namespace: string) {
+  const filename = temporaryDatabase(t);
+  const baseA = fixtures(`${namespace}-a`);
+  const baseB = fixtures(`${namespace}-b`);
+  const answerA = answerOnlyFixtures(baseA, `${namespace}-a`);
+  const answerB = answerOnlyFixtures(baseB, `${namespace}-b`);
+  const store = openStore(filename);
+  installPolicy(store, namespace, baseA.policy);
+  const persist = (
+    base: ReturnType<typeof fixtures>,
+    answer: ReturnType<typeof answerOnlyFixtures>,
+  ) => {
+    assert.equal(
+      store.reserveInitialIntake({
+        rawRequest: base.rawRequest,
+        rawRequestRevision: answer.revision,
+        intakeRun: answer.analyzingRun,
+        manifest: answer.manifest,
+        reservation: answer.reservation,
+        auditEvents: base.reservationAudits,
+      }).status,
+      'RESERVED',
+    );
+    const committed = store.commitIntakeNoExecution({
+      kind: 'ANSWER_ONLY',
+      commandId: answer.reservation.commandId,
+      decision: answer.decision,
+      response: answer.response,
+      intakeRun: answer.noExecutionRun,
+      completedAt: LAST,
+      auditEvents: answer.audits,
+    });
+    assert.equal(committed.status, 'APPLIED');
+    return committed.outcome;
+  };
+  const outcomeA = persist(baseA, answerA);
+  const outcomeB = persist(baseB, answerB);
+  store.close();
+  return { filename, answerA, outcomeA, answerB, outcomeB };
+}
+
+function persistFailureAuthorityPair(t: TestContext, namespace: string) {
+  const filename = temporaryDatabase(t);
+  const fixtureA = fixtures(`${namespace}-a`);
+  const fixtureB = fixtures(`${namespace}-b`);
+  const store = openStore(filename);
+  installPolicy(store, namespace, fixtureA.policy);
+  const persist = (fixture: ReturnType<typeof fixtures>) => {
+    assert.equal(
+      store.reserveInitialIntake({
+        rawRequest: fixture.rawRequest,
+        rawRequestRevision: fixture.revision,
+        intakeRun: fixture.analyzingRun,
+        manifest: fixture.manifest,
+        reservation: fixture.reservation,
+        auditEvents: fixture.reservationAudits,
+      }).status,
+      'RESERVED',
+    );
+    const committed = store.commitIntakeFailure({
+      commandId: fixture.reservation.commandId,
+      failure: fixture.failure,
+      intakeRun: fixture.failedRun,
+      completedAt: LAST,
+      auditEvents: fixture.failureAudits,
+    });
+    assert.equal(committed.status, 'APPLIED');
+    return committed.outcome;
+  };
+  const outcomeA = persist(fixtureA);
+  const outcomeB = persist(fixtureB);
+  store.close();
+  return { filename, fixtureA, outcomeA, fixtureB, outcomeB };
+}
+
 function materializationFixtures(
   base: ReturnType<typeof fixtures>,
   startAuthority: ReturnType<typeof createWorkflowStartAuthorityRuntime>,
@@ -2149,6 +2257,475 @@ void test('[I-006][I-008][I-009] Answer-only result remains non-authoritative NO
   assert.deepEqual(authority.answerOnlyResponses, [answer.response]);
   assert.deepEqual(authority.decisions, [answer.decision]);
   assert.equal(authority.outcomes.length, 1);
+});
+
+void test('[I-006][I-008][I-009] Answer-only authority cannot be committed as Intake FAILED', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('answer-only-failed-forbidden');
+  const answer = answerOnlyFixtures(base, 'answer-only-failed-forbidden');
+  const store = openStore(filename);
+  installPolicy(store, 'answer-only-failed-forbidden', base.policy);
+  assert.equal(
+    store.reserveInitialIntake({
+      rawRequest: base.rawRequest,
+      rawRequestRevision: answer.revision,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: base.reservationAudits,
+    }).status,
+    'RESERVED',
+  );
+  const failureBase: IntakeFailureRecord = {
+    id: intakeFailureRecordId('intake-failure_answer-only-failed-forbidden'),
+    schemaVersion: 1,
+    commandId: answer.reservation.commandId,
+    intakeRunId: answer.analyzingRun.id,
+    intakeRunVersion: answer.analyzingRun.version,
+    rawRequestRevision: answer.revision.revision,
+    rawRequestDigest: answer.revision.rawRequestDigest,
+    failedOperation: IntakeFailedOperation.ADMISSION_PREPARATION,
+    reasonCode: IntakeFailureReasonCode.INTAKE_PREPARATION_FAILED,
+    retryDisposition: 'NEW_INTAKE_RUN_REQUIRED',
+    failedAt: LATER,
+    failureDigest: FIXTURE_DIGEST,
+  };
+  const failure = decodeIntakeFailureRecord(
+    {
+      ...failureBase,
+      failureDigest: digests.digest(intakeFailureRecordProjection(failureBase)),
+    },
+    digests,
+  );
+  const failedRun = decodeIntakeRun({
+    ...answer.analyzingRun,
+    version: intakeRunVersion(answer.analyzingRun.version + 1),
+    status: IntakeRunStatus.FAILED,
+    terminalFailureRef: { id: failure.id, digest: failure.failureDigest },
+    updatedAt: LATER,
+  });
+  if (failedRun.status !== IntakeRunStatus.FAILED) {
+    throw new Error('Fixture did not create a FAILED Intake Run');
+  }
+
+  assert.throws(
+    () =>
+      store.commitIntakeFailure({
+        commandId: answer.reservation.commandId,
+        failure,
+        intakeRun: failedRun,
+        completedAt: LAST,
+        auditEvents: base.failureAudits,
+      }),
+    /Only a reserved external Intake analysis may commit an Intake failure/,
+  );
+  const retained = store.getIntakeAuthority(answer.analyzingRun.id);
+  assert.ok(retained);
+  assert.equal(retained.intakeRun.status, IntakeRunStatus.ANALYZING);
+  assert.deepEqual(retained.failures, []);
+  assert.deepEqual(retained.outcomes, []);
+  store.close();
+
+  const reopened = openStore(filename);
+  t.after(() => reopened.close());
+  const reopenedAuthority = reopened.getIntakeAuthority(answer.analyzingRun.id);
+  assert.ok(reopenedAuthority);
+  assert.equal(reopenedAuthority.intakeRun.status, IntakeRunStatus.ANALYZING);
+  assert.deepEqual(reopenedAuthority.failures, []);
+  assert.deepEqual(reopenedAuthority.outcomes, []);
+});
+
+void test('[I-006][I-008][I-009] Answer-only commit rejects a substituted IntakeRun response reference kind', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('answer-only-substituted-run-kind');
+  const answer = answerOnlyFixtures(base, 'answer-only-substituted-run-kind');
+  const store = openStore(filename);
+  t.after(() => store.close());
+  installPolicy(store, 'answer-only-substituted-run-kind', base.policy);
+  assert.equal(
+    store.reserveInitialIntake({
+      rawRequest: base.rawRequest,
+      rawRequestRevision: answer.revision,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: base.reservationAudits,
+    }).status,
+    'RESERVED',
+  );
+  if (!('answerOnlyResponseRef' in answer.noExecutionRun)) {
+    throw new Error('Fixture did not create an Answer-only NO_EXECUTION Intake Run');
+  }
+  const substitutedRun = decodeIntakeRun({
+    ...answer.noExecutionRun,
+    answerOnlyResponseRef: {
+      ...answer.noExecutionRun.answerOnlyResponseRef,
+      kind: AnswerOnlyResponseKind.ANSWER_FAILED,
+    },
+  });
+  if (
+    substitutedRun.status !== IntakeRunStatus.NO_EXECUTION ||
+    !('answerOnlyResponseRef' in substitutedRun)
+  ) {
+    throw new Error('Fixture did not create an Answer-only NO_EXECUTION Intake Run');
+  }
+
+  assert.throws(
+    () =>
+      store.commitIntakeNoExecution({
+        kind: 'ANSWER_ONLY',
+        commandId: answer.reservation.commandId,
+        decision: answer.decision,
+        response: answer.response,
+        intakeRun: substitutedRun,
+        completedAt: LAST,
+        auditEvents: answer.audits,
+      }),
+    /NO_EXECUTION commit has inconsistent authority/,
+  );
+  const retained = store.getIntakeAuthority(answer.analyzingRun.id);
+  assert.ok(retained);
+  assert.equal(retained.intakeRun.status, IntakeRunStatus.ANALYZING);
+  assert.deepEqual(retained.answerOnlyResponses, []);
+  assert.deepEqual(retained.outcomes, []);
+});
+
+void test('[I-006][I-008][I-009] strict reopen rejects substituted Answer terminal references and columns', async (t) => {
+  await t.test('IntakeRun response kind', (scenarioTest) => {
+    const { filename, answer } = persistAnswerOnlyAuthority(
+      scenarioTest,
+      'answer-reopen-substituted-run-kind',
+    );
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER intake_runs_versioned_update_guard');
+      database
+        .prepare(
+          `UPDATE intake_runs
+              SET record_json = json_set(
+                    record_json,
+                    '$.answerOnlyResponseRef.kind',
+                    'ANSWER_FAILED'
+                  )
+            WHERE id = ?`,
+        )
+        .run(answer.analyzingRun.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(() => openStore(filename), /false Answer-only Response|strict reopen/);
+  });
+
+  await t.test('command outcome response kind', (scenarioTest) => {
+    const { filename, outcome } = persistAnswerOnlyAuthority(
+      scenarioTest,
+      'answer-reopen-substituted-outcome-kind',
+    );
+    if (
+      outcome.disposition !== 'APPLIED' ||
+      outcome.result.kind !== 'NO_EXECUTION' ||
+      !('answerOnlyResponseRef' in outcome.result)
+    ) {
+      throw new Error('Fixture did not create an Answer-only command outcome');
+    }
+    const result = decodeIntakeCommandResult({
+      ...outcome.result,
+      answerDisposition: 'ANSWER_FAILED',
+      answerOnlyResponseRef: {
+        ...outcome.result.answerOnlyResponseRef,
+        kind: AnswerOnlyResponseKind.ANSWER_FAILED,
+      },
+    });
+    if (result.kind !== 'NO_EXECUTION' || !('answerOnlyResponseRef' in result)) {
+      throw new Error('Fixture did not create a substituted Answer-only result');
+    }
+    const outcomeBase: IntakeCommandOutcome = {
+      ...outcome,
+      result,
+      resultDigest: digests.digest(intakeCommandResultProjection(result)),
+      outcomeDigest: FIXTURE_DIGEST,
+    };
+    const poisonedOutcome = decodeIntakeCommandOutcome(
+      {
+        ...outcomeBase,
+        outcomeDigest: digests.digest(intakeCommandOutcomeProjection(outcomeBase)),
+      },
+      digests,
+    );
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER intake_command_outcomes_no_update');
+      database
+        .prepare(
+          `UPDATE intake_command_outcomes
+              SET result_digest = ?, outcome_digest = ?, record_json = ?
+            WHERE command_id = ?`,
+        )
+        .run(
+          poisonedOutcome.resultDigest,
+          poisonedOutcome.outcomeDigest,
+          JSON.stringify(poisonedOutcome),
+          poisonedOutcome.commandId,
+        );
+    } finally {
+      database.close();
+    }
+    assert.throws(() => openStore(filename), /Answer-only Response .* is falsely bound/);
+  });
+
+  await t.test('Answer response duplicated observed_at column', (scenarioTest) => {
+    const { filename, answer } = persistAnswerOnlyAuthority(
+      scenarioTest,
+      'answer-reopen-substituted-column',
+    );
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER answer_only_responses_no_update');
+      database
+        .prepare('UPDATE answer_only_responses SET observed_at = ? WHERE id = ?')
+        .run('2030-01-01T00:00:00.000Z', answer.response.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(() => openStore(filename), /Answer-only Response .* has substituted columns/);
+  });
+});
+
+void test('[I-006][I-008][I-009] strict reopen rejects cross-Intake terminal authority reuse', async (t) => {
+  await t.test('Answer-only Response', (scenarioTest) => {
+    const { filename, answerA, answerB, outcomeB } = persistAnswerOnlyAuthorityPair(
+      scenarioTest,
+      'answer-reopen-cross-response',
+    );
+    if (
+      outcomeB.disposition !== 'APPLIED' ||
+      outcomeB.result.kind !== 'NO_EXECUTION' ||
+      !('answerOnlyResponseRef' in outcomeB.result) ||
+      !('answerOnlyResponseRef' in answerA.noExecutionRun)
+    ) {
+      throw new Error('Fixture did not create paired Answer-only terminal authority');
+    }
+    const poisonedResult = decodeIntakeCommandResult({
+      ...outcomeB.result,
+      answerOnlyResponseRef: answerA.noExecutionRun.answerOnlyResponseRef,
+    });
+    if (poisonedResult.kind !== 'NO_EXECUTION') {
+      throw new Error('Fixture did not create a poisoned Answer-only result');
+    }
+    const outcomeBase: IntakeCommandOutcome = {
+      ...outcomeB,
+      result: poisonedResult,
+      resultDigest: digests.digest(intakeCommandResultProjection(poisonedResult)),
+      outcomeDigest: FIXTURE_DIGEST,
+    };
+    const poisonedOutcome = decodeIntakeCommandOutcome(
+      {
+        ...outcomeBase,
+        outcomeDigest: digests.digest(intakeCommandOutcomeProjection(outcomeBase)),
+      },
+      digests,
+    );
+    const poisonedRun = decodeIntakeRun({
+      ...answerB.noExecutionRun,
+      answerOnlyResponseRef: answerA.noExecutionRun.answerOnlyResponseRef,
+    });
+    const database = new Database(filename);
+    try {
+      database.pragma('foreign_keys = OFF');
+      database.exec('DROP TRIGGER intake_runs_versioned_update_guard');
+      database.exec('DROP TRIGGER intake_command_outcomes_no_update');
+      database.exec('DROP TRIGGER answer_only_responses_no_delete');
+      database
+        .prepare(
+          `UPDATE intake_runs
+              SET answer_only_response_id = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(answerA.response.id, JSON.stringify(poisonedRun), answerB.noExecutionRun.id);
+      database
+        .prepare(
+          `UPDATE intake_command_outcomes
+              SET result_digest = ?, outcome_digest = ?, record_json = ?
+            WHERE command_id = ?`,
+        )
+        .run(
+          poisonedOutcome.resultDigest,
+          poisonedOutcome.outcomeDigest,
+          JSON.stringify(poisonedOutcome),
+          poisonedOutcome.commandId,
+        );
+      database.prepare('DELETE FROM answer_only_responses WHERE id = ?').run(answerB.response.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(() => openStore(filename), /Answer-only Response .* is falsely bound/);
+  });
+
+  await t.test('terminal Decision', (scenarioTest) => {
+    const { filename, answerA, answerB, outcomeA, outcomeB } = persistAnswerOnlyAuthorityPair(
+      scenarioTest,
+      'answer-reopen-cross-decision',
+    );
+    if (
+      outcomeA.result.kind !== 'NO_EXECUTION' ||
+      outcomeB.disposition !== 'APPLIED' ||
+      outcomeB.result.kind !== 'NO_EXECUTION'
+    ) {
+      throw new Error('Fixture did not create paired NO_EXECUTION authority');
+    }
+    const responseBase: AnswerOnlyResponse = {
+      ...answerB.response,
+      intentAdmissionDecisionId: answerA.decision.id,
+      intentAdmissionDecisionDigest: answerA.decision.decisionDigest,
+      responseDigest: FIXTURE_DIGEST,
+    };
+    const poisonedResponse = decodeAnswerOnlyResponse(
+      {
+        ...responseBase,
+        responseDigest: digests.digest(answerOnlyResponseProjection(responseBase)),
+      },
+      digests,
+    );
+    const poisonedResult = decodeIntakeCommandResult({
+      ...outcomeB.result,
+      decisionRef: outcomeA.result.decisionRef,
+      answerOnlyResponseRef: {
+        id: poisonedResponse.id,
+        digest: poisonedResponse.responseDigest,
+        kind: poisonedResponse.kind,
+      },
+    });
+    if (poisonedResult.kind !== 'NO_EXECUTION') {
+      throw new Error('Fixture did not create a poisoned NO_EXECUTION result');
+    }
+    const outcomeBase: IntakeCommandOutcome = {
+      ...outcomeB,
+      result: poisonedResult,
+      resultDigest: digests.digest(intakeCommandResultProjection(poisonedResult)),
+      outcomeDigest: FIXTURE_DIGEST,
+    };
+    const poisonedOutcome = decodeIntakeCommandOutcome(
+      {
+        ...outcomeBase,
+        outcomeDigest: digests.digest(intakeCommandOutcomeProjection(outcomeBase)),
+      },
+      digests,
+    );
+    const poisonedRun = decodeIntakeRun({
+      ...answerB.noExecutionRun,
+      terminalDecisionRef: answerA.noExecutionRun.terminalDecisionRef,
+      answerOnlyResponseRef: {
+        id: poisonedResponse.id,
+        digest: poisonedResponse.responseDigest,
+        kind: poisonedResponse.kind,
+      },
+    });
+    const database = new Database(filename);
+    try {
+      database.exec('DROP TRIGGER intake_runs_versioned_update_guard');
+      database.exec('DROP TRIGGER intake_command_outcomes_no_update');
+      database.exec('DROP TRIGGER answer_only_responses_no_update');
+      database
+        .prepare(
+          `UPDATE answer_only_responses
+              SET decision_id = ?, decision_digest = ?, response_digest = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(
+          poisonedResponse.intentAdmissionDecisionId,
+          poisonedResponse.intentAdmissionDecisionDigest,
+          poisonedResponse.responseDigest,
+          JSON.stringify(poisonedResponse),
+          poisonedResponse.id,
+        );
+      database
+        .prepare(
+          `UPDATE intake_runs
+              SET terminal_decision_id = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(answerA.decision.id, JSON.stringify(poisonedRun), answerB.noExecutionRun.id);
+      database
+        .prepare(
+          `UPDATE intake_command_outcomes
+              SET result_digest = ?, outcome_digest = ?, record_json = ?
+            WHERE command_id = ?`,
+        )
+        .run(
+          poisonedOutcome.resultDigest,
+          poisonedOutcome.outcomeDigest,
+          JSON.stringify(poisonedOutcome),
+          poisonedOutcome.commandId,
+        );
+    } finally {
+      database.close();
+    }
+    assert.throws(() => openStore(filename), /Answer-only Response .* is falsely bound/);
+  });
+
+  await t.test('Failure Record', (scenarioTest) => {
+    const { filename, fixtureA, fixtureB, outcomeB } = persistFailureAuthorityPair(
+      scenarioTest,
+      'failure-reopen-cross-record',
+    );
+    if (outcomeB.disposition !== 'FAILED') {
+      throw new Error('Fixture did not create paired FAILED terminal authority');
+    }
+    const poisonedResult = decodeIntakeCommandResult({
+      ...outcomeB.result,
+      failureRef: { id: fixtureA.failure.id, digest: fixtureA.failure.failureDigest },
+    });
+    if (poisonedResult.kind !== 'FAILED') {
+      throw new Error('Fixture did not create a poisoned FAILED result');
+    }
+    const outcomeBase: IntakeCommandOutcome = {
+      ...outcomeB,
+      result: poisonedResult,
+      resultDigest: digests.digest(intakeCommandResultProjection(poisonedResult)),
+      outcomeDigest: FIXTURE_DIGEST,
+    };
+    const poisonedOutcome = decodeIntakeCommandOutcome(
+      {
+        ...outcomeBase,
+        outcomeDigest: digests.digest(intakeCommandOutcomeProjection(outcomeBase)),
+      },
+      digests,
+    );
+    const poisonedRun = decodeIntakeRun({
+      ...fixtureB.failedRun,
+      terminalFailureRef: { id: fixtureA.failure.id, digest: fixtureA.failure.failureDigest },
+    });
+    const database = new Database(filename);
+    try {
+      database.pragma('foreign_keys = OFF');
+      database.exec('DROP TRIGGER intake_runs_versioned_update_guard');
+      database.exec('DROP TRIGGER intake_command_outcomes_no_update');
+      database.exec('DROP TRIGGER intake_failure_records_no_delete');
+      database
+        .prepare(
+          `UPDATE intake_runs
+              SET terminal_failure_id = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(fixtureA.failure.id, JSON.stringify(poisonedRun), fixtureB.failedRun.id);
+      database
+        .prepare(
+          `UPDATE intake_command_outcomes
+              SET result_digest = ?, outcome_digest = ?, record_json = ?
+            WHERE command_id = ?`,
+        )
+        .run(
+          poisonedOutcome.resultDigest,
+          poisonedOutcome.outcomeDigest,
+          JSON.stringify(poisonedOutcome),
+          poisonedOutcome.commandId,
+        );
+      database.prepare('DELETE FROM intake_failure_records WHERE id = ?').run(fixtureB.failure.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(() => openStore(filename), /Intake Failure .* is falsely bound/);
+  });
 });
 
 void test('[I-006][I-008][I-009] analyzed CLARIFY authority commits Decision, Question, active reference, audit, and outcome atomically', (t) => {
@@ -3620,6 +4197,306 @@ void test('[I-006][I-008][I-009][I-032] strict reopen rejects separately valid M
   }
 
   assert.throws(() => openStore(filename), /no exact reservation\/Manifest authority/);
+});
+
+void test('[I-006][I-008][I-009] strict reopen rejects digest-valid retained text that violates the fixed retention profile', async (t) => {
+  await t.test('Raw Request revision', (scenarioTest) => {
+    const filename = temporaryDatabase(scenarioTest);
+    const base = fixtures('retention-reopen-raw-request');
+    const store = openStore(filename);
+    installPolicy(store, 'retention-reopen-raw-request', base.policy);
+    assert.equal(
+      store.reserveInitialIntake({
+        rawRequest: base.rawRequest,
+        rawRequestRevision: base.revision,
+        intakeRun: base.analyzingRun,
+        manifest: base.manifest,
+        reservation: base.reservation,
+        auditEvents: base.reservationAudits,
+      }).status,
+      'RESERVED',
+    );
+    store.close();
+
+    const admittedUserContent = 'password: must-not-reopen';
+    const revisionBase: RawRequestRevisionRecord = {
+      ...base.revision,
+      admittedUserContent,
+      admittedContentDigest: digests.digestUtf8(admittedUserContent),
+      rawRequestDigest: FIXTURE_DIGEST,
+    };
+    const poisoned = decodeRawRequestRevision(
+      {
+        ...revisionBase,
+        rawRequestDigest: digests.digest(rawRequestRevisionProjection(revisionBase)),
+      },
+      digests,
+    );
+    const poisonedRun = decodeIntakeRun({
+      ...base.analyzingRun,
+      activeRawRequestRevision: {
+        ...base.analyzingRun.activeRawRequestRevision,
+        digest: poisoned.rawRequestDigest,
+      },
+    });
+    const manifestBase: IntakeManifest = {
+      ...base.manifest,
+      rawRequestRevisions: base.manifest.rawRequestRevisions.map((revision) => ({
+        ...revision,
+        digest: poisoned.rawRequestDigest,
+      })),
+      entries: base.manifest.entries.map((entry) => ({
+        ...entry,
+        sourceDigest: poisoned.rawRequestDigest,
+      })),
+      packageDigest: digests.digest({ poisonedRawRequestDigest: poisoned.rawRequestDigest }),
+      manifestDigest: FIXTURE_DIGEST,
+    };
+    const poisonedManifest = decodeIntakeManifest(
+      {
+        ...manifestBase,
+        manifestDigest: digests.digest(intakeManifestProjection(manifestBase)),
+      },
+      digests,
+    );
+    const reservationBase: IntakeCommandReservation = {
+      ...base.reservation,
+      externalOperationBinding: {
+        ...requiredExternalBinding(base.reservation),
+        manifestDigest: poisonedManifest.manifestDigest,
+      },
+      reservationDigest: FIXTURE_DIGEST,
+    };
+    const poisonedReservation = decodeIntakeCommandReservation(
+      {
+        ...reservationBase,
+        reservationDigest: digests.digest(intakeCommandReservationProjection(reservationBase)),
+      },
+      digests,
+    );
+    const database = new Database(filename);
+    try {
+      database.pragma('foreign_keys = OFF');
+      database.exec('DROP TRIGGER raw_request_revisions_no_update');
+      database.exec('DROP TRIGGER intake_runs_versioned_update_guard');
+      database.exec('DROP TRIGGER intake_manifests_no_update');
+      database.exec('DROP TRIGGER intake_command_reservations_no_update');
+      database
+        .prepare(
+          `UPDATE raw_request_revisions
+              SET admitted_content_digest = ?, raw_request_digest = ?, record_json = ?
+            WHERE raw_request_id = ? AND revision = ?`,
+        )
+        .run(
+          poisoned.admittedContentDigest,
+          poisoned.rawRequestDigest,
+          JSON.stringify(poisoned),
+          poisoned.rawRequestId,
+          poisoned.revision,
+        );
+      database
+        .prepare(
+          `UPDATE intake_runs
+              SET active_raw_request_digest = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(poisoned.rawRequestDigest, JSON.stringify(poisonedRun), poisonedRun.id);
+      database
+        .prepare(
+          `UPDATE intake_manifests
+              SET package_digest = ?, manifest_digest = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(
+          poisonedManifest.packageDigest,
+          poisonedManifest.manifestDigest,
+          JSON.stringify(poisonedManifest),
+          poisonedManifest.id,
+        );
+      database
+        .prepare(
+          `UPDATE intake_command_reservations
+              SET manifest_digest = ?, reservation_digest = ?, record_json = ?
+            WHERE command_id = ?`,
+        )
+        .run(
+          poisonedManifest.manifestDigest,
+          poisonedReservation.reservationDigest,
+          JSON.stringify(poisonedReservation),
+          poisonedReservation.commandId,
+        );
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /Raw Request revision .* violates its retention profile/,
+    );
+  });
+
+  await t.test('Intent Analysis Proposal', (scenarioTest) => {
+    const filename = temporaryDatabase(scenarioTest);
+    const base = fixtures('retention-reopen-proposal');
+    const clarify = clarifyFixtures(base, 'retention-reopen-proposal');
+    const store = openStore(filename);
+    installPolicy(store, 'retention-reopen-proposal', base.policy);
+    persistClarification(store, base, clarify);
+    store.close();
+
+    const proposalBase: IntentAnalysisProposal = {
+      ...clarify.proposal,
+      proposedClassification: 'authorization: must-not-reopen',
+      proposalDigest: FIXTURE_DIGEST,
+    };
+    const poisoned = decodeIntentAnalysisProposal(
+      {
+        ...proposalBase,
+        proposalDigest: digests.digest(intentAnalysisProposalProjection(proposalBase)),
+      },
+      digests,
+    );
+    const database = new Database(filename);
+    try {
+      database.pragma('foreign_keys = OFF');
+      database.exec('DROP TRIGGER intent_analysis_proposals_no_update');
+      database
+        .prepare(
+          `UPDATE intent_analysis_proposals
+              SET proposal_digest = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(poisoned.proposalDigest, JSON.stringify(poisoned), poisoned.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /Intent Analysis Proposal .* violates its retention profile/,
+    );
+  });
+
+  await t.test('Answer-only Response', (scenarioTest) => {
+    const filename = temporaryDatabase(scenarioTest);
+    const base = fixtures('retention-reopen-answer');
+    const answer = answerOnlyFixtures(base, 'retention-reopen-answer');
+    const store = openStore(filename);
+    installPolicy(store, 'retention-reopen-answer', base.policy);
+    assert.equal(
+      store.reserveInitialIntake({
+        rawRequest: base.rawRequest,
+        rawRequestRevision: answer.revision,
+        intakeRun: answer.analyzingRun,
+        manifest: answer.manifest,
+        reservation: answer.reservation,
+        auditEvents: base.reservationAudits,
+      }).status,
+      'RESERVED',
+    );
+    const committed = store.commitIntakeNoExecution({
+      kind: 'ANSWER_ONLY',
+      commandId: answer.reservation.commandId,
+      decision: answer.decision,
+      response: answer.response,
+      intakeRun: answer.noExecutionRun,
+      completedAt: LAST,
+      auditEvents: answer.audits,
+    });
+    assert.equal(committed.status, 'APPLIED');
+    store.close();
+
+    if (answer.response.kind !== AnswerOnlyResponseKind.ANSWER_RETURNED) {
+      throw new Error('Fixture did not create a returned Answer-only Response');
+    }
+    const answerContent = 'private_key = must-not-reopen';
+    const responseBase: AnswerOnlyResponse = {
+      ...answer.response,
+      answerContent,
+      answerContentDigest: digests.digestUtf8(answerContent),
+      responseDigest: FIXTURE_DIGEST,
+    };
+    const poisoned = decodeAnswerOnlyResponse(
+      {
+        ...responseBase,
+        responseDigest: digests.digest(answerOnlyResponseProjection(responseBase)),
+      },
+      digests,
+    );
+    if (!('answerOnlyResponseRef' in answer.noExecutionRun)) {
+      throw new Error('Fixture did not create an Answer-only NO_EXECUTION Intake Run');
+    }
+    const poisonedRun = decodeIntakeRun({
+      ...answer.noExecutionRun,
+      answerOnlyResponseRef: {
+        ...answer.noExecutionRun.answerOnlyResponseRef,
+        digest: poisoned.responseDigest,
+      },
+    });
+    if (
+      committed.outcome.disposition !== 'APPLIED' ||
+      committed.outcome.result.kind !== 'NO_EXECUTION' ||
+      !('answerOnlyResponseRef' in committed.outcome.result)
+    ) {
+      throw new Error('Fixture did not create an Answer-only command outcome');
+    }
+    const poisonedResult = decodeIntakeCommandResult({
+      ...committed.outcome.result,
+      answerOnlyResponseRef: {
+        ...committed.outcome.result.answerOnlyResponseRef,
+        digest: poisoned.responseDigest,
+      },
+    });
+    if (poisonedResult.kind !== 'NO_EXECUTION') {
+      throw new Error('Fixture did not create a NO_EXECUTION result');
+    }
+    const outcomeBase: IntakeCommandOutcome = {
+      ...committed.outcome,
+      result: poisonedResult,
+      resultDigest: digests.digest(intakeCommandResultProjection(poisonedResult)),
+      outcomeDigest: FIXTURE_DIGEST,
+    };
+    const poisonedOutcome = decodeIntakeCommandOutcome(
+      {
+        ...outcomeBase,
+        outcomeDigest: digests.digest(intakeCommandOutcomeProjection(outcomeBase)),
+      },
+      digests,
+    );
+    const database = new Database(filename);
+    try {
+      database.pragma('foreign_keys = OFF');
+      database.exec('DROP TRIGGER answer_only_responses_no_update');
+      database.exec('DROP TRIGGER intake_runs_versioned_update_guard');
+      database.exec('DROP TRIGGER intake_command_outcomes_no_update');
+      database
+        .prepare(
+          `UPDATE answer_only_responses
+              SET response_digest = ?, record_json = ?
+            WHERE id = ?`,
+        )
+        .run(poisoned.responseDigest, JSON.stringify(poisoned), poisoned.id);
+      database
+        .prepare('UPDATE intake_runs SET record_json = ? WHERE id = ?')
+        .run(JSON.stringify(poisonedRun), poisonedRun.id);
+      database
+        .prepare(
+          `UPDATE intake_command_outcomes
+              SET result_digest = ?, outcome_digest = ?, record_json = ?
+            WHERE command_id = ?`,
+        )
+        .run(
+          poisonedOutcome.resultDigest,
+          poisonedOutcome.outcomeDigest,
+          JSON.stringify(poisonedOutcome),
+          poisonedOutcome.commandId,
+        );
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openStore(filename),
+      /Answer-only Response .* violates its retention profile/,
+    );
+  });
 });
 
 void test('[I-006][I-008][I-009] strict reopen rejects codec-invalid retained Intake authority', (t) => {

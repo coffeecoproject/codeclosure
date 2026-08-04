@@ -3,6 +3,7 @@ import {
   attemptId,
   acceptanceDecisionId,
   auditEventId,
+  answerOnlyResponseId,
   candidateGenerationId,
   candidateId,
   checkSpecificationId,
@@ -16,6 +17,7 @@ import {
   clarificationAnswerBindingId,
   clarificationQuestionId,
   intakeManifestId,
+  intakeFailureRecordId,
   intakeOperationId,
   intakeRunId,
   intentAdmissionDecisionId,
@@ -34,6 +36,7 @@ import {
   type AttemptId,
   type AcceptanceDecisionId,
   type AuditEventId,
+  type AnswerOnlyResponseId,
   type CandidateGenerationId,
   type CandidateId,
   type CheckSpecificationId,
@@ -47,6 +50,7 @@ import {
   type ClarificationAnswerBindingId,
   type ClarificationQuestionId,
   type IntakeManifestId,
+  type IntakeFailureRecordId,
   type IntakeOperationId,
   type IntakeRunId,
   type IntentAdmissionDecisionId,
@@ -137,6 +141,14 @@ export class DeterministicIds {
 
   public nextIntakeOperationId(): IntakeOperationId {
     return intakeOperationId(`intake-operation_${this.nextSuffix()}`);
+  }
+
+  public nextAnswerOnlyResponseId(): AnswerOnlyResponseId {
+    return answerOnlyResponseId(`answer-response_${this.nextSuffix()}`);
+  }
+
+  public nextIntakeFailureRecordId(): IntakeFailureRecordId {
+    return intakeFailureRecordId(`intake-failure_${this.nextSuffix()}`);
   }
 
   public nextIntentAnalysisProposalId(): IntentAnalysisProposalId {

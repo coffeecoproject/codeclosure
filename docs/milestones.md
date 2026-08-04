@@ -298,8 +298,10 @@ are implemented under
 grants no CodeClosure authority capability and fails on observed tool use
 without claiming an empty model-visible tool set. Slice 4 Coordinator,
 source-bound Projection, clarification, abandonment, deterministic Admission,
-and non-Answer `NO_EXECUTION` behavior are implemented. Slice 5 is the next
-implementation boundary and has not begun.
+and non-Answer `NO_EXECUTION` behavior are implemented. Slice 5 bounded
+Answer-only delivery, terminal failure, restart reconciliation, replay,
+retention, and redacted in-process status/audit behavior are implemented. Slice
+6 is the next implementation boundary and has not begun.
 The operational scope below remains planned behavior governed by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and
@@ -309,8 +311,8 @@ M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. At the
-current post-Slice-4 boundary, no Answer-only/failure recovery, CLI,
-Materialization application path, or ordinary Start invocation is implemented.
+current post-Slice-5 boundary, no CLI, Materialization application path, or
+ordinary Start invocation is implemented.
 
 ### Objective
 

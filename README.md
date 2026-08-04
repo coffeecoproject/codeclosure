@@ -16,12 +16,13 @@ M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
 green on one source identity. M2.5 Goal Intake remains unimplemented as an
-operational loop. Its Domain, Policy, SQLite, package, isolated Adapter,
-source-bound Projection, deterministic Admission, and non-Answer Coordinator
-foundations are implemented. Answer-only/failure recovery, CLI, Goal
-Materialization, and Start execution remain unimplemented. This does not prove Goal Intake, product
-completion, or authority to merge, release, deploy, or perform another external
-effect.
+end-to-end operational loop. Its Domain, Policy, SQLite, package, isolated Adapter,
+source-bound Projection, deterministic Admission, Coordinator, bounded
+Answer-only result, terminal failure, startup reconciliation, retention, and
+redacted in-process read-view foundations are implemented. CLI, Goal
+Materialization application, and Start execution remain unimplemented. This
+does not prove Goal Intake or product completion. It does not authorize
+merge, release, deploy, or any other external effect.
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
 detailed status source required by the repository README contract; the
 [milestone document](docs/milestones.md) defines the current bounded scope and
@@ -148,9 +149,10 @@ M2.5 Goal Intake is the current implementation milestone. Its detailed
 [acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the work. The
 initial implementation decisions and dependency expectations are closed. The
 Domain, SQLite, package, Intake Assistant Adapter, Projection, deterministic
-Admission, clarification, abandonment, and non-Answer no-execution foundations
-are implemented; later terminal handling, Materialization, CLI, and the product
-loop remain incomplete.
+Admission, clarification, abandonment, Answer-only, failure, restart,
+retention, and in-process read-view foundations are implemented;
+Materialization, Start composition, CLI, and the product loop remain
+incomplete.
 
 ## Non-Goals
 

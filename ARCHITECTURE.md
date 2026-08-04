@@ -36,9 +36,11 @@ use without claiming that the pinned App Server presents an empty model-visible
 tool set. Slice 4 implements the source-bound Projection compiler,
 capability-free deterministic Admission evaluator, Runtime-owned submit,
 clarification and abandonment coordination, atomic `CLARIFY` and non-Answer
-`NO_EXECUTION`, and typed in-process status views. Goal Intake remains
-non-operational until its later terminal handling, Materialization, CLI, and
-Start slices are implemented.
+`NO_EXECUTION`, and typed in-process status views. Slice 5 implements bounded
+Answer-only delivery, safe terminal failure mapping, operation-kind-aware
+startup reconciliation, exact retention classification, replay, and redacted
+status/audit projections. Goal Intake remains non-operational until its
+Materialization, Start-composition, and CLI slices are implemented.
 Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
@@ -47,15 +49,17 @@ and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
 historical implementation and exit evidence. The
 [M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
-milestone. Slices 1 through 4 are complete; the Store can persist and strictly
+milestone. Slices 1 through 5 are complete; the Store can persist and strictly
 reopen the planned compound Intake/Goal/Workflow/Materialization authority, and
 Runtime can compile the bounded assistant inputs consumed by the separate
 Intake adapter. The Adapter runs one fresh isolated read-only operation and
 returns only strictly decoded untrusted values. Runtime now coordinates the
 non-Answer analysis and clarification path through source-bound Projection and
-deterministic Admission without persisting `READY_TO_MATERIALIZE`. No
-Answer-only/failure recovery, CLI, Materialization application path, or ordinary
-Start invocation is implemented. The following M2 slice
+deterministic Admission without persisting `READY_TO_MATERIALIZE`. Runtime now
+also closes Answer-only delivery, terminal analysis failure, exact replay, and
+startup orphan reconciliation without granting the assistant formal authority.
+No CLI, Materialization application path, or ordinary Start invocation is
+implemented. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -146,19 +150,21 @@ and
 [ADR 0035](docs/adr/0035-bound-intake-by-non-authoritative-effects.md)
 defines the enforceable Intake assistant effect boundary without claiming an
 empty App Server tool inventory. Goal Intake is not operational. M2.5 Slices 1
-through 4 implement its closed Domain
+through 5 implement its closed Domain
 records, codecs, canonical projections, fixed Policy definitions,
 capability-free Admission Engine and evaluator, migrations, Store ports, compound
 transactions, verified activation inputs, strict reopen validation,
 deterministic Intake/Answer package compilation, and the isolated read-only
 Intake Assistant Adapter. Slice 4 adds Runtime-owned submit, clarification and
 abandonment coordination; exact source-bound Projection, ambiguity and Question
-construction; atomic non-Answer outcomes; and typed status views. It does not
-implement Answer-only/failure recovery, CLI, Materialization application path,
-or ordinary Start invocation. The completed M2 milestone preserved the reusable
+construction; atomic non-Answer outcomes; and typed status views. Slice 5 adds
+bounded Answer-only results, safe terminal failures, restart reconciliation,
+retention enforcement, and redacted status/audit projections. It does not
+implement CLI, the Materialization application path, or ordinary Start
+invocation. The completed M2 milestone preserved the reusable
 Codex App Server client boundary, which the M2.5 Intake Adapter now reuses. The
-same Intake boundary will later own bounded non-authoritative Answer-only
-results and terminal Intake-failure classification. Materialization creates a
+same Intake boundary owns bounded non-authoritative Answer-only results and
+terminal Intake-failure classification. Materialization creates a
 `READY` Workflow; optional automatic execution still crosses the separate
 ordinary `StartGoal` boundary.
 

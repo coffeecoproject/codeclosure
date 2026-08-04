@@ -29,7 +29,9 @@ kind and completed the bounded M2 exit review on 2026-08-02. Pre-Goal
 Intake observations are not part of the implemented Evidence model and cannot satisfy a formal Goal's Acceptance.
 M2.5 Slices 1 and 2 add no Evidence kind or eligibility rule; their Proposal,
 Answer-only, persistence, and reopen boundaries do not promote Intake content
-into Evidence or Acceptance authority.
+into Evidence or Acceptance authority. Slice 5 implements bounded Answer-only
+and failure/restart results without making either an Evidence or Acceptance
+input.
 
 ## Purpose
 
