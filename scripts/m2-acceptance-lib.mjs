@@ -626,6 +626,7 @@ export function validateM2ScopeReview(documents, productSources) {
   const requiredDocuments = [
     'agents',
     'readme',
+    'm2CompletionReview',
     'architecture',
     'domainModel',
     'workflow',
@@ -651,9 +652,9 @@ export function validateM2ScopeReview(documents, productSources) {
     'AGENTS does not preserve the satisfied independent M2 prerequisite',
   );
   requirePattern(
-    documents.readme,
-    /bounded\s+M2 Codex vertical slice are complete[\s\S]{0,500}M2\.5 Goal Intake remains unimplemented[\s\S]{0,500}does not[\s\S]{0,80}prove Goal Intake[\s\S]{0,160}merge, release, deploy/u,
-    'README does not retain the bounded M2 non-claim',
+    documents.m2CompletionReview,
+    /M2\.5 remains not started;[\s\S]{0,200}no Raw Request[\s\S]{0,200}entered product source/u,
+    'M2 completion review does not retain the historical M2.5 non-claim',
   );
   requirePattern(
     documents.architecture,

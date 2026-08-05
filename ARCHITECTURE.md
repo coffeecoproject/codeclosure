@@ -41,8 +41,9 @@ Answer-only delivery, safe terminal failure mapping, operation-kind-aware
 startup reconciliation, exact retention classification, replay, and redacted
 status/audit projections. Slice 6 implements the trusted Runtime Materializer,
 atomic Goal/Workflow creation, optional Start Authorization, separate ordinary
-Start composition, and composite Start status. Goal Intake remains
-non-operational until its CLI slice is implemented.
+Start composition, and composite Start status. Slice 7 exposes that bounded
+implementation only through narrow CLI command/read facades and adds a
+fail-closed non-verdict assessment harness.
 Components marked for later
 milestones are architectural boundaries, not current implementation claims.
 
@@ -51,7 +52,7 @@ and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
 historical implementation and exit evidence. The
 [M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
 [M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
-milestone. Slices 1 through 6 are complete; the Store persists and strictly
+milestone. Slices 1 through 7 are implemented; the Store persists and strictly
 reopens compound Intake/Goal/Workflow/Materialization authority, and
 Runtime can compile the bounded assistant inputs consumed by the separate
 Intake adapter. The Adapter runs one fresh isolated read-only operation and
@@ -62,8 +63,11 @@ also closes Answer-only delivery, terminal analysis failure, exact replay, and
 startup orphan reconciliation without granting the assistant formal authority.
 Runtime now also commits admitted Materialization before submitting only the
 preallocated ordinary `StartGoal`; Start failure cannot roll back the committed
-Goal, and replay cannot create another first Attempt. No Intake CLI or M2.5
-acceptance harness is implemented. The following M2 slice
+Goal, and replay cannot create another first Attempt. The Intake CLI now
+requires an explicit action, uses only public Runtime facades, and preserves
+strict SQLite reopen across separate processes. The `accept:m2.5` runner emits
+only `READY_FOR_INDEPENDENT_REVIEW` evidence and cannot issue or record the
+milestone verdict. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -153,8 +157,8 @@ closes its pre-Goal command replay and verified SQLite activation boundaries,
 and
 [ADR 0035](docs/adr/0035-bound-intake-by-non-authoritative-effects.md)
 defines the enforceable Intake assistant effect boundary without claiming an
-empty App Server tool inventory. Goal Intake is not operational. M2.5 Slices 1
-through 6 implement its closed Domain
+empty App Server tool inventory. M2.5 Slices 1 through 7 implement its bounded
+local command loop over the closed Domain
 records, codecs, canonical projections, fixed Policy definitions,
 capability-free Admission Engine and evaluator, migrations, Store ports, compound
 transactions, verified activation inputs, strict reopen validation,
@@ -164,8 +168,10 @@ abandonment coordination; exact source-bound Projection, ambiguity and Question
 construction; atomic non-Answer outcomes; and typed status views. Slice 5 adds
 bounded Answer-only results, safe terminal failures, restart reconciliation,
 retention enforcement, and redacted status/audit projections. Slice 6 adds
-atomic Materialization and separate ordinary Start composition. It does not
-implement the Intake CLI or M2.5 acceptance harness. The completed M2 milestone
+atomic Materialization and separate ordinary Start composition. Slice 7 adds
+the narrow CLI composition, deterministic real-adapter fixtures, strict
+cross-process reopen proof, and the non-verdict acceptance harness. The
+canonical assessment and independent M2.5 verdict remain unexecuted. The completed M2 milestone
 preserved the reusable Codex App Server client boundary, which the M2.5 Intake
 Adapter now reuses. The
 same Intake boundary owns bounded non-authoritative Answer-only results and
@@ -849,7 +855,7 @@ The target adapter layering is:
 Codex App Server Client
 ├── Codex Worker Adapter
 │   └── Goal-bound WorkerPort requests and events
-└── Goal Intake Assistant Adapter (M2.5 planned)
+└── Goal Intake Assistant Adapter (M2.5 implemented)
     ├── IntakePackage -> IntentAnalysisProposal
     └── AnswerOnlyPackage -> bounded answer response
 ```

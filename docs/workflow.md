@@ -58,7 +58,11 @@ source-bound Admission, clarification, bounded terminal handling, and restart
 reconciliation without creating a Workflow or adding a Workflow phase. Slice 6
 implements the Materialization application path and submits an authorized
 preallocated command only through ordinary `StartGoal`; it adds no Workflow
-phase or second Workflow writer. The Intake CLI is not operational.
+phase or second Workflow writer. Slice 7 exposes Intake through a facade that
+cannot access the Workflow kernel. Only an admitted governed-execution result
+may submit its preallocated ordinary `StartGoal`; read, Answer-only,
+clarification, abandonment, and materialize-only CLI paths add no Workflow
+mutation authority.
 Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
 2026-08-02.
 
@@ -81,7 +85,7 @@ CodeClosure separates:
 This prevents an operational failure or user wait from being confused with a
 new engineering phase.
 
-## Pre-Goal Flow — implemented through M2.5 Slice 6
+## Pre-Goal Flow — implemented through M2.5 Slice 7
 
 Goal Intake precedes this state machine and owns no `WorkflowPhase`,
 `RunStatus`, or `Attempt`. Its independent bounded flow is:

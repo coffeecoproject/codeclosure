@@ -7,7 +7,7 @@ import test, { type TestContext } from 'node:test';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { parseGoalIdentifier } from '@codeclosure/runtime';
+import { parseGoalIdentifier, parseIntakeRunIdentifier } from '@codeclosure/runtime';
 import { CryptographicIdentityGenerator } from '@codeclosure/runtime/composition';
 import { openSqliteControlStore } from '@codeclosure/store-sqlite';
 
@@ -175,6 +175,332 @@ void test('goal create and status form one JSON-safe cross-process SQLite loop',
   assert.match(human.stdout, /Phase: DISCOVERY/);
   assert.match(human.stdout, /Technical closeout: no/);
   assert.equal(human.stdout.includes('\u001B['), false);
+});
+
+void test('M2.5 governed CLI chain carries one Adapter assumption through clarification, Materialization, Start, and strict reopen', (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  const dataHomePath = join(root, 'authority');
+  mkdirSync(project, { mode: 0o700 });
+  const fixtureEnvironment = (name: string) => ({
+    CODECLOSURE_M25_ACCEPTANCE_FIXTURE: name,
+  });
+
+  const submitted = runCli(
+    [
+      'intake',
+      'submit',
+      '--action',
+      'governed-execution',
+      '--request',
+      'Ship slice 7',
+      '--project',
+      project,
+      '--json',
+    ],
+    {
+      cwd: root,
+      dataHomePath,
+      environment: fixtureEnvironment('governed-assumption'),
+    },
+  );
+  assert.equal(submitted.status, 0, `${submitted.stderr}\n${submitted.stdout}`);
+  assert.equal(submitted.stderr, '');
+  const submittedEnvelope = parseSingleJsonDocument(submitted.stdout);
+  assert.equal(field(submittedEnvelope, 'kind'), 'INTAKE_COMMAND_RESULT');
+  const submittedResult = field(submittedEnvelope, 'result');
+  assert.equal(field(submittedResult, 'kind'), 'OUTCOME');
+  const submittedOutcome = field(submittedResult, 'outcome');
+  const clarification = field(submittedOutcome, 'result');
+  assert.equal(field(clarification, 'kind'), 'CLARIFICATION_REQUIRED');
+  assert.equal(field(submittedResult, 'startDisposition'), 'NOT_AUTHORIZED');
+  const intakeRunId = field(submittedOutcome, 'intakeRunId');
+  assert.equal(typeof intakeRunId, 'string');
+  if (typeof intakeRunId !== 'string') {
+    assert.fail('Intake submit returned no IntakeRunId');
+  }
+
+  const statusBefore = runCli(['intake', 'status', intakeRunId, '--json'], {
+    cwd: root,
+    dataHomePath,
+  });
+  assert.equal(statusBefore.status, 0, statusBefore.stderr);
+  assert.equal(statusBefore.stderr, '');
+  const clarificationView = field(
+    field(parseSingleJsonDocument(statusBefore.stdout), 'result'),
+    'view',
+  );
+  assert.equal(field(clarificationView, 'status'), 'NEEDS_CLARIFICATION');
+  const expectedVersion = field(clarificationView, 'intakeRunVersion');
+  const activeQuestion = field(clarificationView, 'activeQuestion');
+  const questionId = field(activeQuestion, 'id');
+  assert.equal(typeof expectedVersion, 'number');
+  assert.equal(typeof questionId, 'string');
+  if (typeof expectedVersion !== 'number' || typeof questionId !== 'string') {
+    assert.fail('Clarification view lacks exact version or Question identity');
+  }
+  assert.equal(field(activeQuestion, 'answerSchema') !== undefined, true);
+  assert.match(String(field(activeQuestion, 'questionSpecDigest')), /^sha256:/u);
+  assert.match(String(field(activeQuestion, 'questionDigest')), /^sha256:/u);
+
+  const clarified = runCli(
+    [
+      'intake',
+      'clarify',
+      intakeRunId,
+      '--question-id',
+      questionId,
+      '--expected-version',
+      String(expectedVersion),
+      '--answer',
+      'Confirmed',
+      '--project',
+      project,
+      '--json',
+    ],
+    {
+      cwd: root,
+      dataHomePath,
+      environment: fixtureEnvironment('exact-source'),
+    },
+  );
+  assert.equal(clarified.status, 0, clarified.stderr);
+  assert.equal(clarified.stderr, '');
+  const clarifiedResult = field(parseSingleJsonDocument(clarified.stdout), 'result');
+  assert.equal(field(clarifiedResult, 'kind'), 'OUTCOME');
+  assert.equal(field(field(field(clarifiedResult, 'outcome'), 'result'), 'kind'), 'MATERIALIZED');
+  assert.equal(field(clarifiedResult, 'startDisposition'), 'START_COMMAND_APPLIED');
+
+  const statusAfter = runCli(['intake', 'status', intakeRunId, '--json'], {
+    cwd: root,
+    dataHomePath,
+  });
+  assert.equal(statusAfter.status, 0, statusAfter.stderr);
+  const materializedView = field(
+    field(parseSingleJsonDocument(statusAfter.stdout), 'result'),
+    'view',
+  );
+  assert.equal(field(materializedView, 'status'), 'MATERIALIZED');
+  assert.equal(field(materializedView, 'startDisposition'), 'START_COMMAND_APPLIED');
+
+  const audit = runCli(['intake', 'audit', intakeRunId, '--json'], {
+    cwd: root,
+    dataHomePath,
+  });
+  assert.equal(audit.status, 0, audit.stderr);
+  const auditView = field(field(parseSingleJsonDocument(audit.stdout), 'result'), 'view');
+  const history = field(auditView, 'questionHistory');
+  assert.ok(Array.isArray(history));
+  assert.equal(history.length, 1);
+  assert.equal(field(history[0], 'id'), questionId);
+  assert.equal(field(history[0], 'answerBinding') !== undefined, true);
+
+  const reopened = openSqliteControlStore({ filename: join(dataHomePath, 'state.sqlite') });
+  try {
+    const authority = reopened.getIntakeAuthority(parseIntakeRunIdentifier(intakeRunId));
+    assert.ok(authority?.materialization);
+    assert.ok(authority.startAuthorization);
+    assert.equal(authority.rawRequestRevisions.length, 2);
+    assert.equal(authority.proposals.length, 2);
+    assert.deepEqual(authority.proposals[0]?.proposedAssumptions, ['Confirm bounded risk']);
+    assert.equal(authority.answerBindings.length, 1);
+    assert.equal(authority.projections.length, 2);
+    assert.equal(authority.decisions.length, 2);
+    const workflow = reopened.getWorkflow(authority.materialization.workflowId);
+    assert.ok(workflow);
+    assert.equal(workflow.runStatus, 'CLOSED');
+    assert.equal(workflow.activeAttemptId, undefined);
+    const initialRequest = authority.rawRequestRevisions[0];
+    const initialProposal = authority.proposals[0];
+    const initialReservation = authority.reservations[0];
+    assert.ok(initialRequest);
+    assert.ok(initialRequest.declaredProjectRef);
+    assert.ok(initialProposal);
+    assert.ok(initialReservation);
+
+    const evidencePath = process.env['CODECLOSURE_M25_GOVERNED_SCENARIO_EVIDENCE_PATH'];
+    if (evidencePath !== undefined) {
+      writeFileSync(
+        evidencePath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          kind: 'M25_SCENARIO_EVIDENCE',
+          scenarioId: 'M25-D01-D09-GOVERNED-CHAIN',
+          isolatedRoots: [
+            { kind: 'AUTHORITY_HOME', path: dataHomePath },
+            { kind: 'AUTHORITY_DATABASE', path: join(dataHomePath, 'state.sqlite') },
+            { kind: 'PROJECT_ROOT', path: project },
+          ],
+          inputIdentity: {
+            operation: 'GOVERNED_EXECUTION',
+            primaryId: initialReservation.commandId,
+            digest: initialRequest.rawRequestDigest,
+          },
+          expectedDisposition:
+            'CLARIFICATION_REQUIRED->MATERIALIZED/START_COMMAND_APPLIED/STRICT_REOPEN_MATCHED',
+          observedDisposition:
+            'CLARIFICATION_REQUIRED->MATERIALIZED/START_COMMAND_APPLIED/STRICT_REOPEN_MATCHED',
+          finalSafeAuthorityProjection: {
+            intakeRunId,
+            intakeRunStatus: authority.intakeRun.status,
+            intakeRunVersion: authority.intakeRun.version,
+            assistantAdapterId: initialProposal.assistantAdapterId,
+            assistantAdapterVersion: initialProposal.assistantAdapterVersion,
+            rawRequestDigests: authority.rawRequestRevisions.map(
+              ({ rawRequestDigest }) => rawRequestDigest,
+            ),
+            proposalDigests: authority.proposals.map(({ proposalDigest }) => proposalDigest),
+            projectionDigests: authority.projections.map(
+              ({ projectionDigest }) => projectionDigest,
+            ),
+            decisionDigests: authority.decisions.map(({ decisionDigest }) => decisionDigest),
+            answerBindingDigests: authority.answerBindings.map(
+              ({ answerBindingDigest }) => answerBindingDigest,
+            ),
+            materializationDigest: authority.materialization.materializationDigest,
+            startAuthorizationDigest: authority.startAuthorization.authorizationDigest,
+            goalId: authority.materialization.goalId,
+            workflowId: authority.materialization.workflowId,
+            workflowRunStatus: workflow.runStatus,
+            activeAttemptPresent: false,
+            declaredProjectIdentityDigest: initialRequest.declaredProjectRef.identityDigest,
+          },
+          strictReopen: 'MATCHED',
+        })}\n`,
+        { mode: 0o600 },
+      );
+    }
+  } finally {
+    reopened.close();
+  }
+
+  for (const expected of [
+    { action: 'answer-only', fixture: 'answer-success', startDisposition: 'NOT_AUTHORIZED' },
+    { action: 'materialize-only', fixture: 'exact-source', startDisposition: 'NOT_AUTHORIZED' },
+  ] as const) {
+    const result = runCli(
+      [
+        'intake',
+        'submit',
+        '--action',
+        expected.action,
+        '--request',
+        'Ship slice 7',
+        ...(expected.action === 'materialize-only' ? ['--project', project] : []),
+        '--json',
+      ],
+      {
+        cwd: root,
+        dataHomePath,
+        environment: fixtureEnvironment(expected.fixture),
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      field(field(parseSingleJsonDocument(result.stdout), 'result'), 'startDisposition'),
+      expected.startDisposition,
+    );
+  }
+
+  const abandonCandidate = runCli(
+    ['intake', 'submit', '--action', 'materialize-only', '--request', 'Ship slice 7', '--json'],
+    {
+      cwd: root,
+      dataHomePath,
+      environment: fixtureEnvironment('project-question'),
+    },
+  );
+  assert.equal(abandonCandidate.status, 0, abandonCandidate.stderr);
+  const abandonOutcome = field(
+    field(parseSingleJsonDocument(abandonCandidate.stdout), 'result'),
+    'outcome',
+  );
+  const abandonRunId = field(abandonOutcome, 'intakeRunId');
+  assert.equal(typeof abandonRunId, 'string');
+  if (typeof abandonRunId !== 'string') {
+    assert.fail('Abandonment fixture lacks exact Intake identity');
+  }
+  const abandonStatus = runCli(['intake', 'status', abandonRunId, '--json'], {
+    cwd: root,
+    dataHomePath,
+  });
+  assert.equal(abandonStatus.status, 0, abandonStatus.stderr);
+  const abandonVersion = field(
+    field(field(parseSingleJsonDocument(abandonStatus.stdout), 'result'), 'view'),
+    'intakeRunVersion',
+  );
+  assert.equal(typeof abandonVersion, 'number');
+  if (typeof abandonVersion !== 'number') {
+    assert.fail('Strict reopen did not expose the exact current Intake version');
+  }
+  const abandoned = runCli(
+    ['intake', 'abandon', abandonRunId, '--expected-version', String(abandonVersion), '--json'],
+    { cwd: root, dataHomePath },
+  );
+  assert.equal(abandoned.status, 0, `${abandoned.stderr}\n${abandoned.stdout}`);
+  const abandonedResult = field(parseSingleJsonDocument(abandoned.stdout), 'result');
+  assert.equal(field(field(field(abandonedResult, 'outcome'), 'result'), 'kind'), 'NO_EXECUTION');
+  assert.equal(field(abandonedResult, 'startDisposition'), 'NOT_AUTHORIZED');
+});
+
+void test('Intake assistant cleanup failure preserves the committed disposition and grants no second effect', (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  const dataHomePath = join(root, 'authority');
+  mkdirSync(project, { mode: 0o700 });
+
+  const submitted = runCli(
+    [
+      'intake',
+      'submit',
+      '--action',
+      'materialize-only',
+      '--request',
+      'Ship slice 7',
+      '--project',
+      project,
+      '--json',
+    ],
+    {
+      cwd: root,
+      dataHomePath,
+      environment: { CODECLOSURE_M25_ACCEPTANCE_FIXTURE: 'cleanup-failure' },
+    },
+  );
+  assert.equal(submitted.status, 0, `${submitted.stderr}\n${submitted.stdout}`);
+  assert.equal(submitted.stderr, '');
+  const result = field(parseSingleJsonDocument(submitted.stdout), 'result');
+  assert.equal(field(result, 'kind'), 'OUTCOME');
+  const outcome = field(result, 'outcome');
+  assert.equal(field(field(outcome, 'result'), 'kind'), 'MATERIALIZED');
+  const intakeRunId = field(outcome, 'intakeRunId');
+  assert.equal(typeof intakeRunId, 'string');
+  if (typeof intakeRunId !== 'string') {
+    assert.fail('Cleanup-failure fixture did not retain an IntakeRunId');
+  }
+
+  const status = runCli(['intake', 'status', intakeRunId, '--json'], {
+    cwd: root,
+    dataHomePath,
+    environment: { CODECLOSURE_M25_ACCEPTANCE_FIXTURE: 'exact-source' },
+  });
+  assert.equal(status.status, 0, status.stderr);
+  const view = field(field(parseSingleJsonDocument(status.stdout), 'result'), 'view');
+  assert.equal(field(view, 'status'), 'MATERIALIZED');
+  assert.equal(field(view, 'startDisposition'), 'NOT_AUTHORIZED');
+
+  const reopened = openSqliteControlStore({ filename: join(dataHomePath, 'state.sqlite') });
+  try {
+    const authority = reopened.getIntakeAuthority(parseIntakeRunIdentifier(intakeRunId));
+    if (authority?.materialization === undefined || authority.intakeRun.status !== 'MATERIALIZED') {
+      assert.fail('Cleanup-failure fixture did not retain exact Materialization authority');
+    }
+    assert.equal(authority.proposals.length, 1);
+    assert.equal(authority.materialization.goalId, authority.intakeRun.materializedGoalRef.goalId);
+    assert.equal(authority.startAuthorization, undefined);
+  } finally {
+    reopened.close();
+  }
 });
 
 void test('human status renders exact accepted authority without inventing completion', async (t) => {

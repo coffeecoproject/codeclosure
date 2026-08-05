@@ -36,7 +36,9 @@ bindings during startup reconciliation without resuming a Thread or making an
 assistant call; it does not change Goal-bound Context authority. Slice 6 adds no
 Context schema or compiler authority: automatic execution crosses the existing
 ordinary `StartGoal` boundary, which remains the sole owner of first Context
-and Attempt creation.
+and Attempt creation. Slice 7 transports the existing Intake Package/Manifest
+boundary through a narrow CLI composition and adds no Goal-bound Context source
+or compiler authority.
 Slice 8 adds no Context authority and completed the bounded M2 exit review on
 2026-08-02.
 
@@ -584,7 +586,7 @@ including:
 An in-flight worker may finish, but its result is evaluated against the current
 Attempt and manifest. Stale results cannot advance the workflow.
 
-## Intake Context Boundary — planned M2.5
+## Intake Context Boundary — implemented M2.5
 
 The existing Context contract requires a formal `GoalId`, `GoalRevision`,
 `WorkflowId`, Workflow phase/version, `AttemptId`, Policy binding, Execution
@@ -592,7 +594,7 @@ Profile binding, response contract, and capability grant. Pre-Goal Intake has
 none of those authorities and MUST NOT fabricate them to call the Worker
 Context Compiler.
 
-The planned Intake path instead uses:
+The implemented bounded Intake path instead uses:
 
 ```text
 Raw Request revision + optional current Intent Projection

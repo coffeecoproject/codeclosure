@@ -3208,6 +3208,67 @@ void test('[I-006][I-008][I-009] competing clarification answers retain one revi
   store.close();
 });
 
+void test('[I-006][I-008][I-009] a new Raw Request revision invalidates earlier materialization derivation', (t) => {
+  const filename = temporaryDatabase(t);
+  const base = fixtures('stale-materialization-derivation');
+  const clarify = clarifyFixtures(base, 'stale-materialization-derivation');
+  const answer = clarificationAnswerFixtures(base, clarify, 'stale-materialization-derivation');
+  const store = openStore(filename);
+  t.after(() => store.close());
+  installPolicy(store, 'stale-materialization-derivation', base.policy);
+  persistClarification(store, base, clarify);
+  assert.equal(
+    store.reserveClarificationIntake({
+      rawRequestRevision: answer.revision,
+      answerBinding: answer.answerBinding,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: answer.audits,
+    }).status,
+    'RESERVED',
+  );
+
+  const startAuthority = createWorkflowStartAuthorityRuntime({
+    store,
+    namespace: 'stale-materialization-derivation',
+    clock: Object.freeze({ now: () => LAST }),
+  });
+  const stale = materializationFixtures(
+    { ...base, analyzingRun: answer.analyzingRun, manifest: answer.manifest },
+    startAuthority,
+    'stale-materialization-derivation',
+  );
+  const rejected = store.commitIntakeMaterialization({
+    kind: 'MATERIALIZE',
+    commandId: answer.reservation.commandId,
+    proposal: stale.proposal,
+    projection: stale.projection,
+    ambiguitySet: stale.ambiguitySet,
+    decision: stale.decision,
+    goal: stale.goal,
+    workflow: stale.workflow,
+    materialization: stale.materialization,
+    startAuthorization: stale.startAuthorization,
+    intakeRun: stale.materializedRun,
+    goalAuditEventId: auditEventId('audit_stale-materialization-derivation-goal'),
+    workflowAuditEventId: auditEventId('audit_stale-materialization-derivation-workflow'),
+    goalCreationPayloadDigest: stale.goalCreationPayloadDigest,
+    completedAt: LAST,
+    auditEvents: stale.audits,
+  });
+  assert.equal(rejected.status, 'VERSION_CONFLICT');
+
+  const authority = store.getIntakeAuthority(base.analyzingRun.id);
+  assert.ok(authority);
+  assert.deepEqual(authority.intakeRun, answer.analyzingRun);
+  assert.deepEqual(authority.rawRequestRevisions, [base.revision, answer.revision]);
+  assert.deepEqual(authority.proposals, [clarify.proposal]);
+  assert.equal(authority.materialization, undefined);
+  assert.equal(store.getGoal(stale.goal.id), undefined);
+  assert.equal(store.getWorkflow(stale.workflow.id), undefined);
+});
+
 void test('[I-006][I-008][I-009] explicit abandonment binds the active Question and closes Intake without a new Raw Request revision', (t) => {
   const filename = temporaryDatabase(t);
   const base = fixtures('abandonment');
@@ -4100,6 +4161,53 @@ for (const step of abandonmentFailureSteps) {
     }
   });
 }
+
+void test('[I-008][I-009] the M2.5 compound-write fault registry covers every required authority boundary', () => {
+  assert.deepEqual(clarificationDecisionFailureSteps, [
+    IntakeTransactionStep.AFTER_PROPOSAL_WRITE,
+    IntakeTransactionStep.AFTER_SOURCE_BINDING_WRITE,
+    IntakeTransactionStep.AFTER_PROJECTION_WRITE,
+    IntakeTransactionStep.AFTER_AMBIGUITY_WRITE,
+    IntakeTransactionStep.AFTER_DECISION_WRITE,
+    IntakeTransactionStep.AFTER_QUESTION_WRITE,
+    IntakeTransactionStep.AFTER_RUN_WRITE,
+    IntakeTransactionStep.AFTER_AUDIT_WRITE,
+    IntakeTransactionStep.AFTER_OUTCOME_WRITE,
+    IntakeTransactionStep.BEFORE_COMMIT,
+  ]);
+  assert.deepEqual(clarificationReservationFailureSteps, [
+    IntakeTransactionStep.AFTER_RAW_REQUEST_REVISION_WRITE,
+    IntakeTransactionStep.AFTER_ANSWER_BINDING_WRITE,
+    IntakeTransactionStep.AFTER_RUN_WRITE,
+    IntakeTransactionStep.AFTER_MANIFEST_WRITE,
+    IntakeTransactionStep.AFTER_RESERVATION_WRITE,
+    IntakeTransactionStep.AFTER_AUDIT_WRITE,
+    IntakeTransactionStep.BEFORE_COMMIT,
+  ]);
+  assert.deepEqual(abandonmentFailureSteps, [
+    IntakeTransactionStep.AFTER_RESERVATION_WRITE,
+    IntakeTransactionStep.AFTER_RUN_WRITE,
+    IntakeTransactionStep.AFTER_DECISION_WRITE,
+    IntakeTransactionStep.AFTER_AUDIT_WRITE,
+    IntakeTransactionStep.AFTER_OUTCOME_WRITE,
+    IntakeTransactionStep.BEFORE_COMMIT,
+  ]);
+  assert.deepEqual(materializationFailureSteps, [
+    IntakeTransactionStep.AFTER_PROPOSAL_WRITE,
+    IntakeTransactionStep.AFTER_SOURCE_BINDING_WRITE,
+    IntakeTransactionStep.AFTER_PROJECTION_WRITE,
+    IntakeTransactionStep.AFTER_AMBIGUITY_WRITE,
+    IntakeTransactionStep.AFTER_DECISION_WRITE,
+    IntakeTransactionStep.AFTER_GOAL_WRITE,
+    IntakeTransactionStep.AFTER_WORKFLOW_WRITE,
+    IntakeTransactionStep.AFTER_MATERIALIZATION_WRITE,
+    IntakeTransactionStep.AFTER_START_AUTHORIZATION_WRITE,
+    IntakeTransactionStep.AFTER_RUN_WRITE,
+    IntakeTransactionStep.AFTER_AUDIT_WRITE,
+    IntakeTransactionStep.AFTER_OUTCOME_WRITE,
+    IntakeTransactionStep.BEFORE_COMMIT,
+  ]);
+});
 
 void test('[I-006][I-008][I-009] strict reopen rejects a missing Intake audit relationship', (t) => {
   const filename = temporaryDatabase(t);

@@ -9,6 +9,14 @@ const PRIVILEGED_PACKAGE_ROOTS = new Map([
     'CLI adapters must not import the raw Codex Worker adapter capability.',
   ],
   [
+    '@codeclosure/adapter-codex-intake',
+    'CLI adapters must not import the raw Codex Intake adapter capability.',
+  ],
+  [
+    '@codeclosure/codex-app-server-client/testing',
+    'CLI adapters must not import the Codex App Server fixture-launch capability.',
+  ],
+  [
     '@codeclosure/codex-app-server-client',
     'CLI adapters must not import the raw Codex App Server client capability.',
   ],
@@ -48,13 +56,21 @@ const PUBLIC_ADAPTER_RUNTIME_IMPORTS = new Set([
   'GoalNextSafeAction',
   'GoalReadResult',
   'GoalStatusView',
+  'AbandonIntakeCommand',
+  'ClarifyIntakeCommand',
+  'IntakeAuditView',
+  'IntakeCoordinatorCommandResult',
+  'IntakeStatusView',
   'JsonPrimitive',
   'JsonValue',
   'parseGoalIdentifier',
+  'parseClarificationQuestionIdentifier',
+  'parseIntakeRunIdentifier',
   'ResumeGoalRequest',
   'RuntimeCommandResult',
   'RuntimeErrorCode',
   'StartGoalRequest',
+  'SubmitIntakeCommand',
   'SuccessfulCommandOutput',
   'WorkflowDriveFinalState',
   'WorkflowDriveStopReason',
@@ -108,6 +124,30 @@ const M2_CODEX_CLIENT_IMPORTS = new Set([
   'isJsonObject',
   'startAppServerClient',
   'verifyBundledCodexInstallation',
+]);
+
+const M25_INTAKE_ADAPTER_IMPORTS = new Set([
+  'M25_INTAKE_DISABLED_FEATURES',
+  'M25_INTAKE_PERMISSION_PROFILE_ID',
+  'createCodexIntakeAssistantAdapter',
+]);
+
+const M25_INTAKE_CLIENT_IMPORTS = new Set([
+  'AppServerProcessLaunch',
+  'createControlledAppServerLaunch',
+  'verifyBundledCodexInstallation',
+]);
+
+const M25_INTAKE_FIXTURE_CLIENT_IMPORTS = new Set(['createFixtureAppServerLaunch']);
+
+const M25_INTAKE_DOMAIN_IMPORTS = new Set(['DeclaredProjectRef']);
+
+const M25_INTAKE_RUNTIME_COMPOSITION_IMPORTS = new Set([
+  'CryptographicIdentityGenerator',
+  'SystemUtcClock',
+  'createM1DeterministicPhaseGuardEvaluator',
+  'createRecoveryCoordinator',
+  'createWorkflowDriver',
 ]);
 
 const M2_CODEX_DOMAIN_IMPORTS = new Set([
@@ -177,6 +217,27 @@ const M2_PROOF_VERIFICATION_IMPORTS = new Set([
 
 const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
   [
+    'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
+    new Map([
+      ['@codeclosure/adapter-codex-intake', new Set(['createCodexIntakeAssistantAdapter'])],
+      ['@codeclosure/codex-app-server-client/testing', M25_INTAKE_FIXTURE_CLIENT_IMPORTS],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/intake-assistant-invocation.ts',
+    new Map([
+      ['@codeclosure/adapter-codex-intake', M25_INTAKE_ADAPTER_IMPORTS],
+      ['@codeclosure/codex-app-server-client', M25_INTAKE_CLIENT_IMPORTS],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/trusted-intake-composition.ts',
+    new Map([
+      ['@codeclosure/domain', M25_INTAKE_DOMAIN_IMPORTS],
+      ['@codeclosure/runtime/composition', M25_INTAKE_RUNTIME_COMPOSITION_IMPORTS],
+    ]),
+  ],
+  [
     'apps/cli/src/composition/trusted-composition.ts',
     new Map([['@codeclosure/runtime/composition', TRUSTED_COMPOSITION_RUNTIME_IMPORTS]]),
   ],
@@ -225,6 +286,34 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
 ]);
 
 const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
+  [
+    'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
+    Object.freeze({
+      values: new Set(['createFixtureIntakeAssistant']),
+      types: new Set(),
+    }),
+  ],
+  [
+    'apps/cli/src/composition/intake-assistant-invocation.ts',
+    Object.freeze({
+      values: new Set(['createProductionIntakeAssistant']),
+      types: new Set([
+        'CreateProductionIntakeAssistantOptions',
+        'ProductionIntakeAssistantResource',
+      ]),
+    }),
+  ],
+  [
+    'apps/cli/src/composition/trusted-intake-composition.ts',
+    Object.freeze({
+      values: new Set(['createIntakeCliComposition', 'createIntakeCliInvocationComposition']),
+      types: new Set([
+        'CreateIntakeCliCompositionOptions',
+        'CreateIntakeCliInvocationCompositionOptions',
+        'IntakeCliComposition',
+      ]),
+    }),
+  ],
   [
     'apps/cli/src/composition/trusted-composition.ts',
     Object.freeze({
@@ -404,6 +493,45 @@ const TRUSTED_COMPOSITION_LOCAL_CONSUMERS = new Map([
 ]);
 
 const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
+  [
+    'apps/cli/src/composition/intake-assistant-fixture-invocation.js',
+    new Map([
+      [
+        'apps/cli/src/composition/trusted-intake-composition.ts',
+        new Set(['createFixtureIntakeAssistant']),
+      ],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/trusted-intake-composition.js',
+    new Map([
+      [
+        'apps/cli/src/composition/index.ts',
+        Object.freeze({
+          kind: 'EXPORT_DECLARATION',
+          values: new Set(['createIntakeCliComposition', 'createIntakeCliInvocationComposition']),
+          types: new Set([
+            'CreateIntakeCliCompositionOptions',
+            'CreateIntakeCliInvocationCompositionOptions',
+            'IntakeCliComposition',
+          ]),
+        }),
+      ],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/intake-assistant-invocation.js',
+    new Map([
+      [
+        'apps/cli/src/composition/trusted-intake-composition.ts',
+        new Set(['createProductionIntakeAssistant']),
+      ],
+      [
+        'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
+        new Set(['ProductionIntakeAssistantResource']),
+      ],
+    ]),
+  ],
   ['apps/cli/src/composition/trusted-composition.js', TRUSTED_COMPOSITION_LOCAL_CONSUMERS],
   [
     'apps/cli/src/composition/m1-proof-read-facade.js',
@@ -429,6 +557,10 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
         'apps/cli/src/composition/trusted-composition.ts',
         new Set(['OpenCliSqliteAuthorityOptions', 'openCliSqliteAuthority']),
       ],
+      [
+        'apps/cli/src/composition/trusted-intake-composition.ts',
+        new Set(['OpenCliSqliteAuthorityOptions', 'openCliSqliteAuthority']),
+      ],
     ]),
   ],
   [
@@ -441,6 +573,10 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
           'installM1RuntimeProfiles',
           'parseM1RuntimeProfileName',
         ]),
+      ],
+      [
+        'apps/cli/src/composition/trusted-intake-composition.ts',
+        new Set(['installM1RuntimeProfiles', 'parseM1RuntimeProfileName']),
       ],
     ]),
   ],
@@ -504,12 +640,24 @@ const GENERAL_EXTERNAL_MODULES = new Set(['zod']);
 const CLI_ENTRY_COMPOSITION_IMPORTS = new Set([
   'createCliCommandId',
   'createCliInvocationComposition',
+  'createIntakeCliInvocationComposition',
   'runM1DemoProof',
   'runDemoProof',
   'validateCliStartProfileName',
 ]);
 
 const TRUSTED_COMPOSITION_ROOT_EXPORTS = new Map([
+  [
+    './trusted-intake-composition.js',
+    Object.freeze({
+      values: new Set(['createIntakeCliComposition', 'createIntakeCliInvocationComposition']),
+      types: new Set([
+        'CreateIntakeCliCompositionOptions',
+        'CreateIntakeCliInvocationCompositionOptions',
+        'IntakeCliComposition',
+      ]),
+    }),
+  ],
   [
     './m1-stale-closeout-proof.js',
     Object.freeze({
@@ -552,6 +700,14 @@ const NODE_BUILTIN_MODULES_BY_ZONE = new Map([
 ]);
 
 const NODE_BUILTIN_MODULES_BY_FILE = new Map([
+  [
+    'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
+    new Set(['node:crypto', 'node:fs', 'node:os', 'node:path']),
+  ],
+  [
+    'apps/cli/src/composition/intake-assistant-invocation.ts',
+    new Set(['node:crypto', 'node:fs', 'node:os', 'node:path']),
+  ],
   ['apps/cli/src/composition/data-home.ts', new Set(['node:fs'])],
   ['apps/cli/src/composition/m1-demo-proof.ts', new Set(['node:fs', 'node:os'])],
   ['apps/cli/src/composition/m1-profile-demo-proof.ts', new Set(['node:fs', 'node:os'])],

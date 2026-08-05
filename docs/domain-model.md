@@ -73,7 +73,9 @@ Slice 6 implements the already-defined Goal Materialization and Goal Start
 Authorization records without adding another aggregate or completion issuer.
 Its Runtime composition creates Goal revision 1 and the initial Workflow
 atomically, then submits only the preallocated ordinary `StartGoal` in a
-separate transaction. CLI behavior remains planned for Slice 7.
+separate transaction. Slice 7 adds no Domain authority shape: its CLI consumes
+public Runtime result/view unions, parses public branded identifiers, and keeps
+the three Answer, Materialization, and Start dispositions separate.
 
 ## Design Rules
 
@@ -145,7 +147,7 @@ The M2.5 Slice 1 Intake Domain boundary adds distinct `RawRequestId`,
 interchanged with Goal, Workflow, Attempt, Worker, Command, or Acceptance
 identity.
 
-## Pre-Goal Intake — Domain contracts and behavior implemented through Slice 6
+## Pre-Goal Intake — Domain contracts and behavior implemented through Slice 7
 
 Goal Intake records the path from user input to source-bound admitted formal
 intent without creating Workflow authority early. Its minimal record

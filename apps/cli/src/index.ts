@@ -17,8 +17,16 @@ import { executeGoalResume } from './commands/goal-resume.js';
 import { executeGoalStart } from './commands/goal-start.js';
 import { executeGoalStatus } from './commands/goal-status.js';
 import {
+  executeIntakeAbandon,
+  executeIntakeAudit,
+  executeIntakeClarify,
+  executeIntakeStatus,
+  executeIntakeSubmit,
+} from './commands/intake.js';
+import {
   createCliCommandId,
   createCliInvocationComposition,
+  createIntakeCliInvocationComposition,
   runDemoProof,
   validateCliStartProfileName,
 } from './composition/index.js';
@@ -50,6 +58,90 @@ async function runCli(args: readonly string[]): Promise<number> {
     const invocation = parseCliInvocation(args);
     json = invocation.json;
     switch (invocation.operation) {
+      case 'intake submit': {
+        const projectPath =
+          invocation.projectOperand === undefined
+            ? undefined
+            : resolveCliProjectPath(invocation.projectOperand, process.cwd());
+        const composition = createIntakeCliInvocationComposition({
+          platform: process.platform,
+          environment: process.env,
+          ...(projectPath === undefined ? {} : { projectPath }),
+        });
+        try {
+          envelope = await executeIntakeSubmit({
+            application: composition.application,
+            commandId: createCliCommandId(),
+            invocation,
+            ...(projectPath === undefined ? {} : { projectPath }),
+          });
+        } finally {
+          composition.close();
+        }
+        break;
+      }
+      case 'intake clarify': {
+        const projectPath =
+          invocation.projectOperand === undefined
+            ? undefined
+            : resolveCliProjectPath(invocation.projectOperand, process.cwd());
+        const composition = createIntakeCliInvocationComposition({
+          platform: process.platform,
+          environment: process.env,
+          ...(projectPath === undefined ? {} : { projectPath }),
+        });
+        try {
+          envelope = await executeIntakeClarify({
+            application: composition.application,
+            commandId: createCliCommandId(),
+            invocation,
+            ...(projectPath === undefined ? {} : { projectPath }),
+          });
+        } finally {
+          composition.close();
+        }
+        break;
+      }
+      case 'intake abandon': {
+        const composition = createIntakeCliInvocationComposition({
+          platform: process.platform,
+          environment: process.env,
+        });
+        try {
+          envelope = executeIntakeAbandon({
+            application: composition.application,
+            commandId: createCliCommandId(),
+            invocation,
+          });
+        } finally {
+          composition.close();
+        }
+        break;
+      }
+      case 'intake status': {
+        const composition = createIntakeCliInvocationComposition({
+          platform: process.platform,
+          environment: process.env,
+        });
+        try {
+          envelope = executeIntakeStatus(composition.application, invocation.intakeRunId);
+        } finally {
+          composition.close();
+        }
+        break;
+      }
+      case 'intake audit': {
+        const composition = createIntakeCliInvocationComposition({
+          platform: process.platform,
+          environment: process.env,
+        });
+        try {
+          envelope = executeIntakeAudit(composition.application, invocation.intakeRunId);
+        } finally {
+          composition.close();
+        }
+        break;
+      }
       case 'goal create': {
         const projectPath = resolveCliProjectPath(invocation.projectOperand, process.cwd());
         const composition = createCliInvocationComposition({

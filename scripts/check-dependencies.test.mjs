@@ -108,6 +108,7 @@ void test('the current manifest, lockfile, and actual source dependency graph ar
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/cli'), [
     '@codeclosure/adapter-codex',
+    '@codeclosure/adapter-codex-intake',
     '@codeclosure/codex-app-server-client',
     '@codeclosure/domain',
     '@codeclosure/runtime',

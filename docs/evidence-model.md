@@ -33,7 +33,10 @@ into Evidence or Acceptance authority. Slice 5 implements bounded Answer-only
 and failure/restart results without making either an Evidence or Acceptance
 input. Slice 6 adds no Evidence kind or eligibility path; Materialization
 creates no Candidate, Evidence, or Acceptance authority, and any post-Start
-evidence still follows the existing Workflow and Acceptance boundaries.
+evidence still follows the existing Workflow and Acceptance boundaries. Slice
+7 status/audit rendering and assessment artifacts remain projections and test
+evidence only; neither can create an `EvidenceRecord`, satisfy a Criterion, or
+issue technical `ACCEPT`.
 
 ## Purpose
 
@@ -442,7 +445,7 @@ not make the review authoritative.
 - cleanup unproven -> evidence cannot satisfy isolation-dependent obligations;
 - required payload missing -> fail closed.
 
-## Intake Observation Boundary — planned M2.5
+## Intake Observation Boundary — implemented M2.5
 
 An Intake Assistant or optional read-only project explorer may return a bounded
 observation to help produce an Intent Projection or Clarification Question. An

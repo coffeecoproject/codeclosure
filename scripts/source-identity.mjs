@@ -56,6 +56,7 @@ for (const path of paths) {
 
 const status = git(['status', '--porcelain=v1']);
 log(`Base Git revision: ${git(['rev-parse', 'HEAD']).trim()}`);
+log(`Git branch: ${git(['branch', '--show-current']).trim() || 'DETACHED'}`);
 log(`Working tree state: ${status.length === 0 ? 'clean' : 'modified'}`);
 log(`Source manifest schema: codeclosure-source-manifest-v1`);
 log(`Source manifest paths: ${paths.length}`);

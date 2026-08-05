@@ -74,8 +74,47 @@ function drivenCommandExit(
   }
 }
 
+function intakeCommandExit(
+  envelope: Extract<CliEnvelope, { readonly kind: 'INTAKE_COMMAND_RESULT' }>,
+): CliExitCodeType {
+  const result = envelope.result;
+  switch (result.kind) {
+    case 'CONTENT_REJECTED':
+    case 'NOT_FOUND':
+    case 'COMMAND_CONFLICT':
+    case 'VERSION_CONFLICT':
+      return CliExitCode.REJECTED;
+    case 'IN_PROGRESS':
+      return CliExitCode.GOVERNED_STOP;
+    case 'OUTCOME': {
+      if (result.outcome.result.kind === 'REJECTED') {
+        return CliExitCode.REJECTED;
+      }
+      if (result.outcome.result.kind === 'FAILED') {
+        return CliExitCode.GOVERNED_STOP;
+      }
+      switch (result.startDisposition) {
+        case 'START_COMMAND_REJECTED':
+          return CliExitCode.REJECTED;
+        case 'READY_PENDING_START':
+          return CliExitCode.GOVERNED_STOP;
+        case 'START_INFRASTRUCTURE_FAILURE':
+          return CliExitCode.INTERNAL;
+        case 'NOT_AUTHORIZED':
+        case 'START_COMMAND_APPLIED':
+          return CliExitCode.SUCCESS;
+      }
+    }
+  }
+}
+
 export function exitCodeForCliEnvelope(envelope: CliEnvelope): CliExitCodeType {
   switch (envelope.kind) {
+    case 'INTAKE_COMMAND_RESULT':
+      return intakeCommandExit(envelope);
+    case 'INTAKE_STATUS':
+    case 'INTAKE_AUDIT':
+      return envelope.result.status === 'FOUND' ? CliExitCode.SUCCESS : CliExitCode.REJECTED;
     case 'COMMAND_RESULT':
       return envelope.result.output.ok
         ? CliExitCode.SUCCESS
@@ -98,6 +137,161 @@ export function exitCodeForCliEnvelope(envelope: CliEnvelope): CliExitCodeType {
           return CliExitCode.INTERNAL;
       }
   }
+}
+
+function renderIntakeCommand(
+  envelope: Extract<CliEnvelope, { readonly kind: 'INTAKE_COMMAND_RESULT' }>,
+): string {
+  const result = envelope.result;
+  const lines = [`Operation: ${envelope.operation}`];
+  switch (result.kind) {
+    case 'CONTENT_REJECTED':
+      lines.push(
+        'Result: content rejected',
+        `Reason: ${result.reasonCode}`,
+        `Observed bytes: ${String(result.observedByteCount)}`,
+        `Rejection digest: ${result.rejectionDigest}`,
+      );
+      break;
+    case 'NOT_FOUND':
+      lines.push('Result: not found', `Intake run: ${result.intakeRunId}`);
+      break;
+    case 'COMMAND_CONFLICT':
+    case 'VERSION_CONFLICT':
+      lines.push(
+        `Result: ${result.kind.toLowerCase().replace('_', ' ')}`,
+        `Message: ${result.message}`,
+      );
+      break;
+    case 'IN_PROGRESS':
+      lines.push(
+        'Result: in progress',
+        `Intake run: ${result.intakeRunId}`,
+        `Intake version: ${String(result.intakeRunVersion)}`,
+        `Operation kind: ${result.operationKind}`,
+      );
+      break;
+    case 'OUTCOME': {
+      const stored = result.outcome.result;
+      lines.push(
+        `Result: ${stored.kind.toLowerCase().replaceAll('_', ' ')}`,
+        `Command disposition: ${result.outcome.disposition}`,
+        `Intake run: ${result.outcome.intakeRunId}`,
+        `Intake version: ${String(result.outcome.observedIntakeRunVersion)}`,
+        `Replay: ${result.replayed ? 'yes' : 'no'}`,
+        `Start disposition: ${result.startDisposition}`,
+      );
+      if ('answerDisposition' in stored) {
+        lines.push(`Answer disposition: ${stored.answerDisposition}`);
+      }
+      if ('materializationDisposition' in stored) {
+        lines.push(`Materialization disposition: ${stored.materializationDisposition}`);
+      }
+      if (result.answerOnlyContent !== undefined) {
+        lines.push(`Answer: ${result.answerOnlyContent}`);
+      }
+      break;
+    }
+  }
+  return lines.join('\n');
+}
+
+function renderIntakeStatus(
+  envelope: Extract<CliEnvelope, { readonly kind: 'INTAKE_STATUS' }>,
+): string {
+  if (envelope.result.status === 'NOT_FOUND') {
+    return `Intake run not found: ${envelope.result.intakeRunId}`;
+  }
+  const view = envelope.result.view;
+  const lines = [
+    `Intake run: ${view.intakeRunId}`,
+    `Intake version: ${String(view.intakeRunVersion)}`,
+    `Status: ${view.status}`,
+  ];
+  if (view.status === 'NEEDS_CLARIFICATION') {
+    lines.push(
+      `Question: ${view.activeQuestion.id}`,
+      `Question spec digest: ${view.activeQuestion.questionSpecDigest}`,
+      `Question digest: ${view.activeQuestion.questionDigest}`,
+      `Issuing decision: ${view.activeQuestion.issuingDecisionId}`,
+      `Issuing decision digest: ${view.activeQuestion.issuingDecisionDigest}`,
+      `Prompt: ${view.activeQuestion.prompt}`,
+      `Affected fields: ${view.activeQuestion.affectedFields.join(', ')}`,
+      `Answer schema: ${view.activeQuestion.answerSchema.kind}`,
+    );
+  } else if (view.status === 'NO_EXECUTION') {
+    lines.push(`Reason: ${view.reasonCode}`);
+    if (view.answerOnlyResponse !== undefined) {
+      lines.push(
+        `Answer response: ${view.answerOnlyResponse.id}`,
+        `Answer response digest: ${view.answerOnlyResponse.digest}`,
+        `Answer response kind: ${view.answerOnlyResponse.kind}`,
+      );
+    }
+  } else if (view.status === 'MATERIALIZED') {
+    lines.push(
+      `Goal: ${view.materializedGoalRef.goalId}`,
+      `Goal revision: ${String(view.materializedGoalRef.goalRevision)}`,
+      `Workflow: ${view.materializedGoalRef.workflowId}`,
+      `Materialization: ${view.materializedGoalRef.goalMaterializationId}`,
+      `Materialization digest: ${view.materializedGoalRef.materializationDigest}`,
+      `Start disposition: ${view.startDisposition}`,
+    );
+  } else if (view.status === 'FAILED') {
+    lines.push(
+      `Failure: ${view.failure.id}`,
+      `Failure digest: ${view.failure.digest}`,
+      `Failed operation: ${view.failure.failedOperation}`,
+      `Reason: ${view.failure.reasonCode}`,
+      `Retry disposition: ${view.failure.retryDisposition}`,
+    );
+  } else if (view.operationKind !== undefined) {
+    lines.push(`Operation kind: ${view.operationKind}`);
+  }
+  return lines.join('\n');
+}
+
+function renderIntakeAudit(
+  envelope: Extract<CliEnvelope, { readonly kind: 'INTAKE_AUDIT' }>,
+): string {
+  if (envelope.result.status === 'NOT_FOUND') {
+    return `Intake run not found: ${envelope.result.intakeRunId}`;
+  }
+  const view = envelope.result.view;
+  const lines = [
+    `Intake audit: ${view.intakeRunId}`,
+    `Event count: ${String(view.events.length)}`,
+    `Question count: ${String(view.questionHistory.length)}`,
+  ];
+  for (const event of view.events) {
+    lines.push(
+      `[${String(event.sequence)}] ${event.occurredAt} ${event.eventType}`,
+      `  Payload digest: ${event.payloadDigest}`,
+    );
+    if (event.commandId !== undefined) {
+      lines.push(`  Command: ${event.commandId}`);
+    }
+  }
+  for (const question of view.questionHistory) {
+    lines.push(
+      `Question: ${question.id}`,
+      `  Question spec digest: ${question.questionSpecDigest}`,
+      `  Question digest: ${question.questionDigest}`,
+      `  Issuing decision: ${question.issuingDecisionId}`,
+      `  Issuing decision digest: ${question.issuingDecisionDigest}`,
+      `  Answer schema: ${question.answerSchema.kind}`,
+    );
+    if (question.answerBinding !== undefined) {
+      lines.push(
+        `  Answer binding: ${question.answerBinding.id}`,
+        `  Answer binding digest: ${question.answerBinding.digest}`,
+        `  Answer command: ${question.answerBinding.commandId}`,
+        `  Raw request: ${question.answerBinding.rawRequestId}@${String(question.answerBinding.rawRequestRevision)}`,
+        `  Raw request digest: ${question.answerBinding.rawRequestDigest}`,
+      );
+    }
+  }
+  return lines.join('\n');
 }
 
 function renderRuntimeCommand(operation: string, result: RuntimeCommandResult): string[] {
@@ -391,6 +585,12 @@ function renderDemoResult(
 
 export function renderCliEnvelopeHuman(envelope: CliEnvelope): string {
   switch (envelope.kind) {
+    case 'INTAKE_COMMAND_RESULT':
+      return `${renderIntakeCommand(envelope)}\n`;
+    case 'INTAKE_STATUS':
+      return `${renderIntakeStatus(envelope)}\n`;
+    case 'INTAKE_AUDIT':
+      return `${renderIntakeAudit(envelope)}\n`;
     case 'COMMAND_RESULT':
       return `${renderCommand(envelope)}\n`;
     case 'DRIVEN_COMMAND_RESULT':

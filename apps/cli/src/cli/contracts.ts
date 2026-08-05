@@ -4,6 +4,9 @@ import type {
   GoalAuditView,
   GoalReadResult,
   GoalStatusView,
+  IntakeAuditView,
+  IntakeCoordinatorCommandResult,
+  IntakeStatusView,
   RuntimeCommandResult,
   WorkflowDriveSummary,
 } from '@codeclosure/runtime';
@@ -79,6 +82,11 @@ export interface CliRuntimeStopDiagnostic {
 }
 
 export const CliOperation = {
+  INTAKE_SUBMIT: 'intake submit',
+  INTAKE_CLARIFY: 'intake clarify',
+  INTAKE_ABANDON: 'intake abandon',
+  INTAKE_STATUS: 'intake status',
+  INTAKE_AUDIT: 'intake audit',
   GOAL_CREATE: 'goal create',
   GOAL_START: 'goal start',
   GOAL_STATUS: 'goal status',
@@ -88,6 +96,13 @@ export const CliOperation = {
   DEMO_RUN: 'demo run',
 } as const;
 export type CliOperation = (typeof CliOperation)[keyof typeof CliOperation];
+
+export const CliIntakeAction = {
+  ANSWER_ONLY: 'answer-only',
+  MATERIALIZE_ONLY: 'materialize-only',
+  GOVERNED_EXECUTION: 'governed-execution',
+} as const;
+export type CliIntakeAction = (typeof CliIntakeAction)[keyof typeof CliIntakeAction];
 
 export const CliDemoScenario = {
   HAPPY_PATH: 'happy-path',
@@ -135,6 +150,34 @@ export interface CliCommandResultEnvelope {
   readonly kind: 'COMMAND_RESULT';
   readonly operation: typeof CliOperation.GOAL_CREATE;
   readonly result: RuntimeCommandResult;
+}
+
+export interface CliIntakeCommandResultEnvelope {
+  readonly schemaVersion: 1;
+  readonly kind: 'INTAKE_COMMAND_RESULT';
+  readonly operation:
+    | typeof CliOperation.INTAKE_SUBMIT
+    | typeof CliOperation.INTAKE_CLARIFY
+    | typeof CliOperation.INTAKE_ABANDON;
+  readonly result: IntakeCoordinatorCommandResult;
+}
+
+export type CliIntakeReadResult<View> =
+  | Readonly<{ status: 'FOUND'; view: View }>
+  | Readonly<{ status: 'NOT_FOUND'; intakeRunId: string }>;
+
+export interface CliIntakeStatusEnvelope {
+  readonly schemaVersion: 1;
+  readonly kind: 'INTAKE_STATUS';
+  readonly operation: typeof CliOperation.INTAKE_STATUS;
+  readonly result: CliIntakeReadResult<IntakeStatusView>;
+}
+
+export interface CliIntakeAuditEnvelope {
+  readonly schemaVersion: 1;
+  readonly kind: 'INTAKE_AUDIT';
+  readonly operation: typeof CliOperation.INTAKE_AUDIT;
+  readonly result: CliIntakeReadResult<IntakeAuditView>;
 }
 
 export interface CliGoalStatusEnvelope {
@@ -442,6 +485,9 @@ export interface CliErrorEnvelope {
 }
 
 export type CliEnvelope =
+  | CliIntakeCommandResultEnvelope
+  | CliIntakeStatusEnvelope
+  | CliIntakeAuditEnvelope
   | CliCommandResultEnvelope
   | CliDrivenCommandResultEnvelope
   | CliCancelCommandResultEnvelope

@@ -524,6 +524,7 @@ function runScopeReview() {
       {
         agents: read('AGENTS.md'),
         readme: read('README.md'),
+        m2CompletionReview: read('docs/reviews/m2-completion-review.md'),
         architecture: read('ARCHITECTURE.md'),
         domainModel: read('docs/domain-model.md'),
         workflow: read('docs/workflow.md'),

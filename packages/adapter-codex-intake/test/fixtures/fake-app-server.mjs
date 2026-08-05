@@ -120,6 +120,34 @@ function finalText(message) {
   if (scenario === 'oversized-wire') {
     return JSON.stringify({ answerContent: 'x'.repeat(131_073) });
   }
+  if (
+    !answerOnly &&
+    (scenario === 'cli-exact-source' || scenario === 'cli-unsupported-assumption')
+  ) {
+    return JSON.stringify({
+      proposedObjective: 'Ship slice 7',
+      proposedCriteria: ['Ship slice 7'],
+      proposedNonGoals: [],
+      proposedAssumptions:
+        scenario === 'cli-unsupported-assumption' ? ['Confirm bounded risk'] : [],
+      proposedQuestions: [],
+      candidateSourceSpanSuggestions: [
+        {
+          projectionFieldRef: 'OBJECTIVE',
+          rawRequestRevision: 1,
+          startByte: 0,
+          endByte: 12,
+        },
+        {
+          projectionFieldRef: 'REQUIRED_CRITERION',
+          itemIndex: 0,
+          rawRequestRevision: 1,
+          startByte: 0,
+          endByte: 12,
+        },
+      ],
+    });
+  }
   return answerOnly
     ? JSON.stringify({ answerContent: 'This is a bounded non-authoritative answer.' })
     : JSON.stringify({

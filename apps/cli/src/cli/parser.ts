@@ -1,9 +1,45 @@
 import { parseArgs } from 'node:util';
 
-import { parseGoalIdentifier } from '@codeclosure/runtime';
+import {
+  parseClarificationQuestionIdentifier,
+  parseGoalIdentifier,
+  parseIntakeRunIdentifier,
+} from '@codeclosure/runtime';
 import { z } from 'zod';
 
-import { CliDemoScenario, CliOperation } from './contracts.js';
+import { CliDemoScenario, CliIntakeAction, CliOperation } from './contracts.js';
+
+export interface IntakeSubmitInvocation {
+  readonly operation: typeof CliOperation.INTAKE_SUBMIT;
+  readonly action: CliIntakeAction;
+  readonly request: string;
+  readonly projectOperand?: string;
+  readonly constraints: readonly string[];
+  readonly json: boolean;
+}
+
+export interface IntakeClarifyInvocation {
+  readonly operation: typeof CliOperation.INTAKE_CLARIFY;
+  readonly intakeRunId: ReturnType<typeof parseIntakeRunIdentifier>;
+  readonly questionId: ReturnType<typeof parseClarificationQuestionIdentifier>;
+  readonly expectedVersion: number;
+  readonly answer: string;
+  readonly projectOperand?: string;
+  readonly json: boolean;
+}
+
+export interface IntakeAbandonInvocation {
+  readonly operation: typeof CliOperation.INTAKE_ABANDON;
+  readonly intakeRunId: ReturnType<typeof parseIntakeRunIdentifier>;
+  readonly expectedVersion: number;
+  readonly json: boolean;
+}
+
+export interface IntakeReadInvocation {
+  readonly operation: typeof CliOperation.INTAKE_STATUS | typeof CliOperation.INTAKE_AUDIT;
+  readonly intakeRunId: ReturnType<typeof parseIntakeRunIdentifier>;
+  readonly json: boolean;
+}
 
 export interface GoalCreateInvocation {
   readonly operation: typeof CliOperation.GOAL_CREATE;
@@ -51,6 +87,10 @@ export interface DemoRunInvocation {
 }
 
 export type CliInvocation =
+  | IntakeSubmitInvocation
+  | IntakeClarifyInvocation
+  | IntakeAbandonInvocation
+  | IntakeReadInvocation
   | GoalCreateInvocation
   | GoalStartInvocation
   | GoalStatusInvocation
@@ -74,7 +114,20 @@ const RESUME_USAGE = 'Usage: codeclosure goal resume <goal-id> [--json]';
 const CANCEL_USAGE = 'Usage: codeclosure goal cancel <goal-id> [--json]';
 const AUDIT_USAGE = 'Usage: codeclosure audit show <goal-id> [--json]';
 const DEMO_USAGE = 'Usage: codeclosure demo run <scenario> [--json]';
+const INTAKE_SUBMIT_USAGE =
+  'Usage: codeclosure intake submit --action <answer-only|materialize-only|governed-execution> --request <text> [--project <path>] [--constraint <text> ...] [--json]';
+const INTAKE_CLARIFY_USAGE =
+  'Usage: codeclosure intake clarify <intake-run-id> --question-id <clarification-question-id> --expected-version <number> --answer <text> [--project <path>] [--json]';
+const INTAKE_ABANDON_USAGE =
+  'Usage: codeclosure intake abandon <intake-run-id> --expected-version <number> [--json]';
+const INTAKE_STATUS_USAGE = 'Usage: codeclosure intake status <intake-run-id> [--json]';
+const INTAKE_AUDIT_USAGE = 'Usage: codeclosure intake audit <intake-run-id> [--json]';
 const ROOT_USAGE = [
+  INTAKE_SUBMIT_USAGE,
+  INTAKE_CLARIFY_USAGE,
+  INTAKE_ABANDON_USAGE,
+  INTAKE_STATUS_USAGE,
+  INTAKE_AUDIT_USAGE,
   CREATE_USAGE,
   START_USAGE,
   STATUS_USAGE,
@@ -112,6 +165,211 @@ const demoOperandsSchema = z
     json: z.boolean(),
   })
   .strict();
+
+const exactNonBlankStringSchema = z
+  .string()
+  .refine((value) => value.trim().length > 0, 'value must contain non-whitespace content');
+
+const intakeSubmitOperandsSchema = z
+  .object({
+    action: z.enum(CliIntakeAction),
+    request: exactNonBlankStringSchema,
+    projectOperand: z
+      .string()
+      .refine((value) => value.trim().length > 0)
+      .optional(),
+    constraints: z.array(exactNonBlankStringSchema),
+    json: z.boolean(),
+  })
+  .strict();
+
+const intakeClarifyOperandsSchema = z
+  .object({
+    intakeRunId: exactNonBlankStringSchema,
+    questionId: exactNonBlankStringSchema,
+    expectedVersion: z.coerce.number().int().positive(),
+    answer: exactNonBlankStringSchema,
+    projectOperand: z
+      .string()
+      .refine((value) => value.trim().length > 0)
+      .optional(),
+    json: z.boolean(),
+  })
+  .strict();
+
+const intakeAbandonOperandsSchema = z
+  .object({
+    intakeRunId: exactNonBlankStringSchema,
+    expectedVersion: z.coerce.number().int().positive(),
+    json: z.boolean(),
+  })
+  .strict();
+
+function parseIntakeSubmit(args: readonly string[]): IntakeSubmitInvocation {
+  for (const option of ['action', 'request', 'project', 'json']) {
+    requireSingleOption(args, option, INTAKE_SUBMIT_USAGE);
+  }
+  try {
+    const parsed = parseArgs({
+      args,
+      allowPositionals: false,
+      strict: true,
+      options: {
+        action: { type: 'string' },
+        request: { type: 'string' },
+        project: { type: 'string' },
+        constraint: { type: 'string', multiple: true },
+        json: { type: 'boolean', default: false },
+      },
+    });
+    const operands = intakeSubmitOperandsSchema.parse({
+      action: parsed.values.action,
+      request: parsed.values.request,
+      projectOperand: parsed.values.project,
+      constraints: parsed.values.constraint ?? [],
+      json: parsed.values.json,
+    });
+    return Object.freeze({
+      operation: CliOperation.INTAKE_SUBMIT,
+      action: operands.action,
+      request: operands.request,
+      ...(operands.projectOperand === undefined ? {} : { projectOperand: operands.projectOperand }),
+      constraints: Object.freeze(operands.constraints),
+      json: operands.json,
+    });
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      throw error;
+    }
+    throw new CliUsageError(
+      `${error instanceof Error ? error.message : 'Invalid intake submit arguments'}\n${INTAKE_SUBMIT_USAGE}`,
+      { cause: error },
+    );
+  }
+}
+
+function parseIntakeClarify(args: readonly string[]): IntakeClarifyInvocation {
+  for (const option of ['question-id', 'expected-version', 'answer', 'project', 'json']) {
+    requireSingleOption(args, option, INTAKE_CLARIFY_USAGE);
+  }
+  try {
+    const parsed = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        'question-id': { type: 'string' },
+        'expected-version': { type: 'string' },
+        answer: { type: 'string' },
+        project: { type: 'string' },
+        json: { type: 'boolean', default: false },
+      },
+    });
+    if (parsed.positionals.length !== 1) {
+      throw new CliUsageError(
+        `Intake clarify requires exactly one IntakeRunId.\n${INTAKE_CLARIFY_USAGE}`,
+      );
+    }
+    const operands = intakeClarifyOperandsSchema.parse({
+      intakeRunId: parsed.positionals[0],
+      questionId: parsed.values['question-id'],
+      expectedVersion: parsed.values['expected-version'],
+      answer: parsed.values.answer,
+      projectOperand: parsed.values.project,
+      json: parsed.values.json,
+    });
+    return Object.freeze({
+      operation: CliOperation.INTAKE_CLARIFY,
+      intakeRunId: parseIntakeRunIdentifier(operands.intakeRunId),
+      questionId: parseClarificationQuestionIdentifier(operands.questionId),
+      expectedVersion: operands.expectedVersion,
+      answer: operands.answer,
+      ...(operands.projectOperand === undefined ? {} : { projectOperand: operands.projectOperand }),
+      json: operands.json,
+    });
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      throw error;
+    }
+    throw new CliUsageError(
+      `${error instanceof Error ? error.message : 'Invalid intake clarify arguments'}\n${INTAKE_CLARIFY_USAGE}`,
+      { cause: error },
+    );
+  }
+}
+
+function parseIntakeAbandon(args: readonly string[]): IntakeAbandonInvocation {
+  for (const option of ['expected-version', 'json']) {
+    requireSingleOption(args, option, INTAKE_ABANDON_USAGE);
+  }
+  try {
+    const parsed = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        'expected-version': { type: 'string' },
+        json: { type: 'boolean', default: false },
+      },
+    });
+    if (parsed.positionals.length !== 1) {
+      throw new CliUsageError(
+        `Intake abandon requires exactly one IntakeRunId.\n${INTAKE_ABANDON_USAGE}`,
+      );
+    }
+    const operands = intakeAbandonOperandsSchema.parse({
+      intakeRunId: parsed.positionals[0],
+      expectedVersion: parsed.values['expected-version'],
+      json: parsed.values.json,
+    });
+    return Object.freeze({
+      operation: CliOperation.INTAKE_ABANDON,
+      intakeRunId: parseIntakeRunIdentifier(operands.intakeRunId),
+      expectedVersion: operands.expectedVersion,
+      json: operands.json,
+    });
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      throw error;
+    }
+    throw new CliUsageError(
+      `${error instanceof Error ? error.message : 'Invalid intake abandon arguments'}\n${INTAKE_ABANDON_USAGE}`,
+      { cause: error },
+    );
+  }
+}
+
+function parseIntakeRead(
+  args: readonly string[],
+  operation: typeof CliOperation.INTAKE_STATUS | typeof CliOperation.INTAKE_AUDIT,
+  usage: string,
+): IntakeReadInvocation {
+  requireSingleOption(args, 'json', usage);
+  try {
+    const parsed = parseArgs({
+      args,
+      allowPositionals: true,
+      strict: true,
+      options: { json: { type: 'boolean', default: false } },
+    });
+    if (parsed.positionals.length !== 1) {
+      throw new CliUsageError(`Command requires exactly one IntakeRunId.\n${usage}`);
+    }
+    return Object.freeze({
+      operation,
+      intakeRunId: parseIntakeRunIdentifier(parsed.positionals[0] ?? ''),
+      json: parsed.values.json,
+    });
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      throw error;
+    }
+    throw new CliUsageError(
+      `${error instanceof Error ? error.message : 'Invalid Intake read arguments'}\n${usage}`,
+      { cause: error },
+    );
+  }
+}
 
 function countOption(args: readonly string[], option: string): number {
   const exact = `--${option}`;
@@ -308,6 +566,21 @@ export function wantsJsonOutput(args: readonly string[]): boolean {
 
 export function parseCliInvocation(args: readonly string[]): CliInvocation {
   const [group, action, ...remaining] = args;
+  if (group === 'intake' && action === 'submit') {
+    return parseIntakeSubmit(remaining);
+  }
+  if (group === 'intake' && action === 'clarify') {
+    return parseIntakeClarify(remaining);
+  }
+  if (group === 'intake' && action === 'abandon') {
+    return parseIntakeAbandon(remaining);
+  }
+  if (group === 'intake' && action === 'status') {
+    return parseIntakeRead(remaining, CliOperation.INTAKE_STATUS, INTAKE_STATUS_USAGE);
+  }
+  if (group === 'intake' && action === 'audit') {
+    return parseIntakeRead(remaining, CliOperation.INTAKE_AUDIT, INTAKE_AUDIT_USAGE);
+  }
   if (group === 'goal' && action === 'create') {
     return parseCreate(remaining);
   }

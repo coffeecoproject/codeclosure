@@ -44,6 +44,9 @@ importers:
       '@codeclosure/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapter-codex
+      '@codeclosure/adapter-codex-intake':
+        specifier: workspace:*
+        version: link:../../packages/adapter-codex-intake
       '@codeclosure/codex-app-server-client':
         specifier: workspace:*
         version: link:../../packages/codex-app-server-client

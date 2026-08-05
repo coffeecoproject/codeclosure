@@ -105,6 +105,16 @@ export const M25_LOCAL_PRINCIPAL_ID = 'principal_local-user' as PrincipalId;
 export const M25_LOCAL_RETENTION_PROFILE_ID = 'intake-retention_codeclosure-m2-5-local';
 export const M25_LOCAL_RETENTION_PROFILE_VERSION = 'codeclosure-m2-5-local-retention-v1';
 
+/** Strict public-adapter parser for the Intake Run identity accepted by CLI commands. */
+export function parseIntakeRunIdentifier(value: string): IntakeRunId {
+  return intakeRunId(value);
+}
+
+/** Strict public-adapter parser for the current clarification Question identity. */
+export function parseClarificationQuestionIdentifier(value: string): ClarificationQuestionId {
+  return clarificationQuestionId(value);
+}
+
 export interface IntakeCoordinatorIdentityGenerator
   extends IntentProjectionIdentityGenerator, IntakeMaterializationIdentityGenerator {
   nextRawRequestId(): RawRequestId;

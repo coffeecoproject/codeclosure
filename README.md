@@ -15,16 +15,19 @@ The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
 M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
-green on one source identity. M2.5 Goal Intake remains unimplemented as an
-end-to-end operational loop. This does not prove Goal Intake or product
+green on one source identity. The bounded M2.5 Goal Intake implementation
+deliverables are now present, including its explicit-action CLI, strict-reopen
+views, deterministic real-adapter fixtures, and fail-closed executable
+assessment harness. This does not prove the M2.5 milestone or product
 completion. It does not authorize merge, release, deploy, or any other external
 effect. Its Domain, Policy, SQLite, package, isolated Adapter,
 source-bound Projection, deterministic Admission, Coordinator, bounded
 Answer-only result, terminal failure, startup reconciliation, retention, and
 redacted in-process read-view foundations are implemented. Atomic Goal/Workflow
 Materialization, optional Start Authorization, separate ordinary Start
-composition, and composite Start status are also implemented. The CLI and
-milestone acceptance harness remain unimplemented.
+composition, and composite Start status are also implemented. The canonical
+M2.5 assessment has not been executed on its required exact supported-toolchain
+source identity, and the independent M2.5 review has not issued a verdict.
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
 detailed status source required by the repository README contract; the
 [milestone document](docs/milestones.md) defines the current bounded scope and
@@ -67,7 +70,9 @@ Current repository commands are:
   the seven test/proof stages, and the production build in the required order.
 - `pnpm accept:m2` — run the canonical M2 milestone procedure; it completes the
   offline proof first and requires explicit bounded live authorization before
-  any model-service request.
+  any model-service request;
+- `pnpm accept:m2.5` — run the non-verdict M2.5 executable assessment and emit
+  evidence that is only an input to the later independent milestone review.
 
 The exact implemented proof coverage is recorded in the M1 implementation plan
 and completion review. The test runner fails when any invoked test is failed,
@@ -153,8 +158,10 @@ initial implementation decisions and dependency expectations are closed. The
 Domain, SQLite, package, Intake Assistant Adapter, Projection, deterministic
 Admission, clarification, abandonment, Answer-only, failure, restart,
 retention, in-process read views, Materialization, and separate Start
-composition are implemented; CLI composition and the end-to-end product loop
-remain incomplete.
+composition are implemented. The CLI layer adds explicit Intake commands,
+shared status/audit views, a deterministic real-adapter cross-process path, and
+the canonical non-verdict assessment runner. The required assessment execution
+and independent M2.5 verdict remain separate and incomplete.
 
 ## Non-Goals
 

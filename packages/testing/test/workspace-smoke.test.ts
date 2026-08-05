@@ -24,6 +24,7 @@ void test('[I-001][I-003][I-007] CLI declares only its trusted composition packa
   assert.equal('@codeclosure/testing' in dependencies, true);
   assert.deepEqual(Object.keys(dependencies).toSorted(), [
     '@codeclosure/adapter-codex',
+    '@codeclosure/adapter-codex-intake',
     '@codeclosure/codex-app-server-client',
     '@codeclosure/domain',
     '@codeclosure/runtime',

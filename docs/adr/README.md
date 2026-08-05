@@ -42,6 +42,10 @@ supersedes it.
 | [0034](0034-close-pre-goal-command-replay-and-sqlite-activation.md) | Close pre-Goal command replay and SQLite activation | Accepted |
 | [0035](0035-bound-intake-by-non-authoritative-effects.md) | Bound M2.5 Intake by non-authoritative effects instead of model-visible tool absence | Accepted |
 
+M2.5 Slice 7 implements CLI composition and a non-verdict assessment harness
+within ADRs 0027, 0034, and 0035. It introduces no new durable authority owner
+or architectural decision and therefore requires no additional ADR.
+
 ## ADR lifecycle
 
 - `Proposed`: under discussion and not yet binding.

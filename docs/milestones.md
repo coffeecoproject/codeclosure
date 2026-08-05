@@ -303,8 +303,10 @@ Answer-only delivery, terminal failure, restart reconciliation, replay,
 retention, and redacted in-process status/audit behavior are implemented. Slice
 6 atomic Goal/Workflow Materialization, optional Start Authorization, separate
 ordinary `StartGoal` composition, replay, race, failure isolation, strict
-reopen, and composite Start status are implemented. Slice 7 is the next
-implementation boundary and has not begun.
+reopen, and composite Start status are implemented. Slice 7 explicit-action
+CLI commands, bounded shared views, deterministic real-adapter fixtures,
+strict cross-process reopen path, and non-verdict assessment harness are also
+implemented.
 The operational scope below remains planned behavior governed by
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
 and
@@ -313,9 +315,11 @@ with the assistant effect boundary governed by ADR 0035 above.
 M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
-[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. At the
-current post-Slice-6 boundary, no Intake CLI or M2.5 acceptance harness is
-implemented. The implementation work does not issue an M2.5 verdict.
+[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. The
+implementation slices do not issue an M2.5 verdict. The canonical assessment
+has not been executed on its final supported-toolchain source identity, and
+the independent review remains the only owner of the bounded milestone
+verdict.
 
 ### Objective
 

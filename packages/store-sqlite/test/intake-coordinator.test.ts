@@ -198,7 +198,11 @@ function completedAnswer(
 
 function failedOperation(
   operation: 'INTENT_ANALYSIS' | 'ANSWER_ONLY',
-  failureReasonCode: 'ASSISTANT_TIMEOUT' | 'ASSISTANT_UNAVAILABLE',
+  failureReasonCode:
+    | 'ASSISTANT_TIMEOUT'
+    | 'ASSISTANT_UNAVAILABLE'
+    | 'ASSISTANT_PROTOCOL_ERROR'
+    | 'RESPONSE_REJECTED',
 ): IntakeAssistantOperationResult<never> {
   return {
     kind: 'FAILED',
@@ -653,6 +657,7 @@ void test('Slice 4 atomically clarifies, binds the answer revision, and abandons
   } as const;
   const clarified = await runtime.clarify(clarificationInput);
   assert.equal(clarified.kind, 'OUTCOME', JSON.stringify(clarified));
+  const originalClarificationOutcome = clarified.outcome;
   const clarificationReplay = await runtime.clarify(clarificationInput);
   assert.equal(clarificationReplay.kind, 'OUTCOME');
   assert.equal(clarificationReplay.replayed, true);
@@ -661,6 +666,10 @@ void test('Slice 4 atomically clarifies, binds the answer revision, and abandons
     clarificationQuestionId: clarificationQuestionId('clarification-question_foreign'),
   });
   assert.equal(conflictingReplay.kind, 'COMMAND_CONFLICT');
+  assert.deepEqual(
+    store.getIntakeCommandOutcome(clarificationCommandId),
+    originalClarificationOutcome,
+  );
   const authorityAfterAnswer = store.getIntakeAuthority(runId);
   assert.ok(authorityAfterAnswer);
   assert.equal(authorityAfterAnswer.rawRequestRevisions.length, 2);
@@ -1150,6 +1159,152 @@ void test('ineligible abandonment records only a deterministic rejection and uns
   assert.equal(store.getIntakeAuthority(submitted.outcome.intakeRunId)?.decisions.length, 1);
 });
 
+void test('M2.5 governed scenario links one unsupported assumption through clarification, Materialization, Start, and strict reopen', async (t) => {
+  const filename = temporaryDatabase(t);
+  const store = SqliteControlStore.open({ filename });
+  let storeClosed = false;
+  t.after(() => {
+    if (!storeClosed) {
+      store.close();
+    }
+  });
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'm2-5-governed-assumption');
+  const governed = governedStart(store, 'm2-5-governed-assumption-authority');
+  const assistant = new QueueAssistant([
+    { ...exactSourceResponse, proposedAssumptions: ['Confirm bounded risk'] },
+    exactSourceResponse,
+  ]);
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('m2-5-governed-assumption'),
+    new DeterministicClock([
+      '2026-08-03T08:02:11.000Z',
+      '2026-08-03T08:02:12.000Z',
+      '2026-08-03T08:02:13.000Z',
+      '2026-08-03T08:02:14.000Z',
+      '2026-08-03T08:02:15.000Z',
+      '2026-08-03T08:02:16.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+  const submittedCommandId = commandId('command_m2-5-governed-assumption-submit');
+  const declaredProjectRef = project('/fixture/m2-5-governed-assumption');
+  const submitted = await runtime.submit({
+    commandId: submittedCommandId,
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef,
+  });
+  assert.equal(submitted.kind, 'OUTCOME');
+  assert.equal(submitted.outcome.result.kind, 'CLARIFICATION_REQUIRED');
+  assert.equal(submitted.startDisposition, 'NOT_AUTHORIZED');
+  const runId = submitted.outcome.intakeRunId;
+  const clarificationStatus = runtime.getStatus(runId);
+  assert.equal(clarificationStatus?.status, IntakeRunStatus.NEEDS_CLARIFICATION);
+  assert.deepEqual(clarificationStatus.activeQuestion.affectedFields, [
+    IntentProjectionField.ASSUMPTION,
+  ]);
+  const beforeClarification = store.getIntakeAuthority(runId);
+  assert.ok(beforeClarification);
+  assert.deepEqual(beforeClarification.proposals[0]?.proposedAssumptions, ['Confirm bounded risk']);
+  assert.equal(beforeClarification.ambiguitySets[0]?.ambiguities.length, 1);
+  assert.equal(beforeClarification.materialization, undefined);
+
+  const clarified = await runtime.clarify({
+    commandId: commandId('command_m2-5-governed-assumption-clarify'),
+    intakeRunId: runId,
+    expectedIntakeRunVersion: clarificationStatus.intakeRunVersion,
+    clarificationQuestionId: clarificationStatus.activeQuestion.id,
+    answer: 'Confirmed',
+  });
+  assert.equal(clarified.kind, 'OUTCOME');
+  assert.equal(clarified.outcome.result.kind, 'MATERIALIZED');
+  assert.equal(clarified.startDisposition, 'START_COMMAND_APPLIED');
+  const authority = store.getIntakeAuthority(runId);
+  assert.ok(authority?.materialization);
+  assert.ok(authority.startAuthorization);
+  assert.equal(authority.rawRequestRevisions.length, 2);
+  assert.equal(authority.answerBindings.length, 1);
+  assert.equal(authority.projections.length, 2);
+  assert.equal(authority.decisions.length, 2);
+  const workflow = store.getWorkflow(authority.materialization.workflowId);
+  assert.equal(workflow?.runStatus, RunStatus.RUNNING);
+  assert.ok(workflow.activeAttemptId);
+
+  store.close();
+  storeClosed = true;
+  const reopened = SqliteControlStore.open({ filename });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.getIntakeAuthority(runId), authority);
+  assert.equal(
+    reopened.getProcessedCommand(authority.startAuthorization.startCommandId)?.commandId,
+    authority.startAuthorization.startCommandId,
+  );
+  assert.equal(assistant.analyzeCalls, 2);
+});
+
+void test('Intake observations and Answer-only content cannot create Goal-bound Evidence before fresh verification', async (t) => {
+  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+  t.after(() => store.close());
+  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+  installPolicy(store, policy, 'm2-5-intake-evidence-separation');
+  const governed = governedStart(store, 'm2-5-intake-evidence-separation-authority');
+  const assistant = new Slice5Assistant({
+    answers: [completedAnswer('Untrusted answer content claiming verification passed.')],
+    analysis: [completed(exactSourceResponse)],
+  });
+  const runtime = coordinator(
+    store,
+    assistant,
+    new DeterministicIds('m2-5-intake-evidence-separation'),
+    new DeterministicClock([
+      '2026-08-03T08:02:21.000Z',
+      '2026-08-03T08:02:22.000Z',
+      '2026-08-03T08:02:23.000Z',
+      '2026-08-03T08:02:24.000Z',
+      '2026-08-03T08:02:25.000Z',
+    ]),
+    policy.id,
+    undefined,
+    governed,
+  );
+
+  const answered = await runtime.submit({
+    commandId: commandId('command_m2-5-intake-evidence-answer'),
+    interactionAction: IntakeInteractionAction.ANSWER_ONLY,
+    admittedUserContent: 'Can the Intake answer certify Goal verification?',
+  });
+  assert.equal(answered.kind, 'OUTCOME');
+  assert.equal(answered.outcome.result.kind, 'NO_EXECUTION');
+  const answerAuthority = store.getIntakeAuthority(answered.outcome.intakeRunId);
+  assert.ok(answerAuthority);
+  assert.equal(answerAuthority.answerOnlyResponses.length, 1);
+  assert.equal(answerAuthority.materialization, undefined);
+
+  const governedResult = await runtime.submit({
+    commandId: commandId('command_m2-5-intake-evidence-governed'),
+    interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+    admittedUserContent: 'Ship slice 4',
+    declaredProjectRef: project('/fixture/m2-5-intake-evidence-separation'),
+  });
+  assert.equal(governedResult.kind, 'OUTCOME');
+  assert.equal(governedResult.outcome.result.kind, 'MATERIALIZED');
+  assert.equal(governedResult.startDisposition, 'START_COMMAND_APPLIED');
+  const governedAuthority = store.getIntakeAuthority(governedResult.outcome.intakeRunId);
+  assert.ok(governedAuthority?.materialization);
+  assert.equal(governedAuthority.proposals.length, 1);
+  assert.equal(
+    store.getCandidateAuthorityForWorkflow(governedAuthority.materialization.workflowId),
+    undefined,
+  );
+  assert.equal(assistant.answerCalls, 1);
+  assert.equal(assistant.analyzeCalls, 1);
+});
+
 void test('Slice 6 materialize-only atomically creates one READY Goal and exact replay makes no second call', async (t) => {
   const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
   t.after(() => store.close());
@@ -1473,25 +1628,19 @@ void test('Slice 6 cannot report an applied Start without retained Workflow auth
   assert.equal(assistant.analyzeCalls, 1);
 });
 
-void test('Slice 6 Start infrastructure failure preserves READY Materialization and a later manual Start wins once', async (t) => {
-  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+void test('Slice 6 Start infrastructure failure strictly reopens and only the exact preallocated Start wins once', async (t) => {
+  const filename = temporaryDatabase(t);
+  const store = SqliteControlStore.open({ filename });
   t.after(() => store.close());
   const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
   installPolicy(store, policy, 'slice6-start-race');
   let automaticStartCalls = 0;
-  const actualStart: { current?: IntakeStartCompositionPort['startGoal'] } = {};
+  const startCommandIds: string[] = [];
   const governed = governedStart(store, 'slice6-start-race-authority', (input) => {
     automaticStartCalls += 1;
-    if (automaticStartCalls === 1) {
-      throw new Error('injected failure between Materialization and Start');
-    }
-    if (actualStart.current === undefined) {
-      throw new Error('ordinary StartGoal runtime is unavailable');
-    }
-    return actualStart.current(input);
+    startCommandIds.push(input.commandId);
+    throw new Error('injected failure between Materialization and Start');
   });
-  actualStart.current = (input) =>
-    Promise.resolve({ command: governed.authority.kernel.startGoal(input) });
   const assistant = new QueueAssistant([exactSourceResponse]);
   const runtime = coordinator(
     store,
@@ -1524,6 +1673,7 @@ void test('Slice 6 Start infrastructure failure preserves READY Materialization 
   assert.equal(readyWorkflow.runStatus, 'READY');
   assert.equal(readyWorkflow.activeAttemptId, undefined);
   assert.equal(store.getProcessedCommand(authority.startAuthorization.startCommandId), undefined);
+  assert.deepEqual(startCommandIds, [authority.startAuthorization.startCommandId]);
   const pendingStatus = runtime.getStatus(failedStart.outcome.intakeRunId);
   assert.equal(
     pendingStatus?.status === IntakeRunStatus.MATERIALIZED
@@ -1531,28 +1681,70 @@ void test('Slice 6 Start infrastructure failure preserves READY Materialization 
       : undefined,
     'READY_PENDING_START',
   );
+  assert.equal(automaticStartCalls, 1);
+  assert.equal(assistant.analyzeCalls, 1);
 
-  const manualStart = governed.authority.kernel.startGoal({
-    commandId: commandId('command_slice6-manual-winner'),
-    goalId: authority.materialization.goalId,
-    expectedGoalRevision: authority.materialization.goalRevision,
-    expectedWorkflowVersion: authority.materialization.workflowVersion,
+  store.close();
+  const reopened = SqliteControlStore.open({ filename });
+  t.after(() => reopened.close());
+  let reopenedStartCalls = 0;
+  const reopenedStart: { current?: IntakeStartCompositionPort['startGoal'] } = {};
+  const reopenedGoverned = governedStart(reopened, 'slice6-start-race-authority', (startInput) => {
+    reopenedStartCalls += 1;
+    assert.equal(startInput.commandId, authority.startAuthorization?.startCommandId);
+    if (reopenedStart.current === undefined) {
+      throw new Error('Reopened ordinary StartGoal runtime is unavailable');
+    }
+    return reopenedStart.current(startInput);
   });
-  assert.equal(manualStart.status, 'APPLIED');
+  reopenedStart.current = (startInput) =>
+    Promise.resolve({ command: reopenedGoverned.authority.kernel.startGoal(startInput) });
+  const replayAssistant = new QueueAssistant([]);
+  const reopenedRuntime = coordinator(
+    reopened,
+    replayAssistant,
+    new DeterministicIds('slice6-start-race-reopened'),
+    new DeterministicClock(['2026-08-03T08:05:04.000Z']),
+    policy.id,
+    undefined,
+    reopenedGoverned,
+  );
 
-  const replay = await runtime.submit(input);
+  const replay = await reopenedRuntime.submit(input);
   assert.equal(replay.kind, 'OUTCOME');
   assert.equal(replay.replayed, true);
-  assert.equal(replay.startDisposition, 'START_COMMAND_REJECTED');
-  assert.equal(store.nextAttemptSequence(authority.materialization.workflowId), 2);
-  assert.ok(store.getProcessedCommand(authority.startAuthorization.startCommandId));
-  const racedStatus = runtime.getStatus(failedStart.outcome.intakeRunId);
+  assert.equal(replay.startDisposition, 'START_COMMAND_APPLIED');
+  const startedWorkflow = reopened.getWorkflow(authority.materialization.workflowId);
+  assert.ok(startedWorkflow?.activeAttemptId);
+  assert.equal(reopened.nextAttemptSequence(authority.materialization.workflowId), 2);
+  assert.equal(
+    reopened.getProcessedCommand(authority.startAuthorization.startCommandId)?.commandId,
+    authority.startAuthorization.startCommandId,
+  );
+  assert.equal(
+    reopened.getWorkflowPolicyBinding(authority.materialization.workflowId)?.startCommandId,
+    authority.startAuthorization.startCommandId,
+  );
+  assert.equal(
+    reopened.getExecutionProfileBinding(authority.materialization.workflowId)?.startCommandId,
+    authority.startAuthorization.startCommandId,
+  );
+  const racedStatus = reopenedRuntime.getStatus(failedStart.outcome.intakeRunId);
   assert.equal(
     racedStatus?.status === IntakeRunStatus.MATERIALIZED ? racedStatus.startDisposition : undefined,
-    'START_COMMAND_REJECTED',
+    'START_COMMAND_APPLIED',
   );
-  assert.equal(automaticStartCalls, 2);
-  assert.equal(assistant.analyzeCalls, 1);
+  const exactReplay = await reopenedRuntime.submit(input);
+  assert.equal(exactReplay.kind, 'OUTCOME');
+  assert.equal(exactReplay.replayed, true);
+  assert.equal(exactReplay.startDisposition, 'START_COMMAND_APPLIED');
+  assert.equal(reopened.nextAttemptSequence(authority.materialization.workflowId), 2);
+  assert.equal(
+    reopened.getWorkflow(authority.materialization.workflowId)?.activeAttemptId,
+    startedWorkflow.activeAttemptId,
+  );
+  assert.equal(reopenedStartCalls, 2);
+  assert.equal(replayAssistant.analyzeCalls, 0);
 });
 
 void test(
@@ -1955,50 +2147,62 @@ void test('Slice 5 Answer-only failure remains APPLIED NO_EXECUTION and distinct
 });
 
 void test('Slice 5 analysis failure commits one terminal FAILED result and exact replay is call-free', async (t) => {
-  const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
-  t.after(() => store.close());
-  const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
-  installPolicy(store, policy, 'slice5-analysis-failure');
-  const assistant = new Slice5Assistant({
-    analysis: [failedOperation('INTENT_ANALYSIS', 'ASSISTANT_UNAVAILABLE')],
-  });
-  const runtime = coordinator(
-    store,
-    assistant,
-    new DeterministicIds('slice5-analysis-failure'),
-    new DeterministicClock(['2026-08-03T09:02:01.000Z', '2026-08-03T09:02:02.000Z']),
-    policy.id,
-  );
-  const input = {
-    commandId: commandId('command_slice5-analysis-failure'),
-    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
-    admittedUserContent: 'Create a bounded goal.',
-  } as const;
-  const result = await runtime.submit(input);
-  assert.equal(result.kind, 'OUTCOME');
-  assert.equal(result.outcome.disposition, 'FAILED');
-  assert.equal(result.outcome.result.kind, 'FAILED');
-  const authority = store.getIntakeAuthority(result.outcome.intakeRunId);
-  assert.ok(authority);
-  assert.equal(authority.intakeRun.status, IntakeRunStatus.FAILED);
-  assert.equal(authority.failures[0]?.reasonCode, IntakeFailureReasonCode.ASSISTANT_UNAVAILABLE);
-  assert.equal(authority.answerOnlyResponses.length, 0);
-  const replay = await runtime.submit(input);
-  assert.equal(replay.kind, 'OUTCOME');
-  assert.equal(replay.replayed, true);
-  assert.equal(assistant.analyzeCalls, 1);
-  const restartedAssistant = new Slice5Assistant({});
-  const restartedRuntime = coordinator(
-    store,
-    restartedAssistant,
-    new DeterministicIds('slice5-failure-restart'),
-    new DeterministicClock(['2026-08-03T09:02:03.000Z']),
-    policy.id,
-  );
-  const restartedReplay = await restartedRuntime.submit(input);
-  assert.equal(restartedReplay.kind, 'OUTCOME');
-  assert.equal(restartedReplay.replayed, true);
-  assert.equal(restartedAssistant.analyzeCalls, 0);
+  const cases = Object.freeze([
+    ['ASSISTANT_TIMEOUT', IntakeFailureReasonCode.ASSISTANT_TIMEOUT],
+    ['ASSISTANT_UNAVAILABLE', IntakeFailureReasonCode.ASSISTANT_UNAVAILABLE],
+    ['ASSISTANT_PROTOCOL_ERROR', IntakeFailureReasonCode.ASSISTANT_PROTOCOL_ERROR],
+  ] as const);
+  for (const [assistantReason, retainedReason] of cases) {
+    await t.test(assistantReason, async (subtest) => {
+      const namespace = `slice5-analysis-failure-${assistantReason
+        .toLowerCase()
+        .replaceAll('_', '-')}`;
+      const store = SqliteControlStore.open({ filename: temporaryDatabase(subtest) });
+      subtest.after(() => store.close());
+      const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
+      installPolicy(store, policy, namespace);
+      const assistant = new Slice5Assistant({
+        analysis: [failedOperation('INTENT_ANALYSIS', assistantReason)],
+      });
+      const runtime = coordinator(
+        store,
+        assistant,
+        new DeterministicIds(namespace),
+        new DeterministicClock(['2026-08-03T09:02:01.000Z', '2026-08-03T09:02:02.000Z']),
+        policy.id,
+      );
+      const input = {
+        commandId: commandId(`command_${namespace}`),
+        interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+        admittedUserContent: 'Create a bounded goal.',
+      } as const;
+      const result = await runtime.submit(input);
+      assert.equal(result.kind, 'OUTCOME');
+      assert.equal(result.outcome.disposition, 'FAILED');
+      assert.equal(result.outcome.result.kind, 'FAILED');
+      const authority = store.getIntakeAuthority(result.outcome.intakeRunId);
+      assert.ok(authority);
+      assert.equal(authority.intakeRun.status, IntakeRunStatus.FAILED);
+      assert.equal(authority.failures[0]?.reasonCode, retainedReason);
+      assert.equal(authority.answerOnlyResponses.length, 0);
+      const replay = await runtime.submit(input);
+      assert.equal(replay.kind, 'OUTCOME');
+      assert.equal(replay.replayed, true);
+      assert.equal(assistant.analyzeCalls, 1);
+      const restartedAssistant = new Slice5Assistant({});
+      const restartedRuntime = coordinator(
+        store,
+        restartedAssistant,
+        new DeterministicIds(`${namespace}-restart`),
+        new DeterministicClock(['2026-08-03T09:02:03.000Z']),
+        policy.id,
+      );
+      const restartedReplay = await restartedRuntime.submit(input);
+      assert.equal(restartedReplay.kind, 'OUTCOME');
+      assert.equal(restartedReplay.replayed, true);
+      assert.equal(restartedAssistant.analyzeCalls, 0);
+    });
+  }
 });
 
 void test('Slice 5 retention rejection stores neither rejected user nor assistant payload bytes or payload digests', async (t) => {

@@ -10,8 +10,8 @@ participation in verified SQLite activation.
 [ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md) defines the
 Intake assistant's isolated read-only, no-authority-effect boundary without
 claiming an empty model-visible App Server tool set.
-Goal Intake is not yet operational. M2 completed with its reusable App Server client
-seam preserved. M2.5 Slices 1 and 2 implement typed Intake records, strict
+M2 completed with its reusable App Server client seam preserved. M2.5 Slices 1
+and 2 implement typed Intake records, strict
 owning codecs, canonical projections and golden vectors, fixed Admission Policy
 definitions, the capability-free Admission Engine contract, the
 anti-self-admission Runtime invariant, and transactional SQLite Intake
@@ -32,12 +32,17 @@ trusted Runtime Materializer, atomic Goal/Workflow creation, optional Start
 Authorization, post-commit submission of only its preallocated ordinary
 `StartGoal`, all five Start dispositions, and composite in-process status. A
 failed Start leaves the committed Goal visibly `READY`, while exact replay and
-automatic/manual competition retain one first-Start winner. The Intake CLI is
-not yet implemented. The
+automatic/manual competition retain one first-Start winner. Slice 7 implements
+the explicit-action Intake CLI, shared bounded status/audit views,
+deterministic real-adapter fixtures, strict cross-process reopen path, and the
+canonical fail-closed assessment runner. CLI handlers receive only the narrow
+Intake command/read facade and cannot issue Admission, Goal, Workflow, Start,
+Evidence, or Acceptance authority. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone; Slice 7 is the next implementation
-boundary and has not begun.
+contract into the current bounded milestone. All implementation slices are now
+present, but `accept:m2.5` has not been executed for the milestone and no
+independent M2.5 verdict exists.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout

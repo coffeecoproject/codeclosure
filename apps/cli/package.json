@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@codeclosure/adapter-codex": "workspace:*",
+    "@codeclosure/adapter-codex-intake": "workspace:*",
     "@codeclosure/codex-app-server-client": "workspace:*",
     "@codeclosure/domain": "workspace:*",
     "@codeclosure/runtime": "workspace:*",

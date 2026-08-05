@@ -11,6 +11,15 @@ export {
   createCliInvocationComposition,
   validateCliStartProfileName,
 } from './trusted-composition.js';
+export {
+  createIntakeCliComposition,
+  createIntakeCliInvocationComposition,
+} from './trusted-intake-composition.js';
+export type {
+  CreateIntakeCliCompositionOptions,
+  CreateIntakeCliInvocationCompositionOptions,
+  IntakeCliComposition,
+} from './trusted-intake-composition.js';
 export type {
   CliComposition,
   CreateCliCompositionOptions,

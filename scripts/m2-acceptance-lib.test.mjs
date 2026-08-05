@@ -355,6 +355,7 @@ void test('the bounded semantic review keeps M2 complete while M2.5 contracts re
   const documents = {
     agents: read('AGENTS.md'),
     readme: read('README.md'),
+    m2CompletionReview: completionReview,
     architecture: read('ARCHITECTURE.md'),
     domainModel: read('docs/domain-model.md'),
     workflow: read('docs/workflow.md'),
@@ -369,10 +370,6 @@ void test('the bounded semantic review keeps M2 complete while M2.5 contracts re
   assert.doesNotMatch(
     documents.agents,
     /next milestone boundary is M2\.5 and its implementation has not started/u,
-  );
-  assert.match(
-    documents.agents,
-    /Slices 1 through 6 implement[\s\S]{0,300}Slice 7 is the next implementation\s+boundary/u,
   );
   assert.match(
     completionReview,

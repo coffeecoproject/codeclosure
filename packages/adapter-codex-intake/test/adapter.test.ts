@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
@@ -128,12 +128,15 @@ function answerDecision(rawRequest: ReturnType<typeof rawRequestRevision>) {
   return { ...base, decisionDigest: digests.digest(projection) };
 }
 
-function intentInput(declaredProjectPath?: string): IntentAnalysisAssistantInput {
+function intentInput(
+  declaredProjectPath?: string,
+  content = 'Prepare the bounded requested change.',
+): IntentAnalysisAssistantInput {
   const intakeRunId = 'intake_adapter-intent';
   const rawRequest = rawRequestRevision(
     'MATERIALIZE_ONLY',
     intakeRunId,
-    'Prepare the bounded requested change.',
+    content,
     declaredProjectPath,
   );
   return compiler.compileIntentAnalysis({
@@ -172,7 +175,7 @@ function fixtureRoots(t: TestContext) {
   return { root, codexHome, cwd, processHome, temporaryDirectory, authorityRoot };
 }
 
-function adapter(t: TestContext, scenario: string) {
+function adapterFixture(t: TestContext, scenario: string) {
   const roots = fixtureRoots(t);
   const launch = createFixtureAppServerLaunch({
     codexHome: roots.codexHome,
@@ -183,18 +186,25 @@ function adapter(t: TestContext, scenario: string) {
     scriptPath: fixtureScript,
     temporaryDirectory: roots.temporaryDirectory,
   });
-  return createCodexIntakeAssistantAdapter({
-    launch,
-    launchNonce,
-    forbiddenRoots: [roots.authorityRoot],
-    clientLimits: {
-      initializationTimeoutMilliseconds: 1_000,
-      requestTimeoutMilliseconds:
-        scenario === 'request-timeout' ? 100 : scenario === 'running-turn' ? 3_000 : 1_000,
-      shutdownGraceMilliseconds: 1_000,
-      shutdownKillMilliseconds: 1_000,
-    },
-  });
+  return {
+    assistant: createCodexIntakeAssistantAdapter({
+      launch,
+      launchNonce,
+      forbiddenRoots: [roots.authorityRoot],
+      clientLimits: {
+        initializationTimeoutMilliseconds: 1_000,
+        requestTimeoutMilliseconds:
+          scenario === 'request-timeout' ? 100 : scenario === 'running-turn' ? 3_000 : 1_000,
+        shutdownGraceMilliseconds: 1_000,
+        shutdownKillMilliseconds: 1_000,
+      },
+    }),
+    roots,
+  };
+}
+
+function adapter(t: TestContext, scenario: string) {
+  return adapterFixture(t, scenario).assistant;
 }
 
 void test('Intent analysis uses one fresh process, Thread, and Turn and returns only wire values', async (t) => {
@@ -221,6 +231,64 @@ void test('Intent analysis uses one fresh process, Thread, and Turn and returns 
   });
   assert.equal('decisionId' in result.response, false);
   assert.equal('goalId' in result.response, false);
+});
+
+void test('the CLI exact-source fixture crosses the real lower client and Intake Adapter', async (t) => {
+  const result = await adapter(t, 'cli-exact-source').analyze(
+    intentInput(undefined, 'Ship slice 7'),
+    new AbortController().signal,
+  );
+  assert.equal(result.kind, 'COMPLETED', JSON.stringify(result));
+  assert.equal(result.response.proposedObjective, 'Ship slice 7');
+  assert.equal(result.response.candidateSourceSpanSuggestions.length, 2);
+});
+
+void test('the CLI governed fixture returns one unsupported assumption without authority', async (t) => {
+  const fixture = adapterFixture(t, 'cli-unsupported-assumption');
+  const input = intentInput(undefined, 'Ship slice 7');
+  const result = await fixture.assistant.analyze(input, new AbortController().signal);
+  assert.equal(result.kind, 'COMPLETED', JSON.stringify(result));
+  assert.deepEqual(result.response.proposedAssumptions, ['Confirm bounded risk']);
+  assert.equal('decisionId' in result.response, false);
+  assert.equal('goalId' in result.response, false);
+
+  const evidencePath = process.env['CODECLOSURE_M25_ASSISTANT_SCENARIO_EVIDENCE_PATH'];
+  if (evidencePath !== undefined) {
+    writeFileSync(
+      evidencePath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        kind: 'M25_SCENARIO_EVIDENCE',
+        scenarioId: 'M25-D02-ASSISTANT-ASSUMPTION',
+        isolatedRoots: [
+          { kind: 'AUTHORITY_ROOT', path: fixture.roots.authorityRoot },
+          { kind: 'ADAPTER_STATE_ROOT', path: fixture.roots.codexHome },
+          { kind: 'OPERATION_ROOT', path: fixture.roots.cwd },
+          { kind: 'PROCESS_STATE_ROOT', path: fixture.roots.processHome },
+          { kind: 'PROCESS_TEMPORARY_ROOT', path: fixture.roots.temporaryDirectory },
+        ],
+        inputIdentity: {
+          operation: 'INTENT_ANALYSIS',
+          primaryId: input.package.intakeRunId,
+          digest: input.manifest.manifestDigest,
+        },
+        expectedDisposition: 'COMPLETED/ONE_UNSUPPORTED_ASSUMPTION/NO_AUTHORITY_FIELDS',
+        observedDisposition: 'COMPLETED/ONE_UNSUPPORTED_ASSUMPTION/NO_AUTHORITY_FIELDS',
+        finalSafeAuthorityProjection: {
+          responseDigest: digests.digest(result.response),
+          proposedAssumptionCount: result.response.proposedAssumptions.length,
+          decisionAuthorityPresent: 'decisionId' in result.response,
+          goalAuthorityPresent: 'goalId' in result.response,
+          operationState: result.observation.state,
+          processLaunchCount: result.observation.processLaunchCount,
+          threadStartCount: result.observation.threadStartCount,
+          turnStartCount: result.observation.turnStartCount,
+        },
+        strictReopen: 'NOT_APPLICABLE',
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
 });
 
 void test('the closed profile explicitly disables every selected capability source', () => {
@@ -420,7 +488,7 @@ void test('a response above the Answer-only wire budget is rejected before reten
   assert.equal(result.failureReasonCode, 'RESPONSE_REJECTED');
 });
 
-void test('the Intent wire decoder enforces optional, duplicate, integer, and item-index rules', () => {
+void test('the Intent wire decoder rejects closed-contract, collection, span, and cross-Intake violations', () => {
   const packageValue = intentInput().package;
   const base = {
     proposedCriteria: ['criterion'],
@@ -429,6 +497,7 @@ void test('the Intent wire decoder enforces optional, duplicate, integer, and it
     proposedQuestions: [],
     candidateSourceSpanSuggestions: [],
   };
+  assert.deepEqual(decodeIntentAnalysisResponse(JSON.stringify(base), packageValue), base);
   assert.throws(
     () =>
       decodeIntentAnalysisResponse(
@@ -436,6 +505,20 @@ void test('the Intent wire decoder enforces optional, duplicate, integer, and it
         packageValue,
       ),
     /non-blank/u,
+  );
+  const { proposedCriteria: ignoredCriteria, ...missingRequiredArray } = base;
+  void ignoredCriteria;
+  assert.throws(
+    () => decodeIntentAnalysisResponse(JSON.stringify(missingRequiredArray), packageValue),
+    /unknown or missing fields/u,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({ ...base, proposedQuestions: null }),
+        packageValue,
+      ),
+    /must be an array/u,
   );
   assert.throws(
     () =>
@@ -480,6 +563,72 @@ void test('the Intent wire decoder enforces optional, duplicate, integer, and it
         packageValue,
       ),
     /missing fields/u,
+  );
+  const validSuggestion = {
+    projectionFieldRef: 'OBJECTIVE',
+    rawRequestRevision: 1,
+    startByte: 0,
+    endByte: 1,
+  };
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({
+          ...base,
+          candidateSourceSpanSuggestions: [validSuggestion, validSuggestion],
+        }),
+        packageValue,
+      ),
+    /duplicate items/u,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({
+          ...base,
+          candidateSourceSpanSuggestions: [{ ...validSuggestion, endByte: 0 }],
+        }),
+        packageValue,
+      ),
+    /bounded integer|does not address selected Raw Request bytes/u,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({
+          ...base,
+          candidateSourceSpanSuggestions: [
+            {
+              projectionFieldRef: 'REQUIRED_CRITERION',
+              itemIndex: 1,
+              rawRequestRevision: 1,
+              startByte: 0,
+              endByte: 1,
+            },
+          ],
+        }),
+        packageValue,
+      ),
+    /item index is outside/u,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({
+          ...base,
+          candidateSourceSpanSuggestions: [{ ...validSuggestion, rawRequestRevision: 2 }],
+        }),
+        packageValue,
+      ),
+    /does not address selected Raw Request bytes/u,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({ ...base, proposedObjective: 'x'.repeat(1024 * 1024) }),
+        packageValue,
+      ),
+    /budget/u,
   );
 });
 

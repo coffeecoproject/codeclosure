@@ -113,6 +113,7 @@ const packagePolicies = Object.freeze([
     name: '@codeclosure/cli',
     dependencies: Object.freeze({
       '@codeclosure/adapter-codex': 'workspace:*',
+      '@codeclosure/adapter-codex-intake': 'workspace:*',
       '@codeclosure/codex-app-server-client': 'workspace:*',
       '@codeclosure/domain': 'workspace:*',
       '@codeclosure/runtime': 'workspace:*',

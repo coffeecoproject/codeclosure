@@ -48,11 +48,11 @@ first-pass Codex edit MUST NOT be forced through an artificial failure merely
 to exercise repair.
 
 M2.5 — Goal Intake and Materialization — is the current milestone boundary.
-Slices 1 through 6 implement the bounded Domain, SQLite, Intake package and
+Slices 1 through 7 implement the bounded Domain, SQLite, Intake package and
 Adapter, Projection and Admission, Answer/failure/recovery, Materialization,
-and separate ordinary Start foundations. Slice 7 is the next implementation
-boundary; the Intake CLI, canonical M2.5 acceptance harness, and independent
-milestone verdict have not begun. Goal Intake MUST remain separate from the
+separate ordinary Start composition, explicit-action CLI, and non-verdict
+assessment harness. The canonical assessment and independent milestone verdict
+have not been executed. Goal Intake MUST remain separate from the
 Goal-bound WorkerPort and MUST NOT reinterpret the completed M2 execution path
 as intent, Goal, Start, or Admission authority. Do not expand M2.5 into a rich
 TUI, multiple agents, cloud or multi-user execution, full Fact Graph traversal,

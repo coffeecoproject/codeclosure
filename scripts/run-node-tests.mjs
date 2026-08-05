@@ -33,6 +33,9 @@ if (process.argv.length < 3) {
           .join('\n');
         process.exitCode = 1;
       } else {
+        if (process.env.CODECLOSURE_NODE_TEST_EVIDENCE === '1') {
+          process.stdout.write(result.stdout ?? '');
+        }
         process.stdout.write(
           `Node tests: PASS (${summary.pass}/${summary.tests}; fail=${summary.fail}, cancelled=${summary.cancelled}, skipped=${summary.skipped}, todo=${summary.todo})\n`,
         );

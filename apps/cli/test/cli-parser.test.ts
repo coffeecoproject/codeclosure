@@ -27,6 +27,96 @@ void test('goal create parsing preserves repeated criterion order and explicit J
   assert.equal(invocation.json, true);
 });
 
+void test('intake submit requires an explicit action and preserves bounded repeated constraints', () => {
+  const invocation = parseCliInvocation([
+    'intake',
+    'submit',
+    '--action',
+    'governed-execution',
+    '--request',
+    '  implement the bounded change  ',
+    '--project',
+    './fixture',
+    '--constraint',
+    ' first boundary ',
+    '--constraint=second boundary',
+    '--json',
+  ]);
+
+  assert.equal(invocation.operation, CliOperation.INTAKE_SUBMIT);
+  assert.equal(invocation.action, 'governed-execution');
+  assert.equal(invocation.request, '  implement the bounded change  ');
+  assert.equal(invocation.projectOperand, './fixture');
+  assert.deepEqual(invocation.constraints, [' first boundary ', 'second boundary']);
+  assert.equal(invocation.json, true);
+
+  assert.throws(
+    () => parseCliInvocation(['intake', 'submit', '--request', 'missing action']),
+    CliUsageError,
+  );
+  assert.throws(
+    () =>
+      parseCliInvocation(['intake', 'submit', '--action', 'materialize-only', '--request', '   ']),
+    CliUsageError,
+  );
+});
+
+void test('intake continuation accepts only exact IDs, one positive version, and optional project input', () => {
+  const clarified = parseCliInvocation([
+    'intake',
+    'clarify',
+    'intake_cli-run',
+    '--question-id',
+    'clarification-question_cli-current',
+    '--expected-version',
+    '2',
+    '--answer',
+    '  bounded answer  ',
+    '--project',
+    './project',
+  ]);
+  assert.equal(clarified.operation, CliOperation.INTAKE_CLARIFY);
+  assert.equal(clarified.intakeRunId, 'intake_cli-run');
+  assert.equal(clarified.questionId, 'clarification-question_cli-current');
+  assert.equal(clarified.expectedVersion, 2);
+  assert.equal(clarified.answer, '  bounded answer  ');
+  assert.equal(clarified.projectOperand, './project');
+
+  assert.throws(
+    () =>
+      parseCliInvocation([
+        'intake',
+        'clarify',
+        ' intake_cli-run ',
+        '--question-id',
+        'clarification-question_cli-current',
+        '--expected-version',
+        '2',
+        '--answer',
+        'bounded answer',
+      ]),
+    CliUsageError,
+  );
+
+  const abandoned = parseCliInvocation([
+    'intake',
+    'abandon',
+    'intake_cli-run',
+    '--expected-version=3',
+    '--json',
+  ]);
+  assert.equal(abandoned.operation, CliOperation.INTAKE_ABANDON);
+  assert.equal(abandoned.expectedVersion, 3);
+  assert.equal(abandoned.json, true);
+
+  for (const operation of [CliOperation.INTAKE_STATUS, CliOperation.INTAKE_AUDIT] as const) {
+    const [, action] = operation.split(' ');
+    const read = parseCliInvocation(['intake', action ?? '', 'intake_cli-run']);
+    assert.equal(read.operation, operation);
+    assert.equal(read.intakeRunId, 'intake_cli-run');
+  }
+});
+
 void test('goal status parsing validates one branded GoalId', () => {
   const invocation = parseCliInvocation(['goal', 'status', 'goal_cli-status', '--json']);
 
@@ -89,6 +179,11 @@ void test('demo parsing accepts the closed M1 and bounded M2 Slice 7 proof scena
 
 void test('[I-025] M1 exposes no merge, release, deploy, promotion, or effect command', () => {
   assert.deepEqual(Object.values(CliOperation), [
+    'intake submit',
+    'intake clarify',
+    'intake abandon',
+    'intake status',
+    'intake audit',
     'goal create',
     'goal start',
     'goal status',
@@ -111,6 +206,23 @@ void test('[I-025] M1 exposes no merge, release, deploy, promotion, or effect co
 void test('CLI parsing rejects incomplete, ambiguous, and unknown command input', () => {
   const invalid = [
     ['goal', 'create', '--objective', 'objective', '--project', 'fixture'],
+    ['intake', 'submit', '--action', 'implicit-is-forbidden', '--request', 'request'],
+    ['intake', 'clarify', 'intake_cli', '--question-id', 'clarification-question_cli'],
+    [
+      'intake',
+      'clarify',
+      'intake_cli',
+      '--question-id',
+      'not-a-question',
+      '--expected-version',
+      '1',
+      '--answer',
+      'answer',
+    ],
+    ['intake', 'abandon', 'intake_cli', '--expected-version', '0'],
+    ['intake', 'abandon', 'intake_cli', '--expected-version', '1', '--expected-version', '2'],
+    ['intake', 'status', 'not-an-intake-id'],
+    ['intake', 'audit', 'intake_first', 'intake_second'],
     [
       'goal',
       'create',
