@@ -23,7 +23,7 @@ function requireCommand(executable, commandArguments, failureMessage) {
 if (
   arguments_.length !== 2 ||
   arguments_[0] !== '--review-exclusion' ||
-  !/^docs\/reviews\/[a-z0-9][a-z0-9-]*\.md$/u.test(arguments_[1] ?? '')
+  !/^docs\/reviews\/[a-z0-9][a-z0-9.-]*\.md$/u.test(arguments_[1] ?? '')
 ) {
   throw new TypeError('Usage: m2.5-preflight.mjs --review-exclusion docs/reviews/<review>.md');
 }

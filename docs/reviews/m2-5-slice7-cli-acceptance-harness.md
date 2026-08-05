@@ -24,12 +24,12 @@ The reviewed working-tree source identity excludes only this Slice 7 review to
 avoid self-reference:
 
 ```text
-Base Git revision: d349014899fc1e623254ca61935b00ef3b218ecc
+Base Git revision: 99849e35847695dfc6838c62205076b95201c975
 Git branch: m2.5-goal-intake
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 985
-Source manifest digest: sha256:c073e867a3ced8e325c8bbf3bdd37cd51de5eb0b106ef33401b5e48d3c52c478
+Source manifest digest: sha256:ea97ea32ab6426d0f993016e655a3df23e8b78c9b8f34dbf794f1a46d5522229
 Self-referential review exclusion: docs/reviews/m2-5-slice7-cli-acceptance-harness.md
 ```
 
@@ -114,6 +114,13 @@ the intentionally separate SQLite Start-failure/reopen/replay proof. `M25-S04`,
 `M25-R03` requires both strict reopen/replay evidence and the same-CommandId
 conflict proof that preserves the original reservation and final outcome.
 
+The shared source-identity and M2.5 preflight argument grammar accepts the
+canonical `docs/reviews/m2.5-completion-review.md` exclusion while retaining the
+fixed `docs/reviews/` Markdown-file boundary. A runner self-test invokes the
+real source-identity entry point with that exact exclusion so the canonical
+preflight cannot be blocked by a filename grammar narrower than the accepted
+review path.
+
 Two additional closed JSON artifacts record the lower Adapter assumption
 observation and canonical governed chain with exact root kinds, digest-only
 input identity, expected-versus-observed dispositions, closed authority
@@ -140,7 +147,7 @@ authority.
 
 ## Verification
 
-The runner contract self-tests passed `8/8`. The canonical cross-process CLI
+The runner contract self-tests passed `9/9`. The canonical cross-process CLI
 chain and lower App Server/Adapter assumption fixture each passed `1/1`, and
 their emitted scenario evidence passed production-schema validation `2/2`.
 The focused SQLite Intake suites passed `152/152`, the complete Intake Adapter
@@ -154,7 +161,7 @@ recorded below after final documentation closure:
 corepack pnpm gate:quality
 Result: PASS (exit 0)
 Documentation: 75/75 checker tests; 79 portable repository GFM sources
-Unit groups: 23/23, 44/44, 57/57, 28/28, 19/19, 13/13, 160/160
+Unit groups: 24/24, 44/44, 57/57, 28/28, 19/19, 13/13, 160/160
 Digest authority: 46/46
 SQLite migrations and restart behavior: 102/102
 Authority and adversarial behavior: 454/454
@@ -164,12 +171,12 @@ Invariant checker: 4/4; 32/32 invariants; 507 metadata-bearing tests
 Formatting, protocol snapshot, lint/dependency audit, typecheck, and build: PASS
 
 Final source identity excluding only this review:
-Base Git revision: d349014899fc1e623254ca61935b00ef3b218ecc
+Base Git revision: 99849e35847695dfc6838c62205076b95201c975
 Git branch: m2.5-goal-intake
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 985
-Source manifest digest: sha256:c073e867a3ced8e325c8bbf3bdd37cd51de5eb0b106ef33401b5e48d3c52c478
+Source manifest digest: sha256:ea97ea32ab6426d0f993016e655a3df23e8b78c9b8f34dbf794f1a46d5522229
 Self-referential review exclusion: docs/reviews/m2-5-slice7-cli-acceptance-harness.md
 ```
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
@@ -40,6 +41,18 @@ Source manifest digest: ${digest}
 Self-referential review exclusion: ${reviewExclusion}
 `;
 }
+
+void test('canonical M2.5 review exclusion is accepted by the source identity entry point', () => {
+  const repositoryRoot = resolve(import.meta.dirname, '..');
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/source-identity.mjs', '--review-exclusion', M25_REVIEW_EXCLUSION],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(parseM25SourceIdentity(result.stdout).reviewExclusion, M25_REVIEW_EXCLUSION);
+});
 
 function passingStages(artifacts) {
   return M25_STAGE_ORDER.map((id) => {
