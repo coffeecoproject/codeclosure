@@ -31,6 +31,9 @@ import {
 } from '../dist/composition/m1-proof-child-process.js';
 
 const entryPoint = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+const intakeFixtureEntryPoint = fileURLToPath(
+  new URL('./fixtures/intake-cli-entry.mjs', import.meta.url),
+);
 const RESTART_DISPATCH_TIMEOUT_MILLISECONDS = 10_000;
 const PROCESS_CLOSE_TIMEOUT_MILLISECONDS = 5_000;
 const PROCESS_CLEANUP_TIMEOUT_MILLISECONDS = 1_000;
@@ -55,13 +58,42 @@ function runCli(
     CODECLOSURE_HOME: options.dataHomePath,
     ...options.environment,
   };
-  return spawnSync(process.execPath, [entryPoint, ...args], {
+  const selectedEntryPoint =
+    options.environment?.['CODECLOSURE_M25_ACCEPTANCE_FIXTURE'] === undefined
+      ? entryPoint
+      : intakeFixtureEntryPoint;
+  return spawnSync(process.execPath, [selectedEntryPoint, ...args], {
     cwd: options.cwd,
     encoding: 'utf8',
     env: environment,
     maxBuffer: 1024 * 1024,
   });
 }
+
+void test('ordinary CLI composition ignores the acceptance-fixture environment switch', (t) => {
+  const root = temporaryRoot(t);
+  const dataHomePath = join(root, 'authority');
+  const result = spawnSync(
+    process.execPath,
+    [entryPoint, 'intake', 'status', 'intake_missing', '--json'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CODECLOSURE_HOME: dataHomePath,
+        CODECLOSURE_M25_ACCEPTANCE_FIXTURE: 'must-not-be-observed',
+      },
+      maxBuffer: MAX_CLI_OUTPUT_BYTES,
+    },
+  );
+  assert.equal(result.status, 3, `${result.stderr}\n${result.stdout}`);
+  assert.equal(result.stderr, '');
+  assert.equal(
+    field(field(parseSingleJsonDocument(result.stdout), 'result'), 'status'),
+    'NOT_FOUND',
+  );
+});
 
 function field(value: unknown, name: string): unknown {
   assert.ok(value !== null && typeof value === 'object', `${name} owner must be an object`);

@@ -7,6 +7,17 @@ import process from 'node:process';
 import test from 'node:test';
 
 import {
+  M2AcceptanceOutcome,
+  M2AcceptanceStage,
+  M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS,
+  M2_CURRENT_SOURCE_REGRESSION_NON_CLAIMS,
+  M2_CURRENT_SOURCE_REGRESSION_STAGE_ORDER,
+  buildM2CurrentSourceRegressionMatrixResults,
+  parseAcceptanceMatrix,
+  validateM2CurrentSourceRegressionResult,
+} from './m2-acceptance-lib.mjs';
+
+import {
   M25_REVIEW_EXCLUSION,
   M25_ACCEPTANCE_MATRIX_CONTRACT_DIGEST,
   M25_REQUIRED_NON_CLAIMS,
@@ -42,6 +53,85 @@ Self-referential review exclusion: ${reviewExclusion}
 `;
 }
 
+function m2RegressionDemoEvidence(stageId) {
+  const profiles = {
+    [M2AcceptanceStage.PROTECTED_REPAIR]: {
+      scenario: 'm2-protected-repair',
+      proofCode: 'M2_PROTECTED_REPAIR_ACCEPTED',
+      branch: 'REPAIR_ACCEPTED',
+      generationCount: 2,
+      externalExecutionCount: 0,
+      evidenceResults: ['FAIL', 'PASS'],
+      finalRunStatus: 'CLOSED',
+      technicalCloseout: true,
+    },
+    [M2AcceptanceStage.FAILED_REPAIR]: {
+      scenario: 'm2-protected-failed-repair',
+      proofCode: 'M2_PROTECTED_FAILED_REPAIR_STOPPED',
+      branch: 'REPAIR_FAILED_STOP',
+      generationCount: 2,
+      externalExecutionCount: 0,
+      evidenceResults: ['FAIL', 'FAIL'],
+      finalRunStatus: 'READY',
+      technicalCloseout: false,
+    },
+    [M2AcceptanceStage.ADAPTER_FAILURE]: {
+      scenario: 'm2-adapter-failure',
+      proofCode: 'M2_ADAPTER_FAILURE_GOVERNED',
+      branch: 'ADAPTER_FAILURE',
+      generationCount: 1,
+      externalExecutionCount: 1,
+      evidenceResults: [],
+      finalRunStatus: 'FAILED',
+      technicalCloseout: false,
+    },
+    [M2AcceptanceStage.LIVE_REPAIR_HANDOFF]: {
+      scenario: 'm2-live-repair-handoff',
+      proofCode: 'M2_LIVE_REPAIR_HANDOFF_CLOSED',
+      branch: 'LIVE_REPAIR_HANDOFF_ACCEPTED',
+      generationCount: 2,
+      externalExecutionCount: 1,
+      evidenceResults: ['FAIL', 'PASS'],
+      finalRunStatus: 'CLOSED',
+      technicalCloseout: true,
+    },
+    [M2AcceptanceStage.LIVE_NATURAL]: {
+      scenario: 'm2-live',
+      proofCode: 'M2_LIVE_NATURAL_BRANCH_CLOSED',
+      branch: 'LIVE_FIRST_PASS_ACCEPTED',
+      generationCount: 1,
+      externalExecutionCount: 1,
+      evidenceResults: ['PASS'],
+      finalRunStatus: 'CLOSED',
+      technicalCloseout: true,
+    },
+  };
+  const profile = profiles[stageId];
+  if (profile === undefined) return undefined;
+  return {
+    scenario: profile.scenario,
+    proofCode: profile.proofCode,
+    branch: profile.branch,
+    goalId: 'goal_fixture',
+    generationCount: profile.generationCount,
+    externalExecutionCount: profile.externalExecutionCount,
+    planId: 'plan_fixture',
+    planDigest: digest,
+    evidence: profile.evidenceResults.map((result, index) => ({
+      candidateGenerationId: `generation_${String(index + 1)}`,
+      candidateDigest: digest,
+      checkId: `check_${String(index + 1)}`,
+      evidenceDigest: digest,
+      result,
+    })),
+    acceptanceTrace: { schemaVersion: 1 },
+    sourceIdentity: { sourceTreeDigest: digest, sourceGitMetadataDigest: digest },
+    audit: { eventCount: 1, throughSequence: 1 },
+    finalRunStatus: profile.finalRunStatus,
+    technicalCloseout: profile.technicalCloseout,
+  };
+}
+
 void test('canonical M2.5 review exclusion is accepted by the source identity entry point', () => {
   const repositoryRoot = resolve(import.meta.dirname, '..');
   const result = spawnSync(
@@ -54,14 +144,173 @@ void test('canonical M2.5 review exclusion is accepted by the source identity en
   assert.equal(parseM25SourceIdentity(result.stdout).reviewExclusion, M25_REVIEW_EXCLUSION);
 });
 
-function passingStages(artifacts) {
+function m2RegressionFixture(source) {
+  const plan = readFileSync(
+    resolve(import.meta.dirname, '..', 'docs', 'plans', 'm2-acceptance-plan.md'),
+    'utf8',
+  );
+  const identity = {
+    baseGitRevision: source.baseGitRevision,
+    gitBranch: source.gitBranch,
+    workingTreeState: source.workingTreeState,
+    manifestSchema: source.manifestSchema,
+    pathCount: source.pathCount,
+    digest: source.digest,
+    reviewExclusion: source.reviewExclusion,
+  };
+  const environment = {
+    platform: 'darwin',
+    architecture: 'arm64',
+    osRelease: 'fixture',
+    node: 'v22.22.0',
+    pnpm: '11.1.3',
+    branch: source.gitBranch,
+    baseGitRevision: source.baseGitRevision,
+    gitStatusDigest: digest,
+    requestedModel: 'gpt-5.6-sol',
+    requestedProvider: 'openai',
+    liveAuthorization: 'EXPLICIT',
+    reviewExclusion: M25_REVIEW_EXCLUSION,
+  };
+  const protocol = {
+    codex: {
+      architecture: 'arm64',
+      delegatedExecutableDigest: digest,
+      delegatedExecutablePath: '/fixture/codex',
+      launcherDigest: digest,
+      launcherPath: '/fixture/launcher',
+      launcherRealPath: '/fixture/launcher-real',
+      platform: 'darwin',
+      platformPackage: '@openai/codex-darwin-arm64',
+      targetTriple: 'aarch64-apple-darwin',
+      version: 'codex-cli 0.146.0',
+    },
+    snapshotDigest: digest,
+    rawTypescriptDigest: digest,
+    rawTypescriptFileCount: 1,
+    canonicalJsonDigest: digest,
+    canonicalJsonFileCount: 1,
+    normalizationProfile: 'RFC8785_JSON',
+  };
+  const qualitySummaries = Array.from({ length: 10 }, () => ({
+    pass: 1,
+    tests: 1,
+    fail: 0,
+    cancelled: 0,
+    skipped: 0,
+    todo: 0,
+  }));
+  const stages = M2_CURRENT_SOURCE_REGRESSION_STAGE_ORDER.map((id) => {
+    const common = {
+      id,
+      outcome: M2AcceptanceOutcome.PASS,
+      startedAt: '2026-08-05T00:00:00.000Z',
+      durationMilliseconds: 1,
+    };
+    if (id === M2AcceptanceStage.ENTRY) {
+      return { ...common, evidence: environment };
+    }
+    if (id === M2AcceptanceStage.SCOPE_REVIEW) {
+      return {
+        ...common,
+        outputDigest: digest,
+        evidence: {
+          reviewedDocuments: 16,
+          acceptedM2Adrs: 6,
+          historicalM2Prerequisite: 'PRESERVED',
+          historicalMilestoneOnlyRow: 'M2-H06',
+          currentGoalIntakeImplementationTokens: 5,
+          goalIntakeBoundary: 'SEPARATE_CURRENT_MILESTONE',
+          workerPortAuthority: 'NOT_GRANTED_TO_INTAKE',
+          acceptanceAuthority: 'UNCHANGED',
+          externalEffectAuthority: 'NOT_AUTHORIZED',
+        },
+      };
+    }
+    let evidence;
+    if (id === M2AcceptanceStage.SOURCE_OPENING || id === M2AcceptanceStage.SOURCE_CLOSING) {
+      evidence = identity;
+    } else if (id === M2AcceptanceStage.PROTOCOL) {
+      evidence = protocol;
+    } else if (id === M2AcceptanceStage.QUALITY) {
+      evidence = {
+        aggregate: {
+          tests: 10,
+          pass: 10,
+          fail: 0,
+          cancelled: 0,
+          skipped: 0,
+          todo: 0,
+        },
+        summaryCount: 10,
+      };
+    } else if (id === M2AcceptanceStage.M1_BLACK_BOX) {
+      evidence = { passedCases: 8, expectedCases: 8 };
+    } else if (id === M2AcceptanceStage.LIVE_PREFLIGHT) {
+      evidence = {
+        version: protocol.codex.version,
+        snapshotDigest: protocol.snapshotDigest,
+        configDigest: digest,
+        requirementsDigest: digest,
+        permissionProfile: 'fixture',
+        stderrDigest: digest,
+        stderrCapturedBytes: 0,
+      };
+    } else {
+      evidence = m2RegressionDemoEvidence(id);
+    }
+    return {
+      ...common,
+      command: `node ${id}.mjs`,
+      exitCode: 0,
+      outputDigest: digest,
+      testSummaries: id === M2AcceptanceStage.QUALITY ? qualitySummaries : [],
+      evidence,
+    };
+  });
+  const matrix = buildM2CurrentSourceRegressionMatrixResults(parseAcceptanceMatrix(plan), stages);
+  return {
+    schemaVersion: 1,
+    kind: 'M2_CURRENT_SOURCE_REGRESSION_EXECUTION',
+    verdict: M2AcceptanceOutcome.PASS,
+    claimScope: 'CURRENT_SOURCE_M2_REGRESSION_BASELINE',
+    canonicalCommand: 'corepack pnpm regress:m2',
+    sourceIdentity: { opening: identity, closing: identity, matched: true },
+    environment,
+    protocol,
+    stages,
+    tests: {
+      summaryCount: 10,
+      tests: 10,
+      pass: 10,
+      fail: 0,
+      cancelled: 0,
+      skipped: 0,
+      todo: 0,
+    },
+    matrix,
+    rowCounts: { total: 92, pass: 92, fail: 0, blocked: 0 },
+    excludedHistoricalMilestoneRows: M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS,
+    failedChecks: [],
+    unavailableChecks: [],
+    nonClaims: M2_CURRENT_SOURCE_REGRESSION_NON_CLAIMS,
+    historicalM2MilestoneVerdictReissued: false,
+    milestoneStatusMutationAuthorized: false,
+    datedIndependentReviewRequired: false,
+  };
+}
+
+function passingStages(artifacts, source) {
   return M25_STAGE_ORDER.map((id) => {
     const artifactPath = `artifacts/${id}.log`;
     const executedTestNames = requiredM25TestNamesForStage(id);
-    const artifact = Buffer.from(
-      `${executedTestNames.map((name) => `# Subtest: ${name}`).join('\n')}\nevidence:${id}`,
-      'utf8',
-    );
+    const artifact =
+      id === 'm2-regression'
+        ? Buffer.from(`STDOUT\n${JSON.stringify(m2RegressionFixture(source))}\nSTDERR\n`, 'utf8')
+        : Buffer.from(
+            `${executedTestNames.map((name) => `# Subtest: ${name}`).join('\n')}\nevidence:${id}`,
+            'utf8',
+          );
     artifacts.set(artifactPath, artifact);
     return Object.freeze({
       id,
@@ -88,8 +337,8 @@ function passingManifest() {
   );
   const rows = parseM25AcceptanceMatrix(plan);
   const artifacts = new Map();
-  const stages = passingStages(artifacts);
   const source = parseM25SourceIdentity(sourceIdentityOutput());
+  const stages = passingStages(artifacts, source);
   const scenarioEvidence = M25_REQUIRED_SCENARIO_EVIDENCE.map(({ scenarioId, stageId }) => {
     const artifactPath = `artifacts/${scenarioId.toLowerCase()}.json`;
     const assistantScenario = scenarioId === 'M25-D02-ASSISTANT-ASSUMPTION';
@@ -314,6 +563,92 @@ void test('source identity detects drift and permits only the one M2.5 review ex
   assert.throws(
     () => parseM25SourceIdentity(sourceIdentityOutput('docs/reviews/another-review.md')),
     /unauthorized review-file exclusion/u,
+  );
+});
+
+void test('M2 current-source proof rejects historical-row, live, and enclosing-source drift', () => {
+  const source = parseM25SourceIdentity(sourceIdentityOutput());
+  const result = m2RegressionFixture(source);
+  assert.doesNotThrow(() => validateM2CurrentSourceRegressionResult(result, source));
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(
+        { ...result, excludedHistoricalMilestoneRows: [] },
+        source,
+      ),
+    /historical-only row set/u,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(
+        { ...result, environment: { ...result.environment, liveAuthorization: 'ABSENT' } },
+        source,
+      ),
+    /source or live authority/u,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(result, {
+        ...source,
+        digest: `sha256:${'b'.repeat(64)}`,
+      }),
+    /differs from the enclosing M2.5 assessment/u,
+  );
+  assert.throws(
+    () => validateM2CurrentSourceRegressionResult({ ...result, protocol: {} }, source),
+    /protocol identity has unknown or missing fields/u,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(
+        {
+          ...result,
+          stages: result.stages.map(({ id, outcome }) => ({ id, outcome })),
+        },
+        source,
+      ),
+    /stage entry-conditions has unknown or missing fields/u,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(
+        {
+          ...result,
+          matrix: result.matrix.map(({ id, outcome }) => ({ id, outcome })),
+        },
+        source,
+      ),
+    /matrix row M2-A01 has unknown or missing fields/u,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(
+        {
+          ...result,
+          stages: result.stages.map((stage) =>
+            stage.id === M2AcceptanceStage.LIVE_NATURAL
+              ? { ...stage, evidence: { proof: 'fixture' } }
+              : stage,
+          ),
+        },
+        source,
+      ),
+    /m2-live projected proof has unknown or missing fields/u,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionResult(
+        {
+          ...result,
+          stages: result.stages.map((stage) =>
+            stage.id === M2AcceptanceStage.PROTECTED_REPAIR
+              ? { ...stage, evidence: { ...stage.evidence, branch: 'WRONG_BRANCH' } }
+              : stage,
+          ),
+        },
+        source,
+      ),
+    /m2-protected-repair projected proof identity is invalid/u,
   );
 });
 

@@ -22,6 +22,34 @@ export const M2AcceptanceStage = Object.freeze({
   SOURCE_CLOSING: 'source-identity-closing',
 });
 
+export const M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS = Object.freeze(['M2-H06']);
+
+export const M2_CURRENT_SOURCE_REGRESSION_STAGE_ORDER = Object.freeze([
+  M2AcceptanceStage.ENTRY,
+  M2AcceptanceStage.SOURCE_OPENING,
+  M2AcceptanceStage.PROTOCOL,
+  M2AcceptanceStage.QUALITY,
+  M2AcceptanceStage.M1_BLACK_BOX,
+  M2AcceptanceStage.PROTECTED_REPAIR,
+  M2AcceptanceStage.FAILED_REPAIR,
+  M2AcceptanceStage.ADAPTER_FAILURE,
+  M2AcceptanceStage.SCOPE_REVIEW,
+  M2AcceptanceStage.LIVE_PREFLIGHT,
+  M2AcceptanceStage.LIVE_REPAIR_HANDOFF,
+  M2AcceptanceStage.LIVE_NATURAL,
+  M2AcceptanceStage.SOURCE_CLOSING,
+]);
+
+export const M2_CURRENT_SOURCE_REGRESSION_NON_CLAIMS = Object.freeze([
+  'NOT_THE_M2_MILESTONE_ACCEPTANCE_VERDICT',
+  'NOT_A_TECHNICAL_ACCEPTANCE_DECISION',
+  'NOT_GOAL_INTAKE_OR_GOAL_MATERIALIZATION_AUTHORITY',
+  'NOT_AUTOMATIC_MULTI_ROUND_REPAIR',
+  'NOT_ARBITRARY_PROJECT_VALIDATION_COMPLETENESS',
+  'NOT_PRODUCT_COMPLETION',
+  'NOT_CANDIDATE_PROMOTION_OR_EXTERNAL_EFFECT_AUTHORITY',
+]);
+
 const sha256Pattern = /^sha256:[0-9a-f]{64}$/u;
 const matrixGroupCounts = Object.freeze({ A: 10, B: 11, C: 11, D: 10, E: 15, F: 11, G: 17, H: 8 });
 
@@ -30,6 +58,14 @@ function assertObject(value, name) {
     throw new TypeError(`${name} must be an object`);
   }
   return value;
+}
+
+function assertExactKeys(value, expected, name) {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(sortedExpected)) {
+    throw new TypeError(`${name} has unknown or missing fields`);
+  }
 }
 
 function assertString(value, name) {
@@ -80,6 +116,7 @@ export function parseSourceIdentity(output) {
   }
   const required = [
     'Base Git revision',
+    'Git branch',
     'Working tree state',
     'Source manifest schema',
     'Source manifest paths',
@@ -98,6 +135,7 @@ export function parseSourceIdentity(output) {
   assertDigest(digest, 'Source manifest digest');
   return Object.freeze({
     baseGitRevision: values.get('Base Git revision'),
+    gitBranch: values.get('Git branch'),
     workingTreeState: values.get('Working tree state'),
     manifestSchema: values.get('Source manifest schema'),
     pathCount,
@@ -465,6 +503,92 @@ function expectedDemo(scenario, branch) {
   return table[aliases[key] ?? key];
 }
 
+export function validateM2DemoProof(rawProof, scenario) {
+  const proof = assertObject(rawProof, `${scenario} projected proof`);
+  assertExactKeys(
+    proof,
+    [
+      'scenario',
+      'proofCode',
+      'branch',
+      'goalId',
+      'generationCount',
+      'externalExecutionCount',
+      'planId',
+      'planDigest',
+      'evidence',
+      'acceptanceTrace',
+      'sourceIdentity',
+      'audit',
+      'finalRunStatus',
+      'technicalCloseout',
+    ],
+    `${scenario} projected proof`,
+  );
+  const expected = expectedDemo(scenario, proof.branch);
+  if (
+    proof.scenario !== scenario ||
+    expected === undefined ||
+    proof.proofCode !== expected.proofCode ||
+    proof.branch !== expected.branch ||
+    proof.generationCount !== expected.generationCount ||
+    proof.externalExecutionCount !== (expected.externalExecutionCount ?? 0) ||
+    proof.finalRunStatus !== expected.runStatus ||
+    proof.technicalCloseout !== expected.technicalCloseout
+  ) {
+    throw new TypeError(`${scenario} projected proof identity is invalid`);
+  }
+  assertString(proof.goalId, `${scenario} projected Goal ID`);
+  assertString(proof.planId, `${scenario} projected Plan ID`);
+  assertDigest(proof.planDigest, `${scenario} projected Plan digest`);
+  if (!Array.isArray(proof.evidence)) {
+    throw new TypeError(`${scenario} projected Evidence must be an array`);
+  }
+  const observedResults = proof.evidence.map((rawItem, index) => {
+    const item = assertObject(rawItem, `${scenario} projected Evidence ${index}`);
+    assertExactKeys(
+      item,
+      ['candidateGenerationId', 'candidateDigest', 'checkId', 'evidenceDigest', 'result'],
+      `${scenario} projected Evidence ${index}`,
+    );
+    assertString(
+      item.candidateGenerationId,
+      `${scenario} projected Evidence ${index} Candidate generation ID`,
+    );
+    assertString(item.checkId, `${scenario} projected Evidence ${index} Check ID`);
+    assertDigest(item.candidateDigest, `${scenario} projected Evidence ${index} Candidate digest`);
+    assertDigest(item.evidenceDigest, `${scenario} projected Evidence ${index} digest`);
+    return item.result;
+  });
+  if (!exactJsonEqual(observedResults, expected.evidence)) {
+    throw new TypeError(`${scenario} projected Evidence results are invalid`);
+  }
+  const sourceIdentity = assertObject(
+    proof.sourceIdentity,
+    `${scenario} projected source identity`,
+  );
+  assertExactKeys(
+    sourceIdentity,
+    ['sourceTreeDigest', 'sourceGitMetadataDigest'],
+    `${scenario} projected source identity`,
+  );
+  assertDigest(sourceIdentity.sourceTreeDigest, `${scenario} projected source-tree digest`);
+  assertDigest(sourceIdentity.sourceGitMetadataDigest, `${scenario} projected Git-metadata digest`);
+  const audit = assertObject(proof.audit, `${scenario} projected audit`);
+  assertExactKeys(audit, ['eventCount', 'throughSequence'], `${scenario} projected audit`);
+  if (
+    !Number.isSafeInteger(audit.eventCount) ||
+    audit.eventCount < 1 ||
+    !Number.isSafeInteger(audit.throughSequence) ||
+    audit.throughSequence < audit.eventCount ||
+    Object.keys(assertObject(proof.acceptanceTrace, `${scenario} projected Acceptance trace`))
+      .length === 0
+  ) {
+    throw new TypeError(`${scenario} projected trace or audit is incomplete`);
+  }
+  return proof;
+}
+
 export function validateM2DemoEnvelope(envelope, scenario) {
   const root = assertObject(envelope, `${scenario} envelope`);
   if (root.schemaVersion !== 1 || root.kind !== 'DEMO_RESULT' || root.operation !== 'demo run') {
@@ -556,28 +680,62 @@ export function validateM2DemoEnvelope(envelope, scenario) {
   ) {
     throw new TypeError(`${scenario} external failure classification differs from the contract`);
   }
+  const proof = Object.freeze({
+    scenario,
+    proofCode: result.proofCode,
+    branch: m2.branch,
+    goalId: assertString(result.goalId, `${scenario} Goal ID`),
+    generationCount: m2.generationCount,
+    externalExecutionCount: m2.externalExecutionCount ?? 0,
+    planId: m2.planId,
+    planDigest: m2.planDigest,
+    evidence,
+    acceptanceTrace,
+    sourceIdentity: Object.freeze({
+      sourceTreeDigest: sourceIdentity.sourceTreeDigest,
+      sourceGitMetadataDigest: sourceIdentity.sourceGitMetadataDigest,
+    }),
+    audit,
+    finalRunStatus: finalStatus.runStatus,
+    technicalCloseout: finalStatus.technicalCloseout,
+  });
   return Object.freeze({
     outcome: M2AcceptanceOutcome.PASS,
-    proof: Object.freeze({
-      scenario,
-      proofCode: result.proofCode,
-      branch: m2.branch,
-      goalId: assertString(result.goalId, `${scenario} Goal ID`),
-      generationCount: m2.generationCount,
-      externalExecutionCount: m2.externalExecutionCount ?? 0,
-      planId: m2.planId,
-      planDigest: m2.planDigest,
-      evidence,
-      acceptanceTrace,
-      sourceIdentity: Object.freeze({
-        sourceTreeDigest: sourceIdentity.sourceTreeDigest,
-        sourceGitMetadataDigest: sourceIdentity.sourceGitMetadataDigest,
-      }),
-      audit,
-      finalRunStatus: finalStatus.runStatus,
-      technicalCloseout: finalStatus.technicalCloseout,
-    }),
+    proof: validateM2DemoProof(proof, scenario),
   });
+}
+
+export function validateLivePreflightProof(rawProof, expectedIdentity) {
+  const proof = assertObject(rawProof, 'Live-preflight projected proof');
+  assertExactKeys(
+    proof,
+    [
+      'version',
+      'snapshotDigest',
+      'configDigest',
+      'requirementsDigest',
+      'permissionProfile',
+      'stderrDigest',
+      'stderrCapturedBytes',
+    ],
+    'Live-preflight projected proof',
+  );
+  assertString(proof.version, 'Live-preflight projected version');
+  assertDigest(proof.snapshotDigest, 'Live-preflight projected snapshot digest');
+  assertDigest(proof.configDigest, 'Live-preflight projected config digest');
+  assertDigest(proof.requirementsDigest, 'Live-preflight projected requirements digest');
+  assertString(proof.permissionProfile, 'Live-preflight projected permission profile');
+  assertDigest(proof.stderrDigest, 'Live-preflight projected stderr digest');
+  if (
+    !Number.isSafeInteger(proof.stderrCapturedBytes) ||
+    proof.stderrCapturedBytes < 0 ||
+    (expectedIdentity !== undefined &&
+      (proof.version !== expectedIdentity.version ||
+        proof.snapshotDigest !== expectedIdentity.snapshotDigest))
+  ) {
+    throw new TypeError('Live-preflight projected proof differs from the expected identity');
+  }
+  return proof;
 }
 
 export function validateLivePreflight(value) {
@@ -605,15 +763,18 @@ export function validateLivePreflight(value) {
   if (diagnostics.stderrPersisted !== false) {
     throw new TypeError('Live preflight persisted stderr diagnostics');
   }
-  return Object.freeze({
-    version: assertString(binary.version, 'Live preflight Codex version'),
-    snapshotDigest: binary.snapshotDigest,
-    configDigest: controlledInputs.configDigest,
-    requirementsDigest: controlledInputs.requirementsDigest,
-    permissionProfile: controlledInputs.permissionProfile,
-    stderrDigest: diagnostics.stderrDigest,
-    stderrCapturedBytes: diagnostics.stderrCapturedBytes,
-  });
+  return validateLivePreflightProof(
+    Object.freeze({
+      version: assertString(binary.version, 'Live preflight Codex version'),
+      snapshotDigest: binary.snapshotDigest,
+      configDigest: controlledInputs.configDigest,
+      requirementsDigest: controlledInputs.requirementsDigest,
+      permissionProfile: controlledInputs.permissionProfile,
+      stderrDigest: diagnostics.stderrDigest,
+      stderrCapturedBytes: diagnostics.stderrCapturedBytes,
+    }),
+    { version: binary.version, snapshotDigest: binary.snapshotDigest },
+  );
 }
 
 function requirePattern(value, pattern, message) {
@@ -622,7 +783,7 @@ function requirePattern(value, pattern, message) {
   }
 }
 
-export function validateM2ScopeReview(documents, productSources) {
+export function validateM2HistoricalDocumentationPrerequisite(documents) {
   const requiredDocuments = [
     'agents',
     'readme',
@@ -715,6 +876,38 @@ export function validateM2ScopeReview(documents, productSources) {
   ) {
     throw new TypeError('Domain Model still describes implemented Slice 7 authority as later work');
   }
+  return Object.freeze({ reviewedDocuments: requiredDocuments.length, acceptedM2Adrs: 6 });
+}
+
+function validatedProductSources(rawSources) {
+  if (!Array.isArray(rawSources) || rawSources.length === 0) {
+    throw new TypeError('M2 product source set must be a non-empty array');
+  }
+  const seen = new Set();
+  return rawSources.map((rawSource, index) => {
+    const source = assertObject(rawSource, `M2 product source ${index}`);
+    assertExactKeys(source, ['path', 'text'], `M2 product source ${index}`);
+    if (
+      typeof source.path !== 'string' ||
+      !/^(?:apps|packages)\/[a-z0-9-]+\/src\/[A-Za-z0-9._/-]+\.ts$/u.test(source.path) ||
+      source.path.split('/').includes('..') ||
+      seen.has(source.path)
+    ) {
+      throw new TypeError(`M2 product source ${index} has an invalid or duplicate path`);
+    }
+    assertString(source.text, `M2 product source ${index} text`);
+    seen.add(source.path);
+    return source;
+  });
+}
+
+function joinedProductSourceText(sources) {
+  return sources.map(({ text }) => text).join('\n');
+}
+
+export function validateM2ScopeReview(documents, rawProductSources) {
+  const historical = validateM2HistoricalDocumentationPrerequisite(documents);
+  const productSources = joinedProductSourceText(validatedProductSources(rawProductSources));
   const intakeImplementationTokens = [
     'RawRequestId',
     'IntakeRunId',
@@ -726,12 +919,9 @@ export function validateM2ScopeReview(documents, productSources) {
   const implementedIntakeTokens = intakeImplementationTokens.filter((token) =>
     productSources.includes(token),
   );
-  if (
-    implementedIntakeTokens.length !== 0 &&
-    implementedIntakeTokens.length !== intakeImplementationTokens.length
-  ) {
+  if (implementedIntakeTokens.length !== 0) {
     throw new TypeError(
-      `M2.5 Slice 1 Intake contract is partial: ${implementedIntakeTokens.join(', ')}`,
+      `Historical M2 scope contains Goal Intake source: ${implementedIntakeTokens.join(', ')}`,
     );
   }
   const operationalIntakeTokens = [
@@ -743,15 +933,87 @@ export function validateM2ScopeReview(documents, productSources) {
   ].filter((token) => productSources.includes(token));
   if (operationalIntakeTokens.length !== 0) {
     throw new TypeError(
-      `M2.5 operational Intake work exceeds the recorded Slice 1 boundary: ${operationalIntakeTokens.join(', ')}`,
+      `Historical M2 scope contains operational Goal Intake source: ${operationalIntakeTokens.join(', ')}`,
     );
   }
   return Object.freeze({
-    reviewedDocuments: requiredDocuments.length,
-    acceptedM2Adrs: 6,
+    reviewedDocuments: historical.reviewedDocuments,
+    acceptedM2Adrs: historical.acceptedM2Adrs,
     goalIntakeSlice1ContractTokens: implementedIntakeTokens.length,
     goalIntakeOperationalTokens: operationalIntakeTokens.length,
     goalIntakeBoundary: 'NOT_M2_SCOPE',
+    externalEffectAuthority: 'NOT_AUTHORIZED',
+  });
+}
+
+export function validateM2CurrentSourceRegressionScope(documents, rawProductSources) {
+  const historicalBoundary = validateM2HistoricalDocumentationPrerequisite(documents);
+  const productSources = validatedProductSources(rawProductSources);
+  const sourceByPath = new Map(productSources.map(({ path, text }) => [path, text]));
+  for (const name of ['goalIntake', 'm25ImplementationPlan', 'm25AcceptancePlan']) {
+    assertString(documents[name], `M2 current-source regression document ${name}`);
+  }
+  requirePattern(
+    documents.agents,
+    /Goal Intake\s+MUST remain separate from the\s+Goal-bound WorkerPort/u,
+    'AGENTS does not preserve the current M2.5 WorkerPort separation',
+  );
+  requirePattern(
+    documents.goalIntake,
+    /receives no Goal-bound WorkerPort request, Store mutation/u,
+    'Goal Intake does not preserve the WorkerPort and Store boundary',
+  );
+  requirePattern(
+    documents.m25ImplementationPlan,
+    /\| 7 \| CLI and acceptance harness \| Implemented \|/u,
+    'M2.5 implementation plan does not record Slice 7 as implemented',
+  );
+  requirePattern(
+    documents.m25AcceptancePlan,
+    /Implementation complete through Slice 7/u,
+    'M2.5 acceptance plan does not record the implemented current source',
+  );
+
+  const currentIntakeDeclarations = [
+    ['packages/runtime/src/intake-coordinator.ts', /export class M25IntakeCoordinator/u],
+    ['packages/runtime/src/intake-materialization.ts', /export class M25IntakeMaterializer/u],
+    ['packages/runtime/src/intake-store.ts', /export interface IntakeControlStore/u],
+    ['packages/runtime/src/intake-assistant.ts', /export interface IntakeAssistantPort/u],
+    ['packages/adapter-codex-intake/src/adapter.ts', /export class CodexIntakeAssistantAdapter/u],
+  ];
+  const missingDeclarations = currentIntakeDeclarations
+    .filter(([path, pattern]) => !pattern.test(sourceByPath.get(path) ?? ''))
+    .map(([path]) => path);
+  if (missingDeclarations.length !== 0) {
+    throw new TypeError(
+      `Current M2.5 Intake implementation is incomplete: ${missingDeclarations.join(', ')}`,
+    );
+  }
+  const authorityImportPattern =
+    /from\s+['"](?:@codeclosure\/(?:adapter-codex|testing|verification-local|workspace-local)|\.\/(?:acceptance-[^'"]*|candidate-[^'"]*|evidence-[^'"]*|worker-contracts)\.js)['"]/u;
+  const intakeAuthoritySources = productSources.filter(
+    ({ path }) =>
+      path.startsWith('packages/runtime/src/intake-') ||
+      path.startsWith('packages/adapter-codex-intake/src/'),
+  );
+  const forbiddenImports = intakeAuthoritySources
+    .filter(({ text }) => authorityImportPattern.test(text))
+    .map(({ path }) => path);
+  if (forbiddenImports.length !== 0) {
+    throw new TypeError(
+      `Current M2.5 Intake source imports Goal-bound authority: ${forbiddenImports.join(', ')}`,
+    );
+  }
+
+  return Object.freeze({
+    reviewedDocuments: historicalBoundary.reviewedDocuments + 3,
+    acceptedM2Adrs: historicalBoundary.acceptedM2Adrs,
+    historicalM2Prerequisite: 'PRESERVED',
+    historicalMilestoneOnlyRow: 'M2-H06',
+    currentGoalIntakeImplementationTokens: currentIntakeDeclarations.length,
+    goalIntakeBoundary: 'SEPARATE_CURRENT_MILESTONE',
+    workerPortAuthority: 'NOT_GRANTED_TO_INTAKE',
+    acceptanceAuthority: 'UNCHANGED',
     externalEffectAuthority: 'NOT_AUTHORIZED',
   });
 }
@@ -864,9 +1126,555 @@ export function buildMatrixResults(matrixRows, stages) {
   );
 }
 
+export function buildM2CurrentSourceRegressionMatrixResults(matrixRows, stages) {
+  const excluded = new Set(M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS);
+  const excludedRows = matrixRows.filter(({ id }) => excluded.has(id));
+  if (
+    excludedRows.length !== M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS.length ||
+    excludedRows.some(({ id }, index) => id !== M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS[index])
+  ) {
+    throw new TypeError('M2 current-source regression did not find its exact historical-only row');
+  }
+  return buildMatrixResults(
+    matrixRows.filter(({ id }) => !excluded.has(id)),
+    stages,
+  );
+}
+
 export function acceptanceVerdict(matrixResults) {
   const outcomes = matrixResults.map(({ outcome }) => outcome);
   if (outcomes.includes(M2AcceptanceOutcome.FAIL)) return M2AcceptanceOutcome.FAIL;
   if (outcomes.includes(M2AcceptanceOutcome.BLOCKED)) return M2AcceptanceOutcome.BLOCKED;
   return M2AcceptanceOutcome.PASS;
+}
+
+function validateRegressionSourceIdentity(rawIdentity, name) {
+  const identity = assertObject(rawIdentity, name);
+  assertExactKeys(
+    identity,
+    [
+      'baseGitRevision',
+      'gitBranch',
+      'workingTreeState',
+      'manifestSchema',
+      'pathCount',
+      'digest',
+      'reviewExclusion',
+    ],
+    name,
+  );
+  assertString(identity.baseGitRevision, `${name} base Git revision`);
+  assertString(identity.gitBranch, `${name} Git branch`);
+  assertString(identity.workingTreeState, `${name} working-tree state`);
+  if (
+    identity.manifestSchema !== 'codeclosure-source-manifest-v1' ||
+    !Number.isSafeInteger(identity.pathCount) ||
+    identity.pathCount < 1 ||
+    identity.reviewExclusion !== 'docs/reviews/m2.5-completion-review.md'
+  ) {
+    throw new TypeError(`${name} does not bind the canonical M2.5 source manifest`);
+  }
+  assertDigest(identity.digest, `${name} digest`);
+  return identity;
+}
+
+function sourceIdentityComparable(identity) {
+  return Object.freeze({
+    baseGitRevision: identity.baseGitRevision,
+    gitBranch: identity.gitBranch,
+    workingTreeState: identity.workingTreeState,
+    manifestSchema: identity.manifestSchema,
+    pathCount: identity.pathCount,
+    digest: identity.digest,
+    reviewExclusion: identity.reviewExclusion,
+  });
+}
+
+function validateRegressionEnvironment(rawEnvironment, opening, verdict) {
+  const environment = assertObject(rawEnvironment, 'M2 regression environment');
+  assertExactKeys(
+    environment,
+    [
+      'platform',
+      'architecture',
+      'osRelease',
+      'node',
+      'pnpm',
+      'branch',
+      'baseGitRevision',
+      'gitStatusDigest',
+      'requestedModel',
+      'requestedProvider',
+      'liveAuthorization',
+      'reviewExclusion',
+    ],
+    'M2 regression environment',
+  );
+  for (const name of [
+    'platform',
+    'architecture',
+    'osRelease',
+    'node',
+    'pnpm',
+    'branch',
+    'baseGitRevision',
+    'requestedModel',
+  ]) {
+    assertString(environment[name], `M2 regression environment ${name}`);
+  }
+  assertDigest(environment.gitStatusDigest, 'M2 regression environment Git status digest');
+  if (
+    environment.branch !== opening.gitBranch ||
+    environment.baseGitRevision !== opening.baseGitRevision ||
+    environment.requestedProvider !== 'openai' ||
+    !['EXPLICIT', 'ABSENT'].includes(environment.liveAuthorization) ||
+    environment.reviewExclusion !== 'docs/reviews/m2.5-completion-review.md' ||
+    (verdict === M2AcceptanceOutcome.PASS && environment.liveAuthorization !== 'EXPLICIT')
+  ) {
+    throw new TypeError('M2 regression environment does not preserve source or live authority');
+  }
+  return environment;
+}
+
+function validateRegressionProtocol(rawProtocol) {
+  const protocol = assertObject(rawProtocol, 'M2 regression protocol identity');
+  assertExactKeys(
+    protocol,
+    [
+      'codex',
+      'snapshotDigest',
+      'rawTypescriptDigest',
+      'rawTypescriptFileCount',
+      'canonicalJsonDigest',
+      'canonicalJsonFileCount',
+      'normalizationProfile',
+    ],
+    'M2 regression protocol identity',
+  );
+  const codex = assertObject(protocol.codex, 'M2 regression Codex identity');
+  assertExactKeys(
+    codex,
+    [
+      'architecture',
+      'delegatedExecutableDigest',
+      'delegatedExecutablePath',
+      'launcherDigest',
+      'launcherPath',
+      'launcherRealPath',
+      'platform',
+      'platformPackage',
+      'targetTriple',
+      'version',
+    ],
+    'M2 regression Codex identity',
+  );
+  for (const name of [
+    'architecture',
+    'delegatedExecutablePath',
+    'launcherPath',
+    'launcherRealPath',
+    'platform',
+    'platformPackage',
+    'targetTriple',
+  ]) {
+    assertString(codex[name], `M2 regression Codex identity ${name}`);
+  }
+  assertDigest(codex.delegatedExecutableDigest, 'M2 regression delegated executable digest');
+  assertDigest(codex.launcherDigest, 'M2 regression launcher digest');
+  assertDigest(protocol.snapshotDigest, 'M2 regression protocol snapshot digest');
+  assertDigest(protocol.rawTypescriptDigest, 'M2 regression TypeScript digest');
+  assertDigest(protocol.canonicalJsonDigest, 'M2 regression JSON digest');
+  if (
+    codex.version !== 'codex-cli 0.146.0' ||
+    !Number.isSafeInteger(protocol.rawTypescriptFileCount) ||
+    protocol.rawTypescriptFileCount < 1 ||
+    !Number.isSafeInteger(protocol.canonicalJsonFileCount) ||
+    protocol.canonicalJsonFileCount < 1 ||
+    protocol.normalizationProfile !== 'RFC8785_JSON'
+  ) {
+    throw new TypeError('M2 regression protocol identity differs from the pinned profile');
+  }
+  return protocol;
+}
+
+function validateRegressionTestSummary(rawSummary, name) {
+  const summary = assertObject(rawSummary, name);
+  assertExactKeys(summary, ['pass', 'tests', 'fail', 'cancelled', 'skipped', 'todo'], name);
+  for (const field of ['pass', 'tests', 'fail', 'cancelled', 'skipped', 'todo']) {
+    if (!Number.isSafeInteger(summary[field]) || summary[field] < 0) {
+      throw new TypeError(`${name} ${field} must be a non-negative integer`);
+    }
+  }
+  if (
+    summary.pass !== summary.tests ||
+    summary.fail !== 0 ||
+    summary.cancelled !== 0 ||
+    summary.skipped !== 0 ||
+    summary.todo !== 0
+  ) {
+    throw new TypeError(`${name} is not a complete passing test summary`);
+  }
+  return summary;
+}
+
+const regressionDemoStageScenarios = Object.freeze({
+  [M2AcceptanceStage.PROTECTED_REPAIR]: 'm2-protected-repair',
+  [M2AcceptanceStage.FAILED_REPAIR]: 'm2-protected-failed-repair',
+  [M2AcceptanceStage.ADAPTER_FAILURE]: 'm2-adapter-failure',
+  [M2AcceptanceStage.LIVE_REPAIR_HANDOFF]: 'm2-live-repair-handoff',
+  [M2AcceptanceStage.LIVE_NATURAL]: 'm2-live',
+});
+
+function validatePassingRegressionStages(stages, environment, protocol, opening, closing, tests) {
+  const commandStages = new Set(
+    M2_CURRENT_SOURCE_REGRESSION_STAGE_ORDER.filter(
+      (id) => id !== M2AcceptanceStage.ENTRY && id !== M2AcceptanceStage.SCOPE_REVIEW,
+    ),
+  );
+  const summaries = [];
+  for (const stage of stages) {
+    const name = `M2 regression stage ${stage.id}`;
+    if (stage.id === M2AcceptanceStage.ENTRY) {
+      assertExactKeys(
+        stage,
+        ['id', 'outcome', 'startedAt', 'durationMilliseconds', 'evidence'],
+        name,
+      );
+    } else if (stage.id === M2AcceptanceStage.SCOPE_REVIEW) {
+      assertExactKeys(
+        stage,
+        ['id', 'outcome', 'startedAt', 'durationMilliseconds', 'outputDigest', 'evidence'],
+        name,
+      );
+      assertDigest(stage.outputDigest, `${name} output digest`);
+    } else if (commandStages.has(stage.id)) {
+      assertExactKeys(
+        stage,
+        [
+          'id',
+          'outcome',
+          'command',
+          'exitCode',
+          'startedAt',
+          'durationMilliseconds',
+          'outputDigest',
+          'testSummaries',
+          'evidence',
+        ],
+        name,
+      );
+      if (typeof stage.command !== 'string' || stage.command.length === 0 || stage.exitCode !== 0) {
+        throw new TypeError(`${name} has invalid command evidence`);
+      }
+      assertDigest(stage.outputDigest, `${name} output digest`);
+      if (!Array.isArray(stage.testSummaries)) {
+        throw new TypeError(`${name} test summaries must be an array`);
+      }
+      for (const [index, summary] of stage.testSummaries.entries()) {
+        summaries.push(validateRegressionTestSummary(summary, `${name} summary ${index}`));
+      }
+    }
+    if (
+      typeof stage.startedAt !== 'string' ||
+      Number.isNaN(Date.parse(stage.startedAt)) ||
+      !Number.isSafeInteger(stage.durationMilliseconds) ||
+      stage.durationMilliseconds < 0 ||
+      Object.keys(assertObject(stage.evidence, `${name} evidence`)).length === 0
+    ) {
+      throw new TypeError(`${name} has incomplete passing evidence`);
+    }
+  }
+  const byId = new Map(stages.map((stage) => [stage.id, stage]));
+  if (
+    JSON.stringify(byId.get(M2AcceptanceStage.ENTRY).evidence) !== JSON.stringify(environment) ||
+    JSON.stringify(byId.get(M2AcceptanceStage.SOURCE_OPENING).evidence) !==
+      JSON.stringify(opening) ||
+    JSON.stringify(byId.get(M2AcceptanceStage.PROTOCOL).evidence) !== JSON.stringify(protocol) ||
+    JSON.stringify(byId.get(M2AcceptanceStage.SOURCE_CLOSING).evidence) !== JSON.stringify(closing)
+  ) {
+    throw new TypeError('M2 regression stages do not bind their enclosing identities');
+  }
+  const qualityEvidence = assertObject(
+    byId.get(M2AcceptanceStage.QUALITY).evidence,
+    'M2 regression quality evidence',
+  );
+  assertExactKeys(qualityEvidence, ['aggregate', 'summaryCount'], 'M2 regression quality evidence');
+  const qualitySummaries = byId.get(M2AcceptanceStage.QUALITY).testSummaries;
+  const qualityAggregate = qualitySummaries.reduce(
+    (total, summary) => ({
+      tests: total.tests + summary.tests,
+      pass: total.pass + summary.pass,
+      fail: total.fail + summary.fail,
+      cancelled: total.cancelled + summary.cancelled,
+      skipped: total.skipped + summary.skipped,
+      todo: total.todo + summary.todo,
+    }),
+    { tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 },
+  );
+  if (
+    qualityEvidence.summaryCount !== qualitySummaries.length ||
+    JSON.stringify(qualityEvidence.aggregate) !== JSON.stringify(qualityAggregate)
+  ) {
+    throw new TypeError('M2 regression quality evidence differs from its test summaries');
+  }
+  const m1Evidence = assertObject(
+    byId.get(M2AcceptanceStage.M1_BLACK_BOX).evidence,
+    'M2 regression M1 evidence',
+  );
+  assertExactKeys(m1Evidence, ['passedCases', 'expectedCases'], 'M2 regression M1 evidence');
+  if (m1Evidence.passedCases !== 8 || m1Evidence.expectedCases !== 8) {
+    throw new TypeError('M2 regression M1 evidence does not retain all eight cases');
+  }
+  const scopeEvidence = assertObject(
+    byId.get(M2AcceptanceStage.SCOPE_REVIEW).evidence,
+    'M2 regression scope evidence',
+  );
+  assertExactKeys(
+    scopeEvidence,
+    [
+      'reviewedDocuments',
+      'acceptedM2Adrs',
+      'historicalM2Prerequisite',
+      'historicalMilestoneOnlyRow',
+      'currentGoalIntakeImplementationTokens',
+      'goalIntakeBoundary',
+      'workerPortAuthority',
+      'acceptanceAuthority',
+      'externalEffectAuthority',
+    ],
+    'M2 regression scope evidence',
+  );
+  if (
+    scopeEvidence.reviewedDocuments !== 16 ||
+    scopeEvidence.acceptedM2Adrs !== 6 ||
+    scopeEvidence.historicalM2Prerequisite !== 'PRESERVED' ||
+    scopeEvidence.historicalMilestoneOnlyRow !== 'M2-H06' ||
+    scopeEvidence.currentGoalIntakeImplementationTokens !== 5 ||
+    scopeEvidence.goalIntakeBoundary !== 'SEPARATE_CURRENT_MILESTONE' ||
+    scopeEvidence.workerPortAuthority !== 'NOT_GRANTED_TO_INTAKE' ||
+    scopeEvidence.acceptanceAuthority !== 'UNCHANGED' ||
+    scopeEvidence.externalEffectAuthority !== 'NOT_AUTHORIZED'
+  ) {
+    throw new TypeError('M2 regression scope evidence weakened its authority boundary');
+  }
+  validateLivePreflightProof(byId.get(M2AcceptanceStage.LIVE_PREFLIGHT).evidence, {
+    version: protocol.codex.version,
+    snapshotDigest: protocol.snapshotDigest,
+  });
+  for (const [stageId, scenario] of Object.entries(regressionDemoStageScenarios)) {
+    validateM2DemoProof(byId.get(stageId).evidence, scenario);
+  }
+  const aggregate = summaries.reduce(
+    (total, summary) => ({
+      summaryCount: total.summaryCount + 1,
+      tests: total.tests + summary.tests,
+      pass: total.pass + summary.pass,
+      fail: total.fail + summary.fail,
+      cancelled: total.cancelled + summary.cancelled,
+      skipped: total.skipped + summary.skipped,
+      todo: total.todo + summary.todo,
+    }),
+    { summaryCount: 0, tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 },
+  );
+  if (aggregate.summaryCount < 10 || JSON.stringify(aggregate) !== JSON.stringify(tests)) {
+    throw new TypeError('M2 regression test totals are not derived from complete stage evidence');
+  }
+}
+
+export function validateM2CurrentSourceRegressionResult(rawResult, expectedSourceIdentity) {
+  const result = assertObject(rawResult, 'M2 current-source regression result');
+  assertExactKeys(
+    result,
+    [
+      'schemaVersion',
+      'kind',
+      'verdict',
+      'claimScope',
+      'canonicalCommand',
+      'sourceIdentity',
+      'environment',
+      'protocol',
+      'stages',
+      'tests',
+      'matrix',
+      'rowCounts',
+      'excludedHistoricalMilestoneRows',
+      'failedChecks',
+      'unavailableChecks',
+      'nonClaims',
+      'historicalM2MilestoneVerdictReissued',
+      'milestoneStatusMutationAuthorized',
+      'datedIndependentReviewRequired',
+    ],
+    'M2 current-source regression result',
+  );
+  if (
+    result.schemaVersion !== 1 ||
+    result.kind !== 'M2_CURRENT_SOURCE_REGRESSION_EXECUTION' ||
+    result.claimScope !== 'CURRENT_SOURCE_M2_REGRESSION_BASELINE' ||
+    result.canonicalCommand !== 'corepack pnpm regress:m2' ||
+    !Object.values(M2AcceptanceOutcome).includes(result.verdict)
+  ) {
+    throw new TypeError('M2 current-source regression identity or verdict is invalid');
+  }
+  if (
+    JSON.stringify(result.excludedHistoricalMilestoneRows) !==
+    JSON.stringify(M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS)
+  ) {
+    throw new TypeError('M2 current-source regression changed its historical-only row set');
+  }
+  if (
+    JSON.stringify(result.nonClaims) !== JSON.stringify(M2_CURRENT_SOURCE_REGRESSION_NON_CLAIMS) ||
+    result.historicalM2MilestoneVerdictReissued !== false ||
+    result.milestoneStatusMutationAuthorized !== false ||
+    result.datedIndependentReviewRequired !== false
+  ) {
+    throw new TypeError('M2 current-source regression weakened its non-verdict contract');
+  }
+
+  const sourceIdentity = assertObject(result.sourceIdentity, 'M2 regression source identity');
+  assertExactKeys(
+    sourceIdentity,
+    ['opening', 'closing', 'matched'],
+    'M2 regression source identity',
+  );
+  const opening = validateRegressionSourceIdentity(
+    sourceIdentity.opening,
+    'M2 regression opening source identity',
+  );
+  const closing = validateRegressionSourceIdentity(
+    sourceIdentity.closing,
+    'M2 regression closing source identity',
+  );
+  const matched = sourceIdentitiesMatch(opening, closing);
+  if (
+    sourceIdentity.matched !== matched ||
+    (result.verdict === M2AcceptanceOutcome.PASS && !matched)
+  ) {
+    throw new TypeError('M2 current-source regression source identity is not closed');
+  }
+  if (expectedSourceIdentity !== undefined) {
+    const expected = sourceIdentityComparable(
+      assertObject(expectedSourceIdentity, 'Expected source identity'),
+    );
+    if (!sourceIdentitiesMatch(opening, expected) || !sourceIdentitiesMatch(closing, expected)) {
+      throw new TypeError(
+        'M2 regression source identity differs from the enclosing M2.5 assessment',
+      );
+    }
+  }
+
+  const environment = validateRegressionEnvironment(result.environment, opening, result.verdict);
+  const protocol = validateRegressionProtocol(result.protocol);
+
+  if (!Array.isArray(result.stages)) {
+    throw new TypeError('M2 regression stages must be an array');
+  }
+  const stageIds = result.stages.map(({ id }) => id);
+  if (JSON.stringify(stageIds) !== JSON.stringify(M2_CURRENT_SOURCE_REGRESSION_STAGE_ORDER)) {
+    throw new TypeError('M2 regression stages omit or reorder a mandatory stage');
+  }
+  for (const stage of result.stages) {
+    assertObject(stage, `M2 regression stage ${stage.id ?? '<unknown>'}`);
+    if (!Object.values(M2AcceptanceOutcome).includes(stage.outcome)) {
+      throw new TypeError(`M2 regression stage ${stage.id ?? '<unknown>'} has an invalid outcome`);
+    }
+  }
+
+  if (!Array.isArray(result.matrix)) {
+    throw new TypeError('M2 regression matrix must be an array');
+  }
+  const expectedIds = M2_MANDATORY_MATRIX_IDS.filter(
+    (id) => !M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS.includes(id),
+  );
+  if (JSON.stringify(result.matrix.map(({ id }) => id)) !== JSON.stringify(expectedIds)) {
+    throw new TypeError('M2 current-source regression matrix differs from its 92-row contract');
+  }
+  for (const row of result.matrix) {
+    assertExactKeys(
+      row,
+      ['id', 'requiredProof', 'primaryEvidence', 'outcome', 'evidenceStages'],
+      `M2 regression matrix row ${row.id ?? '<unknown>'}`,
+    );
+    assertString(row.requiredProof, `M2 regression matrix row ${row.id} required proof`);
+    assertString(row.primaryEvidence, `M2 regression matrix row ${row.id} primary evidence`);
+    if (!Object.values(M2AcceptanceOutcome).includes(row.outcome)) {
+      throw new TypeError(
+        `M2 regression matrix row ${row.id ?? '<unknown>'} has an invalid outcome`,
+      );
+    }
+    const expectedEvidenceStages = stagesForRow(row.id);
+    if (JSON.stringify(row.evidenceStages) !== JSON.stringify(expectedEvidenceStages)) {
+      throw new TypeError(`M2 regression matrix row ${row.id} changed its evidence mapping`);
+    }
+  }
+  if (acceptanceVerdict(result.matrix) !== result.verdict) {
+    throw new TypeError('M2 regression verdict differs from its matrix outcomes');
+  }
+
+  const rowCounts = assertObject(result.rowCounts, 'M2 regression row counts');
+  assertExactKeys(rowCounts, ['total', 'pass', 'fail', 'blocked'], 'M2 regression row counts');
+  const expectedCounts = {
+    total: result.matrix.length,
+    pass: result.matrix.filter(({ outcome }) => outcome === M2AcceptanceOutcome.PASS).length,
+    fail: result.matrix.filter(({ outcome }) => outcome === M2AcceptanceOutcome.FAIL).length,
+    blocked: result.matrix.filter(({ outcome }) => outcome === M2AcceptanceOutcome.BLOCKED).length,
+  };
+  if (JSON.stringify(rowCounts) !== JSON.stringify(expectedCounts)) {
+    throw new TypeError('M2 regression row counts differ from its matrix');
+  }
+  const failedChecks = result.matrix
+    .filter(({ outcome }) => outcome === M2AcceptanceOutcome.FAIL)
+    .map(({ id }) => id);
+  const unavailableChecks = result.matrix
+    .filter(({ outcome }) => outcome === M2AcceptanceOutcome.BLOCKED)
+    .map(({ id }) => id);
+  if (
+    JSON.stringify(result.failedChecks) !== JSON.stringify(failedChecks) ||
+    JSON.stringify(result.unavailableChecks) !== JSON.stringify(unavailableChecks)
+  ) {
+    throw new TypeError('M2 regression failed or unavailable checks differ from its matrix');
+  }
+
+  const tests = assertObject(result.tests, 'M2 regression test totals');
+  assertExactKeys(
+    tests,
+    ['summaryCount', 'tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'],
+    'M2 regression test totals',
+  );
+  if (
+    result.verdict === M2AcceptanceOutcome.PASS &&
+    (tests.summaryCount < 1 ||
+      tests.tests < 1 ||
+      tests.pass !== tests.tests ||
+      tests.fail !== 0 ||
+      tests.cancelled !== 0 ||
+      tests.skipped !== 0 ||
+      tests.todo !== 0 ||
+      result.stages.some(({ outcome }) => outcome !== M2AcceptanceOutcome.PASS))
+  ) {
+    throw new TypeError('Passing M2 regression contains incomplete, skipped, or failed evidence');
+  }
+  if (result.verdict === M2AcceptanceOutcome.PASS) {
+    validatePassingRegressionStages(result.stages, environment, protocol, opening, closing, tests);
+  }
+  return Object.freeze(result);
+}
+
+export function parseM2CurrentSourceRegressionResult(output, expectedSourceIdentity) {
+  const candidates = [];
+  for (const line of output.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
+    try {
+      const value = JSON.parse(trimmed);
+      if (value?.kind === 'M2_CURRENT_SOURCE_REGRESSION_EXECUTION') candidates.push(value);
+    } catch {
+      // Non-result diagnostics remain outside the closed result contract.
+    }
+  }
+  if (candidates.length !== 1) {
+    throw new TypeError('M2 current-source regression output must contain exactly one result');
+  }
+  return validateM2CurrentSourceRegressionResult(candidates[0], expectedSourceIdentity);
 }

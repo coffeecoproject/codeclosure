@@ -30,7 +30,9 @@ import {
   decodeSourceBinding,
   intentAnalysisProposalProjection,
   intentProjectionRevisionProjection,
+  isoTimestamp,
   materialAmbiguitySetProjection,
+  rawRequestRevision,
   sourceBindingProjection,
   workflowVersion,
   type DeclaredProjectRef,
@@ -38,7 +40,6 @@ import {
   type IntentProjectionRevisionRecord,
   type MaterialAmbiguitySet,
   type Sha256Digest,
-  type SourceBinding,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
@@ -98,7 +99,7 @@ function installPolicy(
 ): void {
   const installed = store.installIntentAdmissionPolicy({
     policy,
-    installedAt: '2026-08-03T08:00:00.000Z' as never,
+    installedAt: isoTimestamp('2026-08-03T08:00:00.000Z'),
     auditEventId: auditEventId(`audit_policy-${suffix}`),
     payloadDigest: policy.digest,
   });
@@ -263,7 +264,7 @@ function governedStart(
   const authority = createWorkflowStartAuthorityRuntime({
     store,
     namespace,
-    clock: Object.freeze({ now: () => '2026-08-03T08:00:00.000Z' as never }),
+    clock: Object.freeze({ now: () => isoTimestamp('2026-08-03T08:00:00.000Z') }),
     policyDefinition: createM1PolicyBundleDefinition(digests),
     executionProfileDefinition: m1FakeExecutionProfileRecipe(M1FakeExecutionProfileName.HAPPY_PATH)
       .definition,
@@ -301,7 +302,12 @@ function governedStart(
 
 function rehashProjection(
   analysis: ProjectedIntentAnalysis,
-  changes: Partial<IntentProjectionRevisionRecord>,
+  changes: Partial<
+    Pick<
+      IntentProjectionRevisionRecord,
+      'intentAnalysisProposalRef' | 'requestedExecutionDisposition' | 'sourceBindings'
+    >
+  >,
 ): ProjectedIntentAnalysis {
   const { projectionDigest: ignoredProjectionDigest, ...retainedProjection } = analysis.projection;
   void ignoredProjectionDigest;
@@ -309,9 +315,7 @@ function rehashProjection(
   const projection = decodeIntentProjectionRevision(
     {
       ...projectionBase,
-      projectionDigest: digests.digest(
-        intentProjectionRevisionProjection(projectionBase as IntentProjectionRevisionRecord),
-      ),
+      projectionDigest: digests.digest(intentProjectionRevisionProjection(projectionBase)),
     },
     digests,
   );
@@ -325,7 +329,7 @@ function rehashProjection(
   const ambiguitySet = decodeMaterialAmbiguitySet(
     {
       ...ambiguitySetBase,
-      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase as never)),
+      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
     },
     digests,
   );
@@ -342,9 +346,7 @@ function rehashProposalEnvelope(
   const proposal = decodeIntentAnalysisProposal(
     {
       ...proposalBase,
-      proposalDigest: digests.digest(
-        intentAnalysisProposalProjection(proposalBase as IntentAnalysisProposal),
-      ),
+      proposalDigest: digests.digest(intentAnalysisProposalProjection(proposalBase)),
     },
     digests,
   );
@@ -362,9 +364,7 @@ function rehashProposalEnvelope(
     const replacement = decodeSourceBinding(
       {
         ...bindingBase,
-        bindingDigest: digests.digest(
-          sourceBindingProjection(bindingBase as unknown as SourceBinding),
-        ),
+        bindingDigest: digests.digest(sourceBindingProjection(bindingBase)),
       },
       digests,
     );
@@ -389,12 +389,7 @@ function rehashProposalEnvelope(
   const ambiguitySet = decodeMaterialAmbiguitySet(
     {
       ...ambiguitySetBase,
-      ambiguitySetDigest: digests.digest(
-        materialAmbiguitySetProjection({
-          ...ambiguitySetBase,
-          ambiguitySetDigest: analysis.ambiguitySet.ambiguitySetDigest,
-        }),
-      ),
+      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
     },
     digests,
   );
@@ -420,9 +415,7 @@ function replaceFirstModelBindingWithUnresolved(
   const unresolved = decodeSourceBinding(
     {
       ...bindingBase,
-      bindingDigest: digests.digest(
-        sourceBindingProjection(bindingBase as unknown as SourceBinding),
-      ),
+      bindingDigest: digests.digest(sourceBindingProjection(bindingBase)),
     },
     digests,
   );
@@ -444,12 +437,7 @@ function replaceFirstModelBindingWithUnresolved(
   const ambiguitySet = decodeMaterialAmbiguitySet(
     {
       ...ambiguitySetBase,
-      ambiguitySetDigest: digests.digest(
-        materialAmbiguitySetProjection({
-          ...ambiguitySetBase,
-          ambiguitySetDigest: analysis.ambiguitySet.ambiguitySetDigest,
-        }),
-      ),
+      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
     },
     digests,
   );
@@ -472,9 +460,7 @@ function appendModelBinding(
   const binding = decodeSourceBinding(
     {
       ...bindingBase,
-      bindingDigest: digests.digest(
-        sourceBindingProjection(bindingBase as unknown as SourceBinding),
-      ),
+      bindingDigest: digests.digest(sourceBindingProjection(bindingBase)),
     },
     digests,
   );
@@ -501,7 +487,7 @@ function substituteMissingObjectiveClosure(
   const ambiguitySet = decodeMaterialAmbiguitySet(
     {
       ...ambiguitySetBase,
-      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase as never)),
+      ambiguitySetDigest: digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
     },
     digests,
   );
@@ -561,14 +547,14 @@ const exactSourceResponse: IntentAnalysisAssistantResponseV1 = {
   candidateSourceSpanSuggestions: [
     {
       projectionFieldRef: IntentProjectionField.OBJECTIVE,
-      rawRequestRevision: 1 as never,
+      rawRequestRevision: rawRequestRevision(1),
       startByte: 0,
       endByte: 12,
     },
     {
       projectionFieldRef: IntentProjectionField.REQUIRED_CRITERION,
       itemIndex: 0,
-      rawRequestRevision: 1 as never,
+      rawRequestRevision: rawRequestRevision(1),
       startByte: 0,
       endByte: 12,
     },
@@ -584,7 +570,7 @@ const missingObjectiveResponse: IntentAnalysisAssistantResponseV1 = {
     {
       projectionFieldRef: IntentProjectionField.REQUIRED_CRITERION,
       itemIndex: 0,
-      rawRequestRevision: 1 as never,
+      rawRequestRevision: rawRequestRevision(1),
       startByte: 0,
       endByte: 22,
     },
@@ -1445,14 +1431,14 @@ void test('[I-006][I-008][I-009] Slice 6 Materialization preserves exact admitte
       candidateSourceSpanSuggestions: [
         {
           projectionFieldRef: IntentProjectionField.OBJECTIVE,
-          rawRequestRevision: 1 as never,
+          rawRequestRevision: rawRequestRevision(1),
           startByte: 0,
           endByte: exactByteLength,
         },
         {
           projectionFieldRef: IntentProjectionField.REQUIRED_CRITERION,
           itemIndex: 0,
-          rawRequestRevision: 1 as never,
+          rawRequestRevision: rawRequestRevision(1),
           startByte: 0,
           endByte: exactByteLength,
         },
@@ -1899,7 +1885,7 @@ void test('Slice 6 rejects a preallocated Start applied with substituted Policy 
   const substitutedAuthority = createWorkflowStartAuthorityRuntime({
     store,
     namespace: 'slice6-substituted-start-composition',
-    clock: Object.freeze({ now: () => '2026-08-03T08:05:24.000Z' as never }),
+    clock: Object.freeze({ now: () => isoTimestamp('2026-08-03T08:05:24.000Z') }),
   });
   const substitutedStart = substitutedAuthority.kernel.startGoal({
     commandId: authority.startAuthorization.startCommandId,
@@ -2013,7 +1999,7 @@ void test('a stale or mismatched candidate source span commits RESPONSE_REJECTED
       candidateSourceSpanSuggestions: [
         {
           projectionFieldRef: IntentProjectionField.OBJECTIVE,
-          rawRequestRevision: 1 as never,
+          rawRequestRevision: rawRequestRevision(1),
           startByte: 0,
           endByte: 4,
         },

@@ -1,20 +1,25 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
   M2AcceptanceOutcome,
   M2AcceptanceStage,
+  M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS,
   M2_MANDATORY_MATRIX_IDS,
   acceptanceVerdict,
+  buildM2CurrentSourceRegressionMatrixResults,
   buildMatrixResults,
   parseAcceptanceMatrix,
   parseNodeTestSummaries,
   parseSourceIdentity,
   sourceIdentitiesMatch,
   validateLivePreflight,
+  validateM2HistoricalDocumentationPrerequisite,
   validateM2DemoEnvelope,
+  validateM2CurrentSourceRegressionScope,
   validateM2ScopeReview,
 } from './m2-acceptance-lib.mjs';
 
@@ -225,6 +230,7 @@ void test('the executable matrix parser covers every canonical M2 row in documen
 
 void test('source identity parsing and equality bind the complete opening and closing record', () => {
   const output = `Base Git revision: abc123
+Git branch: m2.5-goal-intake
 Working tree state: modified
 Source manifest schema: codeclosure-source-manifest-v1
 Source manifest paths: 932
@@ -366,6 +372,9 @@ void test('the bounded semantic review keeps M2 complete while M2.5 contracts re
     milestones: read('docs/milestones.md'),
     implementationPlan: read('docs/plans/m2-codex-vertical-slice.md'),
     acceptancePlan: read('docs/plans/m2-acceptance-plan.md'),
+    goalIntake: read('docs/goal-intake.md'),
+    m25ImplementationPlan: read('docs/plans/m2.5-goal-intake-materialization.md'),
+    m25AcceptancePlan: read('docs/plans/m2.5-acceptance-plan.md'),
   };
   assert.doesNotMatch(
     documents.agents,
@@ -379,29 +388,124 @@ void test('the bounded semantic review keeps M2 complete while M2.5 contracts re
     completionReview,
     /M2\.5 may be planned next, but its implementation has\s+not started and requires its own detailed implementation and acceptance plans/u,
   );
-  const evidence = validateM2ScopeReview(documents, '');
+  const historicalDocuments = validateM2HistoricalDocumentationPrerequisite(documents);
+  assert.equal(historicalDocuments.reviewedDocuments, 13);
+  assert.equal(historicalDocuments.acceptedM2Adrs, 6);
+  const evidence = validateM2ScopeReview(documents, [
+    { path: 'packages/runtime/src/historical-fixture.ts', text: 'export const m2 = true;' },
+  ]);
   assert.equal(evidence.goalIntakeBoundary, 'NOT_M2_SCOPE');
   assert.equal(evidence.goalIntakeSlice1ContractTokens, 0);
   assert.equal(evidence.goalIntakeOperationalTokens, 0);
   assert.equal(evidence.acceptedM2Adrs, 6);
 
   const completeSlice1Contract = [
-    'RawRequestId',
-    'IntakeRunId',
-    'IntentAnalysisProposalId',
-    'IntentProjectionId',
-    'IntentAdmissionDecisionId',
-    'GoalMaterializationRecord',
-  ].join('\n');
-  const slice1Evidence = validateM2ScopeReview(documents, completeSlice1Contract);
-  assert.equal(slice1Evidence.goalIntakeSlice1ContractTokens, 6);
-  assert.equal(slice1Evidence.goalIntakeOperationalTokens, 0);
+    {
+      path: 'packages/runtime/src/historical-fixture.ts',
+      text: [
+        'RawRequestId',
+        'IntakeRunId',
+        'IntentAnalysisProposalId',
+        'IntentProjectionId',
+        'IntentAdmissionDecisionId',
+        'GoalMaterializationRecord',
+      ].join('\n'),
+    },
+  ];
   assert.throws(
-    () => validateM2ScopeReview(documents, 'RawRequestId'),
-    /Slice 1 Intake contract is partial/,
+    () => validateM2ScopeReview(documents, completeSlice1Contract),
+    /Historical M2 scope contains Goal Intake source/,
+  );
+
+  const currentImplementation = [
+    {
+      path: 'packages/runtime/src/intake-coordinator.ts',
+      text: 'export class M25IntakeCoordinator {}',
+    },
+    {
+      path: 'packages/runtime/src/intake-materialization.ts',
+      text: 'export class M25IntakeMaterializer {}',
+    },
+    {
+      path: 'packages/runtime/src/intake-store.ts',
+      text: 'export interface IntakeControlStore {}',
+    },
+    {
+      path: 'packages/runtime/src/intake-assistant.ts',
+      text: 'export interface IntakeAssistantPort {}',
+    },
+    {
+      path: 'packages/adapter-codex-intake/src/adapter.ts',
+      text: 'export class CodexIntakeAssistantAdapter {}',
+    },
+  ];
+  const currentEvidence = validateM2CurrentSourceRegressionScope(documents, currentImplementation);
+  assert.equal(currentEvidence.historicalM2Prerequisite, 'PRESERVED');
+  assert.equal(currentEvidence.historicalMilestoneOnlyRow, 'M2-H06');
+  assert.equal(currentEvidence.currentGoalIntakeImplementationTokens, 5);
+  assert.equal(currentEvidence.goalIntakeBoundary, 'SEPARATE_CURRENT_MILESTONE');
+  const currentProductSources = execFileSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+    { cwd: root, encoding: 'utf8' },
+  )
+    .split('\0')
+    .filter(
+      (path) =>
+        existsSync(resolve(root, path)) &&
+        (path.startsWith('apps/') || path.startsWith('packages/')) &&
+        path.includes('/src/') &&
+        path.endsWith('.ts'),
+    )
+    .map((path) => ({ path, text: readFileSync(resolve(root, path), 'utf8') }));
+  assert.doesNotThrow(() =>
+    validateM2CurrentSourceRegressionScope(documents, currentProductSources),
   );
   assert.throws(
-    () => validateM2ScopeReview(documents, `${completeSlice1Contract}\nGoalIntakeCoordinator`),
-    /operational Intake work exceeds/,
+    () =>
+      validateM2CurrentSourceRegressionScope(documents, [
+        {
+          path: 'packages/runtime/src/intake-coordinator.ts',
+          text: 'export class M25IntakeCoordinator {}',
+        },
+      ]),
+    /Current M2.5 Intake implementation is incomplete/,
+  );
+  assert.throws(
+    () =>
+      validateM2CurrentSourceRegressionScope(
+        documents,
+        currentImplementation.map((source) =>
+          source.path === 'packages/runtime/src/intake-coordinator.ts'
+            ? {
+                ...source,
+                text: `${source.text}\nimport type { WorkerPort } from './worker-contracts.js';`,
+              }
+            : source,
+        ),
+      ),
+    /imports Goal-bound authority/,
+  );
+});
+
+void test('current-source M2 regression excludes only the historical Goal Intake absence row', () => {
+  const root = resolve(import.meta.dirname, '..');
+  const rows = parseAcceptanceMatrix(
+    readFileSync(resolve(root, 'docs/plans/m2-acceptance-plan.md'), 'utf8'),
+  );
+  const stages = Object.values(M2AcceptanceStage).map((id) => ({
+    id,
+    outcome: M2AcceptanceOutcome.PASS,
+  }));
+  const regression = buildM2CurrentSourceRegressionMatrixResults(rows, stages);
+  assert.equal(regression.length, 92);
+  assert.deepEqual(M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS, ['M2-H06']);
+  assert.equal(
+    regression.some(({ id }) => id === 'M2-H06'),
+    false,
+  );
+  assert.equal(
+    regression.every(({ outcome }) => outcome === M2AcceptanceOutcome.PASS),
+    true,
   );
 });

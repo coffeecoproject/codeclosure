@@ -663,6 +663,60 @@ export type IntentAdmissionDecision =
   | ClarifyIntentDecision
   | MaterializeIntentDecision;
 
+type DigestProjectionInput<T, DigestField extends PropertyKey> = T extends unknown
+  ? Omit<T, DigestField & keyof T>
+  : never;
+
+export type RawRequestRevisionProjectionInput = DigestProjectionInput<
+  RawRequestRevisionRecord,
+  'rawRequestDigest'
+>;
+export type IntentAnalysisProposalProjectionInput = DigestProjectionInput<
+  IntentAnalysisProposal,
+  'proposalDigest'
+>;
+export type SourceBindingProjectionInput = DigestProjectionInput<SourceBinding, 'bindingDigest'>;
+export type IntentProjectionRevisionProjectionInput = DigestProjectionInput<
+  IntentProjectionRevisionRecord,
+  'projectionDigest'
+>;
+export type MaterialAmbiguitySetProjectionInput = DigestProjectionInput<
+  MaterialAmbiguitySet,
+  'ambiguitySetDigest'
+>;
+export type ClarificationQuestionSpecProjectionInput = DigestProjectionInput<
+  ClarificationQuestionSpec,
+  'questionSpecDigest'
+>;
+export type IntentAdmissionDecisionProjectionInput = DigestProjectionInput<
+  IntentAdmissionDecision,
+  'decisionDigest'
+>;
+export type ClarificationQuestionProjectionInput = DigestProjectionInput<
+  ClarificationQuestion,
+  'questionDigest'
+>;
+export type ClarificationAnswerBindingProjectionInput = DigestProjectionInput<
+  ClarificationAnswerBinding,
+  'answerBindingDigest'
+>;
+export type AnswerOnlyResponseProjectionInput = DigestProjectionInput<
+  AnswerOnlyResponse,
+  'responseDigest'
+>;
+export type IntakeFailureRecordProjectionInput = DigestProjectionInput<
+  IntakeFailureRecord,
+  'failureDigest'
+>;
+export type IntakeCommandInputProjectionInput = DigestProjectionInput<
+  IntakeCommandInput,
+  'canonicalCommandInputDigest'
+>;
+export type IntakeCommandReservationProjectionInput = DigestProjectionInput<
+  IntakeCommandReservation,
+  'reservationDigest'
+>;
+
 export interface ActiveQuestionRef {
   readonly clarificationQuestionId: ClarificationQuestionId;
   readonly questionSpecDigest: Sha256Digest;
@@ -1814,7 +1868,7 @@ export function assertGoalStartAuthorizationInvariant(record: GoalStartAuthoriza
   sha256Digest(record.authorizationDigest);
 }
 
-export function rawRequestRevisionProjection(record: RawRequestRevisionRecord): unknown {
+export function rawRequestRevisionProjection(record: RawRequestRevisionProjectionInput): unknown {
   return {
     schemaVersion: record.schemaVersion,
     rawRequestId: record.rawRequestId,
@@ -1835,7 +1889,9 @@ export function rawRequestRevisionProjection(record: RawRequestRevisionRecord): 
   };
 }
 
-export function intentAnalysisProposalProjection(record: IntentAnalysisProposal): unknown {
+export function intentAnalysisProposalProjection(
+  record: IntentAnalysisProposalProjectionInput,
+): unknown {
   return {
     schemaVersion: record.schemaVersion,
     intakeRunId: record.intakeRunId,
@@ -1859,7 +1915,7 @@ export function intentAnalysisProposalProjection(record: IntentAnalysisProposal)
   };
 }
 
-export function sourceBindingProjection(binding: SourceBinding): unknown {
+export function sourceBindingProjection(binding: SourceBindingProjectionInput): unknown {
   const base = {
     schemaVersion: binding.schemaVersion,
     projectionFieldRef: binding.projectionFieldRef,
@@ -1890,7 +1946,7 @@ export function sourceBindingProjection(binding: SourceBinding): unknown {
 }
 
 export function intentProjectionRevisionProjection(
-  record: IntentProjectionRevisionRecord,
+  record: IntentProjectionRevisionProjectionInput,
 ): unknown {
   return {
     schemaVersion: record.schemaVersion,
@@ -1912,7 +1968,7 @@ export function intentProjectionRevisionProjection(
   };
 }
 
-export function materialAmbiguitySetProjection(set: MaterialAmbiguitySet): unknown {
+export function materialAmbiguitySetProjection(set: MaterialAmbiguitySetProjectionInput): unknown {
   return {
     schemaVersion: set.schemaVersion,
     intakeRunId: set.intakeRunId,
@@ -1923,7 +1979,9 @@ export function materialAmbiguitySetProjection(set: MaterialAmbiguitySet): unkno
   };
 }
 
-export function clarificationQuestionSpecProjection(spec: ClarificationQuestionSpec): unknown {
+export function clarificationQuestionSpecProjection(
+  spec: ClarificationQuestionSpecProjectionInput,
+): unknown {
   return {
     schemaVersion: spec.schemaVersion,
     intakeRunId: spec.intakeRunId,
@@ -1937,7 +1995,9 @@ export function clarificationQuestionSpecProjection(spec: ClarificationQuestionS
   };
 }
 
-export function clarificationQuestionProjection(question: ClarificationQuestion): unknown {
+export function clarificationQuestionProjection(
+  question: ClarificationQuestionProjectionInput,
+): unknown {
   return {
     id: question.id,
     schemaVersion: question.schemaVersion,
@@ -1955,7 +2015,9 @@ export function clarificationQuestionProjection(question: ClarificationQuestion)
   };
 }
 
-export function clarificationAnswerBindingProjection(binding: ClarificationAnswerBinding): unknown {
+export function clarificationAnswerBindingProjection(
+  binding: ClarificationAnswerBindingProjectionInput,
+): unknown {
   return {
     schemaVersion: binding.schemaVersion,
     intakeRunId: binding.intakeRunId,
@@ -1996,7 +2058,9 @@ export function abandonmentBindingProjection(binding: AbandonmentBinding): unkno
   };
 }
 
-export function intentAdmissionDecisionProjection(decision: IntentAdmissionDecision): unknown {
+export function intentAdmissionDecisionProjection(
+  decision: IntentAdmissionDecisionProjectionInput,
+): unknown {
   const common = {
     schemaVersion: decision.schemaVersion,
     intakeRunId: decision.intakeRunId,
@@ -2041,7 +2105,7 @@ export function intentAdmissionDecisionProjection(decision: IntentAdmissionDecis
   }
 }
 
-export function answerOnlyResponseProjection(response: AnswerOnlyResponse): unknown {
+export function answerOnlyResponseProjection(response: AnswerOnlyResponseProjectionInput): unknown {
   const common = {
     schemaVersion: response.schemaVersion,
     intakeRunId: response.intakeRunId,
@@ -2063,7 +2127,7 @@ export function answerOnlyResponseProjection(response: AnswerOnlyResponse): unkn
     : { ...common, failureReasonCode: response.failureReasonCode };
 }
 
-export function intakeFailureRecordProjection(record: IntakeFailureRecord): unknown {
+export function intakeFailureRecordProjection(record: IntakeFailureRecordProjectionInput): unknown {
   return {
     schemaVersion: record.schemaVersion,
     commandId: record.commandId,
@@ -2108,13 +2172,15 @@ export function intakeManifestProjection(manifest: IntakeManifest): unknown {
   };
 }
 
-export function intakeCommandInputProjection(input: IntakeCommandInput): unknown {
+export function intakeCommandInputProjection(input: IntakeCommandInputProjectionInput): unknown {
   return Object.fromEntries(
     Object.entries(input).filter(([key]) => key !== 'canonicalCommandInputDigest'),
   );
 }
 
-export function intakeCommandReservationProjection(reservation: IntakeCommandReservation): unknown {
+export function intakeCommandReservationProjection(
+  reservation: IntakeCommandReservationProjectionInput,
+): unknown {
   const projection = Object.fromEntries(
     Object.entries(reservation).filter(
       ([key]) => key !== 'reservedAt' && key !== 'reservationDigest',

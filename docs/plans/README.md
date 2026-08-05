@@ -3,9 +3,11 @@
 Plans translate accepted product and architecture decisions into bounded work.
 They may sequence decisions but cannot weaken runtime invariants.
 
-M2.5 Slices 0 through 7 are implemented. The canonical executable assessment
-and later independent milestone review remain separate, unexecuted steps; no
-implementation-plan status is an M2.5 verdict.
+M2.5 Slices 0 through 7 are implemented. The first canonical executable
+assessment returned `NOT_READY_FOR_INDEPENDENT_REVIEW` on an acceptance-
+orchestration conflict. Its corrected rerun and the later independent milestone
+review remain separate pending steps; no implementation-plan status is an
+M2.5 verdict.
 
 - [M1 deterministic skeleton](m1-deterministic-skeleton.md)
 - [M1 milestone acceptance plan](m1-acceptance-plan.md)

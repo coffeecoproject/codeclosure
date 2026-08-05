@@ -22,3 +22,5 @@ runtime evidence.
 - [M2.5 Slice 4 Coordinator, Projection, and Admission review](m2-5-slice4-coordinator-projection-admission.md)
 - [M2.5 Slice 5 Answer-only, failure, and restart review](m2-5-slice5-answer-failure-restart.md)
 - [M2.5 Slice 6 Materialization and Start review](m2-5-slice6-materialization-start.md)
+- [M2.5 Slice 7 CLI and acceptance-harness review](m2-5-slice7-cli-acceptance-harness.md)
+- [M2.5 first executable-assessment diagnostic](m2-5-first-assessment-diagnostic.md)

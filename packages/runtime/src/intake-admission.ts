@@ -34,6 +34,7 @@ import {
   type IntakeRun,
   type IntentAdmissionDecision,
   type IntentAdmissionDecisionId,
+  type IntentAdmissionDecisionProjectionInput,
   type IntentAdmissionPolicy,
   type IntentAdmissionRuleTraceEntry,
   type IntentAnalysisProposal,
@@ -338,7 +339,6 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
       intakeRunId: run.id,
       intakeRunVersion: run.version,
       principalRef: run.principalRef,
-      interactionAction: current.interactionAction,
       rawRequestRevision: current.revision,
       rawRequestDigest: current.rawRequestDigest,
       admissionPolicyId: policy.id,
@@ -382,14 +382,29 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
       if (selected === undefined) {
         throw new TypeError('Pre-analysis Admission is not dispositive for this exact input');
       }
+      const decisionIdentity =
+        selected.reasonCode === IntentAdmissionReasonCode.ANSWER_ONLY
+          ? {
+              interactionAction: IntakeInteractionAction.ANSWER_ONLY,
+              reasonCode: IntentAdmissionReasonCode.ANSWER_ONLY,
+            }
+          : selected.reasonCode === IntentAdmissionReasonCode.POLICY_DENIED
+            ? {
+                interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+                reasonCode: IntentAdmissionReasonCode.POLICY_DENIED,
+              }
+            : {
+                interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+                reasonCode: IntentAdmissionReasonCode.UNSUPPORTED,
+              };
       const base = {
         ...common,
+        ...decisionIdentity,
         kind: IntentAdmissionDecisionKind.PRE_ANALYSIS_NO_EXECUTION,
         ...(current.declaredProjectRef === undefined
           ? {}
           : { projectOrScopeRef: current.declaredProjectRef }),
         outcome: IntentAdmissionOutcome.NO_EXECUTION,
-        reasonCode: selected.reasonCode,
         executionDisposition: IntentExecutionDisposition.NONE,
         orderedReasonTrace: trace(
           policy,
@@ -397,13 +412,11 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
           selected.reasonCode,
           current.rawRequestDigest,
         ),
-      };
+      } satisfies IntentAdmissionDecisionProjectionInput;
       return decodeIntentAdmissionDecision(
         {
           ...base,
-          decisionDigest: this.#digests.digest(
-            intentAdmissionDecisionProjection(base as unknown as IntentAdmissionDecision),
-          ),
+          decisionDigest: this.#digests.digest(intentAdmissionDecisionProjection(base)),
         },
         this.#digests,
       );
@@ -559,16 +572,16 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
           break;
       }
     });
+    if (current.interactionAction === IntakeInteractionAction.ANSWER_ONLY) {
+      throw new TypeError(
+        'Projection execution disposition does not agree with trusted interaction action',
+      );
+    }
     const expectedExecutionDisposition =
       current.interactionAction === IntakeInteractionAction.MATERIALIZE_ONLY
         ? IntentExecutionDisposition.LEAVE_READY
-        : current.interactionAction === IntakeInteractionAction.GOVERNED_EXECUTION
-          ? IntentExecutionDisposition.AUTHORIZE_START
-          : undefined;
-    if (
-      expectedExecutionDisposition === undefined ||
-      projection.requestedExecutionDisposition !== expectedExecutionDisposition
-    ) {
+        : IntentExecutionDisposition.AUTHORIZE_START;
+    if (projection.requestedExecutionDisposition !== expectedExecutionDisposition) {
       throw new TypeError(
         'Projection execution disposition does not agree with trusted interaction action',
       );
@@ -589,6 +602,7 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
       }
       const base = {
         ...common,
+        interactionAction: current.interactionAction,
         kind: IntentAdmissionDecisionKind.PROJECTED_NO_EXECUTION,
         projectionBinding: binding,
         abandonmentBinding: abandonment,
@@ -604,13 +618,11 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
           IntentAdmissionReasonCode.ABANDONED,
           current.rawRequestDigest,
         ),
-      };
+      } satisfies IntentAdmissionDecisionProjectionInput;
       return decodeIntentAdmissionDecision(
         {
           ...base,
-          decisionDigest: this.#digests.digest(
-            intentAdmissionDecisionProjection(base as unknown as IntentAdmissionDecision),
-          ),
+          decisionDigest: this.#digests.digest(intentAdmissionDecisionProjection(base)),
         },
         this.#digests,
       );
@@ -650,6 +662,7 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
       }
       const base = {
         ...common,
+        interactionAction: current.interactionAction,
         kind: IntentAdmissionDecisionKind.CLARIFY,
         projectionBinding: binding,
         questionPlanBinding: {
@@ -668,13 +681,11 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
           IntentAdmissionReasonCode.MATERIAL_AMBIGUITY,
           current.rawRequestDigest,
         ),
-      };
+      } satisfies IntentAdmissionDecisionProjectionInput;
       return decodeIntentAdmissionDecision(
         {
           ...base,
-          decisionDigest: this.#digests.digest(
-            intentAdmissionDecisionProjection(base as unknown as IntentAdmissionDecision),
-          ),
+          decisionDigest: this.#digests.digest(intentAdmissionDecisionProjection(base)),
         },
         this.#digests,
       );
@@ -694,24 +705,33 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
     const terminalRuleKind = governed
       ? IntentAdmissionPolicyRuleKind.GOVERNED_EXECUTION_DISPOSITION
       : IntentAdmissionPolicyRuleKind.MATERIALIZE_ONLY_DISPOSITION;
-    const base = {
-      ...common,
-      kind: IntentAdmissionDecisionKind.MATERIALIZE,
-      projectionBinding: binding,
-      projectOrScopeRef: current.declaredProjectRef,
-      outcome: IntentAdmissionOutcome.MATERIALIZE,
-      reasonCode,
-      executionDisposition: governed
-        ? IntentExecutionDisposition.AUTHORIZE_START
-        : IntentExecutionDisposition.LEAVE_READY,
-      orderedReasonTrace: trace(policy, terminalRuleKind, reasonCode, current.rawRequestDigest),
-    };
+    const base = governed
+      ? ({
+          ...common,
+          interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+          kind: IntentAdmissionDecisionKind.MATERIALIZE,
+          projectionBinding: binding,
+          projectOrScopeRef: current.declaredProjectRef,
+          outcome: IntentAdmissionOutcome.MATERIALIZE,
+          reasonCode: IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED,
+          executionDisposition: IntentExecutionDisposition.AUTHORIZE_START,
+          orderedReasonTrace: trace(policy, terminalRuleKind, reasonCode, current.rawRequestDigest),
+        } satisfies IntentAdmissionDecisionProjectionInput)
+      : ({
+          ...common,
+          interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+          kind: IntentAdmissionDecisionKind.MATERIALIZE,
+          projectionBinding: binding,
+          projectOrScopeRef: current.declaredProjectRef,
+          outcome: IntentAdmissionOutcome.MATERIALIZE,
+          reasonCode: IntentAdmissionReasonCode.MATERIALIZE_ONLY_ADMITTED,
+          executionDisposition: IntentExecutionDisposition.LEAVE_READY,
+          orderedReasonTrace: trace(policy, terminalRuleKind, reasonCode, current.rawRequestDigest),
+        } satisfies IntentAdmissionDecisionProjectionInput);
     return decodeIntentAdmissionDecision(
       {
         ...base,
-        decisionDigest: this.#digests.digest(
-          intentAdmissionDecisionProjection(base as unknown as IntentAdmissionDecision),
-        ),
+        decisionDigest: this.#digests.digest(intentAdmissionDecisionProjection(base)),
       },
       this.#digests,
     );

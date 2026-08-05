@@ -316,10 +316,11 @@ M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
 gate passed on 2026-08-02. The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. The
-implementation slices do not issue an M2.5 verdict. The canonical assessment
-has not been executed on its final supported-toolchain source identity, and
-the independent review remains the only owner of the bounded milestone
-verdict.
+implementation slices do not issue an M2.5 verdict. The first canonical
+assessment returned `NOT_READY_FOR_INDEPENDENT_REVIEW` because it reused the
+historical M2 milestone procedure against current Goal Intake source. The
+corrected exact-source assessment remains pending, and the independent review
+remains the only owner of the bounded milestone verdict.
 
 ### Objective
 

@@ -887,9 +887,7 @@ void test('[I-006][I-018] projection profile v2 represents a missing objective o
   const proposal = decodeIntentAnalysisProposal(
     {
       ...retainedProposal,
-      proposalDigest: digest(
-        intentAnalysisProposalProjection(retainedProposal as unknown as IntentAnalysisProposal),
-      ),
+      proposalDigest: digest(intentAnalysisProposalProjection(retainedProposal)),
     },
     digests,
   );
@@ -912,11 +910,7 @@ void test('[I-006][I-018] projection profile v2 represents a missing objective o
   const projection = decodeIntentProjectionRevision(
     {
       ...projectionBase,
-      projectionDigest: digest(
-        intentProjectionRevisionProjection(
-          projectionBase as unknown as IntentProjectionRevisionRecord,
-        ),
-      ),
+      projectionDigest: digest(intentProjectionRevisionProjection(projectionBase)),
     },
     digests,
   );
@@ -961,11 +955,7 @@ void test('[I-006][I-018] projection profile v2 represents a missing objective o
       decodeIntentProjectionRevision(
         {
           ...v1ProjectionBase,
-          projectionDigest: digest(
-            intentProjectionRevisionProjection(
-              v1ProjectionBase as unknown as IntentProjectionRevisionRecord,
-            ),
-          ),
+          projectionDigest: ZERO,
         },
         digests,
       ),

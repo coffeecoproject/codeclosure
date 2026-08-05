@@ -138,8 +138,6 @@ const M25_INTAKE_CLIENT_IMPORTS = new Set([
   'verifyBundledCodexInstallation',
 ]);
 
-const M25_INTAKE_FIXTURE_CLIENT_IMPORTS = new Set(['createFixtureAppServerLaunch']);
-
 const M25_INTAKE_DOMAIN_IMPORTS = new Set(['DeclaredProjectRef']);
 
 const M25_INTAKE_RUNTIME_COMPOSITION_IMPORTS = new Set([
@@ -217,13 +215,6 @@ const M2_PROOF_VERIFICATION_IMPORTS = new Set([
 
 const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
   [
-    'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
-    new Map([
-      ['@codeclosure/adapter-codex-intake', new Set(['createCodexIntakeAssistantAdapter'])],
-      ['@codeclosure/codex-app-server-client/testing', M25_INTAKE_FIXTURE_CLIENT_IMPORTS],
-    ]),
-  ],
-  [
     'apps/cli/src/composition/intake-assistant-invocation.ts',
     new Map([
       ['@codeclosure/adapter-codex-intake', M25_INTAKE_ADAPTER_IMPORTS],
@@ -287,13 +278,6 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
 
 const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
   [
-    'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
-    Object.freeze({
-      values: new Set(['createFixtureIntakeAssistant']),
-      types: new Set(),
-    }),
-  ],
-  [
     'apps/cli/src/composition/intake-assistant-invocation.ts',
     Object.freeze({
       values: new Set(['createProductionIntakeAssistant']),
@@ -306,7 +290,11 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
   [
     'apps/cli/src/composition/trusted-intake-composition.ts',
     Object.freeze({
-      values: new Set(['createIntakeCliComposition', 'createIntakeCliInvocationComposition']),
+      values: new Set([
+        'createIntakeCliComposition',
+        'createIntakeCliInvocationComposition',
+        'createIntakeCliInvocationCompositionWithAssistant',
+      ]),
       types: new Set([
         'CreateIntakeCliCompositionOptions',
         'CreateIntakeCliInvocationCompositionOptions',
@@ -494,15 +482,6 @@ const TRUSTED_COMPOSITION_LOCAL_CONSUMERS = new Map([
 
 const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
   [
-    'apps/cli/src/composition/intake-assistant-fixture-invocation.js',
-    new Map([
-      [
-        'apps/cli/src/composition/trusted-intake-composition.ts',
-        new Set(['createFixtureIntakeAssistant']),
-      ],
-    ]),
-  ],
-  [
     'apps/cli/src/composition/trusted-intake-composition.js',
     new Map([
       [
@@ -524,11 +503,11 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
     new Map([
       [
         'apps/cli/src/composition/trusted-intake-composition.ts',
-        new Set(['createProductionIntakeAssistant']),
-      ],
-      [
-        'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
-        new Set(['ProductionIntakeAssistantResource']),
+        new Set([
+          'CreateProductionIntakeAssistantOptions',
+          'ProductionIntakeAssistantResource',
+          'createProductionIntakeAssistant',
+        ]),
       ],
     ]),
   ],
@@ -700,10 +679,6 @@ const NODE_BUILTIN_MODULES_BY_ZONE = new Map([
 ]);
 
 const NODE_BUILTIN_MODULES_BY_FILE = new Map([
-  [
-    'apps/cli/src/composition/intake-assistant-fixture-invocation.ts',
-    new Set(['node:crypto', 'node:fs', 'node:os', 'node:path']),
-  ],
   [
     'apps/cli/src/composition/intake-assistant-invocation.ts',
     new Set(['node:crypto', 'node:fs', 'node:os', 'node:path']),

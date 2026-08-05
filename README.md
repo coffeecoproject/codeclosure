@@ -26,8 +26,10 @@ Answer-only result, terminal failure, startup reconciliation, retention, and
 redacted in-process read-view foundations are implemented. Atomic Goal/Workflow
 Materialization, optional Start Authorization, separate ordinary Start
 composition, and composite Start status are also implemented. The canonical
-M2.5 assessment has not been executed on its required exact supported-toolchain
-source identity, and the independent M2.5 review has not issued a verdict.
+M2.5 assessment attempt returned `NOT_READY_FOR_INDEPENDENT_REVIEW` because its
+M2 stage applied a historical milestone-only absence assertion to current
+M2.5 source. The corrected exact-source assessment has not yet run, and the
+independent M2.5 review has not issued a verdict.
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
 detailed status source required by the repository README contract; the
 [milestone document](docs/milestones.md) defines the current bounded scope and
@@ -71,6 +73,9 @@ Current repository commands are:
 - `pnpm accept:m2` — run the canonical M2 milestone procedure; it completes the
   offline proof first and requires explicit bounded live authorization before
   any model-service request;
+- `pnpm regress:m2` — run the non-verdict current-source M2 regression profile;
+  it preserves the applicable deterministic/live baseline without reissuing
+  the historical M2 Goal-Intake-absence verdict;
 - `pnpm accept:m2.5` — run the non-verdict M2.5 executable assessment and emit
   evidence that is only an input to the later independent milestone review.
 

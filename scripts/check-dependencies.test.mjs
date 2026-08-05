@@ -180,7 +180,7 @@ void test('the Codex Intake adapter has one closed package edge and production c
       '@codeclosure/codex-app-server-client': 'workspace:*',
       '@codeclosure/runtime': 'workspace:*',
     },
-    devDependencies: {},
+    devDependencies: { '@codeclosure/domain': 'workspace:*' },
   });
   assert.deepEqual(m25CodexIntakeAdapterAllowedNodeBuiltins, [
     'node:buffer',

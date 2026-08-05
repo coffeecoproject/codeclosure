@@ -14,7 +14,7 @@ export const m25CodexIntakeAdapterDependencyExpectation = Object.freeze({
     '@codeclosure/codex-app-server-client': 'workspace:*',
     '@codeclosure/runtime': 'workspace:*',
   }),
-  devDependencies: Object.freeze({}),
+  devDependencies: Object.freeze({ '@codeclosure/domain': 'workspace:*' }),
 });
 
 export const m25CodexIntakeAdapterAllowedNodeBuiltins = Object.freeze([

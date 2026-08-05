@@ -11,6 +11,7 @@
   "scripts": {
     "accept:m1": "node scripts/source-identity.mjs && pnpm gate:quality && node scripts/run-m1-acceptance.mjs && node scripts/source-identity.mjs",
     "accept:m2": "node scripts/run-m2-acceptance.mjs",
+    "regress:m2": "node scripts/run-m2-acceptance.mjs --regression",
     "accept:m2.5": "node scripts/run-m2.5-acceptance.mjs",
     "build": "tsc -b --force --pretty false",
     "check:m2:protocol": "node scripts/run-m2-slice1-protocol-snapshot.mjs",

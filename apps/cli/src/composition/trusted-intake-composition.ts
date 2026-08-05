@@ -28,8 +28,11 @@ import {
 
 import type { IntakeCliApplication } from '../commands/intake.js';
 import { ProtectedPathKind, resolveCodeClosureDataHomePath } from './data-home.js';
-import { createFixtureIntakeAssistant } from './intake-assistant-fixture-invocation.js';
-import { createProductionIntakeAssistant } from './intake-assistant-invocation.js';
+import {
+  createProductionIntakeAssistant,
+  type CreateProductionIntakeAssistantOptions,
+  type ProductionIntakeAssistantResource,
+} from './intake-assistant-invocation.js';
 import { installM1RuntimeProfiles, parseM1RuntimeProfileName } from './m1-runtime-profiles.js';
 import { createNormalizedProjectPathPort } from './project-paths.js';
 import { M1LocalRecoveryInspector } from './recovery-inspector.js';
@@ -52,8 +55,24 @@ export interface CreateIntakeCliInvocationCompositionOptions {
   readonly projectPath?: string;
 }
 
+interface CreateIntakeCliInvocationCompositionWithAssistantOptions extends CreateIntakeCliInvocationCompositionOptions {
+  readonly createAssistant: (
+    options: CreateProductionIntakeAssistantOptions,
+  ) => ProductionIntakeAssistantResource;
+}
+
 export function createIntakeCliInvocationComposition(
   options: CreateIntakeCliInvocationCompositionOptions,
+): IntakeCliComposition {
+  return createIntakeCliInvocationCompositionWithAssistant({
+    ...options,
+    createAssistant: createProductionIntakeAssistant,
+  });
+}
+
+/** Explicit dependency-injection seam for isolated CLI process tests. */
+export function createIntakeCliInvocationCompositionWithAssistant(
+  options: CreateIntakeCliInvocationCompositionWithAssistantOptions,
 ): IntakeCliComposition {
   const dataHomePath = resolveCodeClosureDataHomePath({
     platform: options.platform,
@@ -65,18 +84,14 @@ export function createIntakeCliInvocationComposition(
       : Object.freeze([
           Object.freeze({ kind: ProtectedPathKind.PROJECT, path: options.projectPath }),
         ]);
-  const fixtureName = options.environment['CODECLOSURE_M25_ACCEPTANCE_FIXTURE'];
   const forbiddenRoots = Object.freeze([
     dataHomePath,
     ...(options.projectPath === undefined ? [] : [options.projectPath]),
   ]);
-  const assistant =
-    fixtureName === undefined
-      ? createProductionIntakeAssistant({
-          environment: options.environment,
-          forbiddenRoots,
-        })
-      : createFixtureIntakeAssistant(fixtureName, forbiddenRoots);
+  const assistant = options.createAssistant({
+    environment: options.environment,
+    forbiddenRoots,
+  });
   try {
     const composition = createIntakeCliComposition({
       dataHomePath,

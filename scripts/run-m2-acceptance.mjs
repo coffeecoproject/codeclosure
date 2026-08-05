@@ -15,7 +15,10 @@ import process from 'node:process';
 import {
   M2AcceptanceOutcome,
   M2AcceptanceStage,
+  M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS,
+  M2_CURRENT_SOURCE_REGRESSION_NON_CLAIMS,
   acceptanceVerdict,
+  buildM2CurrentSourceRegressionMatrixResults,
   buildMatrixResults,
   parseAcceptanceMatrix,
   parseNodeTestSummaries,
@@ -24,6 +27,7 @@ import {
   sourceIdentitiesMatch,
   validateLivePreflight,
   validateM2DemoEnvelope,
+  validateM2CurrentSourceRegressionScope,
   validateM2ScopeReview,
 } from './m2-acceptance-lib.mjs';
 
@@ -31,6 +35,15 @@ const repositoryRoot = resolve(import.meta.dirname, '..');
 const acceptancePlanPath = join(repositoryRoot, 'docs', 'plans', 'm2-acceptance-plan.md');
 const cliEntryPoint = join(repositoryRoot, 'apps', 'cli', 'dist', 'index.js');
 const defaultReviewExclusion = 'docs/reviews/m2-completion-review.md';
+const currentMilestoneReviewExclusion = 'docs/reviews/m2.5-completion-review.md';
+const invocationArguments = process.argv.slice(2);
+if (
+  invocationArguments.length > 1 ||
+  (invocationArguments.length === 1 && invocationArguments[0] !== '--regression')
+) {
+  throw new TypeError('run-m2-acceptance accepts only the optional --regression argument');
+}
+const currentSourceRegression = invocationArguments[0] === '--regression';
 const expectedPnpmVersion = '11.1.3';
 const expectedCodexVersion = 'codex-cli 0.146.0';
 const maximumOutputBytes = 128 * 1024 * 1024;
@@ -41,7 +54,7 @@ let protocolIdentity;
 let environmentIdentity;
 
 function log(message) {
-  process.stderr.write(`[accept:m2] ${message}\n`);
+  process.stderr.write(`[${currentSourceRegression ? 'regress:m2' : 'accept:m2'}] ${message}\n`);
 }
 
 function outcomeRank(outcome) {
@@ -198,9 +211,17 @@ function git(arguments_) {
 }
 
 function selectedReviewExclusion() {
-  const value = process.env['CODECLOSURE_M2_REVIEW_EXCLUSION'] ?? defaultReviewExclusion;
-  if (!/^docs\/reviews\/[a-z0-9][a-z0-9-]*\.md$/u.test(value)) {
+  const configured = process.env['CODECLOSURE_M2_REVIEW_EXCLUSION'];
+  const value =
+    configured ??
+    (currentSourceRegression ? currentMilestoneReviewExclusion : defaultReviewExclusion);
+  if (!/^docs\/reviews\/[a-z0-9][a-z0-9.-]*\.md$/u.test(value)) {
     throw new TypeError('CODECLOSURE_M2_REVIEW_EXCLUSION is not a portable review path');
+  }
+  if (currentSourceRegression && value !== currentMilestoneReviewExclusion) {
+    throw new TypeError(
+      'M2 current-source regression requires the canonical M2.5 review exclusion',
+    );
   }
   return value;
 }
@@ -502,16 +523,21 @@ function runDemo(id, scenario, environment = {}, sensitiveValues = []) {
   }
 }
 
-function productSourceText() {
+function productSourceSet() {
   const paths = git(['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
     .split('\0')
     .filter(
       (path) =>
+        existsSync(join(repositoryRoot, path)) &&
         (path.startsWith('apps/') || path.startsWith('packages/')) &&
         path.includes('/src/') &&
         path.endsWith('.ts'),
     );
-  return paths.map((path) => readFileSync(join(repositoryRoot, path), 'utf8')).join('\n');
+  return Object.freeze(
+    paths.map((path) =>
+      Object.freeze({ path, text: readFileSync(join(repositoryRoot, path), 'utf8') }),
+    ),
+  );
 }
 
 function runScopeReview() {
@@ -520,24 +546,27 @@ function runScopeReview() {
   const started = Date.now();
   try {
     const read = (path) => readFileSync(join(repositoryRoot, path), 'utf8');
-    const evidence = validateM2ScopeReview(
-      {
-        agents: read('AGENTS.md'),
-        readme: read('README.md'),
-        m2CompletionReview: read('docs/reviews/m2-completion-review.md'),
-        architecture: read('ARCHITECTURE.md'),
-        domainModel: read('docs/domain-model.md'),
-        workflow: read('docs/workflow.md'),
-        contextCompiler: read('docs/context-compiler.md'),
-        acceptanceEngine: read('docs/acceptance-engine.md'),
-        evidenceModel: read('docs/evidence-model.md'),
-        adrIndex: read('docs/adr/README.md'),
-        milestones: read('docs/milestones.md'),
-        implementationPlan: read('docs/plans/m2-codex-vertical-slice.md'),
-        acceptancePlan: read('docs/plans/m2-acceptance-plan.md'),
-      },
-      productSourceText(),
-    );
+    const documents = {
+      agents: read('AGENTS.md'),
+      readme: read('README.md'),
+      m2CompletionReview: read('docs/reviews/m2-completion-review.md'),
+      architecture: read('ARCHITECTURE.md'),
+      domainModel: read('docs/domain-model.md'),
+      workflow: read('docs/workflow.md'),
+      contextCompiler: read('docs/context-compiler.md'),
+      acceptanceEngine: read('docs/acceptance-engine.md'),
+      evidenceModel: read('docs/evidence-model.md'),
+      adrIndex: read('docs/adr/README.md'),
+      milestones: read('docs/milestones.md'),
+      implementationPlan: read('docs/plans/m2-codex-vertical-slice.md'),
+      acceptancePlan: read('docs/plans/m2-acceptance-plan.md'),
+      goalIntake: read('docs/goal-intake.md'),
+      m25ImplementationPlan: read('docs/plans/m2.5-goal-intake-materialization.md'),
+      m25AcceptancePlan: read('docs/plans/m2.5-acceptance-plan.md'),
+    };
+    const evidence = currentSourceRegression
+      ? validateM2CurrentSourceRegressionScope(documents, productSourceSet())
+      : validateM2ScopeReview(documents, productSourceSet());
     addStage({
       id,
       outcome: M2AcceptanceOutcome.PASS,
@@ -747,7 +776,11 @@ function finalResult() {
     matrixRows = Object.freeze([]);
   }
   const matrix =
-    matrixRows.length === 0 ? Object.freeze([]) : buildMatrixResults(matrixRows, stages);
+    matrixRows.length === 0
+      ? Object.freeze([])
+      : currentSourceRegression
+        ? buildM2CurrentSourceRegressionMatrixResults(matrixRows, stages)
+        : buildMatrixResults(matrixRows, stages);
   const verdict = matrix.length === 0 ? M2AcceptanceOutcome.FAIL : acceptanceVerdict(matrix);
   const rowCounts = Object.freeze({
     total: matrix.length,
@@ -755,12 +788,9 @@ function finalResult() {
     fail: matrix.filter(({ outcome }) => outcome === M2AcceptanceOutcome.FAIL).length,
     blocked: matrix.filter(({ outcome }) => outcome === M2AcceptanceOutcome.BLOCKED).length,
   });
-  return Object.freeze({
+  const common = {
     schemaVersion: 1,
-    kind: 'M2_MILESTONE_ACCEPTANCE_EXECUTION',
     verdict,
-    claimScope: 'CANONICAL_EXECUTABLE_PROCEDURE',
-    canonicalCommand: 'corepack pnpm accept:m2',
     sourceIdentity: Object.freeze({
       opening: openingSourceIdentity ?? null,
       closing: closingSourceIdentity ?? null,
@@ -781,6 +811,25 @@ function finalResult() {
     unavailableChecks: Object.freeze(
       matrix.filter(({ outcome }) => outcome === M2AcceptanceOutcome.BLOCKED).map(({ id }) => id),
     ),
+  };
+  if (currentSourceRegression) {
+    return Object.freeze({
+      ...common,
+      kind: 'M2_CURRENT_SOURCE_REGRESSION_EXECUTION',
+      claimScope: 'CURRENT_SOURCE_M2_REGRESSION_BASELINE',
+      canonicalCommand: 'corepack pnpm regress:m2',
+      excludedHistoricalMilestoneRows: M2_CURRENT_SOURCE_REGRESSION_EXCLUDED_ROWS,
+      nonClaims: M2_CURRENT_SOURCE_REGRESSION_NON_CLAIMS,
+      historicalM2MilestoneVerdictReissued: false,
+      milestoneStatusMutationAuthorized: false,
+      datedIndependentReviewRequired: false,
+    });
+  }
+  return Object.freeze({
+    ...common,
+    kind: 'M2_MILESTONE_ACCEPTANCE_EXECUTION',
+    claimScope: 'CANONICAL_EXECUTABLE_PROCEDURE',
+    canonicalCommand: 'corepack pnpm accept:m2',
     nonClaims: Object.freeze([
       'NOT_A_TECHNICAL_ACCEPTANCE_DECISION',
       'NOT_GOAL_INTAKE_OR_GOAL_MATERIALIZATION',

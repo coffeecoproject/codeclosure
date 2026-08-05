@@ -52,7 +52,10 @@ Slices 1 through 7 implement the bounded Domain, SQLite, Intake package and
 Adapter, Projection and Admission, Answer/failure/recovery, Materialization,
 separate ordinary Start composition, explicit-action CLI, and non-verdict
 assessment harness. The canonical assessment and independent milestone verdict
-have not been executed. Goal Intake MUST remain separate from the
+have not passed: the first canonical attempt returned
+`NOT_READY_FOR_INDEPENDENT_REVIEW` on an acceptance-orchestration conflict, and
+the corrected assessment plus independent verdict remain pending. Goal Intake
+MUST remain separate from the
 Goal-bound WorkerPort and MUST NOT reinterpret the completed M2 execution path
 as intent, Goal, Start, or Admission authority. Do not expand M2.5 into a rich
 TUI, multiple agents, cloud or multi-user execution, full Fact Graph traversal,

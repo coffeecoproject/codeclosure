@@ -25,5 +25,7 @@
     "@codeclosure/codex-app-server-client": "workspace:*",
     "@codeclosure/runtime": "workspace:*"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@codeclosure/domain": "workspace:*"
+  }
 }

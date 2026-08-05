@@ -66,8 +66,12 @@ preallocated ordinary `StartGoal`; Start failure cannot roll back the committed
 Goal, and replay cannot create another first Attempt. The Intake CLI now
 requires an explicit action, uses only public Runtime facades, and preserves
 strict SQLite reopen across separate processes. The `accept:m2.5` runner emits
-only `READY_FOR_INDEPENDENT_REVIEW` evidence and cannot issue or record the
-milestone verdict. The following M2 slice
+only non-verdict review-readiness evidence and cannot issue or record the
+milestone verdict. Its first canonical attempt returned
+`NOT_READY_FOR_INDEPENDENT_REVIEW` because it invoked the historical M2
+milestone procedure against current M2.5 source. The corrected runner uses a
+separate current-source M2 regression contract while preserving the historical
+M2 verdict. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -171,7 +175,9 @@ retention enforcement, and redacted status/audit projections. Slice 6 adds
 atomic Materialization and separate ordinary Start composition. Slice 7 adds
 the narrow CLI composition, deterministic real-adapter fixtures, strict
 cross-process reopen proof, and the non-verdict acceptance harness. The
-canonical assessment and independent M2.5 verdict remain unexecuted. The completed M2 milestone
+first canonical assessment returned `NOT_READY_FOR_INDEPENDENT_REVIEW`; the
+corrected assessment and independent M2.5 verdict remain pending. The completed
+M2 milestone
 preserved the reusable Codex App Server client boundary, which the M2.5 Intake
 Adapter now reuses. The
 same Intake boundary owns bounded non-authoritative Answer-only results and

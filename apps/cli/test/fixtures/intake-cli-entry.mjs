@@ -1,25 +1,21 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
+import process from 'node:process';
+import { URL, fileURLToPath } from 'node:url';
 
 import { createCodexIntakeAssistantAdapter } from '@codeclosure/adapter-codex-intake';
 import { createFixtureAppServerLaunch } from '@codeclosure/codex-app-server-client/testing';
-import type {
-  AnswerOnlyAssistantInput,
-  AnswerOnlyAssistantResponseV1,
-  IntakeAssistantOperationResult,
-  IntakeAssistantPort,
-  IntentAnalysisAssistantInput,
-  IntentAnalysisAssistantResponseV1,
-} from '@codeclosure/runtime';
 
-import type { ProductionIntakeAssistantResource } from './intake-assistant-invocation.js';
+import { runCli } from '../../dist/index.js';
+import { createIntakeCliInvocationCompositionWithAssistant } from '../../dist/composition/trusted-intake-composition.js';
 
-const fixtureScript = resolve(
-  import.meta.dirname,
-  '../../../..',
-  'packages/adapter-codex-intake/test/fixtures/fake-app-server.mjs',
+const fixtureScript = fileURLToPath(
+  new URL(
+    '../../../../packages/adapter-codex-intake/test/fixtures/fake-app-server.mjs',
+    import.meta.url,
+  ),
 );
 
 const fixtureScenarios = new Map([
@@ -30,15 +26,15 @@ const fixtureScenarios = new Map([
   ['project-question', 'cli-exact-source'],
 ]);
 
-class FixtureIntakeAssistant implements IntakeAssistantPort {
-  readonly #forbiddenRoots: readonly string[];
-  readonly #injectCleanupFailure: boolean;
-  readonly #root: string;
-  readonly #launch: ReturnType<typeof createFixtureAppServerLaunch>;
+class FixtureIntakeAssistant {
+  #forbiddenRoots;
+  #injectCleanupFailure;
+  #root;
+  #launch;
   #sequence = 0;
   #closed = false;
 
-  public constructor(fixtureName: string, forbiddenRoots: readonly string[]) {
+  constructor(fixtureName, forbiddenRoots) {
     const scenario = fixtureScenarios.get(fixtureName);
     if (scenario === undefined) {
       throw new TypeError(`Unknown M2.5 CLI Intake fixture: ${fixtureName}`);
@@ -64,21 +60,15 @@ class FixtureIntakeAssistant implements IntakeAssistantPort {
     });
   }
 
-  public analyze(
-    input: IntentAnalysisAssistantInput,
-    signal: AbortSignal,
-  ): Promise<IntakeAssistantOperationResult<IntentAnalysisAssistantResponseV1>> {
+  analyze(input, signal) {
     return this.#nextAdapter().analyze(input, signal);
   }
 
-  public answer(
-    input: AnswerOnlyAssistantInput,
-    signal: AbortSignal,
-  ): Promise<IntakeAssistantOperationResult<AnswerOnlyAssistantResponseV1>> {
+  answer(input, signal) {
     return this.#nextAdapter().answer(input, signal);
   }
 
-  public close(): void {
+  close() {
     this.#closed = true;
     try {
       rmSync(this.#root, { force: true, recursive: true });
@@ -90,7 +80,7 @@ class FixtureIntakeAssistant implements IntakeAssistantPort {
     }
   }
 
-  #nextAdapter(): ReturnType<typeof createCodexIntakeAssistantAdapter> {
+  #nextAdapter() {
     if (this.#closed) {
       throw new TypeError('M2.5 CLI Intake fixture is closed');
     }
@@ -112,13 +102,24 @@ class FixtureIntakeAssistant implements IntakeAssistantPort {
   }
 }
 
-export function createFixtureIntakeAssistant(
-  fixtureName: string,
-  forbiddenRoots: readonly string[],
-): ProductionIntakeAssistantResource {
+function createFixtureIntakeAssistant(fixtureName, forbiddenRoots) {
   const fixture = new FixtureIntakeAssistant(fixtureName, forbiddenRoots);
   return Object.freeze({
     assistant: fixture,
-    close: (): void => fixture.close(),
+    close: () => fixture.close(),
   });
 }
+
+const fixtureName = process.env['CODECLOSURE_M25_ACCEPTANCE_FIXTURE'];
+if (fixtureName === undefined) {
+  throw new TypeError('M2.5 test-only CLI entry requires an explicit fixture name');
+}
+
+process.exitCode = await runCli(process.argv.slice(2), {
+  createIntakeComposition: (options) =>
+    createIntakeCliInvocationCompositionWithAssistant({
+      ...options,
+      createAssistant: ({ forbiddenRoots }) =>
+        createFixtureIntakeAssistant(fixtureName, forbiddenRoots),
+    }),
+});

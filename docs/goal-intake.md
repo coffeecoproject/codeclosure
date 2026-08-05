@@ -41,8 +41,10 @@ Evidence, or Acceptance authority. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
 contract into the current bounded milestone. All implementation slices are now
-present, but `accept:m2.5` has not been executed for the milestone and no
-independent M2.5 verdict exists.
+present. The first `accept:m2.5` attempt returned
+`NOT_READY_FOR_INDEPENDENT_REVIEW` because its M2 stage applied the historical
+Goal-Intake-absence row to current M2.5 source. The corrected assessment has
+not yet run, and no independent M2.5 verdict exists.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout

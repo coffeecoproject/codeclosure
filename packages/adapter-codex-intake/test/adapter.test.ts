@@ -10,6 +10,24 @@ import {
   createSpawnFailureAppServerLaunch,
 } from '@codeclosure/codex-app-server-client/testing';
 import {
+  intakeManifestId,
+  intakeRunId,
+  intakeRunVersion,
+  intentAdmissionDecisionId,
+  intentAdmissionDecisionProjection,
+  isoTimestamp,
+  principalId,
+  rawRequestId,
+  rawRequestRevision as parseRawRequestRevision,
+  rawRequestRevisionProjection,
+  sha256Digest,
+  type IntentAdmissionDecision,
+  type IntentAdmissionDecisionProjectionInput,
+  type IntakeRunId,
+  type RawRequestRevisionProjectionInput,
+  type RawRequestRevisionRecord,
+} from '@codeclosure/domain';
+import {
   CanonicalJsonSha256DigestProvider,
   M25IntakePackageCompiler,
   Rfc8785Canonicalizer,
@@ -35,21 +53,23 @@ const compiler = new M25IntakePackageCompiler({
 });
 const policy = createM25AdmissionPolicy(createM25LocalAdmissionPolicyDefinition(), digests);
 const launchNonce = `sha256:${'9'.repeat(64)}`;
-const fixedDigest = `sha256:${'8'.repeat(64)}`;
-const NOW = '2026-08-03T05:30:00.000Z';
+const fixedDigest = sha256Digest(`sha256:${'8'.repeat(64)}`);
+const NOW = isoTimestamp('2026-08-03T05:30:00.000Z');
 
-function rawRequestRevision(
+function rawRequestRevisionFixture(
   action: 'MATERIALIZE_ONLY' | 'ANSWER_ONLY',
-  intakeRunId: string,
+  runId: IntakeRunId,
   content: string,
   declaredProjectPath?: string,
-) {
+): RawRequestRevisionRecord {
   const base = {
     schemaVersion: 1 as const,
-    rawRequestId: `raw-request_adapter-${action === 'ANSWER_ONLY' ? 'answer' : 'intent'}`,
-    intakeRunId,
-    revision: 1,
-    principalRef: 'principal_local-user',
+    rawRequestId: rawRequestId(
+      `raw-request_adapter-${action === 'ANSWER_ONLY' ? 'answer' : 'intent'}`,
+    ),
+    intakeRunId: runId,
+    revision: parseRawRequestRevision(1),
+    principalRef: principalId('principal_local-user'),
     interactionAction: action,
     admittedUserContent: content,
     admittedContentDigest: digests.digestUtf8(content),
@@ -65,28 +85,19 @@ function rawRequestRevision(
     declaredConstraints: [],
     retentionProfile: { id: 'retention_local', version: 'v1', digest: fixedDigest },
     submittedAt: NOW,
+  } satisfies RawRequestRevisionProjectionInput;
+  return {
+    ...base,
+    rawRequestDigest: digests.digest(rawRequestRevisionProjection(base)),
   };
-  const projection = {
-    schemaVersion: base.schemaVersion,
-    rawRequestId: base.rawRequestId,
-    intakeRunId: base.intakeRunId,
-    revision: base.revision,
-    principalRef: base.principalRef,
-    interactionAction: base.interactionAction,
-    admittedContentDigest: base.admittedContentDigest,
-    ...('declaredProjectRef' in base ? { declaredProjectRef: base.declaredProjectRef } : {}),
-    declaredConstraints: base.declaredConstraints,
-    retentionProfile: base.retentionProfile,
-  };
-  return { ...base, rawRequestDigest: digests.digest(projection) };
 }
 
-function answerDecision(rawRequest: ReturnType<typeof rawRequestRevision>) {
+function answerDecision(rawRequest: RawRequestRevisionRecord): IntentAdmissionDecision {
   const base = {
-    id: 'intent-admission_adapter-answer',
+    id: intentAdmissionDecisionId('intent-admission_adapter-answer'),
     schemaVersion: 1 as const,
     intakeRunId: rawRequest.intakeRunId,
-    intakeRunVersion: 1,
+    intakeRunVersion: intakeRunVersion(1),
     principalRef: rawRequest.principalRef,
     interactionAction: 'ANSWER_ONLY' as const,
     rawRequestRevision: rawRequest.revision,
@@ -107,58 +118,44 @@ function answerDecision(rawRequest: ReturnType<typeof rawRequestRevision>) {
     outcome: 'NO_EXECUTION' as const,
     reasonCode: 'ANSWER_ONLY' as const,
     executionDisposition: 'NONE' as const,
+  } satisfies IntentAdmissionDecisionProjectionInput;
+  return {
+    ...base,
+    decisionDigest: digests.digest(intentAdmissionDecisionProjection(base)),
   };
-  const projection = {
-    schemaVersion: base.schemaVersion,
-    intakeRunId: base.intakeRunId,
-    intakeRunVersion: base.intakeRunVersion,
-    principalRef: base.principalRef,
-    interactionAction: base.interactionAction,
-    rawRequestRevision: base.rawRequestRevision,
-    rawRequestDigest: base.rawRequestDigest,
-    admissionPolicyId: base.admissionPolicyId,
-    admissionPolicyVersion: base.admissionPolicyVersion,
-    admissionPolicyDigest: base.admissionPolicyDigest,
-    orderedReasonTrace: base.orderedReasonTrace,
-    kind: base.kind,
-    outcome: base.outcome,
-    reasonCode: base.reasonCode,
-    executionDisposition: base.executionDisposition,
-  };
-  return { ...base, decisionDigest: digests.digest(projection) };
 }
 
 function intentInput(
   declaredProjectPath?: string,
   content = 'Prepare the bounded requested change.',
 ): IntentAnalysisAssistantInput {
-  const intakeRunId = 'intake_adapter-intent';
-  const rawRequest = rawRequestRevision(
+  const runId = intakeRunId('intake_adapter-intent');
+  const rawRequest = rawRequestRevisionFixture(
     'MATERIALIZE_ONLY',
-    intakeRunId,
+    runId,
     content,
     declaredProjectPath,
   );
   return compiler.compileIntentAnalysis({
-    manifestId: 'intake-manifest_adapter-intent',
+    manifestId: intakeManifestId('intake-manifest_adapter-intent'),
     createdAt: NOW,
-    intakeRunId,
+    intakeRunId: runId,
     rawRequestRevisions: [rawRequest],
     admissionPolicy: policy,
-  } as unknown as Parameters<M25IntakePackageCompiler['compileIntentAnalysis']>[0]);
+  });
 }
 
 function answerInput(): AnswerOnlyAssistantInput {
-  const intakeRunId = 'intake_adapter-answer';
-  const rawRequest = rawRequestRevision('ANSWER_ONLY', intakeRunId, 'Explain this bounded topic.');
+  const runId = intakeRunId('intake_adapter-answer');
+  const rawRequest = rawRequestRevisionFixture('ANSWER_ONLY', runId, 'Explain this bounded topic.');
   return compiler.compileAnswerOnly({
-    manifestId: 'intake-manifest_adapter-answer',
+    manifestId: intakeManifestId('intake-manifest_adapter-answer'),
     createdAt: NOW,
-    intakeRunId,
+    intakeRunId: runId,
     rawRequestRevision: rawRequest,
     preparedDecision: answerDecision(rawRequest),
     admissionPolicy: policy,
-  } as unknown as Parameters<M25IntakePackageCompiler['compileAnswerOnly']>[0]);
+  });
 }
 
 function fixtureRoots(t: TestContext) {

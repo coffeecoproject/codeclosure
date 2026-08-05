@@ -3342,17 +3342,17 @@ void test('[I-006][I-008][I-009] ineligible abandonment records only a base rese
   const base = fixtures('abandonment-rejected');
   const clarify = clarifyFixtures(base, 'abandonment-rejected');
   const bound = abandonmentFixtures(base, clarify, 'abandonment-rejected');
-  const { abandonClarificationBinding: ignoredBinding, ...reservationCommon } = bound.reservation;
+  const {
+    abandonClarificationBinding: ignoredBinding,
+    reservationDigest: ignoredReservationDigest,
+    ...reservationCommon
+  } = bound.reservation;
   void ignoredBinding;
+  void ignoredReservationDigest;
   const reservation = decodeIntakeCommandReservation(
     {
       ...reservationCommon,
-      reservationDigest: digests.digest(
-        intakeCommandReservationProjection({
-          ...reservationCommon,
-          reservationDigest: FIXTURE_DIGEST,
-        }),
-      ),
+      reservationDigest: digests.digest(intakeCommandReservationProjection(reservationCommon)),
     },
     digests,
   );
@@ -4946,12 +4946,7 @@ void test('[I-006][I-008][I-009] strict reopen rejects APPLIED abandonment after
   const baseReservation = decodeIntakeCommandReservation(
     {
       ...reservationCommon,
-      reservationDigest: digests.digest(
-        intakeCommandReservationProjection({
-          ...reservationCommon,
-          reservationDigest: FIXTURE_DIGEST,
-        }),
-      ),
+      reservationDigest: digests.digest(intakeCommandReservationProjection(reservationCommon)),
     },
     digests,
   );

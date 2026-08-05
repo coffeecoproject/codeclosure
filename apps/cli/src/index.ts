@@ -50,7 +50,14 @@ function selectedStartProfileName(fixtureName: string | undefined): string | und
   }
 }
 
-async function runCli(args: readonly string[]): Promise<number> {
+export async function runCli(
+  args: readonly string[],
+  dependencies: Readonly<{
+    createIntakeComposition?: typeof createIntakeCliInvocationComposition;
+  }> = {},
+): Promise<number> {
+  const createIntakeComposition =
+    dependencies.createIntakeComposition ?? createIntakeCliInvocationComposition;
   let json = wantsJsonOutput(args);
   let envelope: CliEnvelope;
   let diagnostic: string | undefined;
@@ -63,7 +70,7 @@ async function runCli(args: readonly string[]): Promise<number> {
           invocation.projectOperand === undefined
             ? undefined
             : resolveCliProjectPath(invocation.projectOperand, process.cwd());
-        const composition = createIntakeCliInvocationComposition({
+        const composition = createIntakeComposition({
           platform: process.platform,
           environment: process.env,
           ...(projectPath === undefined ? {} : { projectPath }),
@@ -85,7 +92,7 @@ async function runCli(args: readonly string[]): Promise<number> {
           invocation.projectOperand === undefined
             ? undefined
             : resolveCliProjectPath(invocation.projectOperand, process.cwd());
-        const composition = createIntakeCliInvocationComposition({
+        const composition = createIntakeComposition({
           platform: process.platform,
           environment: process.env,
           ...(projectPath === undefined ? {} : { projectPath }),
@@ -103,7 +110,7 @@ async function runCli(args: readonly string[]): Promise<number> {
         break;
       }
       case 'intake abandon': {
-        const composition = createIntakeCliInvocationComposition({
+        const composition = createIntakeComposition({
           platform: process.platform,
           environment: process.env,
         });
@@ -119,7 +126,7 @@ async function runCli(args: readonly string[]): Promise<number> {
         break;
       }
       case 'intake status': {
-        const composition = createIntakeCliInvocationComposition({
+        const composition = createIntakeComposition({
           platform: process.platform,
           environment: process.env,
         });
@@ -131,7 +138,7 @@ async function runCli(args: readonly string[]): Promise<number> {
         break;
       }
       case 'intake audit': {
-        const composition = createIntakeCliInvocationComposition({
+        const composition = createIntakeComposition({
           platform: process.platform,
           environment: process.env,
         });
@@ -271,4 +278,6 @@ async function runCli(args: readonly string[]): Promise<number> {
   return exitCode;
 }
 
-process.exitCode = await runCli(process.argv.slice(2));
+if (import.meta.main) {
+  process.exitCode = await runCli(process.argv.slice(2));
+}

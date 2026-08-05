@@ -24,18 +24,24 @@ import {
   rawRequestRevision,
   sourceBindingProjection,
   type ClarificationQuestionSpec,
+  type ClarificationQuestionSpecProjectionInput,
   type IntakeDigestVerifier,
   type IntentAdmissionPolicy,
   type IntentAnalysisProposal,
   type IntentAnalysisProposalId,
+  type IntentAnalysisProposalProjectionInput,
   type IntentProjectionId,
   type IntentProjectionRevisionRecord,
+  type IntentProjectionRevisionProjectionInput,
   type IsoTimestamp,
   type MaterialAmbiguity,
   type MaterialAmbiguityId,
   type MaterialAmbiguitySet,
+  type MaterialAmbiguitySetProjectionInput,
   type RawRequestRevisionRecord,
+  type Sha256Digest,
   type SourceBinding,
+  type SourceBindingProjectionInput,
 } from '@codeclosure/domain';
 import { z } from 'zod';
 
@@ -136,7 +142,7 @@ export interface ProjectIntentAnalysisInput {
   readonly rawRequestRevisions: readonly RawRequestRevisionRecord[];
   readonly currentProjection?: IntentProjectionRevisionRecord;
   readonly admissionPolicy: IntentAdmissionPolicy;
-  readonly responseContractDigest: string;
+  readonly responseContractDigest: Sha256Digest;
   readonly response: IntentAnalysisAssistantResponseV1;
   readonly observedAt: IsoTimestamp;
   readonly ids: IntentProjectionIdentityGenerator;
@@ -393,13 +399,11 @@ export class M25IntentProjectionCompiler {
       responseContractDigest: input.responseContractDigest,
       ...response,
       observedAt: input.observedAt,
-    };
+    } satisfies IntentAnalysisProposalProjectionInput;
     const proposal = decodeIntentAnalysisProposal(
       {
         ...proposalBase,
-        proposalDigest: this.#digests.digest(
-          intentAnalysisProposalProjection(proposalBase as unknown as IntentAnalysisProposal),
-        ),
+        proposalDigest: this.#digests.digest(intentAnalysisProposalProjection(proposalBase)),
       },
       this.#digests,
     );
@@ -444,13 +448,11 @@ export class M25IntentProjectionCompiler {
           startByte: suggestion.startByte,
           endByte: suggestion.endByte,
         },
-      };
+      } satisfies SourceBindingProjectionInput;
       const binding = decodeSourceBinding(
         {
           ...bindingBase,
-          bindingDigest: this.#digests.digest(
-            sourceBindingProjection(bindingBase as unknown as SourceBinding),
-          ),
+          bindingDigest: this.#digests.digest(sourceBindingProjection(bindingBase)),
         },
         this.#digests,
       );
@@ -494,16 +496,14 @@ export class M25IntentProjectionCompiler {
         sourceRevision: 1,
         sourceDigest: proposal.proposalDigest,
         sourceFieldPath: proposalSourceFieldPath(item),
-      };
+      } satisfies SourceBindingProjectionInput;
       return {
         ...item,
         bindings: [
           decodeSourceBinding(
             {
               ...bindingBase,
-              bindingDigest: this.#digests.digest(
-                sourceBindingProjection(bindingBase as unknown as SourceBinding),
-              ),
+              bindingDigest: this.#digests.digest(sourceBindingProjection(bindingBase)),
             },
             this.#digests,
           ),
@@ -527,14 +527,12 @@ export class M25IntentProjectionCompiler {
           digest: input.admissionPolicy.digest,
           orderedInputBindingDigests: [],
         },
-      };
+      } satisfies SourceBindingProjectionInput;
       policyDerivedBindings.push(
         decodeSourceBinding(
           {
             ...base,
-            bindingDigest: this.#digests.digest(
-              sourceBindingProjection(base as unknown as SourceBinding),
-            ),
+            bindingDigest: this.#digests.digest(sourceBindingProjection(base)),
           },
           this.#digests,
         ),
@@ -554,14 +552,12 @@ export class M25IntentProjectionCompiler {
         digest: input.admissionPolicy.digest,
         orderedInputBindingDigests: [],
       },
-    };
+    } satisfies SourceBindingProjectionInput;
     policyDerivedBindings.push(
       decodeSourceBinding(
         {
           ...actionBase,
-          bindingDigest: this.#digests.digest(
-            sourceBindingProjection(actionBase as unknown as SourceBinding),
-          ),
+          bindingDigest: this.#digests.digest(sourceBindingProjection(actionBase)),
         },
         this.#digests,
       ),
@@ -739,36 +735,26 @@ export class M25IntentProjectionCompiler {
       materialAmbiguityRefs: ambiguities.map(({ id }) => id),
       canonicalProfileVersion: M25_INTENT_PROJECTION_PROFILE_VERSION,
       createdAt: input.observedAt,
-    };
+    } satisfies IntentProjectionRevisionProjectionInput;
     const projection = decodeIntentProjectionRevision(
       {
         ...projectionBase,
-        projectionDigest: this.#digests.digest(
-          intentProjectionRevisionProjection(
-            projectionBase as unknown as IntentProjectionRevisionRecord,
-          ),
-        ),
+        projectionDigest: this.#digests.digest(intentProjectionRevisionProjection(projectionBase)),
       },
       this.#digests,
     );
+    const ambiguitySetBase = {
+      schemaVersion: 1 as const,
+      intakeRunId: projection.intakeRunId,
+      intentProjectionId: projection.id,
+      intentProjectionRevision: projection.revision,
+      intentProjectionDigest: projection.projectionDigest,
+      ambiguities,
+    } satisfies MaterialAmbiguitySetProjectionInput;
     const ambiguitySet = decodeMaterialAmbiguitySet(
       {
-        schemaVersion: 1,
-        intakeRunId: projection.intakeRunId,
-        intentProjectionId: projection.id,
-        intentProjectionRevision: projection.revision,
-        intentProjectionDigest: projection.projectionDigest,
-        ambiguities,
-        ambiguitySetDigest: this.#digests.digest(
-          materialAmbiguitySetProjection({
-            schemaVersion: 1,
-            intakeRunId: projection.intakeRunId,
-            intentProjectionId: projection.id,
-            intentProjectionRevision: projection.revision,
-            intentProjectionDigest: projection.projectionDigest,
-            ambiguities,
-          } as unknown as MaterialAmbiguitySet),
-        ),
+        ...ambiguitySetBase,
+        ambiguitySetDigest: this.#digests.digest(materialAmbiguitySetProjection(ambiguitySetBase)),
       },
       this.#digests,
     );
@@ -783,44 +769,34 @@ export class M25IntentProjectionCompiler {
           ? left.sourceOrder - right.sourceOrder
           : compareStrings(left.id, right.id);
     })[0];
-    const clarificationQuestionSpec =
+    const clarificationQuestionSpecBase =
       firstAmbiguity === undefined
+        ? undefined
+        : ({
+            schemaVersion: 1,
+            intakeRunId: projection.intakeRunId,
+            basedOnProjectionRevision: projection.revision,
+            ambiguityRef: firstAmbiguity.id,
+            prompt: M25_CLARIFICATION_QUESTION_PROMPTS[firstAmbiguity.reasonCode],
+            affectedFields: [firstAmbiguity.field],
+            answerSchema:
+              firstAmbiguity.field === IntentProjectionField.PROJECT_IDENTITY
+                ? { schemaVersion: 1, kind: ClarificationAnswerSchemaKind.PROJECT_PATH }
+                : {
+                    schemaVersion: 1,
+                    kind: ClarificationAnswerSchemaKind.TEXT,
+                    maxUtf8Bytes:
+                      m25IntakeBudgetDefinition.exactClarificationAnswerBytesPerRevision,
+                  },
+          } satisfies ClarificationQuestionSpecProjectionInput);
+    const clarificationQuestionSpec =
+      clarificationQuestionSpecBase === undefined
         ? undefined
         : decodeClarificationQuestionSpec(
             {
-              schemaVersion: 1,
-              intakeRunId: projection.intakeRunId,
-              basedOnProjectionRevision: projection.revision,
-              ambiguityRef: firstAmbiguity.id,
-              prompt: M25_CLARIFICATION_QUESTION_PROMPTS[firstAmbiguity.reasonCode],
-              affectedFields: [firstAmbiguity.field],
-              answerSchema:
-                firstAmbiguity.field === IntentProjectionField.PROJECT_IDENTITY
-                  ? { schemaVersion: 1, kind: ClarificationAnswerSchemaKind.PROJECT_PATH }
-                  : {
-                      schemaVersion: 1,
-                      kind: ClarificationAnswerSchemaKind.TEXT,
-                      maxUtf8Bytes:
-                        m25IntakeBudgetDefinition.exactClarificationAnswerBytesPerRevision,
-                    },
+              ...clarificationQuestionSpecBase,
               questionSpecDigest: this.#digests.digest(
-                clarificationQuestionSpecProjection({
-                  schemaVersion: 1,
-                  intakeRunId: projection.intakeRunId,
-                  basedOnProjectionRevision: projection.revision,
-                  ambiguityRef: firstAmbiguity.id,
-                  prompt: M25_CLARIFICATION_QUESTION_PROMPTS[firstAmbiguity.reasonCode],
-                  affectedFields: [firstAmbiguity.field],
-                  answerSchema:
-                    firstAmbiguity.field === IntentProjectionField.PROJECT_IDENTITY
-                      ? { schemaVersion: 1, kind: ClarificationAnswerSchemaKind.PROJECT_PATH }
-                      : {
-                          schemaVersion: 1,
-                          kind: ClarificationAnswerSchemaKind.TEXT,
-                          maxUtf8Bytes:
-                            m25IntakeBudgetDefinition.exactClarificationAnswerBytesPerRevision,
-                        },
-                } as unknown as ClarificationQuestionSpec),
+                clarificationQuestionSpecProjection(clarificationQuestionSpecBase),
               ),
             },
             this.#digests,

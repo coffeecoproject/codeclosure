@@ -93,6 +93,10 @@ importers:
       '@codeclosure/runtime':
         specifier: workspace:*
         version: link:../runtime
+    devDependencies:
+      '@codeclosure/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/codex-app-server-client: {}
 

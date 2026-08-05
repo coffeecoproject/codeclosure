@@ -28,6 +28,7 @@ import {
   validateM25EvidenceManifest,
   validateM25ScenarioEvidenceArtifact,
 } from './m2.5-acceptance-lib.mjs';
+import { parseM2CurrentSourceRegressionResult } from './m2-acceptance-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const planPath = join(repositoryRoot, 'docs', 'plans', 'm2.5-acceptance-plan.md');
@@ -88,7 +89,7 @@ const stageDefinitions = assertM25StageEnumeration([
   },
   {
     id: M25AcceptanceStage.M2_REGRESSION,
-    command: ['corepack', 'pnpm', 'accept:m2'],
+    command: ['corepack', 'pnpm', 'regress:m2'],
     requireTests: false,
   },
   {
@@ -450,6 +451,40 @@ try {
 
 const scenarioEvidence = collectScenarioEvidence();
 let stages = executions.map(({ stage }) => stage);
+const m2RegressionExecution = executions.find(
+  ({ stage }) => stage.id === M25AcceptanceStage.M2_REGRESSION,
+);
+if (m2RegressionExecution !== undefined && m2RegressionExecution.stage.exitCode !== null) {
+  try {
+    const regression = parseM2CurrentSourceRegressionResult(
+      m2RegressionExecution.stdout,
+      openingSourceIdentity,
+    );
+    const expectedExitCode =
+      regression.verdict === M25AcceptanceOutcome.PASS
+        ? 0
+        : regression.verdict === M25AcceptanceOutcome.BLOCKED
+          ? 2
+          : 1;
+    if (m2RegressionExecution.stage.exitCode !== expectedExitCode) {
+      throw new TypeError('M2 regression exit code differs from its structured verdict');
+    }
+    stages = stages.map((stage) =>
+      stage.id === M25AcceptanceStage.M2_REGRESSION
+        ? Object.freeze({ ...stage, outcome: regression.verdict })
+        : stage,
+    );
+  } catch (error) {
+    log(
+      `M2 current-source regression evidence rejected: ${error instanceof Error ? error.message : 'unknown failure'}`,
+    );
+    stages = stages.map((stage) =>
+      stage.id === M25AcceptanceStage.M2_REGRESSION
+        ? Object.freeze({ ...stage, outcome: M25AcceptanceOutcome.FAIL })
+        : stage,
+    );
+  }
+}
 for (const evidence of scenarioEvidence) {
   if (evidence.availability === 'UNAVAILABLE') {
     stages = stages.map((stage) =>

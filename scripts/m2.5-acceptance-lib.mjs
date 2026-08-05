@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 
+import { parseM2CurrentSourceRegressionResult } from './m2-acceptance-lib.mjs';
+
 export const M25_REVIEW_EXCLUSION = 'docs/reviews/m2.5-completion-review.md';
 
 export const M25AcceptanceOutcome = Object.freeze({
@@ -36,7 +38,7 @@ export const M25_REQUIRED_NON_CLAIMS = Object.freeze([
 ]);
 
 export const M25_ACCEPTANCE_MATRIX_CONTRACT_DIGEST =
-  'sha256:95e8fefff54e246bf869a6f5eeeda0e3975243a8659687e295ec75feb77287df';
+  'sha256:a25fe0b685588fea0d8a60a62dcdbed4ee15f715da56de08dcb30db9bdee35d2';
 
 export const M25_REQUIRED_SCENARIO_EVIDENCE = Object.freeze([
   Object.freeze({
@@ -1218,6 +1220,21 @@ export function validateM25EvidenceManifest(rawManifest, readArtifact) {
     const artifact = readArtifact(stage.artifactPath);
     if (sha256Bytes(artifact) !== assertDigest(stage.artifactDigest, 'Stage artifact digest')) {
       throw new TypeError(`M2.5 evidence stage ${stage.id} artifact digest does not match`);
+    }
+    if (stage.id === M25AcceptanceStage.M2_REGRESSION && stage.exitCode !== null) {
+      const regression = parseM2CurrentSourceRegressionResult(
+        Buffer.from(artifact).toString('utf8'),
+        openingSourceIdentity.availability === 'AVAILABLE' ? openingSourceIdentity : undefined,
+      );
+      const expectedExitCode =
+        regression.verdict === M25AcceptanceOutcome.PASS
+          ? 0
+          : regression.verdict === M25AcceptanceOutcome.BLOCKED
+            ? 2
+            : 1;
+      if (stage.outcome !== regression.verdict || stage.exitCode !== expectedExitCode) {
+        throw new TypeError('M2.5 M2-regression stage differs from its structured proof');
+      }
     }
     if (
       !Array.isArray(stage.executedTestNames) ||

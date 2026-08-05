@@ -422,7 +422,7 @@ export class M25IntakeCoordinator {
       {
         ...commandBase,
         canonicalCommandInputDigest: this.#digests.digest(
-          intakeCommandInputProjection(commandBase as never),
+          intakeCommandInputProjection(commandBase),
         ),
       },
       this.#digests,
@@ -480,7 +480,7 @@ export class M25IntakeCoordinator {
     const revision = decodeRawRequestRevision(
       {
         ...revisionBase,
-        rawRequestDigest: this.#digests.digest(rawRequestRevisionProjection(revisionBase as never)),
+        rawRequestDigest: this.#digests.digest(rawRequestRevisionProjection(revisionBase)),
       },
       this.#digests,
     );
@@ -677,9 +677,7 @@ export class M25IntakeCoordinator {
       const decoded = decodeIntakeCommandInput(
         {
           ...base,
-          canonicalCommandInputDigest: this.#digests.digest(
-            intakeCommandInputProjection(base as never),
-          ),
+          canonicalCommandInputDigest: this.#digests.digest(intakeCommandInputProjection(base)),
         },
         this.#digests,
       );
@@ -777,7 +775,7 @@ export class M25IntakeCoordinator {
         {
           ...reservationBase,
           reservationDigest: this.#digests.digest(
-            intakeCommandReservationProjection(reservationBase as never),
+            intakeCommandReservationProjection(reservationBase),
           ),
         },
         this.#digests,
@@ -830,7 +828,7 @@ export class M25IntakeCoordinator {
     const revision = decodeRawRequestRevision(
       {
         ...revisionBase,
-        rawRequestDigest: this.#digests.digest(rawRequestRevisionProjection(revisionBase as never)),
+        rawRequestDigest: this.#digests.digest(rawRequestRevisionProjection(revisionBase)),
       },
       this.#digests,
     );
@@ -875,7 +873,7 @@ export class M25IntakeCoordinator {
       {
         ...answerBindingBase,
         answerBindingDigest: this.#digests.digest(
-          clarificationAnswerBindingProjection(answerBindingBase as never),
+          clarificationAnswerBindingProjection(answerBindingBase),
         ),
       },
       this.#digests,
@@ -909,7 +907,7 @@ export class M25IntakeCoordinator {
       {
         ...reservationBase,
         reservationDigest: this.#digests.digest(
-          intakeCommandReservationProjection(reservationBase as never),
+          intakeCommandReservationProjection(reservationBase),
         ),
       },
       this.#digests,
@@ -969,7 +967,7 @@ export class M25IntakeCoordinator {
       {
         ...commandBase,
         canonicalCommandInputDigest: this.#digests.digest(
-          intakeCommandInputProjection(commandBase as never),
+          intakeCommandInputProjection(commandBase),
         ),
       },
       this.#digests,
@@ -1235,7 +1233,7 @@ export class M25IntakeCoordinator {
     const response = decodeAnswerOnlyResponse(
       {
         ...responseBase,
-        responseDigest: this.#digests.digest(answerOnlyResponseProjection(responseBase as never)),
+        responseDigest: this.#digests.digest(answerOnlyResponseProjection(responseBase)),
       },
       this.#digests,
     );
@@ -1525,7 +1523,7 @@ export class M25IntakeCoordinator {
     const response = decodeAnswerOnlyResponse(
       {
         ...responseBase,
-        responseDigest: this.#digests.digest(answerOnlyResponseProjection(responseBase as never)),
+        responseDigest: this.#digests.digest(answerOnlyResponseProjection(responseBase)),
       },
       this.#digests,
     );
@@ -1721,9 +1719,7 @@ export class M25IntakeCoordinator {
     const question = decodeClarificationQuestion(
       {
         ...questionBase,
-        questionDigest: this.#digests.digest(
-          clarificationQuestionProjection(questionBase as never),
-        ),
+        questionDigest: this.#digests.digest(clarificationQuestionProjection(questionBase)),
       },
       this.#digests,
     );
@@ -1826,7 +1822,7 @@ export class M25IntakeCoordinator {
     const failure = decodeIntakeFailureRecord(
       {
         ...failureBase,
-        failureDigest: this.#digests.digest(intakeFailureRecordProjection(failureBase as never)),
+        failureDigest: this.#digests.digest(intakeFailureRecordProjection(failureBase)),
       },
       this.#digests,
     );
@@ -2151,7 +2147,7 @@ export class M25IntakeCoordinator {
     const reservation = decodeIntakeCommandReservation(
       {
         ...base,
-        reservationDigest: this.#digests.digest(intakeCommandReservationProjection(base as never)),
+        reservationDigest: this.#digests.digest(intakeCommandReservationProjection(base)),
       },
       this.#digests,
     );
@@ -2194,7 +2190,7 @@ export class M25IntakeCoordinator {
     return decodeIntakeCommandReservation(
       {
         ...base,
-        reservationDigest: this.#digests.digest(intakeCommandReservationProjection(base as never)),
+        reservationDigest: this.#digests.digest(intakeCommandReservationProjection(base)),
       },
       this.#digests,
     );
@@ -2240,7 +2236,7 @@ export class M25IntakeCoordinator {
     const reservation = decodeIntakeCommandReservation(
       {
         ...base,
-        reservationDigest: this.#digests.digest(intakeCommandReservationProjection(base as never)),
+        reservationDigest: this.#digests.digest(intakeCommandReservationProjection(base)),
       },
       this.#digests,
     );
