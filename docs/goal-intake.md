@@ -40,11 +40,45 @@ Intake command/read facade and cannot issue Admission, Goal, Workflow, Start,
 Evidence, or Acceptance authority. The
 [M2.5 implementation plan](plans/m2.5-goal-intake-materialization.md) and
 [independent acceptance plan](plans/m2.5-acceptance-plan.md) translate this
-contract into the current bounded milestone. All implementation slices are now
+contract into the completed bounded milestone. All implementation slices are
 present. The first `accept:m2.5` attempt returned
 `NOT_READY_FOR_INDEPENDENT_REVIEW` because its M2 stage applied the historical
-Goal-Intake-absence row to current M2.5 source. The corrected assessment has
-not yet run, and no independent M2.5 verdict exists.
+Goal-Intake-absence row to current M2.5 source. The corrected assessment then
+passed all nine stages and 71/71 mandatory rows with zero skip, and the
+[M2.5 completion review](reviews/m2.5-completion-review.md) issued an
+unconditional bounded `PASS` on 2026-08-06.
+
+A later pinned-version real Answer-only test exposed a compatibility defect not
+covered by that historical assessment. The current Observer rejects valid
+disabled remote-control and rate-limit projections and an empty progressive
+agent-message start, and the closed profile requests two deprecated Web Search
+feature keys. The current ordinary Intake composition also selects the M1
+FakeWorker Profile for governed Start. The
+[M2.5.1 plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
+[acceptance plan](plans/m2.5.1-acceptance-plan.md), and
+[diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md) define the
+versioned correction, Adapter-local typed protocol projection, and mandatory
+real composition proof. The normalized events remain inside the Adapter and do
+not change the accepted Intake authority contract or retroactively enlarge
+M2.5 evidence. The existing M2 protected demonstration is not the target
+composition because it uses external Codex only for `IMPLEMENT` and delegates
+candidate-free `DISCOVERY`/`PLAN` to `FakeWorker`. The proposed formal Profile
+uses real candidate-free Codex over exact Runtime-owned read-only selected-
+source snapshots for those two phases, real Candidate-bound Codex for
+`IMPLEMENT`, and no production fake fallback while retaining Candidate creation
+at the governed `PLAN -> IMPLEMENT` boundary. The source checkout remains
+unreadable to candidate-free Codex.
+Because ADR 0015 keeps project-source Context closed, proposed
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md), or an
+accepted replacement, must become binding before that phase mapping is
+implemented.
+Proposed M2.6 Frontstage handoff may begin only after that closure passes. It
+uses exactly one current user message through the existing public Intake
+facade; it does not concatenate chat, synthesize `USER_STATED` provenance, or
+change this contract.
+Proposed M2.7 adds no Intake action or delayed automatic Start. If another Goal
+owns the project slot, Materialization may remain committed while the existing
+ordinary Start returns a typed occupied result and leaves the new Goal `READY`.
 
 Nothing in this document changes the implemented M1 `CreateGoal` command, the
 existing Workflow phase machine, technical Acceptance, or post-closeout
@@ -1674,6 +1708,50 @@ automatic Goal revision, multiple simultaneous Questions, batch answers, a
 Question lifecycle state machine, rich TUI, multiple Intake agents, or a
 long-term business knowledge base.
 
+### M2.5.1
+
+The proposed post-completion closure versions the corrected Intake Assistant
+Profile and Adapter, preserves retained version-1 authority, and makes real
+Answer-only and Intent-analysis compatibility mandatory evidence. Its bounded
+supported composition requires an exact real Codex Execution Profile rather
+than the M1 FakeWorker Profile before Materialization, records it in
+`GoalStartAuthorization`, and resolves it through the separate ordinary Start
+path. That Profile maps `DISCOVERY` and `PLAN` to real candidate-free Codex over
+exact Runtime-owned read-only selected-source snapshots and `IMPLEMENT` to real
+Candidate-bound Codex execution; the current mixed M2 demo does not satisfy
+that claim. Unsupported project/configuration/instruction or project-read
+workspace isolation fails preflight and cannot fall back to FakeWorker.
+
+M2.5.1 does not let the user or model select the Profile, rebind an existing
+Workflow, permit new Intake effects, synthesize protected checks, or merge
+Materialization with Start. Candidate-free phases cannot read or write the
+checkout or create a Candidate; Candidate authority still begins at
+`PLAN -> IMPLEMENT`,
+the implementation Worker writes only the isolated Candidate, and only the
+Acceptance Engine may issue technical `ACCEPT`. Fake Worker, Candidate Source,
+and Verification components remain explicit deterministic test infrastructure
+only. Proposed
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md), or an
+accepted replacement, must first close the candidate-free project-read
+snapshot, Context, isolation, source-currency, configuration/instruction,
+cleanup, and recovery authority.
+
+### M2.6
+
+The proposed M2.6 Frontstage may persist one exact current-message handoff and
+invoke existing public submit or clarification facades. It does not reinterpret
+session history as a Raw Request, let a model select the trusted interaction
+action, change Admission, merge Materialization with Start, or add a second
+Intake lifecycle. See [Frontstage Interaction](frontstage-interaction.md).
+
+### M2.7
+
+The proposed local Runtime Host keeps the same public Intake facade and
+interaction actions. A project execution slot is checked only by the later
+ordinary `StartGoal`. An occupied slot cannot roll back Materialization,
+silently convert governed execution to materialize-only, or create hidden
+delayed-start authority. See [Local Runtime Host](runtime-host.md).
+
 ### M3 and M4
 
 M3 may add project-assisted Intake, Fact/Scenario provenance, relevance
@@ -1697,7 +1775,7 @@ ordinary `StartGoal` boundary.
 
 ## Required User and Adversarial Tests
 
-Before M2.5 can claim completion, tests must cover at least:
+The completed M2.5 assessment covers at least:
 
 1. a clear source-bound execution command materializes exactly one Goal and
    binds exactly one Goal Start Authorization plus its automatic ordinary Start

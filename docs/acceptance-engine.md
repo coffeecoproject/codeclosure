@@ -20,10 +20,14 @@ without changing the M1 rule set. Slice 8 adds no technical-completion authority
 and completed the bounded M2 exit review on 2026-08-02. Intent Admission and
 Goal Materialization remain separate from the technical Acceptance Engine,
 which is unchanged and gains no pre-Goal or model-authored completion authority.
-M2.5 Slices 1 and 2
-implement their Domain Decision, capability-free Admission Engine contracts,
-and strict SQLite persistence, including the compound Materialization write.
-They do not implement the Admission evaluator or public Materialization path.
+M2.5 implements its separate deterministic Admission evaluator, atomic
+Materialization, ordinary Start composition, and strict persistence without
+changing technical Acceptance; its corrected assessment and independent review
+passed on 2026-08-06. Proposed M2.6 Frontstage routes, answers, Goal summaries,
+focus, pending actions, and notifications remain outside technical Acceptance
+and cannot issue `ACCEPT` or closeout.
+Proposed M2.7 Host, control-lease, and project-slot state likewise cannot become
+Evidence, Acceptance input, `ACCEPT`, or closeout authority.
 
 ## Purpose
 

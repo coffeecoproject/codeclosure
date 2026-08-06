@@ -47,29 +47,111 @@ MUST NOT become Goal, Workflow, Acceptance, or closeout authority. A correct
 first-pass Codex edit MUST NOT be forced through an artificial failure merely
 to exercise repair.
 
-M2.5 — Goal Intake and Materialization — is the current milestone boundary.
-Slices 1 through 7 implement the bounded Domain, SQLite, Intake package and
-Adapter, Projection and Admission, Answer/failure/recovery, Materialization,
-separate ordinary Start composition, explicit-action CLI, and non-verdict
-assessment harness. The canonical assessment and independent milestone verdict
-have not passed: the first canonical attempt returned
-`NOT_READY_FOR_INDEPENDENT_REVIEW` on an acceptance-orchestration conflict, and
-the corrected assessment plus independent verdict remain pending. Goal Intake
-MUST remain separate from the
-Goal-bound WorkerPort and MUST NOT reinterpret the completed M2 execution path
-as intent, Goal, Start, or Admission authority. Do not expand M2.5 into a rich
-TUI, multiple agents, cloud or multi-user execution, full Fact Graph traversal,
-or release and deployment authority.
+M2.5 — Goal Intake and Materialization — is complete as a bounded milestone.
+Slices 1 through 7 implement the Domain, SQLite, Intake package and Adapter,
+Projection and Admission, Answer/failure/recovery, Materialization, separate
+ordinary Start composition, explicit-action CLI, and non-verdict assessment
+harness. The corrected canonical assessment passed all 71 mandatory rows with
+zero skip, and the independent completion review issued an unconditional
+`PASS` on 2026-08-06. Goal Intake remains separate from the Goal-bound
+WorkerPort and MUST NOT reinterpret the completed M2 execution path as intent,
+Goal, Start, or Admission authority.
+
+M2.5.1 — Real Intake-to-Codex Composition Closure — is the current proposed
+pre-M2.6 boundary. A real pinned-version integration test found that the M2.5
+Intake Observer rejects valid disabled remote-control and rate-limit
+projections plus an empty progressive `agentMessage` start, while the closed
+configuration itself requests two deprecated Web Search feature keys. The same
+investigation confirmed that ordinary M2.5 production composition currently
+selects the M1 FakeWorker Profile rather than the real M2 Codex Execution
+Profile. M2.5.1 MUST version the corrected Intake profile/Adapter, preserve
+historical version-1 authority, introduce an Adapter-local typed protocol
+projection as the sole successfully decoded notification consumer above the
+lower Client, keep lower-client decode failures, forbidden effects, and unknown
+activity fail-closed, and prove mandatory real Answer-only,
+Intent-analysis, clarification, Materialization, ordinary Start,
+isolated-Candidate Codex Worker, protected verification, Evidence, Acceptance,
+and regression paths. The normalized event union MUST NOT become Domain,
+Runtime, Store, Audit, Evidence, or Acceptance authority. The formal M2.5.1
+Profile MUST use real candidate-free Codex execution over exact Runtime-owned
+read-only selected-source snapshots for `DISCOVERY` and `PLAN`, real Candidate-
+bound Codex execution for `IMPLEMENT`, and the existing non-Worker owners
+afterward. The source checkout itself remains unreadable to candidate-free
+Codex. Its additive execution chain MUST version the Intent/Record and Codex
+directive/Adapter observation without widening retained identities; Profile v3
+MUST have one owner for every shared or phase field, use the existing canonical
+phase-set order, select `ALL_SELECTED_ATTEMPTS`, and bind an Adapter-local
+phase activity policy that permits only snapshot-read commands for
+`DISCOVERY`/`PLAN` and Candidate-bound command/file-change activity for
+`IMPLEMENT`. Snapshot cleanup MUST use one exact grant identity for idempotent
+unknown-result reconciliation and atomically persist its Outcome, audit, and
+consumption before later replay suppresses filesystem work. The current M2
+protected demo is not that chain: it selects external
+Codex only for `IMPLEMENT` and delegates the candidate-free phases to
+`FakeWorker`. Fake Worker/Candidate/Verification components MUST remain
+explicit test infrastructure, MUST NOT be a production fallback, and Candidate
+authority MUST still begin only at the governed `PLAN -> IMPLEMENT` transition.
+A Plan/source mismatch MUST create no Candidate, MUST retain exact
+`PLAN_SOURCE_NOT_CURRENT` through Workflow integrity authority, MUST project the
+Goal to non-resumable `BLOCKED / INSPECT_BLOCKER`, and MUST NOT trigger
+automatic replan, phase rewind, or `goal resume` continuation. Proposed ADR
+0043, or an accepted
+replacement closing
+the same candidate-free project-read snapshot, Context, isolation, source-
+currency, configuration/instruction, cleanup, and execution-record boundary,
+MUST become binding before that composition is implemented. M2.5.1 MUST NOT
+rewrite the historical M2.5 review or add Frontstage, scheduling, Host,
+arbitrary-project verification, promotion, release, or deployment scope.
+
+M2.6 — Unified Frontstage Interaction and Control — is the next proposed
+feature milestone after M2.5.1 passes. Its formal domain, ADR,
+implementation-plan, acceptance-plan, and temporary deferred-boundary
+documents exist for review; implementation has not started, and proposed ADRs
+are not binding. The bounded
+candidate keeps one foreground CLI frontstage available while the process is
+alive, accepts natural-language user input, routes the closed new-Intake and
+Goal-control action set through exact immutable Runtime-owned Pending Action,
+Authorization, Reservation, and Outcome records, and uses deterministic policy
+to bind either the originating explicit low-risk command or a separate
+natural-language confirmation. Exact M2.5 Question clarification keeps its
+existing authority and receives no competing Pending Action. M2.6 calls only
+public M2.5/Goal facades, exposes an authority-home-bound exact-project Goal
+summary query, and allows at most one execution-bearing task launched by that CLI
+session. Unresolved authorized action recovery may use only its retained public
+Command ID; Assistant work is never recalled automatically. It MUST NOT become
+a rich TUI, detached daemon, project-wide
+scheduler, multiple-agent system, cloud or multi-user runtime, full Fact Graph,
+or release/deployment authority.
+
+M2.7 — Local Runtime Host and Single-Goal Project Control — is a separate
+post-M2.6 proposal. It would add one Host per authority home, CLI attach/detach,
+one control lease plus read-only secondary clients per principal/project, and
+one shared project execution slot acquired by ordinary `StartGoal`. Other Goals
+remain ordinary `READY` Goals; no queue, priority, automatic handoff, or
+automatic Start is permitted. M2.7 implementation MUST NOT begin before M2.6
+passes its own independent completion review, and proposed ADRs 0040 through
+0042 are not binding.
 
 The completed M2 implementation and exit evidence remain in
 `docs/plans/m2-codex-vertical-slice.md`,
 `docs/plans/m2-acceptance-plan.md`, and
 `docs/reviews/m2-completion-review.md`. The independent M2 exit review was a
 prerequisite for M2.5 implementation and passed on 2026-08-02. That review is
-historical evidence for the prerequisite, not the current implementation-status
-record. Current implementation follows
-`docs/plans/m2.5-goal-intake-materialization.md`, and its exit claim follows
-`docs/plans/m2.5-acceptance-plan.md`.
+historical evidence for the prerequisite. The completed M2.5 implementation,
+assessment, and verdict remain in
+`docs/plans/m2.5-goal-intake-materialization.md`,
+`docs/plans/m2.5-acceptance-plan.md`, and
+`docs/reviews/m2.5-completion-review.md`. The current proposed compatibility and
+composition closure follows
+`docs/reviews/m2.5-live-intake-compatibility-diagnostic.md`,
+`docs/plans/m2.5.1-real-intake-codex-composition-closure.md`, and
+`docs/plans/m2.5.1-acceptance-plan.md`. Proposed M2.6 work follows
+`docs/frontstage-interaction.md`,
+`docs/plans/m2.6-unified-frontstage-interaction.md`, and
+`docs/plans/m2.6-acceptance-plan.md` only after M2.5.1 passes and its ADRs are
+accepted. Proposed M2.7 work is separately described by `docs/runtime-host.md`,
+`docs/plans/m2.7-local-runtime-host-single-goal-control.md`, and
+`docs/plans/m2.7-acceptance-plan.md`.
 
 ## Engineering Rules
 
@@ -122,13 +204,16 @@ Once M1 scaffolding exists:
   repository-relative Git path; a Markdown-named symbolic link MUST fail rather
   than be followed or silently skipped. `pnpm docs:check` is the executable
   check for these rules.
-- Treat `docs/plans/m2-codex-vertical-slice.md` as the current detailed
-  per-slice implementation-status record and `docs/milestones.md` as the
-  milestone boundary. The completed M1 plan and review remain historical
-  evidence. The root README MUST contain exactly one level-two `Status` section,
-  that section MUST contain prose paragraphs only, and its only links MUST point
-  to the current M2 plan and milestone records. The README MUST NOT contain a
-  numbered rolling-slice status anywhere.
+- Treat `docs/milestones.md` as the milestone boundary and
+  `docs/plans/m2.5.1-real-intake-codex-composition-closure.md` as the current
+  proposed implementation sequence. The completed M1, M2, and M2.5 plans and
+  reviews remain historical evidence; M2.6 remains the next feature proposal
+  after M2.5.1. Until the separately reviewed README status-source
+  contract is migrated, the root README MUST contain exactly one level-two
+  `Status` section, that section MUST contain prose paragraphs only, and its
+  only links MUST point to the M2 plan and milestone records enforced by
+  `pnpm docs:check`. The README MUST NOT contain a numbered rolling-slice status
+  anywhere.
 - The root README MUST NOT duplicate a rolling feature or test inventory.
   Because semantic equivalence is not mechanically decidable from prose, the
   slice-close documentation review owns this check; `pnpm docs:check` enforces

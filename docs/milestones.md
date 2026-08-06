@@ -290,37 +290,27 @@ that CodeClosure can form a Goal from an incomplete natural-language request.
 
 ## M2.5 — Goal Intake and Materialization Vertical Slice
 
-Status: In progress. Slice 1 domain, codec, fixed-policy, Engine-contract, and
-invariant work plus Slice 2 SQLite Intake authority are complete. Slice 3
-Runtime packages, Manifests, and the isolated read-only Intake Assistant Adapter
-are implemented under
-[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). The Adapter
-grants no CodeClosure authority capability and fails on observed tool use
-without claiming an empty model-visible tool set. Slice 4 Coordinator,
-source-bound Projection, clarification, abandonment, deterministic Admission,
-and non-Answer `NO_EXECUTION` behavior are implemented. Slice 5 bounded
-Answer-only delivery, terminal failure, restart reconciliation, replay,
-retention, and redacted in-process status/audit behavior are implemented. Slice
-6 atomic Goal/Workflow Materialization, optional Start Authorization, separate
-ordinary `StartGoal` composition, replay, race, failure isolation, strict
-reopen, and composite Start status are implemented. Slice 7 explicit-action
-CLI commands, bounded shared views, deterministic real-adapter fixtures,
-strict cross-process reopen path, and non-verdict assessment harness are also
-implemented.
-The operational scope below remains planned behavior governed by
-[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md)
-and
+Status: Complete as a bounded Goal Intake and Materialization milestone on
+2026-08-06. Slices 0 through 7 implement the closed Domain, SQLite authority,
+packages and isolated Intake Assistant Adapter, source-bound Projection,
+deterministic Admission, clarification, Answer/failure/recovery, atomic
+Materialization, separate ordinary Start composition, explicit-action CLI,
+strict cross-process reopen, and non-verdict assessment harness. The corrected
+canonical assessment passed all nine stages and 71/71 mandatory rows with zero
+skip. The
+[M2.5 completion review](reviews/m2.5-completion-review.md) independently issued
+an unconditional `PASS` for that exact bounded claim.
+
+The accepted authority remains
+[ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md),
 [ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md),
-with the assistant effect boundary governed by ADR 0035 above.
-M2.5 implementation MUST NOT begin until M2 has passed its exit review. That
-gate passed on 2026-08-02. The detailed
+and
+[ADR 0035](adr/0035-bound-intake-by-non-authoritative-effects.md). The detailed
 [implementation plan](plans/m2.5-goal-intake-materialization.md) and
-[acceptance plan](plans/m2.5-acceptance-plan.md) now govern execution. The
-implementation slices do not issue an M2.5 verdict. The first canonical
-assessment returned `NOT_READY_FOR_INDEPENDENT_REVIEW` because it reused the
-historical M2 milestone procedure against current Goal Intake source. The
-corrected exact-source assessment remains pending, and the independent review
-remains the only owner of the bounded milestone verdict.
+[acceptance plan](plans/m2.5-acceptance-plan.md) are historical implementation
+and exit contracts. Later interaction work may call the public M2.5 facade but
+cannot reinterpret its Raw Request, Source Binding, Admission,
+Materialization, or Start authority.
 
 ### Objective
 
@@ -464,6 +454,403 @@ Supplementary cases must show:
   green; and
 - every M1 and M2 regression gate remains green.
 
+M2.5 completion proves bounded source-bound Goal Intake, Materialization, and
+separately authorized Start. It does not prove a persistent conversational
+frontstage, automatic interaction routing, Goal discovery, scheduling, or
+detached execution.
+
+## M2.5.1 — Real Intake-to-Codex Composition Closure
+
+Status: Proposed post-completion compatibility and composition closure.
+Investigation is complete; implementation and assessment have not started. The
+[implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
+[acceptance plan](plans/m2.5.1-acceptance-plan.md), and
+[live Intake diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md)
+define the bounded work.
+
+M2.5.1 does not revoke or rewrite the historical M2.5 `PASS`. That review
+explicitly used no live M2.5 Intake observation and bound governed execution to
+the M1 happy-path FakeWorker Profile. M2.5.1 establishes new current-source
+evidence for behavior that the historical review did not claim.
+
+### Objective
+
+Correct the pinned real App Server compatibility defect in the M2.5 Intake
+Adapter and prove one trusted product-composition path from real Intake through
+source-bound Materialization and ordinary Start to real candidate-free Codex
+`DISCOVERY`/`PLAN`, real Candidate-bound Codex `IMPLEMENT`, protected
+verification, Evidence, Acceptance, and closeout.
+
+### Scope
+
+- versioned Intake Assistant Profile and Adapter compatibility correction;
+- lower-client raw-frame failure closure plus an Adapter-local typed protocol
+  projection as the sole successfully decoded notification consumer above that
+  boundary, with a private exhaustive effect classifier and closed normalized
+  Intake event union;
+- stage-aware agent-message validation and removal of self-induced deprecated
+  configuration notices;
+- safe diagnostic categories without request/response, reasoning, account,
+  credential, notification-payload, or raw-exception retention;
+- version-1 Intake state read/replay/recovery compatibility without silent
+  resume under the corrected version;
+- mandatory explicitly authorized real Answer-only and Intent-analysis calls;
+- trusted installation of the real M2 external-backend capability and
+  Execution Profile before capability publication;
+- exact Profile-owned dispatch of real candidate-free read-only Codex for
+  `DISCOVERY`/`PLAN` and real Candidate-bound Codex for `IMPLEMENT`, with the
+  candidate-free selected-source snapshot, Context, isolation, source-
+  currency, configuration/instruction, and execution-record boundary accepted
+  through
+  [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) or an exact
+  replacement before implementation;
+- atomic persistence and strict reopen of each candidate-free project-read
+  record with its exact externally owned read-only snapshot and Context/Attempt
+  authority, plus `ExternalExecutionIntentV2`/`ExternalExecutionRecordV2`,
+  `CodexWorkerDirectiveV3`, `CodexAdapterObservationV2`, pre/post-Turn source/
+  snapshot checks, monotonic workspace-authority reconciliation, consume-once
+  terminal/orphan cleanup with same-grant idempotent crash reconciliation and
+  atomic Cleanup Outcome persistence, and exact Plan-source-to-Candidate-source
+  equality;
+- additive external-execution v3 phase dispatch with no duplicate global/
+  phase authority, canonical string-sorted phase identity,
+  `ALL_SELECTED_ATTEMPTS`, and exact phase cwd, source/Candidate presence,
+  permission/isolation, project-configuration, instruction-source, response,
+  Adapter-local phase activity-policy identity, network, continuity, compaction,
+  and fallback policy without reinterpreting existing M1/M2 Profiles;
+- exact binding of that Profile in M2.5 governed-execution preflight,
+  `GoalStartAuthorization`, ordinary `StartGoal`, and Workflow Driver
+  resolution;
+- real Codex Worker mutation of only one controlled-copy Candidate under a
+  predeclared bounded demonstration profile;
+- exact Candidate freeze, protected verification, Evidence, Acceptance, and
+  closeout with the source project unchanged; and
+- deterministic, live, failure, replay, restart, strict-reopen, privacy,
+  cleanup, and complete M1/M2/M2.5 regression evidence.
+
+### Explicit Non-Scope
+
+- M2.6 Frontstage routing, Pending Actions, Goal discovery, focus,
+  confirmation, or persistent interaction;
+- M2.7 Runtime Host, attachment, control lease, project execution slot, queue,
+  or automatic handoff;
+- user-, model-, project-, or CLI-selected Execution Profiles;
+- rebinding an existing Goal or started Workflow to another Profile;
+- early Candidate/Generation creation, source-checkout reads or writes from
+  `DISCOVERY`/`PLAN`, projection-excluded reads, or a production FakeWorker
+  fallback;
+- project-assisted Intake, broad discovery, or arbitrary-project verification
+  synthesis;
+- automatic Intake retry, candidate-free Worker retry, same-Goal replan/phase
+  rewind, Worker repair expansion, or Goal revision;
+- Worker-authored Acceptance authority; and
+- Candidate promotion, source-project mutation, merge, release, deployment, or
+  another external effect.
+
+### Required Demonstration
+
+The mandatory assessment must show, on one exact source identity:
+
+1. the original real event sequence succeeds through the corrected versioned
+   Adapter while the historical failed Intake record remains unchanged;
+2. real Answer-only returns a bounded non-authoritative answer and creates no
+   Goal or Start authority;
+3. a clear request completes real Intent analysis while Runtime alone authors
+   Source Bindings and deterministic Admission input;
+4. a materially ambiguous request remains ineligible despite model proposals
+   and creates one exact Clarification Question with no Goal;
+5. an exact clarification answer produces a new source-bound request revision
+   and qualified input materializes one Goal;
+6. its `GoalStartAuthorization` binds the exact installed real M2 Codex
+   Execution Profile rather than the M1 FakeWorker Profile;
+7. the separate ordinary Start resolves that same Profile and dispatches real
+   candidate-free read-only Codex for `DISCOVERY` and `PLAN` over exact owned
+   selected-source snapshots without exposing the checkout or creating a
+   Candidate;
+8. `PLAN -> IMPLEMENT` creates the isolated Candidate and real Candidate-bound
+   Codex changes only that Candidate;
+9. predeclared protected verification, Evidence, Acceptance, and closeout bind
+   that exact Candidate and policy; and
+10. source project content and Git identity remain unchanged through success,
+    failure, cleanup, and strict reopen.
+
+### Exit Criteria
+
+- disabled remote-control and bounded rate-limit notifications project into
+  content-minimized benign events without becoming Intake authority or false
+  protocol failure;
+- deprecated configuration keys are absent and arbitrary deprecation/warning
+  activity is not blanket-whitelisted;
+- started agent-message text may be empty while completed/terminal content and
+  unique summary binding remain strict;
+- the lower Client alone admits raw JSON-RPC frames; successfully decoded Codex
+  notifications and compaction callbacks cannot bypass the Adapter-local
+  protocol projection, and normalized events cannot leak into Domain or Runtime
+  authority;
+- every forbidden Item/effect maps to a forbidden-effect event, while every
+  known-method malformed, unmapped, warning, reroute, compaction, terminal
+  mismatch, and invalid response remains a projected protocol violation, and
+  every unsupported method or malformed envelope closes in the lower Client;
+  all such paths fail closed;
+- new operations use new exact profile/Adapter identities while retained
+  version-1 authority reopens and replays without reinterpretation;
+- model output cannot select Route, Admission, Goal, Policy, Execution Profile,
+  Start, Candidate, Verification, Evidence, Acceptance, or closeout authority;
+- Materialization and Start remain separate transactions, and only ordinary
+  Start creates first Profile/Context/Attempt/dispatch authority;
+- the formal Profile and every live Worker-phase receipt exclude FakeWorker;
+  real `DISCOVERY`/`PLAN` have exact read-only snapshot identity, no checkout
+  access, and no Candidate binding, while real `IMPLEMENT` has the exact mutable
+  Candidate binding;
+- every selected phase binds the additive v2 Intent/Record and v3 Codex
+  directive/v2 Adapter observation chain; retained v1 Record/Intent, v2
+  directive, and v1 Adapter observation meanings remain unchanged, and any
+  reused lifecycle/Worker schema is proven sufficient rather than widened;
+- the versioned Adapter-local Worker activity policy admits only snapshot-cwd
+  read commands for `DISCOVERY`/`PLAN` and exact Candidate-lease/allowed-path
+  command/file-change activity for `IMPLEMENT`; unknown, forbidden, cross-
+  phase, approval, network, or containment-mismatched activity fails closed;
+- `.git`, ignored/special/projection-excluded files, project configuration,
+  ambient instruction sources, authority, credentials, Candidate roots,
+  sibling snapshots, and protected assets cannot widen candidate-free access;
+- candidate-free source or snapshot drift rejects the Worker proposal without
+  a replacement Attempt, and a later Candidate is created only from the exact
+  source projection admitted for the current Plan;
+- a Plan-source mismatch records `PLAN_SOURCE_NOT_CURRENT`, creates no partial
+  Candidate, preserves the completed Plan Attempt, atomically moves the
+  Workflow from `PLAN / READY` to `PLAN / FAILED`, retains the exact code in
+  the integrity event and `suspendedReason`, projects the Goal to
+  `BLOCKED / INSPECT_BLOCKER` with no recovery catalog, and performs no
+  automatic replan, phase rewind, `goal resume` continuation, or fake fallback;
+- cleanup before-call, after-delete/before-outcome, and after-outcome crash
+  windows preserve one exact grant identity: only the same unresolved grant
+  may reconcile, Outcome/audit/grant consumption commit atomically, and a
+  retained Outcome prevents another filesystem call;
+- mandatory live evidence cannot be replaced by a lower-client probe or fixture;
+- the real Worker writes only the isolated Candidate and cannot define the
+  acceptance-critical check;
+- only the Acceptance Engine may issue technical `ACCEPT` for the exact frozen
+  Candidate and evidence;
+- the original source project and historical M2.5 review remain unchanged;
+- the complete M1, M2, and M2.5 current-source regressions pass with zero skip;
+  and
+- the canonical non-verdict runner and independent review pass every mandatory
+  deterministic and live row on one exact source identity.
+
+M2.5.1 completion would prove only this bounded compatibility and composition
+closure. It is a mandatory entry condition for M2.6 implementation and
+assessment, not a Frontstage feature or product-completion claim.
+
+## M2.6 — Unified Frontstage Interaction and Control
+
+Status: Proposed. Formal domain, ADR, implementation, and acceptance documents
+exist for review; implementation has not started. M2.5.1 completion is an
+entry condition, and the proposed ADRs are not binding until accepted. The
+[M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
+plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction
+contract](frontstage-interaction.md) define the candidate boundary. Deferred
+Runtime Host, scheduling, and later-milestone ideas are staged only in the
+temporary [M2.6 deferred-boundary
+TODO](plans/m2.6-deferred-boundary-todo.md).
+
+### Objective
+
+Provide one continuously available local CLI frontstage where the user uses
+natural language for bounded conversation, existing M2.5 Goal Intake, scoped
+Goal discovery/status/control, and one in-process Goal execution while
+CodeClosure retains exact routing, immutable pending-action authorization and
+dispatch, deterministic direct-or-separate confirmation, Workflow, and
+Acceptance authority.
+
+### Scope
+
+- durable Interaction Session, Message, Operation, Focus, Route Proposal,
+  Route Decision, Pending Action/Resolution, Action Reservation/Outcome, exact
+  M2.5 message handoff, and bounded Frontstage Answer records;
+- deterministic Interaction Routing Policy and a closed natural-language
+  direct-action/confirmation policy plus separate-confirmation parser;
+- exact immutable pending-action, authorization, reservation, and outcome
+  binding before every closed new-Intake/start/resume/cancel action;
+- one current-message handoff to existing M2.5 submit/clarify facades without
+  chat summary or composite `USER_STATED` synthesis;
+- separate Frontstage Assistant port, Context Package/Manifest, one closed
+  proposal-response union, and at most one fresh isolated App Server operation
+  per unresolved message;
+- fixed-local-principal authority-home binding plus exact-project-scoped,
+  stable, paginated public Goal-summary query;
+- exact Focus Binding plus natural-language Goal list, status, audit, start,
+  resume, and cancel interaction;
+- foreground CLI loop that remains available while one session-owned governed
+  action traverses M2.5 into Goal execution;
+- bounded result notifications, graceful shutdown, and strict startup
+  reconciliation; and
+- deterministic, cross-process, failure-injection, regression, and explicitly
+  authorized bounded live assessment.
+
+### Explicit Non-Scope
+
+- detached Runtime Host or guaranteed Goal execution after CLI exit;
+- project-wide execution slots, automatic multi-Goal scheduling, or parallel
+  workers;
+- rich TUI, web/graphical client, multi-user, remote, or cloud behavior;
+- full Fact Graph, broad project discovery, or project-aware ordinary chat;
+- arbitrary multi-message synthesis into M2.5 user authority;
+- persistent assistant Thread reuse or Compact policy;
+- automatic repair/retry or execution-time Goal revision;
+- technical Acceptance changes; and
+- promotion, merge, release, deployment, or another external effect.
+
+### Required Demonstration
+
+One deterministic end-to-end run must show:
+
+1. a trusted principal/project opens one persistent foreground session;
+2. an ordinary question returns a bounded non-authoritative answer;
+3. a natural-language Goal-list request returns scoped Runtime summaries;
+4. an ambiguous reference asks for clarification rather than choosing a Goal;
+5. a clear low-risk governed-work request creates one exact Pending Action and
+   deterministic direct-user authorization;
+6. that action is consumed once and hands the exact originating message bytes
+   to M2.5 without a redundant confirmation turn;
+7. an exact focused clarification continues through the existing M2.5 Question
+   binding and materializes one Goal;
+8. execution crosses only the existing ordinary Start boundary and resolves
+   the exact real M2 Codex Execution Profile proven by M2.5.1;
+9. the same frontstage remains usable for status while the Goal runs; and
+10. shutdown/reopen preserves session and Goal authority without implicit
+    cancellation, assistant recall, duplicate command, or dispatch replay.
+
+### Exit Criteria
+
+- assistant output cannot author a trusted route, interaction action, pending
+  action, Goal command, Workflow mutation, or completion decision;
+- every member of the closed new-Intake/Goal-control action set binds one exact
+  immutable pending action and allowed direct or separate-confirmation
+  disposition; exact M2.5 clarification and interaction bookkeeping do not;
+- deterministic direct authorization is restricted to exact low-risk action
+  kinds and cannot use model interpretation as evidence;
+- cancellation, replacement, destructive, conflicting, ambiguous, stale,
+  expired, or replayed input fails closed to clarification or separate
+  confirmation without floating authorization;
+- Assistant replay invokes no second model operation; unresolved authorized
+  action recovery uses only the retained public Command ID and creates no
+  duplicate authority effect;
+- one-message M2.5 handoff preserves exact user bytes and provenance without
+  importing prior chat or model summaries as `USER_STATED`;
+- the Frontstage Assistant has no project, Store, Worker, Candidate, Evidence,
+  Acceptance, network, or external-effect capability;
+- Goal discovery is scoped, stable, paginated, and includes direct plus
+  Intake-created Goals without exposing raw Store authority;
+- focus is an audited convenience binding and cannot bypass current Runtime
+  freshness checks;
+- the foreground frontstage remains responsive during one session-owned
+  execution-bearing task, rejects another governed Intake/Start/Resume without
+  delayed authority, and allows a `MATERIALIZE_ONLY` Intake fallback only after
+  exact separate authorization;
+- CLI exit creates no implicit `CancelGoal` and makes no detached-execution
+  guarantee;
+- startup reconciles incomplete interaction and existing Runtime work without
+  model recall, replacement Command ID, duplicate authority, or
+  consumed-dispatch replay;
+- status and notifications remain projections and cannot issue Acceptance or
+  closeout; and
+- the complete M1, M2, M2.5, and M2.5.1 regression baselines remain green.
+
+M2.6 completion would prove only the foreground process-lifetime interaction
+boundary. Detached Host ownership, secondary-client control, and project-slot
+authority remain the separate M2.7 proposal below.
+
+## M2.7 — Local Runtime Host and Single-Goal Project Control
+
+Status: Proposed. The [Local Runtime Host contract](runtime-host.md),
+[implementation plan](plans/m2.7-local-runtime-host-single-goal-control.md),
+and [acceptance plan](plans/m2.7-acceptance-plan.md) define a candidate
+post-M2.6 milestone. Implementation has not started, M2.6 completion is an
+entry condition, and proposed ADRs 0040 through 0042 are not binding.
+
+### Objective
+
+Run one compatible deterministic local Runtime Host that continues existing
+governed Goal execution across CLI detach/reconnect, gives one CLI writable
+control plus bounded read-only observers for each principal/project, and
+atomically permits only one started non-terminal Goal per exact project without
+adding a queue or automatic handoff.
+
+### Scope
+
+- one `RuntimeHostRecord`, monotonic Host Epoch, exact process/launch/endpoint
+  identity, and single-owner bootstrap per authority home;
+- Host-owned verified Store activation, M2.6 Interaction reconciliation, and
+  existing Runtime/external-execution recovery before capability publication;
+- bounded versioned local CLI control transport and compatible attach/start/
+  reconnect behavior;
+- one durable project control lease and monotonic Control Epoch for the writable
+  CLI;
+- bounded read-only secondary CLI access to Goal list/status/audit/result views;
+- one durable project execution slot acquired atomically by first Start and
+  retained across the owning Goal's complete non-terminal lifetime;
+- typed `PROJECT_EXECUTION_SLOT_OCCUPIED` Start rejection with no Attempt,
+  Context, dispatch, process, or Worker call;
+- atomic slot release only when the owning Goal closes or is cancelled;
+- CLI detach without implicit Goal cancellation and Host-owned execution while
+  the Host remains alive;
+- graceful Host shutdown and abrupt crash/restart reconciliation; and
+- migration, strict reopen, cross-process concurrency, failure-injection,
+  deterministic, and bounded live assessment.
+
+### Explicit Non-Scope
+
+- waiting Goal queue, priority, fairness, or automatic next-Goal selection;
+- automatic Start when the project slot becomes free;
+- two writable CLIs or manual control transfer;
+- multiple active Goals per project, parallel workers, or global scheduler;
+- multi-user/team, remote client/worker, or cloud hosting;
+- project-aware ordinary conversation, Fact Graph, or Goal Revision;
+- automatic repair/retry changes or rich operator/Human Decision UX;
+- technical Acceptance changes; and
+- promotion, merge, release, deployment, or another external effect.
+
+### Required Demonstration
+
+One deterministic end-to-end run must show:
+
+1. CLI A starts or attaches the sole compatible Host and obtains control;
+2. a clear M2.6 request materializes and starts Goal A, atomically acquiring the
+   project slot;
+3. CLI B attaches as observer, reads Goal A, and cannot mutate Interaction,
+   Intake, or Goal authority;
+4. CLI A detaches without `CancelGoal`, while Host-owned Goal A continues;
+5. a later CLI obtains a higher Control Epoch and reads exact current state;
+6. Goal B remains `DISCOVERY / READY`, and Start while A owns the slot receives
+   the typed occupied result without execution;
+7. Goal A closes or is cancelled and releases the slot atomically;
+8. Goal B remains unchanged and does not start automatically; and
+9. only a fresh user-authorized ordinary Start for Goal B acquires the free
+   slot.
+
+### Exit Criteria
+
+- concurrent Host starters produce one exact Host owner and fail closed on
+  stale/ambiguous process, endpoint, or epoch identity;
+- no client capability is published before verified activation, strict reopen,
+  and recovery complete;
+- CLI detach is distinct from Host stop, Goal cancellation, slot release, and
+  technical completion;
+- one principal/project has one writable control lease, and stale/observer
+  clients cannot mutate or indirectly create pending actions;
+- concurrent Starts for two Goals in one project produce one exact slot owner
+  and one typed occupied loser atomically;
+- the slot is retained across READY, RUNNING, WAITING_FOR_INPUT, BLOCKED,
+  FAILED, restart, and Resume, then released only by exact close/cancel;
+- non-owning Goals retain existing state and are never queued, selected, or
+  automatically started;
+- M2.5 governed Materialization remains committed when its later ordinary Start
+  loses the slot;
+- Host crash/restart never adopts ambiguous work, redispatches consumed
+  authority, releases a slot, or issues Cancel/Accept;
+- local transport exposes no Store/kernel/backend protocol authority; and
+- the complete M1, M2, M2.5, and M2.6 regression baselines remain green.
+
 ## M3 — Full Fact Graph and Context Compiler
 
 ### Objective
@@ -517,7 +904,8 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - explicit authority for each automatic repair continuation, maximum rounds,
   cost/time limits, repeated-failure and no-progress detection, and
   continue/change-strategy/request-user/stop outcomes;
-- robust crash/restart reconciliation;
+- robust crash/restart and dogfood reconciliation beyond the bounded M2.7 Host
+  contract if that proposal is accepted;
 - Human Decision Gateway UX;
 - complete Goal Intake and clarification UX;
 - Raw Request and sensitive Intake-content retention controls;
@@ -555,7 +943,8 @@ Potential scope after local Codex dogfooding is stable:
 - additional coding-agent adapters;
 - policy packs by project/risk type;
 - stronger isolation and remote runners;
-- multi-goal scheduling;
+- multi-goal queueing, priority, and automatic scheduling beyond M2.7's
+  proposed no-auto-handoff project slot;
 - team/multi-user authority;
 - promotion/merge/release control as a separate governed subsystem;
 - evaluate whether any proven limitation justifies a Codex fork.

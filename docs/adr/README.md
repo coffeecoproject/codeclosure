@@ -41,10 +41,24 @@ supersedes it.
 | [0033](0033-align-protected-verification-with-start-and-check-lifecycle.md) | Align protected verification with Start and Check lifecycle | Accepted |
 | [0034](0034-close-pre-goal-command-replay-and-sqlite-activation.md) | Close pre-Goal command replay and SQLite activation | Accepted |
 | [0035](0035-bound-intake-by-non-authoritative-effects.md) | Bound M2.5 Intake by non-authoritative effects instead of model-visible tool absence | Accepted |
+| [0036](0036-trusted-natural-language-interaction-routing.md) | Route natural language through trusted pending actions | Proposed |
+| [0037](0037-frontstage-assistant-effect-and-context-boundary.md) | Bound each Frontstage Assistant operation by a fresh manifest | Proposed |
+| [0038](0038-goal-summary-focus-and-control-boundary.md) | Expose scoped Goal summaries and exact focus through the Runtime | Proposed |
+| [0039](0039-cli-resident-frontstage-lifecycle-and-concurrency.md) | Keep the M2.6 Frontstage resident in the CLI process | Proposed |
+| [0040](0040-local-runtime-host-lifecycle-and-attachment.md) | Move local execution ownership into one attachable Runtime Host | Proposed |
+| [0041](0041-project-control-lease-and-read-only-secondary-cli.md) | Give one CLI the project control lease and make later CLIs observers | Proposed |
+| [0042](0042-project-scoped-single-active-goal-slot.md) | Allow one started Goal per project without adding a scheduler | Proposed |
+| [0043](0043-candidate-free-codex-project-read-authority.md) | Bind candidate-free Codex phases to exact owned read-only source snapshots | Proposed |
 
-M2.5 Slice 7 implements CLI composition and a non-verdict assessment harness
-within ADRs 0027, 0034, and 0035. It introduces no new durable authority owner
-or architectural decision and therefore requires no additional ADR.
+M2.5 completed within ADRs 0027, 0034, and 0035. ADRs 0036 through 0039 are
+M2.6 proposals under review; they are not implementation authority until their
+status becomes `Accepted` or a replacement decision is accepted. ADRs 0040
+through 0042 are separate M2.7 proposals and do not enlarge M2.6.
+
+[ADR 0043](0043-candidate-free-codex-project-read-authority.md) is the required
+M2.5.1 project-read snapshot/Context/configuration, phase Worker-activity, and
+cleanup/crash-reconciliation decision; it is not implementation authority
+until accepted.
 
 ## ADR lifecycle
 

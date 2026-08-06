@@ -15,25 +15,43 @@ The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
 M2 Codex vertical slice are complete. M2 passed its independent exit review on
 2026-08-02 with its M1 regression, deterministic protected repair, failed-repair
 stop, adapter-failure, live repair-handoff, and natural first-pass branches all
-green on one source identity. The bounded M2.5 Goal Intake implementation
-deliverables are now present, including its explicit-action CLI, strict-reopen
-views, deterministic real-adapter fixtures, and fail-closed executable
-assessment harness. This does not prove the M2.5 milestone or product
-completion. It does not authorize merge, release, deploy, or any other external
-effect. Its Domain, Policy, SQLite, package, isolated Adapter,
-source-bound Projection, deterministic Admission, Coordinator, bounded
-Answer-only result, terminal failure, startup reconciliation, retention, and
-redacted in-process read-view foundations are implemented. Atomic Goal/Workflow
-Materialization, optional Start Authorization, separate ordinary Start
-composition, and composite Start status are also implemented. The canonical
-M2.5 assessment attempt returned `NOT_READY_FOR_INDEPENDENT_REVIEW` because its
-M2 stage applied a historical milestone-only absence assertion to current
-M2.5 source. The corrected exact-source assessment has not yet run, and the
-independent M2.5 review has not issued a verdict.
+green on one source identity. Bounded M2.5 Goal Intake and Materialization also
+completed on 2026-08-06: its corrected canonical assessment passed all nine
+stages and 71 mandatory rows with zero skip, and its independent review issued
+an unconditional bounded verdict. M2.5 remains a regression baseline rather
+than product completion or external-effect authority.
+
+One later real pinned-version Intake test exposed a post-completion Adapter
+compatibility defect and confirmed that ordinary M2.5 governed Start still
+selects the M1 FakeWorker Profile rather than the real M2 Codex Profile.
+M2.5.1 Real Intake-to-Codex Composition Closure is therefore the current
+proposed pre-M2.6 boundary. It will correct the versioned Intake profile and
+Adapter through an internal typed protocol projection, preserve the historical
+M2.5 verdict, and require real Answer-only, Intent-analysis, Materialization,
+ordinary Start, isolated-Candidate Codex Worker, protected-verification, and
+regression evidence. Implementation and assessment have not started.
+
+M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
+review and cannot begin until M2.5.1 passes; implementation has not started and
+its proposed ADRs are not binding.
+The candidate scope is one foreground CLI frontstage, natural-language user
+input, an exact immutable pending-action/authorization/dispatch chain for the
+closed new-Intake and Goal-control action set, deterministic direct-or-separate
+confirmation, scoped Goal discovery/control, and one session-owned
+execution-bearing task. Exact M2.5 Question clarification retains its existing
+authority. Detached execution remains outside M2.6.
+
+M2.7 Local Runtime Host and Single-Goal Project Control is a separate formal
+candidate with no implementation started. It proposes CLI detach/reconnect, one
+writable controller plus read-only observers, and one started non-terminal Goal
+per exact project. It explicitly excludes queues, automatic handoff, automatic
+next-Goal Start, parallel Goal workers, multi-user operation, and
+release/deployment authority.
+
 The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
-detailed status source required by the repository README contract; the
-[milestone document](docs/milestones.md) defines the current bounded scope and
-exit criteria.
+detailed historical status source required by the current README structural
+contract; the [milestone document](docs/milestones.md) defines completed and
+proposed bounded scopes and exit criteria.
 
 This README intentionally does not duplicate the rolling slice, feature, or
 test inventory. M1 and M2 remain regression baselines.
@@ -139,12 +157,19 @@ backend, not the product entry and not the completion authority.
 - [Acceptance engine](docs/acceptance-engine.md)
 - [Evidence model](docs/evidence-model.md)
 - [Goal Intake](docs/goal-intake.md)
+- [Frontstage Interaction](docs/frontstage-interaction.md)
+- [Local Runtime Host](docs/runtime-host.md)
 - [Milestones](docs/milestones.md)
 - [M1 deterministic-skeleton plan](docs/plans/m1-deterministic-skeleton.md)
 - [M1 completion review](docs/reviews/m1-completion-review.md)
 - [M2 Codex vertical-slice plan](docs/plans/m2-codex-vertical-slice.md)
 - [M2 milestone acceptance plan](docs/plans/m2-acceptance-plan.md)
 - [M2 completion review](docs/reviews/m2-completion-review.md)
+- [M2.5 completion review](docs/reviews/m2.5-completion-review.md)
+- [M2.6 Unified Frontstage Interaction plan](docs/plans/m2.6-unified-frontstage-interaction.md)
+- [M2.6 milestone acceptance plan](docs/plans/m2.6-acceptance-plan.md)
+- [M2.7 Local Runtime Host plan](docs/plans/m2.7-local-runtime-host-single-goal-control.md)
+- [M2.7 milestone acceptance plan](docs/plans/m2.7-acceptance-plan.md)
 - [M0 architecture review](docs/reviews/m0-architecture-review.md)
 - [Accepted ADR index](docs/adr/README.md)
 
@@ -156,17 +181,27 @@ Repository instructions and document precedence are defined in
 M1 proved the deterministic local control plane with `FakeWorker`; M2 proved a
 bounded real-Codex Candidate, verification, repair, and recovery vertical slice
 under the same authority rules. Both remain required regression baselines.
-M2.5 Goal Intake is the current implementation milestone. Its detailed
+M2.5 Goal Intake is also complete as a bounded milestone. Its historical
 [implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
-[acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the work. The
-initial implementation decisions and dependency expectations are closed. The
-Domain, SQLite, package, Intake Assistant Adapter, Projection, deterministic
-Admission, clarification, abandonment, Answer-only, failure, restart,
-retention, in-process read views, Materialization, and separate Start
-composition are implemented. The CLI layer adds explicit Intake commands,
-shared status/audit views, a deterministic real-adapter cross-process path, and
-the canonical non-verdict assessment runner. The required assessment execution
-and independent M2.5 verdict remain separate and incomplete.
+[acceptance plan](docs/plans/m2.5-acceptance-plan.md), together with its
+[completion review](docs/reviews/m2.5-completion-review.md), remain the bounded
+implementation and verdict records.
+
+M2.6 is the next proposed milestone. Its [Frontstage Interaction
+contract](docs/frontstage-interaction.md), [implementation
+plan](docs/plans/m2.6-unified-frontstage-interaction.md), and [acceptance
+plan](docs/plans/m2.6-acceptance-plan.md) are ready for decision review, not
+implementation or acceptance claims. The separate temporary
+[deferred-boundary TODO](docs/plans/m2.6-deferred-boundary-todo.md) stages
+remaining M3–M5 items and records the M2.7 reassignment without granting scope.
+
+M2.7 is the separate post-M2.6 candidate. Its [Local Runtime Host
+contract](docs/runtime-host.md), [implementation
+plan](docs/plans/m2.7-local-runtime-host-single-goal-control.md), and
+[acceptance plan](docs/plans/m2.7-acceptance-plan.md) define detached local
+execution ownership, one project controller plus observers, and one active Goal
+slot without queueing or automatic handoff. M2.6 must complete before M2.7
+implementation may begin.
 
 ## Non-Goals
 

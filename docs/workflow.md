@@ -63,6 +63,38 @@ cannot access the Workflow kernel. Only an admitted governed-execution result
 may submit its preallocated ordinary `StartGoal`; read, Answer-only,
 clarification, abandonment, and materialize-only CLI paths add no Workflow
 mutation authority.
+The corrected canonical assessment and independent review completed bounded
+M2.5 on 2026-08-06. Proposed M2.5.1 does not change this phase graph or create
+Candidate authority early. Its formal real Profile maps candidate-free
+`DISCOVERY` and `PLAN` to Codex over exact Runtime-owned read-only selected-
+source snapshots, creates Candidate/Generation authority only at the existing
+`PLAN -> IMPLEMENT` transition, then maps `IMPLEMENT` to Candidate-bound Codex.
+The checkout remains unreadable to candidate-free Codex. An Adapter-local
+phase activity policy admits only bounded snapshot-read commands in the first
+two phases and exact Candidate-bound command/file-change activity in
+`IMPLEMENT`; it grants no Workflow authority. A Plan/source mismatch
+preserves the completed Plan Attempt, creates no Candidate, and atomically
+moves the Workflow from `PLAN / READY` to `PLAN / FAILED` through existing
+Workflow integrity-failure authority. The exact `PLAN_SOURCE_NOT_CURRENT` code
+is retained as the event reason and Workflow `suspendedReason`; the Goal
+projects to `BLOCKED / INSPECT_BLOCKER` without a recovery catalog. It provides
+no automatic retry, replacement PLAN Attempt, phase rewind, or `goal resume`
+continuation. The
+existing M2 protected demo's FakeWorker delegation for the first two phases
+remains test composition and is not a permitted production fallback. ADR 0015
+keeps project-source Context closed, so proposed
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md), or an
+accepted replacement, must become binding before that mapping is implemented.
+
+Proposed M2.6 Frontstage work adds no Workflow phase or
+writer: authorized actions would invoke only existing public Runtime commands,
+and its local one-execution-bearing-task limit would not be a project-wide
+scheduler. Same-Command-ID action recovery reuses existing idempotency and
+cannot create a replacement Start or dispatch authority.
+Proposed M2.7 would add one shared project-slot guard to ordinary first Start,
+retain the slot through every non-terminal owner state, and release it only on
+close/cancel. Non-owning Goals remain `READY`; no Workflow phase, queued state,
+automatic handoff, or second Workflow writer is proposed.
 Slice 8 adds no Workflow transition and completed the bounded M2 exit review on
 2026-08-02.
 

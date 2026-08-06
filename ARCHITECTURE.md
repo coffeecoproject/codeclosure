@@ -49,10 +49,8 @@ milestones are architectural boundaries, not current implementation claims.
 
 The completed [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md)
 and [independent acceptance plan](docs/plans/m2-acceptance-plan.md) remain
-historical implementation and exit evidence. The
-[M2.5 implementation plan](docs/plans/m2.5-goal-intake-materialization.md) and
-[M2.5 acceptance plan](docs/plans/m2.5-acceptance-plan.md) govern the current
-milestone. Slices 1 through 7 are implemented; the Store persists and strictly
+historical implementation and exit evidence. M2.5 Slices 1 through 7 are
+implemented; the Store persists and strictly
 reopens compound Intake/Goal/Workflow/Materialization authority, and
 Runtime can compile the bounded assistant inputs consumed by the separate
 Intake adapter. The Adapter runs one fresh isolated read-only operation and
@@ -71,7 +69,67 @@ milestone verdict. Its first canonical attempt returned
 `NOT_READY_FOR_INDEPENDENT_REVIEW` because it invoked the historical M2
 milestone procedure against current M2.5 source. The corrected runner uses a
 separate current-source M2 regression contract while preserving the historical
-M2 verdict. The following M2 slice
+M2 verdict; its rerun passed all nine stages and 71/71 mandatory rows with zero
+skip. The independent
+[M2.5 completion review](docs/reviews/m2.5-completion-review.md) issued an
+unconditional bounded `PASS` on 2026-08-06.
+
+One later real pinned-version Answer-only operation exposed an Intake Adapter
+compatibility defect outside that historical proof: the Observer rejects valid
+disabled remote-control and rate-limit projections and applies completed-text
+requirements to an empty progressive message start, while the closed profile
+requests two deprecated Web Search feature keys. The
+[diagnostic](docs/reviews/m2.5-live-intake-compatibility-diagnostic.md) also
+confirms that ordinary Intake composition currently binds its governed Start
+preflight to the M1 FakeWorker Profile. The proposed
+[M2.5.1 implementation
+plan](docs/plans/m2.5.1-real-intake-codex-composition-closure.md) and
+[acceptance plan](docs/plans/m2.5.1-acceptance-plan.md) define the versioned
+compatibility correction as an Adapter-local typed protocol projection plus
+mandatory real composition proof. The lower Client alone decodes raw JSON-RPC
+frames; above it, only that Projection receives successfully decoded
+`AppServerNotification`, and the Observer consumes a closed normalized event
+union. Neither the union nor its diagnostics become Domain, Runtime, Store,
+Audit, Evidence, or Acceptance authority. The correction does not change the
+historical M2.5 verdict or any authority owner. The formal composition target
+is not the existing mixed protected-demo assembly: that assembly selects
+external Codex only for `IMPLEMENT` and delegates candidate-free
+`DISCOVERY`/`PLAN` to `FakeWorker`. M2.5.1 instead proposes real candidate-free
+Codex execution over exact Runtime-owned read-only selected-source snapshots
+for `DISCOVERY`/`PLAN`, real Candidate-bound Codex execution for `IMPLEMENT`, no
+production fake fallback, no source-checkout visibility, and no Candidate before
+the governed `PLAN -> IMPLEMENT` transition. Its proposed additive authority
+chain versions external Intent/Record plus Codex directive/Adapter observation,
+and its nested Profile v3 gives each shared or phase-specific field one owner,
+uses the existing canonical phase-set order, selects all declared Attempts, and
+binds one Adapter-local activity-policy identity per phase. Snapshot cleanup
+uses one grant identity across unknown-result reconciliation and atomically
+retains its terminal Outcome before later replay can suppress filesystem work.
+Proposed
+[ADR 0043](docs/adr/0043-candidate-free-codex-project-read-authority.md), or an
+accepted replacement closing the same project-read snapshot, Context,
+isolation, source-currency, configuration/instruction, cleanup, and execution-
+record boundary, must become binding before that composition is implemented.
+
+The proposed [M2.6 Frontstage Interaction
+contract](docs/frontstage-interaction.md), [implementation
+plan](docs/plans/m2.6-unified-frontstage-interaction.md), and [acceptance
+plan](docs/plans/m2.6-acceptance-plan.md) define the next feature candidate
+after M2.5.1 passes.
+They propose one persistent foreground CLI interaction loop, deterministic
+route admission, an exact immutable Pending Action/Authorization/Reservation/
+Outcome chain for the closed new-Intake and Goal-control action set,
+deterministic direct-or-separate confirmation, a separate bounded Frontstage
+Assistant, scoped Goal discovery/control, and one session-owned
+execution-bearing task.
+
+The proposed [M2.7 Local Runtime Host contract](docs/runtime-host.md),
+[implementation plan](docs/plans/m2.7-local-runtime-host-single-goal-control.md),
+and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
+post-M2.6 candidate for Host-owned detach/reconnect, one project controller
+plus read-only observers, and one started non-terminal Goal per exact project.
+M2.5.1, M2.6, and M2.7 implementation has not started; proposed ADRs 0036
+through 0043 are not binding. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -176,8 +234,8 @@ atomic Materialization and separate ordinary Start composition. Slice 7 adds
 the narrow CLI composition, deterministic real-adapter fixtures, strict
 cross-process reopen proof, and the non-verdict acceptance harness. The
 first canonical assessment returned `NOT_READY_FOR_INDEPENDENT_REVIEW`; the
-corrected assessment and independent M2.5 verdict remain pending. The completed
-M2 milestone
+corrected assessment and independent M2.5 verdict subsequently passed on
+2026-08-06. The completed M2 milestone
 preserved the reusable Codex App Server client boundary, which the M2.5 Intake
 Adapter now reuses. The
 same Intake boundary owns bounded non-authoritative Answer-only results and
@@ -203,7 +261,7 @@ execution.
                    |                |
                    v                |
         Goal Intake Coordinator     |
-            (M2.5 planned)           |
+          (M2.5 implemented)         |
           |-- Intake Assistant       |
           |-- Intake Store           |
           `-- Intent Admission Engine
@@ -250,7 +308,19 @@ facade and renders Runtime-owned read views. It does not write or query the
 control database directly, sequence internal Workflow commands, or infer
 successful completion from a worker transcript.
 
-The planned Intake surface separately presents Raw Request revisions, trusted
+The proposed M2.6 Frontstage adds one foreground process-lifetime interaction
+loop. It accepts natural-language messages, may obtain an untrusted route
+proposal from a separate bounded Frontstage Assistant, and uses deterministic
+policy to return ordinary answers/read views or construct one exact
+`PendingAction`. Deterministic confirmation policy then binds either the exact
+originating explicit low-risk user command or a separate natural-language
+confirmation. Model output cannot satisfy either authorization path.
+State-changing Intake and Goal operations run only after that exact binding.
+Focus and notifications are persisted/derived convenience views; they are not
+locks, Workflow commands, or completion authority. See
+[Frontstage Interaction](docs/frontstage-interaction.md).
+
+The implemented Intake surface separately presents Raw Request revisions, trusted
 interaction action, assistant Proposal, source-bound Intent Projection,
 material questions, Admission reasons, Answer-only delivery disposition,
 terminal Intake failure/next action, and Materialization/Start dispositions. It
@@ -343,6 +413,56 @@ requires a separate gateway and policy.
 
 ## Logical Components
 
+### Frontstage Interaction Coordinator — proposed M2.6
+
+The proposed Coordinator would own versioned Interaction Sessions, Messages,
+Operations, Focus Bindings, deterministic Route Decisions, exact immutable
+Pending Action/Resolution and Action Reservation/Outcome records, M2.5 Message
+Handoffs, bounded Frontstage Answers, result notifications, and startup
+reconciliation. It would use only public Runtime facades and would persist
+interaction state plus audit atomically.
+
+Trusted confirmation, exact M2.5 Question, direct-action, and read-query
+parsers would run before model assistance. One separate Frontstage Assistant
+port could then return one answer/route/clarification/no-action Proposal union
+from at most one fresh manifest-bound isolated operation for an unresolved
+message. That proposal would remain untrusted. The deterministic Interaction
+Routing Policy would decide whether to answer, query, clarify, or present an
+exact pending action; direct or separately confirmed authorization would bind
+the exact action without using model output as evidence.
+
+The Coordinator would not own Intake Admission, Goal or Workflow mutation,
+Worker dispatch, Candidate/Evidence state, technical Acceptance, or external
+effects. Its local one-execution-bearing-task composition would not create a
+project-wide scheduler or promise detached execution after the CLI exits.
+Same-Command-ID recovery would reuse existing public command idempotency and
+could not create replacement Start or dispatch authority. Proposed ADR 0036
+through ADR 0039 and [Frontstage
+Interaction](docs/frontstage-interaction.md) define the candidate boundary;
+none is an implementation claim.
+
+### Local Runtime Host — proposed M2.7
+
+The proposed Host would move the M2.6 Interaction Coordinator and existing
+Runtime execution composition out of the visible CLI process. One verified
+Host/epoch per authority home would activate the Store and reconcile retained
+authority before publishing a bounded local client transport. CLI detach would
+release only client control; it would not issue `CancelGoal` or stop Host-owned
+execution.
+
+For each principal/project, one exact control lease/epoch would publish the
+writable Frontstage capability while additional clients receive only bounded
+Goal list/status/audit/result queries. That lease would not own the running
+Goal or technical completion.
+
+The same milestone proposes one project execution slot in the shared first
+`StartGoal` transaction. The owner would retain it through every non-terminal
+Workflow state and release it only with exact Goal close/cancel. Other Goals
+would remain ordinary `READY` Goals and receive a typed occupied Start result;
+no queue, priority, automatic handoff, or automatic Start would exist. See
+[Local Runtime Host](docs/runtime-host.md) and proposed ADR 0040 through ADR
+0042. This is not an implementation claim.
+
 ### Goal Intake Coordinator — implemented through Slice 6
 
 The Coordinator implementation through Slice 6 owns the pre-Goal IntakeRun
@@ -417,6 +537,20 @@ ordinary asynchronous `StartGoal` application capability. Its public Intake
 result keeps the Store-authored Materialization outcome separate from the
 observed Start disposition, and its read view derives Start state from the
 immutable authorization, processed command, and current Workflow authority.
+The current ordinary Intake composition installs the M1 happy-path FakeWorker
+Profile for that boundary. Proposed M2.5.1 removes that implicit production
+fallback. Its bounded supported composition requires one trusted installed real
+Codex Profile, binds the exact identity in `GoalStartAuthorization`, and
+requires the ordinary Start resolver to return the same Runtime Profile with
+real candidate-free dispatch over exact Runtime-owned read-only selected-source
+snapshots for `DISCOVERY`/`PLAN` and real Candidate-bound dispatch for
+`IMPLEMENT`. An unsupported project, project-read workspace, configuration, or
+instruction manifest fails preflight rather than selecting FakeWorker.
+Candidate/Generation authority is still created only by the Workflow Runtime
+at `PLAN -> IMPLEMENT`; a candidate-free phase cannot read or write the checkout
+or acquire Candidate authority. Existing Workflow Profile bindings remain
+immutable, and fake Worker, Candidate Source, and Verification composition
+remains only an explicit test seam.
 
 The implemented M1 Slice 7 driver reloads authoritative state before each
 internal operation and stops at a terminal, waiting, blocked, failed,
@@ -606,6 +740,24 @@ owned-leaf cleanup grants. It does not mutate Domain, Workflow, Store, Evidence,
 or Acceptance authority. Slice 5 composes it through trusted in-process Runtime
 capabilities for the deterministic proof path; production CLI and live Codex
 composition remain later M2 work.
+
+Proposed M2.5.1 keeps Candidate Manager as the source-observation owner but adds
+a separate narrow `ProjectReadWorkspacePort` for candidate-free
+`DISCOVERY`/`PLAN`. Its local adapter would materialize only the admitted source
+projection into a Runtime-allocated read-only leaf, revalidate source/snapshot
+identity, reconcile exact externally owned leaves against a monotonically
+sequenced Store-authority snapshot, and consume only a persisted exact terminal
+or owned-orphan cleanup grant. One unresolved grant may be reinvoked only as
+the same idempotent operation after an unknown result; its immutable Outcome,
+audit, and consumption commit atomically, and retained Outcome replay performs
+no filesystem call. The source checkout, `.git`,
+ignored/projection-excluded paths, authority, credentials, Candidate roots,
+protected assets, and sibling snapshots would remain unreadable to model tools.
+The snapshot would have no Candidate, Evidence, Acceptance, or Workflow-writing
+authority. A Plan-source mismatch would persist the exact Workflow integrity
+code, project the Workflow to `FAILED` and Goal to non-resumable
+`BLOCKED / INSPECT_BLOCKER`, and create no Candidate. This port and record are
+proposed under ADR 0043 and are not yet implemented.
 
 ### Evidence Store
 
@@ -859,18 +1011,44 @@ The target adapter layering is:
 
 ```text
 Codex App Server Client
+├── raw JSON-RPC frame -> decoded AppServerNotification or closed client failure
 ├── Codex Worker Adapter
 │   └── Goal-bound WorkerPort requests and events
-└── Goal Intake Assistant Adapter (M2.5 implemented)
-    ├── IntakePackage -> IntentAnalysisProposal
-    └── AnswerOnlyPackage -> bounded answer response
+├── Goal Intake Assistant Adapter (M2.5 implemented)
+│   ├── decoded notification -> IntakeProtocolProjection
+│   │   └── validated minimal fact -> private IntakeEffectClassifier
+│   ├── closed IntakeObservedEvent -> IntakeProtocolObserver
+│   ├── IntakePackage -> IntentAnalysisProposal
+│   └── AnswerOnlyPackage -> bounded answer response
+└── Frontstage Assistant Adapter (M2.6 proposed)
+    └── FrontstageContextPackage -> FrontstageProposalResponse
 ```
 
 The client owns protocol process, transport, initialization, generated schema,
-stream, interruption, and compatibility mechanics. It owns no Goal, Workflow,
-Worker, Projection, Source Binding, Admission, Start, Acceptance, or
-persistence semantics. M2 implements and validates the Worker branch only;
-Goal Intake is not an M2 exit condition.
+raw-frame admission, stream, interruption, protocol limits/correlation, and
+compatibility mechanics. It owns no Goal, Workflow, Worker, Projection, Source
+Binding, Admission, Start, Acceptance, or persistence semantics. M2 implements
+and validates the Worker branch only; Goal Intake was not an M2 exit condition.
+The proposed Frontstage branch would reuse only this lower transport and would
+not import Worker or Intake authority. The proposed M2.5.1 closure first
+corrects the Intake branch for the pinned live protocol through an exhaustive
+Adapter-local projection and private effect classifier. Successfully decoded
+Codex notifications do not reach the Intake Observer, Domain, or Runtime, and
+the lower Client's compaction callback cannot become an Intake side channel.
+The closure then composes its separately authorized ordinary Start with real
+Codex for every Worker-backed phase: candidate-free `DISCOVERY`/`PLAN` over
+exact Runtime-owned read-only selected-source snapshots and Candidate-bound
+`IMPLEMENT`. Candidate-free Codex cannot read the checkout, ignored or
+projection-excluded paths, or activate unbound project configuration and
+instruction sources. A versioned Adapter-local phase activity policy permits
+only bounded snapshot-read commands for candidate-free phases and exact
+Candidate-bound command/file-change activity for `IMPLEMENT`; unknown,
+forbidden, or cross-phase activity fails closed without exposing Codex Item
+types to Domain or Runtime. The current
+`IMPLEMENT`-only trusted invocation and protected-demo FakeWorker delegation
+are implementation inputs, not proof of that formal chain. A lower-client
+probe, live Intake operation, live IMPLEMENT operation, or mixed fake/real demo
+alone cannot substitute for the causally bound phase-complete proof.
 
 For the implemented bounded M2 Worker branch, Codex configuration and state are
 execution inputs, not ambient host truth. Trusted composition must either
@@ -1129,10 +1307,13 @@ commits the exact command.
 
 ## Initial Deployment Model
 
-The initial product is a single local process for one user. It may spawn
-bounded child processes for workers and verification. Multi-user auth,
-distributed scheduling, remote workers, and cloud state are out of scope until
-the local authority model is proven.
+The implemented baseline is a single local control process for one user. It may
+spawn bounded child processes for workers and verification. Proposed M2.6 keeps
+that foreground process model. Proposed M2.7 would extend it to one local
+Runtime Host plus attached local CLI clients while retaining one principal and
+local authority home; it is not a distributed or multi-user deployment.
+Multi-user auth, distributed scheduling, remote workers, and cloud state remain
+out of scope until the local authority model is proven.
 
 ## Forking Policy
 

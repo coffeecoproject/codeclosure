@@ -24,3 +24,5 @@ runtime evidence.
 - [M2.5 Slice 6 Materialization and Start review](m2-5-slice6-materialization-start.md)
 - [M2.5 Slice 7 CLI and acceptance-harness review](m2-5-slice7-cli-acceptance-harness.md)
 - [M2.5 first executable-assessment diagnostic](m2-5-first-assessment-diagnostic.md)
+- [M2.5 completion review](m2.5-completion-review.md)
+- [M2.5 live Intake compatibility diagnostic](m2.5-live-intake-compatibility-diagnostic.md)

@@ -76,6 +76,37 @@ atomically, then submits only the preallocated ordinary `StartGoal` in a
 separate transaction. Slice 7 adds no Domain authority shape: its CLI consumes
 public Runtime result/view unions, parses public branded identifiers, and keeps
 the three Answer, Materialization, and Start dispositions separate.
+The corrected canonical assessment and independent completion review passed the
+bounded M2.5 milestone on 2026-08-06. Proposed
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) would add
+one immutable protocol-neutral project-read authority plus an exact Runtime-
+owned read-only selected-source snapshot for candidate-free real Codex
+`DISCOVERY`/`PLAN`. The record binds Context/Attempt, source/snapshot currency,
+configuration/instruction policy, snapshot ownership, and cleanup without
+creating a Candidate, Fact, Evidence, or Acceptance record or exposing the
+checkout. It is not yet accepted or implemented. The additive external-
+execution v3 phase-dispatch, `ExternalExecutionIntentV2`/
+`ExternalExecutionRecordV2`, `CodexWorkerDirectiveV3`,
+`CodexAdapterObservationV2`, monotonic project-read workspace-authority
+snapshot, consume-once terminal/orphan snapshot cleanup grant/observation/
+Outcome with same-grant unknown-result reconciliation, and
+Profile/Context/persistence schemas remain planned M2.5.1 work. The proposed v3
+Profile has no duplicated global/phase field authority, binds one opaque
+Adapter-local Worker activity-policy identity per phase, and uses the existing
+canonical string-sorted phase set with `ALL_SELECTED_ATTEMPTS`.
+The proposed Plan-source mismatch path uses the existing Workflow integrity
+event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
+and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
+Goal projection is `BLOCKED / INSPECT_BLOCKER`, and no recovery catalog or
+Resume authority is created.
+
+Proposed M2.6 Interaction records remain
+planned in [Frontstage Interaction](frontstage-interaction.md); they do not
+change existing Intake, Goal, Workflow, Evidence, or Acceptance authority.
+Proposed M2.7 separately adds Host/epoch, project control-lease/epoch, and
+project execution-slot records under [Local Runtime Host](runtime-host.md).
+They remain planned and cannot replace Goal, Workflow, command, or Acceptance
+authority.
 
 ## Design Rules
 
@@ -1612,6 +1643,7 @@ describes.
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
+| Project-source read authority, workspace-authority snapshot, cleanup grant, and cleanup outcome — proposed M2.5.1 | Goal scope, Candidate Manager observation, and strict persisted project-read/external-execution authority | Workflow Runtime, Candidate Manager, and Store canonical/relationship backstops | Runtime compound transaction, one persisted consume-once cleanup grant, same-grant idempotent unknown-result reconciliation, and atomic outcome/audit/consumption; workspace adapter cannot issue authority |
 | Acceptance-critical Verification Plan and protected-asset manifest — implemented M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |

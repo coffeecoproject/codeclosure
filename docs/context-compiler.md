@@ -39,6 +39,27 @@ ordinary `StartGoal` boundary, which remains the sole owner of first Context
 and Attempt creation. Slice 7 transports the existing Intake Package/Manifest
 boundary through a narrow CLI composition and adds no Goal-bound Context source
 or compiler authority.
+The corrected canonical assessment and independent review completed bounded
+M2.5 on 2026-08-06. Proposed M2.5.1 would reopen exactly one Goal-bound
+project-source Context class for candidate-free real Codex `DISCOVERY`/`PLAN`
+under
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md). That ADR
+is not yet accepted or implemented. It requires an immutable project-read
+record and exact Runtime-owned read-only selected-source snapshot bound
+atomically to Context/Attempt authority, phase-specific isolation and exact
+configuration/instruction manifests, an opaque phase activity-policy binding,
+source/snapshot checks before and after the Turn, and exact equality with the
+later Candidate Source projection. The
+source checkout itself does not enter Worker-readable Context. It does not open
+selected Fact, Human Decision, omission, pre-Goal project-observation, or full
+relevance-selection Context.
+
+Proposed M2.6 uses a separate
+`FrontstageContextPackage`/Manifest for non-authoritative interaction work; it
+does not extend the Goal-bound Worker Context source set.
+Proposed M2.7 moves composition into a local Host but adds no Context source or
+model-history authority. A project slot is Start authority, not Context input
+selected by a Worker or assistant.
 Slice 8 adds no Context authority and completed the bounded M2 exit review on
 2026-08-02.
 
@@ -652,6 +673,13 @@ accepted ADR must introduce the owning resolver before those entries can enter
 Worker Context. See
 [ADR 0016](adr/0016-candidate-and-evidence-authority-boundary.md) and
 [ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
+
+Proposed ADR 0043 is the narrower candidate-free project-read decision for
+M2.5.1. If accepted, it would add only its exact project-source record,
+Runtime-owned selected-source snapshot, and Context/configuration/instruction
+binding for real `DISCOVERY`/`PLAN`; the checkout remains unreadable and it
+would not reinterpret the M1 subset above or pull M3 Fact/Decision selection
+forward.
 
 Code relevance retrieval, full Fact Graph traversal, and token-aware packing
 belong to later milestones. Slice 6 implements the repair Context and Thread
