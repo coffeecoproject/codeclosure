@@ -7,7 +7,7 @@ import { URL, fileURLToPath } from 'node:url';
 
 import { createCodexIntakeAssistantAdapter } from '@codeclosure/adapter-codex-intake';
 import { createFixtureAppServerLaunch } from '@codeclosure/codex-app-server-client/testing';
-import { m25IntakeAssistantProfile } from '@codeclosure/runtime';
+import { m251IntakeAssistantProfile } from '@codeclosure/runtime';
 
 import { runCli } from '../../dist/index.js';
 import { createIntakeCliInvocationCompositionWithAssistant } from '../../dist/composition/trusted-intake-composition.js';
@@ -20,11 +20,11 @@ const fixtureScript = fileURLToPath(
 );
 
 const fixtureScenarios = new Map([
-  ['answer-success', 'intent-success'],
-  ['cleanup-failure', 'cli-exact-source'],
-  ['exact-source', 'cli-exact-source'],
-  ['governed-assumption', 'cli-unsupported-assumption'],
-  ['project-question', 'cli-exact-source'],
+  ['answer-success', 'v2-observed-sequence'],
+  ['cleanup-failure', 'v2-cli-exact-source'],
+  ['exact-source', 'v2-cli-exact-source'],
+  ['governed-assumption', 'v2-cli-unsupported-assumption'],
+  ['project-question', 'v2-cli-exact-source'],
 ]);
 
 class FixtureIntakeAssistant {
@@ -56,8 +56,8 @@ class FixtureIntakeAssistant {
       executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
       processHome,
       protocolIdentity: Object.freeze({
-        version: `codex-cli ${m25IntakeAssistantProfile.codexVersion}`,
-        snapshotDigest: m25IntakeAssistantProfile.protocolSnapshotDigest,
+        version: `codex-cli ${m251IntakeAssistantProfile.codexVersion}`,
+        snapshotDigest: m251IntakeAssistantProfile.protocolSnapshotDigest,
       }),
       scenario,
       scriptPath: fixtureScript,

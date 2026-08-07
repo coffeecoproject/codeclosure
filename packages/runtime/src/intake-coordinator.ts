@@ -65,12 +65,13 @@ import {
 import {
   M25_INTAKE_ASSISTANT_ADAPTER_ID,
   M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
   m25IntakeBudgetDefinition,
   type IntakeAssistantFailureReasonCode,
   type IntakeAssistantPort,
 } from './intake-assistant.js';
 import type { GovernedExecutionPreflight, IntentAdmissionEngine } from './intake-admission.js';
-import type { M25IntakePackageCompiler } from './intake-packages.js';
+import type { IntakePackageCompilerPort } from './intake-packages.js';
 import type {
   IntentProjectionIdentityGenerator,
   M25IntentProjectionCompiler,
@@ -293,7 +294,7 @@ interface Utf8DigestProvider extends DigestProvider, IntakeDigestVerifier {
 export interface M25IntakeCoordinatorOptions {
   readonly store: IntakeControlStore;
   readonly assistant: IntakeAssistantPort;
-  readonly packageCompiler: M25IntakePackageCompiler;
+  readonly packageCompiler: IntakePackageCompilerPort;
   readonly projectionCompiler: M25IntentProjectionCompiler;
   readonly admissionEngine: IntentAdmissionEngine;
   readonly admissionPolicyId: string;
@@ -357,7 +358,7 @@ function requireRunStatus<Status extends IntakeRun['status']>(
 export class M25IntakeCoordinator {
   readonly #store: IntakeControlStore;
   readonly #assistant: IntakeAssistantPort;
-  readonly #packageCompiler: M25IntakePackageCompiler;
+  readonly #packageCompiler: IntakePackageCompilerPort;
   readonly #projectionCompiler: M25IntentProjectionCompiler;
   readonly #admissionEngine: IntentAdmissionEngine;
   readonly #admissionPolicyId: string;
@@ -1199,15 +1200,18 @@ export class M25IntakeCoordinator {
     ) {
       throw new TypeError('Interrupted Answer-only Decision cannot be reproduced');
     }
-    const compilation = this.#packageCompiler.compileAnswerOnly({
-      manifestId: manifest.id,
-      createdAt: manifest.createdAt,
-      intakeRunId: authority.intakeRun.id,
-      rawRequestRevision: revision,
-      preparedDecision: decision,
-      admissionPolicy: policy,
-      omissions: manifest.omissions,
-    });
+    const compilation = this.#packageCompiler.recompileAnswerOnly(
+      {
+        manifestId: manifest.id,
+        createdAt: manifest.createdAt,
+        intakeRunId: authority.intakeRun.id,
+        rawRequestRevision: revision,
+        preparedDecision: decision,
+        admissionPolicy: policy,
+        omissions: manifest.omissions,
+      },
+      manifest,
+    );
     if (
       compilation.manifest.manifestDigest !== manifest.manifestDigest ||
       compilation.manifest.packageDigest !== manifest.packageDigest ||
@@ -1628,7 +1632,7 @@ export class M25IntakeCoordinator {
           ? {}
           : { currentProjection: input.parentProjection }),
         admissionPolicy: input.policy,
-        responseContractDigest: input.manifest.responseContract.digest,
+        intentAnalysisIdentity,
         response: operation.response,
         observedAt,
         ids: this.#ids,
@@ -2065,14 +2069,21 @@ export class M25IntakeCoordinator {
   }
 
   #externalBinding(manifest: IntakeManifest, policy: IntentAdmissionPolicy) {
+    if (
+      manifest.assistantAdapter.id !== M25_INTAKE_ASSISTANT_ADAPTER_ID ||
+      (manifest.assistantAdapter.version !== M25_INTAKE_ASSISTANT_ADAPTER_VERSION &&
+        manifest.assistantAdapter.version !== M251_INTAKE_ASSISTANT_ADAPTER_VERSION)
+    ) {
+      throw new TypeError('Intake Manifest selects an unsupported Assistant Adapter');
+    }
     return {
       manifestId: manifest.id,
       manifestDigest: manifest.manifestDigest,
       admissionPolicyId: policy.id,
       admissionPolicyVersion: policy.version,
       admissionPolicyDigest: policy.digest,
-      assistantAdapterId: M25_INTAKE_ASSISTANT_ADAPTER_ID,
-      assistantAdapterVersion: M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
+      assistantAdapterId: manifest.assistantAdapter.id,
+      assistantAdapterVersion: manifest.assistantAdapter.version,
       responseContractDigest: manifest.responseContract.digest,
     };
   }

@@ -25,6 +25,7 @@ import {
   sourceBindingProjection,
   type ClarificationQuestionSpec,
   type ClarificationQuestionSpecProjectionInput,
+  type IntakeExternalOperationBinding,
   type IntakeDigestVerifier,
   type IntentAdmissionPolicy,
   type IntentAnalysisProposal,
@@ -39,7 +40,6 @@ import {
   type MaterialAmbiguitySet,
   type MaterialAmbiguitySetProjectionInput,
   type RawRequestRevisionRecord,
-  type Sha256Digest,
   type SourceBinding,
   type SourceBindingProjectionInput,
 } from '@codeclosure/domain';
@@ -48,6 +48,7 @@ import { z } from 'zod';
 import {
   M25_INTAKE_ASSISTANT_ADAPTER_ID,
   M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
   m25IntakeBudgetDefinition,
   type IntentAnalysisAssistantResponseV1,
 } from './intake-assistant.js';
@@ -142,7 +143,10 @@ export interface ProjectIntentAnalysisInput {
   readonly rawRequestRevisions: readonly RawRequestRevisionRecord[];
   readonly currentProjection?: IntentProjectionRevisionRecord;
   readonly admissionPolicy: IntentAdmissionPolicy;
-  readonly responseContractDigest: Sha256Digest;
+  readonly intentAnalysisIdentity: Pick<
+    IntakeExternalOperationBinding,
+    'assistantAdapterId' | 'assistantAdapterVersion' | 'responseContractDigest'
+  >;
   readonly response: IntentAnalysisAssistantResponseV1;
   readonly observedAt: IsoTimestamp;
   readonly ids: IntentProjectionIdentityGenerator;
@@ -376,6 +380,15 @@ export class M25IntentProjectionCompiler {
       }
     });
     const proposedObjective = response.proposedObjective;
+    if (
+      input.intentAnalysisIdentity.assistantAdapterId !== M25_INTAKE_ASSISTANT_ADAPTER_ID ||
+      (input.intentAnalysisIdentity.assistantAdapterVersion !==
+        M25_INTAKE_ASSISTANT_ADAPTER_VERSION &&
+        input.intentAnalysisIdentity.assistantAdapterVersion !==
+          M251_INTAKE_ASSISTANT_ADAPTER_VERSION)
+    ) {
+      throw new TypeError('Projection selects an unsupported Intake Assistant identity');
+    }
     const currentProjection =
       input.currentProjection === undefined
         ? undefined
@@ -394,9 +407,9 @@ export class M25IntentProjectionCompiler {
       intakeRunId: current.intakeRunId,
       rawRequestRevision: current.revision,
       rawRequestDigest: current.rawRequestDigest,
-      assistantAdapterId: M25_INTAKE_ASSISTANT_ADAPTER_ID,
-      assistantAdapterVersion: M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
-      responseContractDigest: input.responseContractDigest,
+      assistantAdapterId: input.intentAnalysisIdentity.assistantAdapterId,
+      assistantAdapterVersion: input.intentAnalysisIdentity.assistantAdapterVersion,
+      responseContractDigest: input.intentAnalysisIdentity.responseContractDigest,
       ...response,
       observedAt: input.observedAt,
     } satisfies IntentAnalysisProposalProjectionInput;

@@ -108,8 +108,11 @@ export function assertManagedRequirements(value: JsonValue): void {
   }
 }
 
-export function assertClosedConfiguration(value: JsonValue): void {
-  if (digestCanonical(value) !== digestCanonical(m25IntakeConfigRead)) {
+export function assertClosedConfiguration(
+  value: JsonValue,
+  expected: JsonValue = m25IntakeConfigRead,
+): void {
+  if (digestCanonical(value) !== digestCanonical(expected)) {
     throw new TypeError('effective configuration does not match the closed Intake profile');
   }
 }

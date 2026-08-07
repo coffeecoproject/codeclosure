@@ -49,6 +49,10 @@ const m2CodexInvocationFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/m2-codex-worker-invocation.ts',
 );
+const m251IntakeInvocationFixturePath = resolve(
+  repositoryRoot,
+  'apps/cli/src/composition/intake-assistant-invocation.ts',
+);
 const m2ProtectedProofFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/m2-protected-demo-proof.ts',
@@ -295,6 +299,20 @@ void test('only named composition owners may import their exact privileged packa
   assert.deepEqual(
     violations("import { FakeWorker } from '@codeclosure/testing';", runtimeProfilesFixturePath),
     [],
+  );
+  assert.deepEqual(
+    violations(
+      "import { M251_INTAKE_DISABLED_FEATURES } from '@codeclosure/adapter-codex-intake';",
+      m251IntakeInvocationFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations(
+      "import { M251_INTAKE_DISABLED_FEATURES } from '@codeclosure/adapter-codex-intake';",
+      compositionFixturePath,
+    ).length,
+    1,
   );
   assert.equal(
     violations(

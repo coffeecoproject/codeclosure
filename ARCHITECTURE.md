@@ -111,8 +111,12 @@ currency, configuration/instruction, cleanup, and execution-record boundary
 before that composition is implemented. The Slice 0 executable contract and
 proof-owner freeze now select the exact reviewed Codex `0.146.1` binary and
 protocol snapshot. Retained `0.146.0` M2/M2.5 authority remains historical and
-cross-version substitution fails closed. The Slice 0 closure review passed;
-the corrected Intake Adapter and real phase composition are not implemented.
+cross-version substitution fails closed. The Slice 0 closure review passed.
+Slice 1 now implements the versioned closed Intake configuration,
+Adapter-local typed protocol Projection, closed normalized-event Observer,
+stage-aware message handling, safe diagnostics, and strict retained-v1
+compatibility. Mandatory real Intake calls and the real phase composition
+remain unimplemented.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -131,9 +135,11 @@ The proposed [M2.7 Local Runtime Host contract](docs/runtime-host.md),
 and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
 post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
-M2.5.1 production implementation, M2.6, and M2.7 implementation has not
-started. ADR 0043 is accepted only for the M2.5.1 boundary; proposed ADRs 0036
-through 0042 are not binding. The following M2 slice
+Only M2.5.1 Slice 1 production behavior is implemented; mandatory live Intake
+compatibility, real phase composition, and M2.5.1 assessment have not started.
+M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
+the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
+following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,

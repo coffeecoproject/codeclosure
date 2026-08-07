@@ -4,6 +4,7 @@ import process from 'node:process';
 import { clearInterval, setInterval } from 'node:timers';
 
 const scenario = process.argv[2] ?? 'intent-success';
+const isM251Scenario = scenario.startsWith('v2-');
 const threadId = 'thread-intake-fixture';
 const turnId = 'turn-intake-fixture';
 const disabledFeatures = [
@@ -79,10 +80,15 @@ function turn(status, items, error = null, selectedTurnId = turnId) {
 }
 
 function closedConfig() {
+  const selectedDisabledFeatures = isM251Scenario
+    ? disabledFeatures.filter(
+        (feature) => feature !== 'web_search_cached' && feature !== 'web_search_request',
+      )
+    : disabledFeatures;
   const config = {
     approval_policy: 'never',
     default_permissions: 'codeclosure-m2-5-intake-no-authority-effects',
-    features: Object.fromEntries(disabledFeatures.map((feature) => [feature, false])),
+    features: Object.fromEntries(selectedDisabledFeatures.map((feature) => [feature, false])),
     include_apps_instructions: false,
     include_collaboration_mode_instructions: false,
     mcp_servers: {},
@@ -97,6 +103,47 @@ function closedConfig() {
     config.features.shell_tool = true;
   }
   return config;
+}
+
+function fullThread() {
+  return {
+    id: threadId,
+    sessionId: 'session-intake-fixture',
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: '',
+    ephemeral: true,
+    isPinned: false,
+    modelProvider: 'openai',
+    createdAt: 1,
+    updatedAt: 1,
+    recencyAt: null,
+    status: { type: 'idle' },
+    path: null,
+    cwd: process.cwd(),
+    cliVersion: '0.146.1',
+    source: 'appServer',
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: null,
+    turns: [],
+  };
+}
+
+function rateLimits() {
+  return {
+    limitId: 'fixture-limit-must-not-be-retained',
+    limitName: 'fixture-account-value-must-not-be-retained',
+    primary: null,
+    secondary: null,
+    credits: null,
+    individualLimit: null,
+    spendControlReached: null,
+    planType: null,
+    rateLimitReachedType: null,
+  };
 }
 
 function finalText(message) {
@@ -122,14 +169,19 @@ function finalText(message) {
   }
   if (
     !answerOnly &&
-    (scenario === 'cli-exact-source' || scenario === 'cli-unsupported-assumption')
+    (scenario === 'cli-exact-source' ||
+      scenario === 'cli-unsupported-assumption' ||
+      scenario === 'v2-cli-exact-source' ||
+      scenario === 'v2-cli-unsupported-assumption')
   ) {
     return JSON.stringify({
       proposedObjective: 'Ship slice 7',
       proposedCriteria: ['Ship slice 7'],
       proposedNonGoals: [],
       proposedAssumptions:
-        scenario === 'cli-unsupported-assumption' ? ['Confirm bounded risk'] : [],
+        scenario === 'cli-unsupported-assumption' || scenario === 'v2-cli-unsupported-assumption'
+          ? ['Confirm bounded risk']
+          : [],
       proposedQuestions: [],
       candidateSourceSpanSuggestions: [
         {
@@ -158,6 +210,40 @@ function finalText(message) {
         proposedQuestions: [],
         candidateSourceSpanSuggestions: [],
       });
+}
+
+function forbiddenCommandItem() {
+  return {
+    type: 'commandExecution',
+    id: 'command-intake-fixture',
+    pluginId: null,
+    scriptPath: null,
+    command: 'forbidden',
+    cwd: process.cwd(),
+    processId: null,
+    source: 'unifiedExecStartup',
+    status: 'completed',
+    commandActions: [],
+    aggregatedOutput: null,
+    exitCode: 0,
+    durationMs: 1,
+  };
+}
+
+function forbiddenRawFunctionCall() {
+  return {
+    type: 'function_call',
+    name: 'sensitive-function-must-not-be-retained',
+    arguments: 'sensitive-arguments-must-not-be-retained',
+    call_id: 'call-intake-fixture',
+  };
+}
+
+function sendRawResponseItem(item) {
+  send({
+    method: 'rawResponseItem/completed',
+    params: { item, threadId, turnId },
+  });
 }
 
 function completeTurn(message) {
@@ -201,6 +287,115 @@ function completeTurn(message) {
       turn: turn('completed', [item]),
     },
   });
+}
+
+function completeM251Turn(message) {
+  const finalItem = {
+    id: 'agent-intake-final',
+    memoryCitation: null,
+    phase: 'final_answer',
+    text: finalText(message),
+    type: 'agentMessage',
+  };
+  const userItem = {
+    type: 'userMessage',
+    id: 'user-intake-fixture',
+    clientId: null,
+    content: [],
+  };
+  const reasoningItem = {
+    type: 'reasoning',
+    id: 'reasoning-intake-fixture',
+    summary: [],
+    content: [],
+  };
+  send({
+    method: 'item/started',
+    params: { item: userItem, threadId, turnId, startedAtMs: 1 },
+  });
+  send({
+    method: 'item/completed',
+    params: { item: userItem, threadId, turnId, completedAtMs: 2 },
+  });
+  send({
+    method: 'item/started',
+    params: { item: reasoningItem, threadId, turnId, startedAtMs: 3 },
+  });
+  send({
+    method: 'item/reasoning/summaryPartAdded',
+    params: { threadId, turnId, itemId: reasoningItem.id, summaryIndex: 0 },
+  });
+  send({
+    method: 'item/completed',
+    params: { item: reasoningItem, threadId, turnId, completedAtMs: 4 },
+  });
+  send({
+    method: 'item/started',
+    params: { item: { ...finalItem, text: '' }, threadId, turnId, startedAtMs: 5 },
+  });
+  send({
+    method: 'item/agentMessage/delta',
+    params: { threadId, turnId, itemId: finalItem.id, delta: finalItem.text },
+  });
+  send({ method: 'account/rateLimits/updated', params: { rateLimits: rateLimits() } });
+  if (scenario === 'v2-empty-completed') {
+    finalItem.text = '';
+  }
+  send({
+    method: 'item/completed',
+    params: { item: finalItem, threadId, turnId, completedAtMs: 6 },
+  });
+  if (scenario === 'v2-multiple-messages') {
+    send({
+      method: 'item/completed',
+      params: {
+        item: { ...finalItem, id: 'agent-intake-extra' },
+        threadId,
+        turnId,
+        completedAtMs: 7,
+      },
+    });
+  }
+  const terminalItem =
+    scenario === 'v2-terminal-mismatch'
+      ? { ...finalItem, text: '{"answerContent":"other"}' }
+      : finalItem;
+  send({
+    method: 'turn/completed',
+    params: { threadId, turn: turn('completed', [terminalItem]) },
+  });
+  if (scenario === 'v2-post-terminal-forbidden') {
+    send({
+      method: 'item/completed',
+      params: {
+        item: forbiddenCommandItem(),
+        threadId,
+        turnId,
+        completedAtMs: 8,
+      },
+    });
+  }
+  if (scenario === 'v2-post-terminal-raw-function-call') {
+    sendRawResponseItem(forbiddenRawFunctionCall());
+  }
+  if (scenario === 'v2-post-terminal-raw-compaction') {
+    sendRawResponseItem({ type: 'compaction_trigger' });
+  }
+  if (scenario === 'v2-post-terminal-protocol-violation') {
+    send({
+      method: 'model/rerouted',
+      params: {
+        threadId,
+        turnId,
+        fromModel: 'gpt-5.6-sol',
+        reason: 'highRiskCyberActivity',
+        toModel: 'fallback',
+      },
+    });
+  }
+  if (scenario === 'v2-post-terminal-unsupported-notification') {
+    send({ method: 'future/unknown', params: {} });
+  }
 }
 
 function handleRequest(message) {
@@ -257,7 +452,10 @@ function handleRequest(message) {
         thread: { id: threadId },
       },
     });
-    send({ method: 'thread/started', params: { thread: { id: threadId } } });
+    send({
+      method: 'thread/started',
+      params: { thread: isM251Scenario ? fullThread() : { id: threadId } },
+    });
     return;
   }
   if (message.method === 'thread/resume' || message.method === 'thread/compact/start') {
@@ -281,6 +479,46 @@ function handleRequest(message) {
       method: 'turn/started',
       params: { threadId, turn: turn('inProgress', []) },
     });
+    if (scenario === 'v2-unsupported-notification') {
+      send({ method: 'future/unknown', params: {} });
+      return;
+    }
+    if (scenario === 'v2-malformed-envelope') {
+      send({ method: 'warning', params: [] });
+      return;
+    }
+    if (scenario === 'v2-forbidden-command') {
+      send({
+        method: 'item/completed',
+        params: {
+          item: forbiddenCommandItem(),
+          threadId,
+          turnId,
+          completedAtMs: 2,
+        },
+      });
+      return;
+    }
+    if (scenario === 'v2-raw-function-call') {
+      sendRawResponseItem(forbiddenRawFunctionCall());
+      return;
+    }
+    if (scenario === 'v2-raw-compaction') {
+      sendRawResponseItem({ type: 'compaction_trigger' });
+      return;
+    }
+    if (scenario === 'v2-context-compaction-item') {
+      send({
+        method: 'item/completed',
+        params: {
+          item: { type: 'contextCompaction', id: 'compact-intake-fixture' },
+          threadId,
+          turnId,
+          completedAtMs: 2,
+        },
+      });
+      return;
+    }
     if (scenario === 'process-failure') {
       process.exit(42);
     }
@@ -310,7 +548,11 @@ function handleRequest(message) {
     if (scenario === 'running-turn') {
       return;
     }
-    completeTurn(message);
+    if (isM251Scenario) {
+      completeM251Turn(message);
+    } else {
+      completeTurn(message);
+    }
     return;
   }
   if (message.method === 'turn/interrupt') {
@@ -335,6 +577,24 @@ lines.on('line', (line) => {
         userAgent: 'codeclosure-intake-fixture',
       },
     });
+    if (isM251Scenario) {
+      if (scenario === 'v2-remote-malformed') {
+        send({
+          method: 'remoteControl/status/changed',
+          params: { status: 'disabled', serverName: '', installationId: '' },
+        });
+      } else {
+        send({
+          method: 'remoteControl/status/changed',
+          params: {
+            status: scenario === 'v2-remote-connected' ? 'connected' : 'disabled',
+            serverName: '',
+            installationId: '',
+            environmentId: null,
+          },
+        });
+      }
+    }
     return;
   }
   if (message.method === 'initialized') {

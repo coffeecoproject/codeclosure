@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
@@ -255,44 +255,6 @@ void test('the CLI governed fixture returns one unsupported assumption without a
   assert.deepEqual(result.response.proposedAssumptions, ['Confirm bounded risk']);
   assert.equal('decisionId' in result.response, false);
   assert.equal('goalId' in result.response, false);
-
-  const evidencePath = process.env['CODECLOSURE_M25_ASSISTANT_SCENARIO_EVIDENCE_PATH'];
-  if (evidencePath !== undefined) {
-    writeFileSync(
-      evidencePath,
-      `${JSON.stringify({
-        schemaVersion: 1,
-        kind: 'M25_SCENARIO_EVIDENCE',
-        scenarioId: 'M25-D02-ASSISTANT-ASSUMPTION',
-        isolatedRoots: [
-          { kind: 'AUTHORITY_ROOT', path: fixture.roots.authorityRoot },
-          { kind: 'ADAPTER_STATE_ROOT', path: fixture.roots.codexHome },
-          { kind: 'OPERATION_ROOT', path: fixture.roots.cwd },
-          { kind: 'PROCESS_STATE_ROOT', path: fixture.roots.processHome },
-          { kind: 'PROCESS_TEMPORARY_ROOT', path: fixture.roots.temporaryDirectory },
-        ],
-        inputIdentity: {
-          operation: 'INTENT_ANALYSIS',
-          primaryId: input.package.intakeRunId,
-          digest: input.manifest.manifestDigest,
-        },
-        expectedDisposition: 'COMPLETED/ONE_UNSUPPORTED_ASSUMPTION/NO_AUTHORITY_FIELDS',
-        observedDisposition: 'COMPLETED/ONE_UNSUPPORTED_ASSUMPTION/NO_AUTHORITY_FIELDS',
-        finalSafeAuthorityProjection: {
-          responseDigest: digests.digest(result.response),
-          proposedAssumptionCount: result.response.proposedAssumptions.length,
-          decisionAuthorityPresent: 'decisionId' in result.response,
-          goalAuthorityPresent: 'goalId' in result.response,
-          operationState: result.observation.state,
-          processLaunchCount: result.observation.processLaunchCount,
-          threadStartCount: result.observation.threadStartCount,
-          turnStartCount: result.observation.turnStartCount,
-        },
-        strictReopen: 'NOT_APPLICABLE',
-      })}\n`,
-      { mode: 0o600 },
-    );
-  }
 });
 
 void test('the closed profile explicitly disables every selected capability source', () => {

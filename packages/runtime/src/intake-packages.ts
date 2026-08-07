@@ -53,6 +53,14 @@ import {
   M25_INTAKE_PROTOCOL_SNAPSHOT_DIGEST,
   M25_INTAKE_REASONING_EFFORT,
   M25_INTAKE_SERVICE_TIER,
+  M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M251_INTAKE_ASSISTANT_PROFILE_VERSION,
+  M251_INTAKE_CLOSED_CONFIGURATION_ID,
+  M251_INTAKE_CLOSED_CONFIGURATION_VERSION,
+  M251_INTAKE_CODEX_VERSION,
+  M251_INTAKE_PROTOCOL_PROJECTION_ID,
+  M251_INTAKE_PROTOCOL_PROJECTION_VERSION,
+  M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST,
   M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_ID,
   M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
   m25IntakeBudgetDefinition,
@@ -77,6 +85,33 @@ export interface IntakeAssistantProfileDescriptor {
   readonly selectedAuthorityCapabilities: readonly never[];
 }
 
+export interface M251IntakeAssistantProfileDescriptor {
+  readonly schemaVersion: 2;
+  readonly id: typeof M25_INTAKE_ASSISTANT_PROFILE_ID;
+  readonly version: typeof M251_INTAKE_ASSISTANT_PROFILE_VERSION;
+  readonly codexVersion: typeof M251_INTAKE_CODEX_VERSION;
+  readonly protocolSnapshotDigest: typeof M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST;
+  readonly modelProvider: typeof M25_INTAKE_MODEL_PROVIDER;
+  readonly model: typeof M25_INTAKE_MODEL;
+  readonly serviceTier: typeof M25_INTAKE_SERVICE_TIER;
+  readonly reasoningEffort: typeof M25_INTAKE_REASONING_EFFORT;
+  readonly threadPolicy: 'FRESH_PROCESS_THREAD_TURN';
+  readonly compactionPolicy: 'FAIL_ON_OBSERVATION';
+  readonly fallbackPolicy: 'FAIL_CLOSED';
+  readonly effectPolicy: 'ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION';
+  readonly selectedAuthorityCapabilities: readonly never[];
+  readonly closedConfiguration: Readonly<{
+    schemaVersion: 1;
+    id: typeof M251_INTAKE_CLOSED_CONFIGURATION_ID;
+    version: typeof M251_INTAKE_CLOSED_CONFIGURATION_VERSION;
+  }>;
+  readonly protocolProjectionPolicy: Readonly<{
+    schemaVersion: 1;
+    id: typeof M251_INTAKE_PROTOCOL_PROJECTION_ID;
+    version: typeof M251_INTAKE_PROTOCOL_PROJECTION_VERSION;
+  }>;
+}
+
 export const m25IntakeAssistantProfile: IntakeAssistantProfileDescriptor = Object.freeze({
   schemaVersion: 1,
   id: M25_INTAKE_ASSISTANT_PROFILE_ID,
@@ -92,6 +127,52 @@ export const m25IntakeAssistantProfile: IntakeAssistantProfileDescriptor = Objec
   fallbackPolicy: 'FAIL_CLOSED',
   effectPolicy: 'ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION',
   selectedAuthorityCapabilities: Object.freeze([]),
+});
+
+export const m251IntakeAssistantProfile: M251IntakeAssistantProfileDescriptor = Object.freeze({
+  schemaVersion: 2,
+  id: M25_INTAKE_ASSISTANT_PROFILE_ID,
+  version: M251_INTAKE_ASSISTANT_PROFILE_VERSION,
+  codexVersion: M251_INTAKE_CODEX_VERSION,
+  protocolSnapshotDigest: M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST,
+  modelProvider: M25_INTAKE_MODEL_PROVIDER,
+  model: M25_INTAKE_MODEL,
+  serviceTier: M25_INTAKE_SERVICE_TIER,
+  reasoningEffort: M25_INTAKE_REASONING_EFFORT,
+  threadPolicy: 'FRESH_PROCESS_THREAD_TURN',
+  compactionPolicy: 'FAIL_ON_OBSERVATION',
+  fallbackPolicy: 'FAIL_CLOSED',
+  effectPolicy: 'ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION',
+  selectedAuthorityCapabilities: Object.freeze([]),
+  closedConfiguration: Object.freeze({
+    schemaVersion: 1,
+    id: M251_INTAKE_CLOSED_CONFIGURATION_ID,
+    version: M251_INTAKE_CLOSED_CONFIGURATION_VERSION,
+  }),
+  protocolProjectionPolicy: Object.freeze({
+    schemaVersion: 1,
+    id: M251_INTAKE_PROTOCOL_PROJECTION_ID,
+    version: M251_INTAKE_PROTOCOL_PROJECTION_VERSION,
+  }),
+});
+
+export type VersionedIntakeAssistantProfileDescriptor =
+  IntakeAssistantProfileDescriptor | M251IntakeAssistantProfileDescriptor;
+
+export type IntakeAssistantAdapterDescriptor = Readonly<{
+  id: typeof M25_INTAKE_ASSISTANT_ADAPTER_ID;
+  version:
+    typeof M25_INTAKE_ASSISTANT_ADAPTER_VERSION | typeof M251_INTAKE_ASSISTANT_ADAPTER_VERSION;
+}>;
+
+export const m25IntakeAssistantAdapter: IntakeAssistantAdapterDescriptor = Object.freeze({
+  id: M25_INTAKE_ASSISTANT_ADAPTER_ID,
+  version: M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
+});
+
+export const m251IntakeAssistantAdapter: IntakeAssistantAdapterDescriptor = Object.freeze({
+  id: M25_INTAKE_ASSISTANT_ADAPTER_ID,
+  version: M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
 });
 
 export const m25IntentAnalysisResponseSchema = Object.freeze({
@@ -194,11 +275,8 @@ export interface IntakeBudgetProfileDescriptor {
 interface IntakePackageCommon {
   readonly schemaVersion: 1;
   readonly intakeRunId: IntakeRunId;
-  readonly assistantProfile: IntakeAssistantProfileDescriptor;
-  readonly assistantAdapter: Readonly<{
-    id: typeof M25_INTAKE_ASSISTANT_ADAPTER_ID;
-    version: typeof M25_INTAKE_ASSISTANT_ADAPTER_VERSION;
-  }>;
+  readonly assistantProfile: VersionedIntakeAssistantProfileDescriptor;
+  readonly assistantAdapter: IntakeAssistantAdapterDescriptor;
   readonly responseContract: IntakeResponseContractDescriptor;
   readonly budgetProfile: IntakeBudgetProfileDescriptor;
 }
@@ -265,11 +343,6 @@ export interface IntakePackageCompilerOptions {
   readonly canonicalizer: Canonicalizer;
   readonly digests: DigestProvider & IntakeDigestVerifier;
 }
-
-const assistantAdapter = Object.freeze({
-  id: M25_INTAKE_ASSISTANT_ADAPTER_ID,
-  version: M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
-});
 
 function canonicalBytes(value: unknown, canonicalizer: Canonicalizer): number {
   return Buffer.byteLength(canonicalizer.canonicalize(value), 'utf8');
@@ -449,6 +522,7 @@ function manifestFor(
     answerBindingDigests: readonly Sha256Digest[];
     declaredProjectRef?: DeclaredProjectRef;
     admissionPolicy: VersionedDigestRef;
+    assistantAdapter: IntakeAssistantAdapterDescriptor;
     responseContract: IntakeResponseContractDescriptor;
     budgetProfile: IntakeBudgetProfileDescriptor;
     entries: readonly IntakeManifestEntry[];
@@ -494,7 +568,7 @@ function manifestFor(
       ? {}
       : { declaredProjectRef: input.declaredProjectRef }),
     admissionPolicy: input.admissionPolicy,
-    assistantAdapter,
+    assistantAdapter: input.assistantAdapter,
     responseContract: versionedRef(input.responseContract),
     budgetProfile: budgetRef(input.budgetProfile),
     entries,
@@ -509,13 +583,21 @@ function manifestFor(
   return decodeIntakeManifest({ ...base, manifestDigest: digests.digest(projected) }, digests);
 }
 
-export class M25IntakePackageCompiler {
+class VersionedIntakePackageCompiler {
   readonly #canonicalizer: Canonicalizer;
   readonly #digests: DigestProvider & IntakeDigestVerifier;
+  readonly #assistantProfile: VersionedIntakeAssistantProfileDescriptor;
+  readonly #assistantAdapter: IntakeAssistantAdapterDescriptor;
 
-  public constructor(options: IntakePackageCompilerOptions) {
+  public constructor(
+    options: IntakePackageCompilerOptions,
+    assistantProfile: VersionedIntakeAssistantProfileDescriptor,
+    assistantAdapter: IntakeAssistantAdapterDescriptor,
+  ) {
     this.#canonicalizer = options.canonicalizer;
     this.#digests = options.digests;
+    this.#assistantProfile = assistantProfile;
+    this.#assistantAdapter = assistantAdapter;
   }
 
   public validateIntentAnalysisCompilation(
@@ -583,8 +665,8 @@ export class M25IntakePackageCompiler {
       intakeRunId: rawRequestRevision.intakeRunId,
       rawRequestRevision,
       preparedDecisionBinding,
-      assistantProfile: m25IntakeAssistantProfile,
-      assistantAdapter,
+      assistantProfile: this.#assistantProfile,
+      assistantAdapter: this.#assistantAdapter,
       responseContract: response,
       budgetProfile: budget,
     });
@@ -622,6 +704,7 @@ export class M25IntakePackageCompiler {
           ? {}
           : { declaredProjectRef: rawRequestRevision.declaredProjectRef }),
         admissionPolicy,
+        assistantAdapter: this.#assistantAdapter,
         responseContract: response,
         budgetProfile: budget,
         entries,
@@ -741,8 +824,8 @@ export class M25IntakePackageCompiler {
       activeQuestionRefs,
       ...(declaredProjectRef === undefined ? {} : { declaredProjectRef }),
       admissionPolicy,
-      assistantProfile: m25IntakeAssistantProfile,
-      assistantAdapter,
+      assistantProfile: this.#assistantProfile,
+      assistantAdapter: this.#assistantAdapter,
       responseContract: response,
       budgetProfile: budget,
     });
@@ -816,6 +899,7 @@ export class M25IntakePackageCompiler {
         ),
         ...(declaredProjectRef === undefined ? {} : { declaredProjectRef }),
         admissionPolicy: policyRef(admissionPolicy),
+        assistantAdapter: this.#assistantAdapter,
         responseContract: response,
         budgetProfile: budget,
         entries,
@@ -873,8 +957,8 @@ export class M25IntakePackageCompiler {
       intakeRunId: input.intakeRunId,
       rawRequestRevision,
       preparedDecisionBinding,
-      assistantProfile: m25IntakeAssistantProfile,
-      assistantAdapter,
+      assistantProfile: this.#assistantProfile,
+      assistantAdapter: this.#assistantAdapter,
       responseContract: response,
       budgetProfile: budget,
     });
@@ -912,6 +996,7 @@ export class M25IntakePackageCompiler {
           ? {}
           : { declaredProjectRef: rawRequestRevision.declaredProjectRef }),
         admissionPolicy: policyRef(admissionPolicy),
+        assistantAdapter: this.#assistantAdapter,
         responseContract: response,
         budgetProfile: budget,
         entries,
@@ -921,6 +1006,19 @@ export class M25IntakePackageCompiler {
       this.#digests,
     );
     return Object.freeze({ package: packageValue, manifest });
+  }
+
+  public recompileAnswerOnly(
+    input: CompileAnswerOnlyPackageInput,
+    retainedManifest: IntakeManifest,
+  ): IntakePackageCompilation<AnswerOnlyPackage> {
+    if (
+      retainedManifest.assistantAdapter.id !== this.#assistantAdapter.id ||
+      retainedManifest.assistantAdapter.version !== this.#assistantAdapter.version
+    ) {
+      throw new TypeError('Retained Intake Manifest does not match this Package compiler');
+    }
+    return this.compileAnswerOnly(input);
   }
 
   #assertExactCompilation(
@@ -935,5 +1033,93 @@ export class M25IntakePackageCompiler {
     ) {
       throw new TypeError('Intake package and Manifest are not one canonical compilation');
     }
+  }
+}
+
+export interface IntakePackageCompilerPort {
+  compileIntentAnalysis(
+    input: CompileIntentAnalysisPackageInput,
+  ): IntakePackageCompilation<IntakePackage>;
+  compileAnswerOnly(
+    input: CompileAnswerOnlyPackageInput,
+  ): IntakePackageCompilation<AnswerOnlyPackage>;
+  validateIntentAnalysisCompilation(compilation: IntakePackageCompilation<IntakePackage>): void;
+  validateAnswerOnlyCompilation(compilation: IntakePackageCompilation<AnswerOnlyPackage>): void;
+  recompileAnswerOnly(
+    input: CompileAnswerOnlyPackageInput,
+    retainedManifest: IntakeManifest,
+  ): IntakePackageCompilation<AnswerOnlyPackage>;
+}
+
+export class M25IntakePackageCompiler
+  extends VersionedIntakePackageCompiler
+  implements IntakePackageCompilerPort
+{
+  public constructor(options: IntakePackageCompilerOptions) {
+    super(options, m25IntakeAssistantProfile, m25IntakeAssistantAdapter);
+  }
+}
+
+export class M251IntakePackageCompiler implements IntakePackageCompilerPort {
+  readonly #v1: VersionedIntakePackageCompiler;
+  readonly #v2: VersionedIntakePackageCompiler;
+
+  public constructor(options: IntakePackageCompilerOptions) {
+    this.#v1 = new VersionedIntakePackageCompiler(
+      options,
+      m25IntakeAssistantProfile,
+      m25IntakeAssistantAdapter,
+    );
+    this.#v2 = new VersionedIntakePackageCompiler(
+      options,
+      m251IntakeAssistantProfile,
+      m251IntakeAssistantAdapter,
+    );
+  }
+
+  public compileIntentAnalysis(
+    input: CompileIntentAnalysisPackageInput,
+  ): IntakePackageCompilation<IntakePackage> {
+    return this.#v2.compileIntentAnalysis(input);
+  }
+
+  public compileAnswerOnly(
+    input: CompileAnswerOnlyPackageInput,
+  ): IntakePackageCompilation<AnswerOnlyPackage> {
+    return this.#v2.compileAnswerOnly(input);
+  }
+
+  public validateIntentAnalysisCompilation(
+    compilation: IntakePackageCompilation<IntakePackage>,
+  ): void {
+    this.#compilerForPackage(compilation.package).validateIntentAnalysisCompilation(compilation);
+  }
+
+  public validateAnswerOnlyCompilation(
+    compilation: IntakePackageCompilation<AnswerOnlyPackage>,
+  ): void {
+    this.#compilerForPackage(compilation.package).validateAnswerOnlyCompilation(compilation);
+  }
+
+  public recompileAnswerOnly(
+    input: CompileAnswerOnlyPackageInput,
+    retainedManifest: IntakeManifest,
+  ): IntakePackageCompilation<AnswerOnlyPackage> {
+    if (retainedManifest.assistantAdapter.id !== M25_INTAKE_ASSISTANT_ADAPTER_ID) {
+      throw new TypeError('Retained Intake Manifest selects an unsupported Adapter');
+    }
+    if (retainedManifest.assistantAdapter.version === M25_INTAKE_ASSISTANT_ADAPTER_VERSION) {
+      return this.#v1.recompileAnswerOnly(input, retainedManifest);
+    }
+    if (retainedManifest.assistantAdapter.version === M251_INTAKE_ASSISTANT_ADAPTER_VERSION) {
+      return this.#v2.recompileAnswerOnly(input, retainedManifest);
+    }
+    throw new TypeError('Retained Intake Manifest selects an unsupported Adapter version');
+  }
+
+  #compilerForPackage(
+    packageValue: IntakePackage | AnswerOnlyPackage,
+  ): VersionedIntakePackageCompiler {
+    return packageValue.assistantProfile.schemaVersion === 1 ? this.#v1 : this.#v2;
   }
 }

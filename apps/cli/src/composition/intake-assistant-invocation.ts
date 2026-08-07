@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
-  M25_INTAKE_DISABLED_FEATURES,
+  M251_INTAKE_DISABLED_FEATURES,
   M25_INTAKE_PERMISSION_PROFILE_ID,
   createCodexIntakeAssistantAdapter,
 } from '@codeclosure/adapter-codex-intake';
@@ -45,9 +45,9 @@ export interface ProductionIntakeAssistantResource {
 }
 
 function controlledConfiguration(): string {
-  const disabledFeatures = M25_INTAKE_DISABLED_FEATURES.map((feature) => `${feature} = false`).join(
-    '\n',
-  );
+  const disabledFeatures = M251_INTAKE_DISABLED_FEATURES.map(
+    (feature) => `${feature} = false`,
+  ).join('\n');
   return `model = ${JSON.stringify(M25_INTAKE_MODEL)}
 model_provider = ${JSON.stringify(M25_INTAKE_MODEL_PROVIDER)}
 model_reasoning_effort = ${JSON.stringify(M25_INTAKE_REASONING_EFFORT)}

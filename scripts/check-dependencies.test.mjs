@@ -227,7 +227,16 @@ void test('the Codex Intake adapter has one closed package edge and production c
     );
   }
 
-  for (const file of ['adapter.ts', 'contracts.ts', 'index.ts', 'protocol.ts']) {
+  for (const file of [
+    'adapter.ts',
+    'contracts.ts',
+    'index.ts',
+    'intake-observed-events.ts',
+    'projection.ts',
+    'protocol-strategy.ts',
+    'protocol-v2.ts',
+    'protocol.ts',
+  ]) {
     const actualSourcePath = resolve(packageRoot, 'src', file);
     const specifiers = collectModuleSpecifiers(
       readFileSync(actualSourcePath, 'utf8'),
@@ -240,6 +249,29 @@ void test('the Codex Intake adapter has one closed package edge and production c
       );
     }
   }
+});
+
+void test('m2.5.1-normalized-observer-only', () => {
+  const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex-intake');
+  const adapterSource = readFileSync(resolve(packageRoot, 'src/adapter.ts'), 'utf8');
+  const projectionSource = readFileSync(resolve(packageRoot, 'src/projection.ts'), 'utf8');
+  const strategySource = readFileSync(resolve(packageRoot, 'src/protocol-strategy.ts'), 'utf8');
+  const observerSource = readFileSync(resolve(packageRoot, 'src/protocol-v2.ts'), 'utf8');
+  const v2Strategy = strategySource.slice(
+    strategySource.indexOf('function createM251Strategy'),
+    strategySource.indexOf('export function createIntakeProtocolObserverStrategy'),
+  );
+
+  assert.equal(adapterSource.includes('AppServerNotification'), false);
+  assert.equal(adapterSource.includes('onCompactionEvent'), false);
+  assert.equal(observerSource.includes('@codeclosure/codex-app-server-client'), false);
+  assert.equal(observerSource.includes('AppServerNotification'), false);
+  assert.equal(observerSource.includes('onCompactionEvent'), false);
+  assert.equal(observerSource.includes('IntakeObservedEvent'), true);
+  assert.equal(projectionSource.includes('type AppServerNotification'), true);
+  assert.equal(projectionSource.includes('class IntakeProtocolProjection'), true);
+  assert.equal(v2Strategy.includes('onNotification: projection.record'), true);
+  assert.equal(v2Strategy.includes('onCompactionEvent'), false);
 });
 
 void test('the local workspace adapter depends only on public Runtime Candidate contracts', () => {

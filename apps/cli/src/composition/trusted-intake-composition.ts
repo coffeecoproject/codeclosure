@@ -2,7 +2,7 @@ import type { DeclaredProjectRef } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
   M25IntakeCoordinator,
-  M25IntakePackageCompiler,
+  M251IntakePackageCompiler,
   M25IntentAdmissionEngine,
   M25IntentProjectionCompiler,
   MinimalContextCompiler,
@@ -250,7 +250,7 @@ export function createIntakeCliComposition(
     const coordinator = new M25IntakeCoordinator({
       store,
       assistant: options.assistant,
-      packageCompiler: new M25IntakePackageCompiler({ canonicalizer, digests }),
+      packageCompiler: new M251IntakePackageCompiler({ canonicalizer, digests }),
       projectionCompiler: new M25IntentProjectionCompiler({ canonicalizer, digests }),
       admissionEngine: new M25IntentAdmissionEngine(digests),
       admissionPolicyId: intentPolicy.id,

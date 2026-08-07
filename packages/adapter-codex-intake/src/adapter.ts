@@ -39,28 +39,61 @@ import {
   decodeAnswerOnlyResponse,
   decodeIntentAnalysisResponse,
   m25IntakeClosedConfig,
+  m25IntakeConfigRead,
+  m251IntakeClosedConfig,
+  m251IntakeConfigRead,
   renderIntakePrompt,
   type SafeAdapterFailure,
 } from './contracts.js';
 import {
-  IntakeProtocolObserver,
   assertClosedConfiguration,
   assertManagedRequirements,
   assertPermissionProfile,
   decodeEffectiveThread,
   decodeStartedTurn,
-  type TerminalIntakeTurn,
 } from './protocol.js';
+import {
+  createIntakeProtocolObserverStrategy,
+  type IntakeProtocolObserverStrategy,
+  type ProtocolTerminal,
+} from './protocol-strategy.js';
+import type { SafeIntakeDiagnosticCategory } from './intake-observed-events.js';
 
 export interface CodexIntakeAssistantAdapterInput {
   readonly launch: AppServerProcessLaunch;
   readonly launchNonce: string;
   readonly forbiddenRoots: readonly string[];
   readonly clientLimits?: Partial<AppServerClientLimits>;
+  readonly onSafeDiagnostic?: (
+    category: SafeIntakeDiagnosticCategory,
+    location: IntakeDiagnosticLocation,
+    token: IntakeDiagnosticToken,
+  ) => void;
+}
+
+export type IntakeDiagnosticToken = string;
+
+export type IntakeDiagnosticLocation =
+  | 'CLIENT_START'
+  | 'CONFIGURATION'
+  | 'INPUT_VALIDATION'
+  | 'ISOLATION'
+  | 'LAUNCH_BINDING'
+  | 'OBSERVATION'
+  | 'RESPONSE'
+  | 'SHUTDOWN'
+  | 'THREAD_START'
+  | 'TURN_START';
+
+interface IntakeOperationFailure {
+  readonly diagnostic: SafeIntakeDiagnosticCategory;
+  readonly location: IntakeDiagnosticLocation;
+  readonly reason: FailureReason;
+  readonly token: IntakeDiagnosticToken;
 }
 
 type WaitResult =
-  | Readonly<{ kind: 'TERMINAL'; terminal: TerminalIntakeTurn }>
+  | Readonly<{ kind: 'TERMINAL'; terminal: ProtocolTerminal }>
   | Readonly<{ kind: 'FAILED'; reason: FailureReason }>
   | Readonly<{ kind: 'CLOSED'; close: AppServerCloseResult }>
   | Readonly<{ kind: 'ABORT' }>
@@ -170,7 +203,50 @@ function mapFailure(error: unknown, signal: AbortSignal): FailureReason {
   return IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR;
 }
 
+function safeDiagnosticForFailure(
+  error: unknown,
+  signal: AbortSignal,
+): SafeIntakeDiagnosticCategory {
+  if (signal.aborted) {
+    return 'PROCESS_INTERRUPTED';
+  }
+  if (error instanceof AppServerClientError) {
+    switch (error.code) {
+      case AppServerClientErrorCode.PROTOCOL_CORRELATION:
+        return 'LOWER_CLIENT_CORRELATION';
+      case AppServerClientErrorCode.PROTOCOL_LIMIT:
+        return 'LOWER_CLIENT_LIMIT';
+      case AppServerClientErrorCode.REQUEST_TIMEOUT:
+        return 'PROCESS_TIMEOUT';
+      case AppServerClientErrorCode.HOST_CANCELLED:
+        return 'PROCESS_INTERRUPTED';
+      case AppServerClientErrorCode.HOST_HANDLER_FAILED:
+      case AppServerClientErrorCode.MALFORMED_RESPONSE:
+      case AppServerClientErrorCode.PROTOCOL_MALFORMED:
+      case AppServerClientErrorCode.REQUEST_REJECTED:
+      case AppServerClientErrorCode.SERVER_REQUEST_FAILED:
+      case AppServerClientErrorCode.UNSUPPORTED_METHOD:
+      case AppServerClientErrorCode.UNSUPPORTED_SERVER_REQUEST:
+        return 'LOWER_CLIENT_UNSUPPORTED_OR_MALFORMED';
+      default:
+        return 'PROCESS_UNAVAILABLE';
+    }
+  }
+  if (
+    error instanceof Error &&
+    'adapterReason' in error &&
+    (error as SafeAdapterFailure).adapterReason ===
+      IntakeAssistantFailureReasonCode.RESPONSE_REJECTED
+  ) {
+    return 'RESPONSE_REJECTED';
+  }
+  return 'PROCESS_UNAVAILABLE';
+}
+
 function mapClosedClient(close: AppServerCloseResult): FailureReason {
+  if (close.code !== 0 && close.failureCode === undefined) {
+    return IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE;
+  }
   return close.failureCode === AppServerClientErrorCode.PROCESS_EXITED ||
     close.failureCode === AppServerClientErrorCode.SPAWN_FAILED ||
     close.failureCode === AppServerClientErrorCode.STREAM_FAILED
@@ -178,9 +254,38 @@ function mapClosedClient(close: AppServerCloseResult): FailureReason {
     : IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR;
 }
 
+function safeDiagnosticTokenForFailure(error: unknown): IntakeDiagnosticToken {
+  if (error instanceof AppServerClientError) {
+    return error.code;
+  }
+  if (error instanceof Error && 'adapterReason' in error) {
+    return (error as SafeAdapterFailure).adapterReason;
+  }
+  return 'UNCLASSIFIED';
+}
+
+function safeDiagnosticForClosedClient(close: AppServerCloseResult): SafeIntakeDiagnosticCategory {
+  switch (close.failureCode) {
+    case AppServerClientErrorCode.PROTOCOL_CORRELATION:
+      return 'LOWER_CLIENT_CORRELATION';
+    case AppServerClientErrorCode.PROTOCOL_LIMIT:
+      return 'LOWER_CLIENT_LIMIT';
+    case AppServerClientErrorCode.HOST_HANDLER_FAILED:
+    case AppServerClientErrorCode.MALFORMED_RESPONSE:
+    case AppServerClientErrorCode.PROTOCOL_MALFORMED:
+    case AppServerClientErrorCode.REQUEST_REJECTED:
+    case AppServerClientErrorCode.SERVER_REQUEST_FAILED:
+    case AppServerClientErrorCode.UNSUPPORTED_METHOD:
+    case AppServerClientErrorCode.UNSUPPORTED_SERVER_REQUEST:
+      return 'LOWER_CLIENT_UNSUPPORTED_OR_MALFORMED';
+    default:
+      return 'PROCESS_UNAVAILABLE';
+  }
+}
+
 async function waitForTerminal(
   client: AppServerClient,
-  observer: IntakeProtocolObserver,
+  observer: IntakeProtocolObserverStrategy,
   signal: AbortSignal,
 ): Promise<WaitResult> {
   let timer: NodeJS.Timeout | undefined;
@@ -223,7 +328,7 @@ async function waitForTerminal(
 function observation(
   operation: 'INTENT_ANALYSIS' | 'ANSWER_ONLY',
   counters: OperationCounters,
-  observer: IntakeProtocolObserver,
+  observer: IntakeProtocolObserverStrategy | undefined,
   failureReason?: FailureReason,
 ): IntakeAssistantObservation {
   return Object.freeze({
@@ -234,11 +339,11 @@ function observation(
     threadStartCount: counters.threadStartCount,
     turnStartCount: counters.turnStartCount,
     turnInterruptCount: counters.turnInterruptCount,
-    compactionCount: observer.compactionCount,
-    ...(observer.backendSessionRef === undefined
+    compactionCount: observer?.compactionCount ?? 0,
+    ...(observer?.backendSessionRef === undefined
       ? {}
       : { backendSessionRef: observer.backendSessionRef }),
-    ...(observer.backendOperationRef === undefined
+    ...(observer?.backendOperationRef === undefined
       ? {}
       : { backendOperationRef: observer.backendOperationRef }),
     ...(failureReason === undefined ? {} : { failureReasonCode: failureReason }),
@@ -275,7 +380,6 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
     signal: AbortSignal,
     decodeResponse: (text: string) => Response,
   ): Promise<IntakeAssistantOperationResult<Response>> {
-    const observer = new IntakeProtocolObserver();
     const counters: OperationCounters = {
       processLaunchCount: 0,
       threadStartCount: 0,
@@ -283,23 +387,41 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
       turnInterruptCount: 0,
     };
     let client: AppServerClient | undefined;
+    let observer: IntakeProtocolObserverStrategy | undefined;
     let response: Response | undefined;
-    let failureReason: FailureReason | undefined;
+    let operationFailure: IntakeOperationFailure | undefined;
+    let diagnosticLocation: IntakeDiagnosticLocation = 'INPUT_VALIDATION';
+    const recordFailure = (
+      reason: FailureReason,
+      diagnostic: SafeIntakeDiagnosticCategory,
+      location: IntakeDiagnosticLocation,
+      token: IntakeDiagnosticToken,
+    ): void => {
+      operationFailure ??= Object.freeze({ diagnostic, location, reason, token });
+      response = undefined;
+    };
     try {
       if (this.#used) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR);
       }
       this.#used = true;
-      if (operation === 'INTENT_ANALYSIS') {
-        assertIntentAnalysisInput(input as IntentAnalysisAssistantInput);
-      } else {
-        assertAnswerOnlyInput(input as AnswerOnlyAssistantInput);
-      }
+      const protocolVersion =
+        operation === 'INTENT_ANALYSIS'
+          ? assertIntentAnalysisInput(input as IntentAnalysisAssistantInput)
+          : assertAnswerOnlyInput(input as AnswerOnlyAssistantInput);
+      const activeObserver = createIntakeProtocolObserverStrategy(protocolVersion);
+      observer = activeObserver;
+      const closedConfig =
+        protocolVersion === 'M25_V1' ? m25IntakeClosedConfig : m251IntakeClosedConfig;
+      const configRead = protocolVersion === 'M25_V1' ? m25IntakeConfigRead : m251IntakeConfigRead;
+      diagnosticLocation = 'LAUNCH_BINDING';
       assertAssistantProfileLaunchBinding(this.#input, input);
+      diagnosticLocation = 'ISOLATION';
       assertIsolation(this.#input, input);
       if (hostCancelled(signal)) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE);
       }
+      diagnosticLocation = 'CLIENT_START';
       client = await startAppServerClient({
         initialize: {
           capabilities: {
@@ -316,12 +438,12 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         launch: this.#input.launch,
         launchNonce: this.#input.launchNonce,
         ...(this.#input.clientLimits === undefined ? {} : { limits: this.#input.clientLimits }),
-        onCompactionEvent: () => observer.recordCompaction(),
-        onNotification: (notification) => observer.record(notification),
+        ...activeObserver.clientCallbacks,
         onProcessStarted: () => {
           counters.processLaunchCount += 1;
         },
       });
+      diagnosticLocation = 'CONFIGURATION';
       const requestOptions = Object.freeze({ signal });
       assertManagedRequirements(
         await client.request('configRequirements/read', undefined, decoderIdentity, requestOptions),
@@ -333,6 +455,7 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
           decoderIdentity,
           requestOptions,
         ),
+        configRead,
       );
       assertPermissionProfile(
         await client.request(
@@ -342,13 +465,14 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
           requestOptions,
         ),
       );
+      diagnosticLocation = 'THREAD_START';
       counters.threadStartCount += 1;
       const effective = await client.request(
         'thread/start',
         {
           approvalPolicy: 'never',
           approvalsReviewer: 'user',
-          config: m25IntakeClosedConfig,
+          config: closedConfig,
           cwd: this.#input.launch.summary.cwd,
           developerInstructions: M25_INTAKE_DEVELOPER_INSTRUCTIONS,
           ephemeral: true,
@@ -360,9 +484,9 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         (value) => decodeEffectiveThread(value, this.#input.launch.summary.cwd),
         requestOptions,
       );
-      observer.bindThread(effective.threadId);
-      if (observer.failureReason !== undefined) {
-        throw adapterFailure(observer.failureReason);
+      activeObserver.bindThread(effective.threadId);
+      if (activeObserver.failureReason !== undefined) {
+        throw adapterFailure(activeObserver.failureReason);
       }
       assertClosedConfiguration(
         await client.request(
@@ -371,11 +495,13 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
           decoderIdentity,
           requestOptions,
         ),
+        configRead,
       );
       const prompt = renderIntakePrompt(input);
       if (Buffer.byteLength(prompt, 'utf8') > 1_048_576) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR);
       }
+      diagnosticLocation = 'TURN_START';
       counters.turnStartCount += 1;
       const started = await client.request(
         'turn/start',
@@ -394,8 +520,9 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         decodeStartedTurn,
         requestOptions,
       );
-      observer.bindTurn(started.turnId);
-      const wait = await waitForTerminal(client, observer, signal);
+      activeObserver.bindTurn(started.turnId);
+      diagnosticLocation = 'OBSERVATION';
+      const wait = await waitForTerminal(client, activeObserver, signal);
       if (wait.kind === 'ABORT' || wait.kind === 'TIMEOUT' || wait.kind === 'FAILED') {
         counters.turnInterruptCount += 1;
         try {
@@ -411,6 +538,12 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_TIMEOUT);
       }
       if (wait.kind === 'CLOSED') {
+        recordFailure(
+          mapClosedClient(wait.close),
+          safeDiagnosticForClosedClient(wait.close),
+          diagnosticLocation,
+          wait.close.failureCode ?? 'UNCLASSIFIED',
+        );
         throw adapterFailure(mapClosedClient(wait.close));
       }
       if (wait.kind === 'FAILED') {
@@ -419,39 +552,77 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
       if (hostCancelled(signal)) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE);
       }
-      const finalText = observer.selectFinalText(wait.terminal);
+      const finalText = activeObserver.selectFinalText(wait.terminal);
+      diagnosticLocation = 'RESPONSE';
       try {
         response = decodeResponse(finalText);
       } catch {
         throw adapterFailure(IntakeAssistantFailureReasonCode.RESPONSE_REJECTED);
       }
     } catch (error) {
-      failureReason = mapFailure(error, signal);
-      response = undefined;
+      recordFailure(
+        mapFailure(error, signal),
+        observer?.failureDiagnostic ?? safeDiagnosticForFailure(error, signal),
+        diagnosticLocation,
+        observer?.failureToken ?? safeDiagnosticTokenForFailure(error),
+      );
     } finally {
       if (client !== undefined) {
+        let close: AppServerCloseResult | undefined;
+        let shutdownError: unknown;
         try {
-          const close = await client.shutdown();
-          if (
-            failureReason === undefined &&
-            (close.code !== 0 || close.failureCode !== undefined)
-          ) {
-            failureReason = IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE;
-            response = undefined;
-          }
-        } catch {
-          failureReason = IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE;
-          response = undefined;
+          close = await client.shutdown();
+        } catch (error) {
+          shutdownError = error;
+        }
+        if (observer?.failureReason !== undefined) {
+          recordFailure(
+            observer.failureReason,
+            observer.failureDiagnostic ?? 'PROCESS_UNAVAILABLE',
+            'OBSERVATION',
+            observer.failureToken ?? 'UNCLASSIFIED',
+          );
+        }
+        if (close !== undefined && (close.code !== 0 || close.failureCode !== undefined)) {
+          recordFailure(
+            mapClosedClient(close),
+            safeDiagnosticForClosedClient(close),
+            'SHUTDOWN',
+            close.failureCode ?? 'ASSISTANT_UNAVAILABLE',
+          );
+        }
+        if (shutdownError !== undefined) {
+          recordFailure(
+            mapFailure(shutdownError, signal),
+            safeDiagnosticForFailure(shutdownError, signal),
+            'SHUTDOWN',
+            safeDiagnosticTokenForFailure(shutdownError),
+          );
         }
       }
     }
-    if (failureReason !== undefined || response === undefined) {
-      const closedReason =
-        failureReason ?? IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR;
+    if (operationFailure !== undefined || response === undefined) {
+      const closedFailure =
+        operationFailure ??
+        Object.freeze({
+          diagnostic: 'PROCESS_UNAVAILABLE' as const,
+          location: diagnosticLocation,
+          reason: IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR,
+          token: 'UNCLASSIFIED',
+        });
+      try {
+        this.#input.onSafeDiagnostic?.(
+          closedFailure.diagnostic,
+          closedFailure.location,
+          closedFailure.token,
+        );
+      } catch {
+        // Diagnostic consumers cannot affect the closed operation result.
+      }
       return Object.freeze({
         kind: 'FAILED',
-        failureReasonCode: closedReason,
-        observation: observation(operation, counters, observer, closedReason),
+        failureReasonCode: closedFailure.reason,
+        observation: observation(operation, counters, observer, closedFailure.reason),
       });
     }
     return Object.freeze({

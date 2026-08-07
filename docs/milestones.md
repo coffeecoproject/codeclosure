@@ -469,8 +469,11 @@ Status: Active post-completion compatibility and composition closure. Slice 0
 has revised its frozen contract to the exact reviewed Codex CLI `0.146.1`
 binary and protocol snapshot while preserving retained M2/M2.5 `0.146.0`
 authority without cross-version substitution. The Slice 0 closure review
-passed and permits Slice 1; feature implementation and assessment have not
-started. The
+passed. Slice 1 implements the versioned Intake Profile and Adapter correction,
+offline protocol Projection/Observer closure, safe diagnostics, and strict
+retained-v1 reopen/replay/recovery compatibility. Its slice review passed and
+permits Slice 2; no mandatory real Intake call, real phase composition, or
+milestone assessment has started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

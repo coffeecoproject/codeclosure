@@ -32,8 +32,9 @@ ordinary Start, isolated-Candidate Codex Worker, protected-verification, and
 regression evidence. Its decision contract and candidate-free project-read ADR
 are accepted. The current contract selects the exact reviewed Codex `0.146.1`
 binary and protocol snapshot while preserving historical `0.146.0` authority;
-contract validation has passed, while feature implementation and assessment
-have not started.
+contract validation and the versioned Intake Adapter correction have passed
+offline closure review. Mandatory real Intake calls and the real phase
+composition remain later work, and milestone assessment has not started.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

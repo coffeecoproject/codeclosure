@@ -27,3 +27,4 @@ runtime evidence.
 - [M2.5 completion review](m2.5-completion-review.md)
 - [M2.5 live Intake compatibility diagnostic](m2.5-live-intake-compatibility-diagnostic.md)
 - [M2.5.1 Slice 0 contract-closure review](m2.5.1-slice0-contract-closure.md)
+- [M2.5.1 Slice 1 Intake Adapter compatibility review](m2.5.1-slice1-intake-adapter-compatibility.md)

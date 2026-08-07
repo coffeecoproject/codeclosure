@@ -54,6 +54,41 @@ export const M25_REQUIRED_SCENARIO_EVIDENCE = Object.freeze([
 const matrixGroupCounts = Object.freeze({ E: 10, D: 9, S: 9, G: 26, R: 11, C: 6 });
 const sha256Pattern = /^sha256:[0-9a-f]{64}$/u;
 const portableArtifactPathPattern = /^[a-z0-9][a-z0-9._/-]*$/u;
+const supportedIntakeProofConfigurations = Object.freeze([
+  Object.freeze({
+    assistantProfileId: 'intake-assistant-profile_codeclosure-m2-5-local',
+    assistantProfileVersion: 'codeclosure-m2-5-local-assistant-v1',
+    assistantProfileDigest:
+      'sha256:6bbab11dae6bd54ce7fa62387db5e451d77dcdd3ea255f78e2161867d742559f',
+    assistantAdapterId: 'intake-assistant-adapter_codex-app-server',
+    assistantAdapterVersion: 'codeclosure-m2-5-intake-adapter-v1',
+    assistantAdapterDigest:
+      'sha256:732fce81ce691f298d4ec9fde3a9be950f2697998f316e311047f5a287b44b38',
+    codexVersion: '0.146.0',
+    protocolSnapshotDigest:
+      'sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21',
+    closedConfigurationDigest:
+      'sha256:6256ec8073b91704258b7d974685b682f140747bdfd5ec2ae8c11404fa72ff2e',
+  }),
+  Object.freeze({
+    assistantProfileId: 'intake-assistant-profile_codeclosure-m2-5-local',
+    assistantProfileVersion: 'codeclosure-m2-5-1-local-assistant-v2',
+    assistantProfileDigest:
+      'sha256:d97af90580601c1618cb45a49333b5d7248eaa5454ed7b2f9e12707eed49c755',
+    assistantAdapterId: 'intake-assistant-adapter_codex-app-server',
+    assistantAdapterVersion: 'codeclosure-m2-5-1-intake-adapter-v2',
+    assistantAdapterDigest:
+      'sha256:4b860931668d2d295d4fa8749333541355591b2229942a7866353a593c5ae9ab',
+    codexVersion: '0.146.1',
+    protocolSnapshotDigest:
+      'sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610',
+    closedConfigurationDigest:
+      'sha256:401be11e8a3e1056fcbff1a0f715b1261b426da6c66f86a6ce9b6e01e9805a31',
+  }),
+]);
+const supportedIntakeAdapterVersions = new Set(
+  supportedIntakeProofConfigurations.map(({ assistantAdapterVersion }) => assistantAdapterVersion),
+);
 const stagesRequiringTests = new Set([
   M25AcceptanceStage.QUALITY,
   M25AcceptanceStage.STATIC_AUTHORITY,
@@ -288,7 +323,7 @@ export function validateM25ScenarioEvidenceArtifact(rawArtifact) {
     if (
       projection.intakeRunStatus !== 'MATERIALIZED' ||
       projection.assistantAdapterId !== 'intake-assistant-adapter_codex-app-server' ||
-      projection.assistantAdapterVersion !== 'codeclosure-m2-5-intake-adapter-v1' ||
+      !supportedIntakeAdapterVersions.has(projection.assistantAdapterVersion) ||
       projection.workflowRunStatus !== 'CLOSED' ||
       projection.activeAttemptPresent !== false ||
       artifact.strictReopen !== 'MATCHED'
@@ -611,6 +646,32 @@ function validateProofConfiguration(rawConfiguration) {
   assertDigest(closedInvocation.configurationDigest, 'M2.5 closed configuration digest');
   assertDigest(closedInvocation.managedRequirementsDigest, 'M2.5 managed requirements digest');
   assertDigest(closedInvocation.permissionProfileDigest, 'M2.5 permission profile digest');
+  if (
+    !supportedIntakeProofConfigurations.some(
+      (supported) =>
+        configuration.assistantProfile.id === supported.assistantProfileId &&
+        configuration.assistantProfile.version === supported.assistantProfileVersion &&
+        configuration.assistantProfile.digest === supported.assistantProfileDigest &&
+        configuration.assistantAdapter.id === supported.assistantAdapterId &&
+        configuration.assistantAdapter.version === supported.assistantAdapterVersion &&
+        configuration.assistantAdapter.digest === supported.assistantAdapterDigest &&
+        configuration.protocol.codexVersion === supported.codexVersion &&
+        configuration.protocol.snapshotDigest === supported.protocolSnapshotDigest &&
+        configuration.closedInvocation.configurationDigest === supported.closedConfigurationDigest,
+    )
+  ) {
+    throw new TypeError('M2.5 proof configuration mixes unsupported Intake identities');
+  }
+  if (
+    configuration.closedInvocation.permissionProfileId !==
+      'codeclosure-m2-5-intake-no-authority-effects' ||
+    configuration.closedInvocation.managedRequirementsDigest !==
+      'sha256:e4ad87b63fa4aa90830a85d180ef2886d589c3f2fa9da0dac6682ef09e302d42' ||
+    configuration.closedInvocation.permissionProfileDigest !==
+      'sha256:142c727167440f24fd85b129a0e4c0dd3a8f7f04f62cd3fe57c277077067960c'
+  ) {
+    throw new TypeError('M2.5 proof configuration has an unsupported closed invocation');
+  }
   return configuration;
 }
 
@@ -1334,6 +1395,16 @@ export function validateM25EvidenceManifest(rawManifest, readArtifact) {
     const validatedArtifact = validateM25ScenarioEvidenceArtifact(parsedArtifact);
     if (validatedArtifact.scenarioId !== evidence.scenarioId) {
       throw new TypeError(`M2.5 scenario ${evidence.scenarioId} artifact identity differs`);
+    }
+    if (
+      validatedArtifact.scenarioId === 'M25-D01-D09-GOVERNED-CHAIN' &&
+      proofConfiguration.availability === 'AVAILABLE' &&
+      (validatedArtifact.finalSafeAuthorityProjection.assistantAdapterId !==
+        proofConfiguration.assistantAdapter.id ||
+        validatedArtifact.finalSafeAuthorityProjection.assistantAdapterVersion !==
+          proofConfiguration.assistantAdapter.version)
+    ) {
+      throw new TypeError('M2.5 governed scenario differs from its proof configuration');
     }
   }
   if (!Array.isArray(manifest.matrixResults)) {

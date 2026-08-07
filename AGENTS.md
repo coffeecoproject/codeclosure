@@ -63,8 +63,12 @@ demonstration baseline, and accepted ADR 0043. Its exact new-operation
 toolchain baseline is now the reviewed Codex CLI `0.146.1` binary and protocol
 snapshot; retained M2/M2.5 `0.146.0` authority keeps its historical meaning
 and cannot be substituted into the selected installation. The Slice 0 closure
-review passed and permits Slice 1; feature implementation and milestone
-assessment have not started. A real pinned-version integration test found that
+review passed. Slice 1 subsequently implemented and reviewed the versioned
+Intake compatibility correction, Adapter-local typed protocol Projection,
+normalized-event Observer, safe diagnostics, and retained-v1 compatibility.
+Slice 2 may begin, but mandatory real Intake compatibility, real phase
+composition, and milestone assessment have not started. A real pinned-version
+integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
 configuration itself requests two deprecated Web Search feature keys. The same

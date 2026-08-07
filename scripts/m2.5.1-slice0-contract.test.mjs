@@ -41,6 +41,11 @@ function threadItemKinds() {
   return [...threadItem.matchAll(/"type": "([^"]+)"/gu)].map(([, kind]) => kind);
 }
 
+function responseItemKinds() {
+  const responseItem = source('packages/codex-app-server-client/src/protocol/ResponseItem.ts');
+  return [...responseItem.matchAll(/"type": "([^"]+)"/gu)].map(([, kind]) => kind);
+}
+
 function sha256(relativePath) {
   return `sha256:${createHash('sha256')
     .update(readFileSync(resolve(repositoryRoot, relativePath)))
@@ -49,7 +54,7 @@ function sha256(relativePath) {
 
 test('M251-S0-01 identity and schema freeze is exact and excludes Fake composition', () => {
   assert.equal(contract.schemaVersion, 1);
-  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v2');
+  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v3');
   const protocolManifest = JSON.parse(
     source('packages/codex-app-server-client/protocol/codex-schema-snapshot-v1.json'),
   );
@@ -92,6 +97,7 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
     serverNotificationSurfaceChanged: false,
     serverRequestSurfaceChanged: false,
     threadItemSurfaceChanged: false,
+    responseItemSurfaceChanged: false,
   });
   assert.match(
     source('packages/codex-app-server-client/src/protocol/v2/Model.ts'),
@@ -221,6 +227,21 @@ test('M251-S0-02 pinned notification and Item dispositions are exhaustive and di
   )) {
     assertStringSorted(dispositionKinds, `${disposition} Thread Item kinds`);
   }
+
+  const rawResponseItemKinds = responseItemKinds().sort();
+  const mappedRawResponseItemKinds = Object.values(
+    contract.intake.rawResponseItemDispositions,
+  ).flat();
+  assert.deepEqual(
+    sortedUnique(mappedRawResponseItemKinds, 'Raw Response Item mapping'),
+    rawResponseItemKinds,
+  );
+  for (const [disposition, dispositionKinds] of Object.entries(
+    contract.intake.rawResponseItemDispositions,
+  )) {
+    assertStringSorted(dispositionKinds, `${disposition} Raw Response Item kinds`);
+  }
+  assert.deepEqual(contract.intake.rawResponseMessageRoles, ['assistant']);
 
   sortedUnique(contract.intake.normalizedEventKinds, 'normalized event kinds');
   assertStringSorted(contract.intake.normalizedEventKinds, 'normalized event kinds');

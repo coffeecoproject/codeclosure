@@ -10,6 +10,12 @@ export const M25_INTAKE_ASSISTANT_PROFILE_ID = 'intake-assistant-profile_codeclo
 export const M25_INTAKE_ASSISTANT_PROFILE_VERSION = 'codeclosure-m2-5-local-assistant-v1';
 export const M25_INTAKE_ASSISTANT_ADAPTER_ID = 'intake-assistant-adapter_codex-app-server';
 export const M25_INTAKE_ASSISTANT_ADAPTER_VERSION = 'codeclosure-m2-5-intake-adapter-v1';
+export const M251_INTAKE_ASSISTANT_PROFILE_VERSION = 'codeclosure-m2-5-1-local-assistant-v2';
+export const M251_INTAKE_ASSISTANT_ADAPTER_VERSION = 'codeclosure-m2-5-1-intake-adapter-v2';
+export const M251_INTAKE_CLOSED_CONFIGURATION_ID = 'intake-config_codeclosure-m2-5-1-local';
+export const M251_INTAKE_CLOSED_CONFIGURATION_VERSION = 'codeclosure-m2-5-1-local-config-v1';
+export const M251_INTAKE_PROTOCOL_PROJECTION_ID = 'intake-protocol-projection_codeclosure-m2-5-1';
+export const M251_INTAKE_PROTOCOL_PROJECTION_VERSION = 'codeclosure-m2-5-1-projection-v1';
 export const M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_ID = 'intake-response_intent-analysis';
 export const M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION =
   'codeclosure-m2-5-intent-analysis-response-v1';
@@ -21,6 +27,9 @@ export const M25_INTAKE_BUDGET_PROFILE_VERSION = 'codeclosure-m2-5-local-budget-
 export const M25_INTAKE_CODEX_VERSION = '0.146.0';
 export const M25_INTAKE_PROTOCOL_SNAPSHOT_DIGEST =
   'sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21';
+export const M251_INTAKE_CODEX_VERSION = '0.146.1';
+export const M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST =
+  'sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610';
 export const M25_INTAKE_MODEL_PROVIDER = 'openai';
 export const M25_INTAKE_MODEL = 'gpt-5.6-sol';
 export const M25_INTAKE_SERVICE_TIER = 'default';

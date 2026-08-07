@@ -58,10 +58,14 @@ FakeWorker Profile for governed Start. The
 [acceptance plan](plans/m2.5.1-acceptance-plan.md), and
 [diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md) define the
 versioned correction, Adapter-local typed protocol projection, and mandatory
-real composition proof. The normalized events remain inside the Adapter and do
-not change the accepted Intake authority contract or retroactively enlarge
-M2.5 evidence. The existing M2 protected demonstration is not the target
-composition because it uses external Codex only for `IMPLEMENT` and delegates
+real composition proof. M2.5.1 Slice 1 implements and offline-validates the
+versioned closed configuration, typed Projection, normalized-event Observer,
+stage-aware messages, safe diagnostics, and retained-v1 compatibility. It does
+not make or satisfy the mandatory real Slice 2 calls. The normalized events
+remain inside the Adapter and do not change the accepted Intake authority
+contract or retroactively enlarge M2.5 evidence. The existing M2 protected
+demonstration is not the target composition because it uses external Codex only
+for `IMPLEMENT` and delegates
 candidate-free `DISCOVERY`/`PLAN` to `FakeWorker`. The proposed formal Profile
 uses real candidate-free Codex over exact Runtime-owned read-only selected-
 source snapshots for those two phases, real Candidate-bound Codex for
@@ -1709,10 +1713,10 @@ long-term business knowledge base.
 
 ### M2.5.1
 
-The post-completion closure has accepted its Slice 0 contract and versions the
-corrected Intake Assistant Profile and Adapter, preserves retained version-1
-authority, and makes real Answer-only and Intent-analysis compatibility
-mandatory evidence. Its bounded
+The post-completion closure has accepted its Slice 0 contract. Slice 1 versions
+and implements the corrected Intake Assistant Profile and Adapter, preserves
+retained version-1 authority, and keeps real Answer-only and Intent-analysis
+compatibility as mandatory Slice 2 evidence. Its bounded
 supported composition requires an exact real Codex Execution Profile rather
 than the M1 FakeWorker Profile before Materialization, records it in
 `GoalStartAuthorization`, and resolves it through the separate ordinary Start

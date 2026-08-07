@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "codeclosure-m2-5-1-slice0-contract",
-  "contractVersion": "codeclosure-m2-5-1-slice0-v2",
+  "contractVersion": "codeclosure-m2-5-1-slice0-v3",
   "toolchain": {
     "selected": {
       "codexVersion": "codex-cli 0.146.1",
@@ -36,7 +36,8 @@
       "clientMethodSurfaceChanged": false,
       "serverNotificationSurfaceChanged": false,
       "serverRequestSurfaceChanged": false,
-      "threadItemSurfaceChanged": false
+      "threadItemSurfaceChanged": false,
+      "responseItemSurfaceChanged": false
     }
   },
   "intake": {
@@ -93,13 +94,13 @@
       "TURN_STARTED": ["turn/started"],
       "TURN_COMPLETED": ["turn/completed"],
       "ITEM_DISCRIMINATED": ["item/completed", "item/started"],
+      "RAW_RESPONSE_ITEM_DISCRIMINATED": ["rawResponseItem/completed"],
       "STREAM_PROGRESS": [
         "item/agentMessage/delta",
         "item/reasoning/summaryPartAdded",
         "item/reasoning/summaryTextDelta",
         "item/reasoning/textDelta",
-        "rawResponse/completed",
-        "rawResponseItem/completed"
+        "rawResponse/completed"
       ],
       "BENIGN_PROCESS_PROJECTION": [
         "account/rateLimits/updated",
@@ -193,6 +194,24 @@
         "plan"
       ]
     },
+    "rawResponseItemDispositions": {
+      "STREAM_PROGRESS": ["message"],
+      "REASONING_OBSERVED": ["reasoning"],
+      "FORBIDDEN_EFFECT_OBSERVED": [
+        "agent_message",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "function_call",
+        "function_call_output",
+        "image_generation_call",
+        "local_shell_call",
+        "tool_search_call",
+        "tool_search_output",
+        "web_search_call"
+      ],
+      "PROTOCOL_VIOLATION": ["compaction", "compaction_trigger", "context_compaction", "other"]
+    },
+    "rawResponseMessageRoles": ["assistant"],
     "safeDiagnosticCategories": [
       "LOWER_CLIENT_CORRELATION",
       "LOWER_CLIENT_LIMIT",

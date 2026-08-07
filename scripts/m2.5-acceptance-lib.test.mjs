@@ -390,7 +390,7 @@ function passingManifest() {
                 intakeRunStatus: 'MATERIALIZED',
                 intakeRunVersion: 2,
                 assistantAdapterId: 'intake-assistant-adapter_codex-app-server',
-                assistantAdapterVersion: 'codeclosure-m2-5-intake-adapter-v1',
+                assistantAdapterVersion: 'codeclosure-m2-5-1-intake-adapter-v2',
                 rawRequestDigests: [digest, digest],
                 proposalDigests: [digest, digest],
                 projectionDigests: [digest, digest],
@@ -437,21 +437,35 @@ function passingManifest() {
       proofConfiguration: {
         availability: 'AVAILABLE',
         admissionPolicy: { id: 'admission', version: 'v1', digest },
-        assistantProfile: { id: 'assistant', version: 'v1', digest },
+        assistantProfile: {
+          id: 'intake-assistant-profile_codeclosure-m2-5-local',
+          version: 'codeclosure-m2-5-1-local-assistant-v2',
+          digest: 'sha256:d97af90580601c1618cb45a49333b5d7248eaa5454ed7b2f9e12707eed49c755',
+        },
         workflowPolicy: { id: 'workflow', version: 'v1', digest },
         executionProfile: { id: 'execution', version: 'v1', digest },
-        assistantAdapter: { id: 'adapter', version: 'v1', digest },
+        assistantAdapter: {
+          id: 'intake-assistant-adapter_codex-app-server',
+          version: 'codeclosure-m2-5-1-intake-adapter-v2',
+          digest: 'sha256:4b860931668d2d295d4fa8749333541355591b2229942a7866353a593c5ae9ab',
+        },
         budgetProfile: { id: 'budget', version: 'v1', digest },
-        protocol: { codexVersion: 'fixture', snapshotDigest: digest },
+        protocol: {
+          codexVersion: '0.146.1',
+          snapshotDigest: 'sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610',
+        },
         responseContracts: [
           { id: 'analysis', version: 'v1', digest },
           { id: 'answer', version: 'v1', digest },
         ],
         closedInvocation: {
-          permissionProfileId: 'permission',
-          configurationDigest: digest,
-          managedRequirementsDigest: digest,
-          permissionProfileDigest: digest,
+          permissionProfileId: 'codeclosure-m2-5-intake-no-authority-effects',
+          configurationDigest:
+            'sha256:401be11e8a3e1056fcbff1a0f715b1261b426da6c66f86a6ce9b6e01e9805a31',
+          managedRequirementsDigest:
+            'sha256:e4ad87b63fa4aa90830a85d180ef2886d589c3f2fa9da0dac6682ef09e302d42',
+          permissionProfileDigest:
+            'sha256:142c727167440f24fd85b129a0e4c0dd3a8f7f04f62cd3fe57c277077067960c',
         },
       },
       matrixContractDigest: M25_ACCEPTANCE_MATRIX_CONTRACT_DIGEST,
@@ -667,6 +681,97 @@ void test('scenario evidence rejects open dispositions, root kinds, and authorit
         strictReopen: 'MATCHED',
       }),
     /invalid isolated-root set|isolated-root kinds differ/u,
+  );
+});
+
+void test('governed scenario and proof configuration require one exact Intake version', () => {
+  const fixture = passingManifest();
+  const evidence = fixture.manifest.scenarioEvidence.find(
+    ({ scenarioId }) => scenarioId === 'M25-D01-D09-GOVERNED-CHAIN',
+  );
+  assert.ok(evidence);
+  const bytes = fixture.artifacts.get(evidence.artifactPath);
+  assert.ok(bytes);
+  const artifact = JSON.parse(bytes.toString('utf8'));
+  assert.doesNotThrow(() => validateM25ScenarioEvidenceArtifact(artifact));
+  const retainedV1Artifact = {
+    ...artifact,
+    finalSafeAuthorityProjection: {
+      ...artifact.finalSafeAuthorityProjection,
+      assistantAdapterVersion: 'codeclosure-m2-5-intake-adapter-v1',
+    },
+  };
+  assert.doesNotThrow(() => validateM25ScenarioEvidenceArtifact(retainedV1Artifact));
+  const retainedV1Bytes = Buffer.from(`${JSON.stringify(retainedV1Artifact)}\n`, 'utf8');
+  const mismatchedArtifacts = new Map(fixture.artifacts);
+  mismatchedArtifacts.set(evidence.artifactPath, retainedV1Bytes);
+  assert.throws(
+    () =>
+      validateM25EvidenceManifest(
+        {
+          ...fixture.manifest,
+          scenarioEvidence: fixture.manifest.scenarioEvidence.map((entry) =>
+            entry.scenarioId === evidence.scenarioId
+              ? { ...entry, artifactDigest: sha256Bytes(retainedV1Bytes) }
+              : entry,
+          ),
+        },
+        (path) => mismatchedArtifacts.get(path),
+      ),
+    /differs from its proof configuration/u,
+  );
+  assert.doesNotThrow(() =>
+    validateM25EvidenceManifest(
+      {
+        ...fixture.manifest,
+        proofConfiguration: {
+          ...fixture.manifest.proofConfiguration,
+          assistantProfile: {
+            ...fixture.manifest.proofConfiguration.assistantProfile,
+            version: 'codeclosure-m2-5-local-assistant-v1',
+            digest: 'sha256:6bbab11dae6bd54ce7fa62387db5e451d77dcdd3ea255f78e2161867d742559f',
+          },
+          assistantAdapter: {
+            ...fixture.manifest.proofConfiguration.assistantAdapter,
+            version: 'codeclosure-m2-5-intake-adapter-v1',
+            digest: 'sha256:732fce81ce691f298d4ec9fde3a9be950f2697998f316e311047f5a287b44b38',
+          },
+          protocol: {
+            codexVersion: '0.146.0',
+            snapshotDigest:
+              'sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21',
+          },
+          closedInvocation: {
+            ...fixture.manifest.proofConfiguration.closedInvocation,
+            configurationDigest:
+              'sha256:6256ec8073b91704258b7d974685b682f140747bdfd5ec2ae8c11404fa72ff2e',
+          },
+        },
+        scenarioEvidence: fixture.manifest.scenarioEvidence.map((entry) =>
+          entry.scenarioId === evidence.scenarioId
+            ? { ...entry, artifactDigest: sha256Bytes(retainedV1Bytes) }
+            : entry,
+        ),
+      },
+      (path) => mismatchedArtifacts.get(path),
+    ),
+  );
+  assert.throws(
+    () =>
+      validateM25EvidenceManifest(
+        {
+          ...fixture.manifest,
+          proofConfiguration: {
+            ...fixture.manifest.proofConfiguration,
+            assistantAdapter: {
+              ...fixture.manifest.proofConfiguration.assistantAdapter,
+              version: 'codeclosure-m2-5-intake-adapter-v1',
+            },
+          },
+        },
+        (path) => fixture.artifacts.get(path),
+      ),
+    /mixes unsupported Intake identities/u,
   );
 });
 
