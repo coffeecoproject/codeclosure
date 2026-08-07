@@ -45,7 +45,7 @@ if (
 }
 const currentSourceRegression = invocationArguments[0] === '--regression';
 const expectedPnpmVersion = '11.1.3';
-const expectedCodexVersion = 'codex-cli 0.146.0';
+const expectedCodexVersion = currentSourceRegression ? 'codex-cli 0.146.1' : 'codex-cli 0.146.0';
 const maximumOutputBytes = 128 * 1024 * 1024;
 const stages = [];
 let openingSourceIdentity;

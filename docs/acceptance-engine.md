@@ -23,9 +23,11 @@ which is unchanged and gains no pre-Goal or model-authored completion authority.
 M2.5 implements its separate deterministic Admission evaluator, atomic
 Materialization, ordinary Start composition, and strict persistence without
 changing technical Acceptance; its corrected assessment and independent review
-passed on 2026-08-06. Proposed M2.6 Frontstage routes, answers, Goal summaries,
-focus, pending actions, and notifications remain outside technical Acceptance
-and cannot issue `ACCEPT` or closeout.
+passed on 2026-08-06. M2.5.1 Slice 0 adds no Acceptance rule or completion
+authority; the protected checker remains only a planned input whose later
+Evidence must pass the existing Engine. Proposed M2.6 Frontstage routes,
+answers, Goal summaries, focus, pending actions, and notifications remain
+outside technical Acceptance and cannot issue `ACCEPT` or closeout.
 Proposed M2.7 Host, control-lease, and project-slot state likewise cannot become
 Evidence, Acceptance input, `ACCEPT`, or closeout authority.
 

@@ -26,3 +26,4 @@ runtime evidence.
 - [M2.5 first executable-assessment diagnostic](m2-5-first-assessment-diagnostic.md)
 - [M2.5 completion review](m2.5-completion-review.md)
 - [M2.5 live Intake compatibility diagnostic](m2.5-live-intake-compatibility-diagnostic.md)
+- [M2.5.1 Slice 0 contract-closure review](m2.5.1-slice0-contract-closure.md)

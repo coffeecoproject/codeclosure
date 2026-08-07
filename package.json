@@ -14,6 +14,7 @@
     "regress:m2": "node scripts/run-m2-acceptance.mjs --regression",
     "accept:m2.5": "node scripts/run-m2.5-acceptance.mjs",
     "build": "tsc -b --force --pretty false",
+    "check:m2.5.1:slice0": "node scripts/run-node-tests.mjs scripts/m2.5.1-slice0-contract.test.mjs",
     "check:m2:protocol": "node scripts/run-m2-slice1-protocol-snapshot.mjs",
     "clean": "tsc -b --clean",
     "docs:check": "node scripts/run-node-tests.mjs scripts/check-docs.test.mjs && node scripts/check-docs.mjs",
@@ -31,7 +32,7 @@
     "test:digests": "pnpm --filter @codeclosure/testing test:digests",
     "test:invariants": "node scripts/run-node-tests.mjs scripts/check-invariants.test.mjs && node scripts/check-invariants.mjs",
     "test:migrations": "pnpm --filter @codeclosure/store-sqlite test:migrations",
-    "test:unit": "node scripts/run-node-tests.mjs scripts/run-node-tests.test.mjs scripts/m2-slice0-probe.test.mjs scripts/m2-acceptance-lib.test.mjs scripts/m2.5-acceptance-lib.test.mjs && pnpm --filter @codeclosure/codex-app-server-client test:unit && pnpm --filter @codeclosure/adapter-codex test:unit && pnpm --filter @codeclosure/adapter-codex-intake test:unit && pnpm --filter @codeclosure/workspace-local test:unit && pnpm --filter @codeclosure/verification-local test:unit && pnpm --filter @codeclosure/testing test:unit",
+    "test:unit": "node scripts/run-node-tests.mjs scripts/run-node-tests.test.mjs scripts/m2-slice0-probe.test.mjs scripts/m2-acceptance-lib.test.mjs scripts/m2.5-acceptance-lib.test.mjs scripts/m2.5.1-slice0-contract.test.mjs && pnpm --filter @codeclosure/codex-app-server-client test:unit && pnpm --filter @codeclosure/adapter-codex test:unit && pnpm --filter @codeclosure/adapter-codex-intake test:unit && pnpm --filter @codeclosure/workspace-local test:unit && pnpm --filter @codeclosure/verification-local test:unit && pnpm --filter @codeclosure/testing test:unit",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false"
   },
   "devDependencies": {

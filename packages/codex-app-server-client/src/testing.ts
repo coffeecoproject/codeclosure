@@ -13,6 +13,10 @@ export interface FixtureAppServerLaunchInput extends Omit<
   'installation'
 > {
   readonly executablePath?: string;
+  readonly protocolIdentity?: Readonly<{
+    version: string;
+    snapshotDigest: string;
+  }>;
   readonly scenario: string;
   readonly scriptPath: string;
 }
@@ -20,8 +24,14 @@ export interface FixtureAppServerLaunchInput extends Omit<
 export function createFixtureAppServerLaunch(
   input: FixtureAppServerLaunchInput,
 ): AppServerProcessLaunch {
-  const { executablePath = process.execPath, scenario, scriptPath, ...launchInput } = input;
-  const installation = fixtureVerifiedInstallation(executablePath);
+  const {
+    executablePath = process.execPath,
+    protocolIdentity,
+    scenario,
+    scriptPath,
+    ...launchInput
+  } = input;
+  const installation = fixtureVerifiedInstallation(executablePath, protocolIdentity);
   return createFixtureProcessLaunch({ ...launchInput, installation }, scriptPath, scenario);
 }
 
@@ -29,8 +39,8 @@ export function createSpawnFailureAppServerLaunch(
   input: Omit<FixtureAppServerLaunchInput, 'scenario' | 'scriptPath'>,
   missingExecutablePath: string,
 ): AppServerProcessLaunch {
-  const { executablePath = process.execPath, ...launchInput } = input;
-  const installation = fixtureVerifiedInstallation(executablePath);
+  const { executablePath = process.execPath, protocolIdentity, ...launchInput } = input;
+  const installation = fixtureVerifiedInstallation(executablePath, protocolIdentity);
   return createSpawnFailureFixtureProcessLaunch(
     { ...launchInput, installation },
     missingExecutablePath,

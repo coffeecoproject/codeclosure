@@ -40,11 +40,11 @@ and Attempt creation. Slice 7 transports the existing Intake Package/Manifest
 boundary through a narrow CLI composition and adds no Goal-bound Context source
 or compiler authority.
 The corrected canonical assessment and independent review completed bounded
-M2.5 on 2026-08-06. Proposed M2.5.1 would reopen exactly one Goal-bound
-project-source Context class for candidate-free real Codex `DISCOVERY`/`PLAN`
-under
+M2.5 on 2026-08-06. M2.5.1 Slice 0 accepted the contract to reopen exactly one
+Goal-bound project-source Context class for candidate-free real Codex
+`DISCOVERY`/`PLAN` under
 [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md). That ADR
-is not yet accepted or implemented. It requires an immutable project-read
+is accepted but not implemented. It requires an immutable project-read
 record and exact Runtime-owned read-only selected-source snapshot bound
 atomically to Context/Attempt authority, phase-specific isolation and exact
 configuration/instruction manifests, an opaque phase activity-policy binding,
@@ -674,12 +674,12 @@ Worker Context. See
 [ADR 0016](adr/0016-candidate-and-evidence-authority-boundary.md) and
 [ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
-Proposed ADR 0043 is the narrower candidate-free project-read decision for
-M2.5.1. If accepted, it would add only its exact project-source record,
-Runtime-owned selected-source snapshot, and Context/configuration/instruction
-binding for real `DISCOVERY`/`PLAN`; the checkout remains unreadable and it
-would not reinterpret the M1 subset above or pull M3 Fact/Decision selection
-forward.
+Accepted ADR 0043 is the narrower candidate-free project-read decision for
+M2.5.1. Its later implementation will add only its exact project-source
+record, Runtime-owned selected-source snapshot, and Context/configuration/
+instruction binding for real `DISCOVERY`/`PLAN`; the checkout remains
+unreadable and the decision does not reinterpret the M1 subset above or pull
+M3 Fact/Decision selection forward.
 
 Code relevance retrieval, full Fact Graph traversal, and token-aware packing
 belong to later milestones. Slice 6 implements the repair Context and Thread

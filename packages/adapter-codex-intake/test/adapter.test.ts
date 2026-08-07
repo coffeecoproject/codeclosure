@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import test, { type TestContext } from 'node:test';
 
+import { loadBundledCodexProfile } from '@codeclosure/codex-app-server-client';
 import {
   createFixtureAppServerLaunch,
   createSpawnFailureAppServerLaunch,
@@ -172,6 +173,11 @@ function fixtureRoots(t: TestContext) {
   return { root, codexHome, cwd, processHome, temporaryDirectory, authorityRoot };
 }
 
+const m25FixtureProtocolIdentity = Object.freeze({
+  version: `codex-cli ${m25IntakeAssistantProfile.codexVersion}`,
+  snapshotDigest: m25IntakeAssistantProfile.protocolSnapshotDigest,
+});
+
 function adapterFixture(t: TestContext, scenario: string) {
   const roots = fixtureRoots(t);
   const launch = createFixtureAppServerLaunch({
@@ -179,6 +185,7 @@ function adapterFixture(t: TestContext, scenario: string) {
     cwd: roots.cwd,
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome: roots.processHome,
+    protocolIdentity: m25FixtureProtocolIdentity,
     scenario,
     scriptPath: fixtureScript,
     temporaryDirectory: roots.temporaryDirectory,
@@ -355,6 +362,7 @@ void test('operation cwd cannot overlap a trusted forbidden root before launch',
     cwd: roots.authorityRoot,
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome: roots.processHome,
+    protocolIdentity: m25FixtureProtocolIdentity,
     scenario: 'intent-success',
     scriptPath: fixtureScript,
     temporaryDirectory: roots.temporaryDirectory,
@@ -378,6 +386,7 @@ void test('controlled App Server state cannot overlap a trusted forbidden root',
     cwd: roots.cwd,
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome: roots.processHome,
+    protocolIdentity: m25FixtureProtocolIdentity,
     scenario: 'intent-success',
     scriptPath: fixtureScript,
     temporaryDirectory: roots.temporaryDirectory,
@@ -403,6 +412,7 @@ void test('operation cwd cannot overlap the declared project before launch', asy
     cwd: projectRoot,
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome: roots.processHome,
+    protocolIdentity: m25FixtureProtocolIdentity,
     scenario: 'intent-success',
     scriptPath: fixtureScript,
     temporaryDirectory: roots.temporaryDirectory,
@@ -629,6 +639,35 @@ void test('the Intent wire decoder rejects closed-contract, collection, span, an
   );
 });
 
+void test('the retained M2.5 v1 profile rejects the selected 0.146.1 toolchain before launch', async (t) => {
+  const roots = fixtureRoots(t);
+  const selected = loadBundledCodexProfile();
+  const launch = createFixtureAppServerLaunch({
+    codexHome: roots.codexHome,
+    cwd: roots.cwd,
+    executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    processHome: roots.processHome,
+    protocolIdentity: Object.freeze({
+      version: selected.version,
+      snapshotDigest: selected.snapshotDigest,
+    }),
+    scenario: 'intent-success',
+    scriptPath: fixtureScript,
+    temporaryDirectory: roots.temporaryDirectory,
+  });
+  assert.equal(selected.version, 'codex-cli 0.146.1');
+  const result = await createCodexIntakeAssistantAdapter({
+    launch,
+    launchNonce,
+    forbiddenRoots: [roots.authorityRoot],
+  }).analyze(intentInput(), new AbortController().signal);
+  if (result.kind !== 'FAILED') {
+    assert.fail('Expected the retained profile to reject cross-version launch substitution');
+  }
+  assert.equal(result.failureReasonCode, 'ASSISTANT_UNAVAILABLE');
+  assert.equal(result.observation.processLaunchCount, 0);
+});
+
 void test('the adapter rejects package-shape expansion before launching a process', async (t) => {
   const input = intentInput();
   const expanded = {
@@ -726,6 +765,7 @@ void test('spawn failure returns no raw exception and no invented process observ
       cwd: roots.cwd,
       executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
       processHome: roots.processHome,
+      protocolIdentity: m25FixtureProtocolIdentity,
       temporaryDirectory: roots.temporaryDirectory,
     },
     join(roots.root, 'missing-codex-executable'),

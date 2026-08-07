@@ -68,10 +68,9 @@ source snapshots for those two phases, real Candidate-bound Codex for
 `IMPLEMENT`, and no production fake fallback while retaining Candidate creation
 at the governed `PLAN -> IMPLEMENT` boundary. The source checkout remains
 unreadable to candidate-free Codex.
-Because ADR 0015 keeps project-source Context closed, proposed
-[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md), or an
-accepted replacement, must become binding before that phase mapping is
-implemented.
+Accepted [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md)
+now binds the narrow project-source Context authority before that phase
+mapping is implemented.
 Proposed M2.6 Frontstage handoff may begin only after that closure passes. It
 uses exactly one current user message through the existing public Intake
 facade; it does not concatenate chat, synthesize `USER_STATED` provenance, or
@@ -1710,9 +1709,10 @@ long-term business knowledge base.
 
 ### M2.5.1
 
-The proposed post-completion closure versions the corrected Intake Assistant
-Profile and Adapter, preserves retained version-1 authority, and makes real
-Answer-only and Intent-analysis compatibility mandatory evidence. Its bounded
+The post-completion closure has accepted its Slice 0 contract and versions the
+corrected Intake Assistant Profile and Adapter, preserves retained version-1
+authority, and makes real Answer-only and Intent-analysis compatibility
+mandatory evidence. Its bounded
 supported composition requires an exact real Codex Execution Profile rather
 than the M1 FakeWorker Profile before Materialization, records it in
 `GoalStartAuthorization`, and resolves it through the separate ordinary Start
@@ -1730,11 +1730,11 @@ checkout or create a Candidate; Candidate authority still begins at
 the implementation Worker writes only the isolated Candidate, and only the
 Acceptance Engine may issue technical `ACCEPT`. Fake Worker, Candidate Source,
 and Verification components remain explicit deterministic test infrastructure
-only. Proposed
-[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md), or an
-accepted replacement, must first close the candidate-free project-read
-snapshot, Context, isolation, source-currency, configuration/instruction,
-cleanup, and recovery authority.
+only. Accepted
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) closes the
+candidate-free project-read snapshot, Context, isolation, source-currency,
+configuration/instruction, cleanup, and recovery authority before production
+implementation.
 
 ### M2.6
 

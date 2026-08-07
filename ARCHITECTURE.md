@@ -105,11 +105,14 @@ uses the existing canonical phase-set order, selects all declared Attempts, and
 binds one Adapter-local activity-policy identity per phase. Snapshot cleanup
 uses one grant identity across unknown-result reconciliation and atomically
 retains its terminal Outcome before later replay can suppress filesystem work.
-Proposed
-[ADR 0043](docs/adr/0043-candidate-free-codex-project-read-authority.md), or an
-accepted replacement closing the same project-read snapshot, Context,
-isolation, source-currency, configuration/instruction, cleanup, and execution-
-record boundary, must become binding before that composition is implemented.
+[ADR 0043](docs/adr/0043-candidate-free-codex-project-read-authority.md) is
+accepted and binds the project-read snapshot, Context, isolation, source-
+currency, configuration/instruction, cleanup, and execution-record boundary
+before that composition is implemented. The Slice 0 executable contract and
+proof-owner freeze now select the exact reviewed Codex `0.146.1` binary and
+protocol snapshot. Retained `0.146.0` M2/M2.5 authority remains historical and
+cross-version substitution fails closed. The Slice 0 closure review passed;
+the corrected Intake Adapter and real phase composition are not implemented.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -128,8 +131,9 @@ The proposed [M2.7 Local Runtime Host contract](docs/runtime-host.md),
 and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
 post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
-M2.5.1, M2.6, and M2.7 implementation has not started; proposed ADRs 0036
-through 0043 are not binding. The following M2 slice
+M2.5.1 production implementation, M2.6, and M2.7 implementation has not
+started. ADR 0043 is accepted only for the M2.5.1 boundary; proposed ADRs 0036
+through 0042 are not binding. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -757,7 +761,7 @@ The snapshot would have no Candidate, Evidence, Acceptance, or Workflow-writing
 authority. A Plan-source mismatch would persist the exact Workflow integrity
 code, project the Workflow to `FAILED` and Goal to non-resumable
 `BLOCKED / INSPECT_BLOCKER`, and create no Candidate. This port and record are
-proposed under ADR 0043 and are not yet implemented.
+accepted under ADR 0043 and are not yet implemented.
 
 ### Evidence Store
 

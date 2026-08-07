@@ -301,6 +301,10 @@ skip. The
 [M2.5 completion review](reviews/m2.5-completion-review.md) independently issued
 an unconditional `PASS` for that exact bounded claim.
 
+The independent M2 exit review passed on 2026-08-02 and was the satisfied
+prerequisite for M2.5 implementation. It remains historical prerequisite
+evidence and is not reissued by the M2.5 completion claim.
+
 The accepted authority remains
 [ADR 0027](adr/0027-source-bound-intent-admission-and-automatic-goal-materialization.md),
 [ADR 0034](adr/0034-close-pre-goal-command-replay-and-sqlite-activation.md),
@@ -461,10 +465,15 @@ detached execution.
 
 ## M2.5.1 — Real Intake-to-Codex Composition Closure
 
-Status: Proposed post-completion compatibility and composition closure.
-Investigation is complete; implementation and assessment have not started. The
+Status: Active post-completion compatibility and composition closure. Slice 0
+has revised its frozen contract to the exact reviewed Codex CLI `0.146.1`
+binary and protocol snapshot while preserving retained M2/M2.5 `0.146.0`
+authority without cross-version substitution. The Slice 0 closure review
+passed and permits Slice 1; feature implementation and assessment have not
+started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
-[acceptance plan](plans/m2.5.1-acceptance-plan.md), and
+[acceptance plan](plans/m2.5.1-acceptance-plan.md),
+[Slice 0 contract](plans/m2.5.1-slice0-contract.md), and
 [live Intake diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md)
 define the bounded work.
 
@@ -501,9 +510,9 @@ verification, Evidence, Acceptance, and closeout.
   `DISCOVERY`/`PLAN` and real Candidate-bound Codex for `IMPLEMENT`, with the
   candidate-free selected-source snapshot, Context, isolation, source-
   currency, configuration/instruction, and execution-record boundary accepted
-  through
-  [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) or an exact
-  replacement before implementation;
+  through accepted
+  [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) before
+  implementation;
 - atomic persistence and strict reopen of each candidate-free project-read
   record with its exact externally owned read-only snapshot and Context/Attempt
   authority, plus `ExternalExecutionIntentV2`/`ExternalExecutionRecordV2`,

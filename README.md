@@ -25,11 +25,15 @@ One later real pinned-version Intake test exposed a post-completion Adapter
 compatibility defect and confirmed that ordinary M2.5 governed Start still
 selects the M1 FakeWorker Profile rather than the real M2 Codex Profile.
 M2.5.1 Real Intake-to-Codex Composition Closure is therefore the current
-proposed pre-M2.6 boundary. It will correct the versioned Intake profile and
+pre-M2.6 boundary. It will correct the versioned Intake profile and
 Adapter through an internal typed protocol projection, preserve the historical
 M2.5 verdict, and require real Answer-only, Intent-analysis, Materialization,
 ordinary Start, isolated-Candidate Codex Worker, protected-verification, and
-regression evidence. Implementation and assessment have not started.
+regression evidence. Its decision contract and candidate-free project-read ADR
+are accepted. The current contract selects the exact reviewed Codex `0.146.1`
+binary and protocol snapshot while preserving historical `0.146.0` authority;
+contract validation has passed, while feature implementation and assessment
+have not started.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and
@@ -96,6 +100,9 @@ Current repository commands are:
   the historical M2 Goal-Intake-absence verdict;
 - `pnpm accept:m2.5` — run the non-verdict M2.5 executable assessment and emit
   evidence that is only an input to the later independent milestone review.
+- `pnpm check:m2.5.1:slice0` — validate the frozen M2.5.1 identities, protocol
+  dispositions, proof ownership, unchanged-schema causality, and protected
+  demonstration checker without claiming production implementation.
 
 The exact implemented proof coverage is recorded in the M1 implementation plan
 and completion review. The test runner fails when any invoked test is failed,

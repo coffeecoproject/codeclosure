@@ -38,9 +38,11 @@ evidence still follows the existing Workflow and Acceptance boundaries. Slice
 evidence only; neither can create an `EvidenceRecord`, satisfy a Criterion, or
 issue technical `ACCEPT`.
 The corrected assessment and independent review completed bounded M2.5 on
-2026-08-06. Proposed M2.6 Frontstage messages, routes, answers, focus, pending
-actions, Goal summaries, and notifications add no Evidence kind or eligibility
-path.
+2026-08-06. M2.5.1 Slice 0 adds no Evidence kind or eligibility path; its
+protected-check and proof-owner freeze cannot approve itself or become
+Acceptance input. Proposed M2.6 Frontstage messages, routes, answers, focus,
+pending actions, Goal summaries, and notifications add no Evidence kind or
+eligibility path.
 Proposed M2.7 Host, control-lease, project-slot, detach, and reconnect records
 also add no Evidence kind or eligibility path.
 

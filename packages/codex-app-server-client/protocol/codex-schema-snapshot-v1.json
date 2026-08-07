@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "codex": {
     "architecture": "arm64",
-    "delegatedExecutableDigest": "sha256:ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02",
+    "delegatedExecutableDigest": "sha256:35d248101b211d6248ad4e6b8c1d441fe81236da87afb9f3e9ea51a049e9f179",
     "delegatedExecutablePath": "/Users/liushan/.nvm/versions/node/v22.22.3/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
     "launcherDigest": "sha256:134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477",
     "launcherPath": "/Users/liushan/.nvm/versions/node/v22.22.3/bin/codex",
@@ -10,10 +10,10 @@
     "platform": "darwin",
     "platformPackage": "@openai/codex-darwin-arm64",
     "targetTriple": "aarch64-apple-darwin",
-    "version": "codex-cli 0.146.0"
+    "version": "codex-cli 0.146.1"
   },
   "jsonSchema": {
-    "digest": "sha256:9c13d0c5385a5eeeed6b0f4f59e7b3b91ca07db451ee78724756d87b6f84e50e",
+    "digest": "sha256:a219496aedf9ac7da2260d9d44ffd5f96c2511e4abe81ca46d7983eb3bb08bcf",
     "entries": [
       {
         "digest": "sha256:968ce933bb3a8602928191fa89550dabb19a16fd042c851f13b1eba8db7e8518",
@@ -156,11 +156,11 @@
         "path": "ToolRequestUserInputResponse.json"
       },
       {
-        "digest": "sha256:048a75c51358e0ea8de994f7d5265ce685476fe5badaf52daa67f0af6e0f1061",
+        "digest": "sha256:c0247d23baf8cf9abcd7c1150638537c68b7d2c75ddd80158e514d9b4ff26460",
         "path": "codex_app_server_protocol.schemas.json"
       },
       {
-        "digest": "sha256:b767c1161c2c56341f3d0e313b4f93810b4b53bdaabeff95c06e1242cfc4df03",
+        "digest": "sha256:0dbb75599e372f1d46acb5fb31703909acd5794de39f6c027a70dea3dc38d366",
         "path": "codex_app_server_protocol.v2.schemas.json"
       },
       {
@@ -604,7 +604,7 @@
         "path": "v2/ModelListParams.json"
       },
       {
-        "digest": "sha256:5549f7c102713a5be45d6c6241a34e776e547185a9c28d2ac5c798cf9c864289",
+        "digest": "sha256:264a93a470d0ca74438d5a3878f97fb671d89c363ad3d99533d1ff7bfe0cd604",
         "path": "v2/ModelListResponse.json"
       },
       {
@@ -1337,7 +1337,7 @@
   ],
   "snapshotProfile": "codex-schema-snapshot-v1",
   "typescript": {
-    "digest": "sha256:63c7a5d3d92b1ba1218d92711a81c39bf5b2ee60d978736166615efe5f947684",
+    "digest": "sha256:29042407f5c2130f2996bd6c35dc9939139e43026ea21f279cbd3a86321ff2f4",
     "entries": [
       {
         "digest": "sha256:a79d31d5e8f24c58c8cce2633e5e4fc5b0bb88d1c44c69e7ce7d0dc7c1252272",
@@ -2784,7 +2784,7 @@
         "path": "v2/MigrationDetails.ts"
       },
       {
-        "digest": "sha256:773f54658d25318c479669b3083bce050183bcefb6942a16ea001b7e3141de27",
+        "digest": "sha256:da8f59a5d58b329912e24050b846d5d4eb2f2ba1cd6f5e5eed1c71c42bcef49b",
         "path": "v2/Model.ts"
       },
       {
@@ -3831,5 +3831,5 @@
     "fileCount": 622,
     "profile": "RAW_BYTES"
   },
-  "snapshotDigest": "sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21"
+  "snapshotDigest": "sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610"
 }

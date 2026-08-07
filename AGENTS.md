@@ -53,13 +53,19 @@ Projection and Admission, Answer/failure/recovery, Materialization, separate
 ordinary Start composition, explicit-action CLI, and non-verdict assessment
 harness. The corrected canonical assessment passed all 71 mandatory rows with
 zero skip, and the independent completion review issued an unconditional
-`PASS` on 2026-08-06. Goal Intake remains separate from the Goal-bound
-WorkerPort and MUST NOT reinterpret the completed M2 execution path as intent,
+`PASS` on 2026-08-06. Goal Intake MUST remain separate from the Goal-bound WorkerPort
+and MUST NOT reinterpret the completed M2 execution path as intent,
 Goal, Start, or Admission authority.
 
-M2.5.1 — Real Intake-to-Codex Composition Closure — is the current proposed
-pre-M2.6 boundary. A real pinned-version integration test found that the M2.5
-Intake Observer rejects valid disabled remote-control and rate-limit
+M2.5.1 — Real Intake-to-Codex Composition Closure — is the current pre-M2.6
+boundary. Slice 0 has frozen its contract, exact proof-owner map, bounded
+demonstration baseline, and accepted ADR 0043. Its exact new-operation
+toolchain baseline is now the reviewed Codex CLI `0.146.1` binary and protocol
+snapshot; retained M2/M2.5 `0.146.0` authority keeps its historical meaning
+and cannot be substituted into the selected installation. The Slice 0 closure
+review passed and permits Slice 1; feature implementation and milestone
+assessment have not started. A real pinned-version integration test found that
+the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
 configuration itself requests two deprecated Web Search feature keys. The same
 investigation confirmed that ordinary M2.5 production composition currently
@@ -94,12 +100,10 @@ authority MUST still begin only at the governed `PLAN -> IMPLEMENT` transition.
 A Plan/source mismatch MUST create no Candidate, MUST retain exact
 `PLAN_SOURCE_NOT_CURRENT` through Workflow integrity authority, MUST project the
 Goal to non-resumable `BLOCKED / INSPECT_BLOCKER`, and MUST NOT trigger
-automatic replan, phase rewind, or `goal resume` continuation. Proposed ADR
-0043, or an accepted
-replacement closing
-the same candidate-free project-read snapshot, Context, isolation, source-
-currency, configuration/instruction, cleanup, and execution-record boundary,
-MUST become binding before that composition is implemented. M2.5.1 MUST NOT
+automatic replan, phase rewind, or `goal resume` continuation. Accepted ADR
+0043 binds the candidate-free project-read snapshot, Context, isolation,
+source-currency, configuration/instruction, cleanup, and execution-record
+boundary before that composition is implemented. M2.5.1 MUST NOT
 rewrite the historical M2.5 review or add Frontstage, scheduling, Host,
 arbitrary-project verification, promotion, release, or deployment scope.
 

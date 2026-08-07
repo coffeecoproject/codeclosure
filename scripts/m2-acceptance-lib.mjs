@@ -804,8 +804,8 @@ export function validateM2HistoricalDocumentationPrerequisite(documents) {
   }
   requirePattern(
     documents.agents,
-    /M2\.5 — Goal Intake and Materialization — is the current milestone boundary/u,
-    'AGENTS does not record M2.5 as the current milestone boundary',
+    /M2\.5 — Goal Intake and Materialization — is complete as a bounded milestone/u,
+    'AGENTS does not preserve M2.5 as a completed bounded milestone',
   );
   requirePattern(
     documents.agents,
@@ -819,7 +819,7 @@ export function validateM2HistoricalDocumentationPrerequisite(documents) {
   );
   requirePattern(
     documents.architecture,
-    /Goal Intake is not an M2 exit condition/u,
+    /Goal Intake was not an M2 exit condition/u,
     'Architecture does not preserve the Goal Intake boundary',
   );
   requirePattern(
@@ -851,7 +851,7 @@ export function validateM2HistoricalDocumentationPrerequisite(documents) {
   }
   requirePattern(
     documents.milestones,
-    /## M2 — Codex Vertical Slice[\s\S]*?M2\.5 implementation MUST NOT begin/u,
+    /independent M2 exit review passed on 2026-08-02 and was the satisfied\s+prerequisite for M2\.5 implementation/u,
     'Milestone record does not preserve the independent M2 gate',
   );
   requirePattern(
@@ -970,7 +970,7 @@ export function validateM2CurrentSourceRegressionScope(documents, rawProductSour
   );
   requirePattern(
     documents.m25AcceptancePlan,
-    /Implementation complete through Slice 7/u,
+    /Status: Executed and passed;[\s\S]{0,120}independent completion review passed on 2026-08-06/u,
     'M2.5 acceptance plan does not record the implemented current source',
   );
 
@@ -1285,7 +1285,7 @@ function validateRegressionProtocol(rawProtocol) {
   assertDigest(protocol.rawTypescriptDigest, 'M2 regression TypeScript digest');
   assertDigest(protocol.canonicalJsonDigest, 'M2 regression JSON digest');
   if (
-    codex.version !== 'codex-cli 0.146.0' ||
+    codex.version !== 'codex-cli 0.146.1' ||
     !Number.isSafeInteger(protocol.rawTypescriptFileCount) ||
     protocol.rawTypescriptFileCount < 1 ||
     !Number.isSafeInteger(protocol.canonicalJsonFileCount) ||

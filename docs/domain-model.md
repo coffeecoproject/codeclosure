@@ -77,14 +77,14 @@ separate transaction. Slice 7 adds no Domain authority shape: its CLI consumes
 public Runtime result/view unions, parses public branded identifiers, and keeps
 the three Answer, Materialization, and Start dispositions separate.
 The corrected canonical assessment and independent completion review passed the
-bounded M2.5 milestone on 2026-08-06. Proposed
-[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) would add
+bounded M2.5 milestone on 2026-08-06. Accepted
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) defines
 one immutable protocol-neutral project-read authority plus an exact Runtime-
 owned read-only selected-source snapshot for candidate-free real Codex
 `DISCOVERY`/`PLAN`. The record binds Context/Attempt, source/snapshot currency,
 configuration/instruction policy, snapshot ownership, and cleanup without
 creating a Candidate, Fact, Evidence, or Acceptance record or exposing the
-checkout. It is not yet accepted or implemented. The additive external-
+checkout. The authority is accepted but not implemented. The additive external-
 execution v3 phase-dispatch, `ExternalExecutionIntentV2`/
 `ExternalExecutionRecordV2`, `CodexWorkerDirectiveV3`,
 `CodexAdapterObservationV2`, monotonic project-read workspace-authority

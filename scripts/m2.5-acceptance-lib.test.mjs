@@ -183,7 +183,7 @@ function m2RegressionFixture(source) {
       platform: 'darwin',
       platformPackage: '@openai/codex-darwin-arm64',
       targetTriple: 'aarch64-apple-darwin',
-      version: 'codex-cli 0.146.0',
+      version: 'codex-cli 0.146.1',
     },
     snapshotDigest: digest,
     rawTypescriptDigest: digest,

@@ -121,6 +121,19 @@ function assertIsolation(
   }
 }
 
+function assertAssistantProfileLaunchBinding(
+  adapterInput: CodexIntakeAssistantAdapterInput,
+  operationInput: IntentAnalysisAssistantInput | AnswerOnlyAssistantInput,
+): void {
+  const profile = operationInput.package.assistantProfile;
+  if (
+    adapterInput.launch.summary.codexVersion !== `codex-cli ${profile.codexVersion}` ||
+    adapterInput.launch.summary.protocolSnapshotDigest !== profile.protocolSnapshotDigest
+  ) {
+    throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE);
+  }
+}
+
 function decoderIdentity(value: JsonValue): JsonValue {
   return value;
 }
@@ -282,6 +295,7 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
       } else {
         assertAnswerOnlyInput(input as AnswerOnlyAssistantInput);
       }
+      assertAssistantProfileLaunchBinding(this.#input, input);
       assertIsolation(this.#input, input);
       if (hostCancelled(signal)) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE);

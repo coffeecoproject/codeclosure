@@ -1,6 +1,6 @@
 # ADR 0043: Bind candidate-free Codex phases to exact owned read-only source snapshots
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-06
 
 ## Context

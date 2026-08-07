@@ -336,6 +336,39 @@ void test('spawn failure is distinct from a protocol or backend response', async
   );
 });
 
+void test('a copied launch cannot retain controlled launch authority', async (t) => {
+  const directories = fixtureDirectories(t);
+  const launch = createFixtureAppServerLaunch({
+    ...directories,
+    executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    scenario: 'happy',
+    scriptPath: fixtureScript,
+  });
+  const copiedLaunch = Object.freeze({
+    ...launch,
+    summary: Object.freeze({
+      ...launch.summary,
+      codexVersion: 'forged-version',
+    }),
+  });
+  await assert.rejects(
+    () =>
+      startAppServerClient({
+        initialize: {
+          capabilities: {
+            experimentalApi: false,
+            mcpServerOpenaiFormElicitation: false,
+            requestAttestation: false,
+          },
+          clientInfo: { name: 'codeclosure_test', title: null, version: '1' },
+        },
+        launch: copiedLaunch,
+        launchNonce: fixtureLaunchNonce,
+      }),
+    isClientError(AppServerClientErrorCode.INVALID_LAUNCH),
+  );
+});
+
 void test('a verified executable that changes before spawn fails closed', async (t) => {
   const directories = fixtureDirectories(t);
   const executablePath = join(directories.root, 'mutable-codex-fixture');

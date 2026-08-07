@@ -10,10 +10,10 @@ import {
 
 void test('bundled profile binds the exact Slice 1 binary and canonical schema identity', () => {
   const profile = loadBundledCodexProfile();
-  assert.equal(profile.version, 'codex-cli 0.146.0');
+  assert.equal(profile.version, 'codex-cli 0.146.1');
   assert.equal(
     profile.snapshotDigest,
-    'sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21',
+    'sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610',
   );
   const installation = verifyBundledCodexInstallation();
   assert.equal(installation.launcherPath, profile.launcherPath);

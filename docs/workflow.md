@@ -64,7 +64,8 @@ may submit its preallocated ordinary `StartGoal`; read, Answer-only,
 clarification, abandonment, and materialize-only CLI paths add no Workflow
 mutation authority.
 The corrected canonical assessment and independent review completed bounded
-M2.5 on 2026-08-06. Proposed M2.5.1 does not change this phase graph or create
+M2.5 on 2026-08-06. M2.5.1 Slice 0 is complete as a contract and does not
+change this phase graph or create
 Candidate authority early. Its formal real Profile maps candidate-free
 `DISCOVERY` and `PLAN` to Codex over exact Runtime-owned read-only selected-
 source snapshots, creates Candidate/Generation authority only at the existing
@@ -81,10 +82,9 @@ projects to `BLOCKED / INSPECT_BLOCKER` without a recovery catalog. It provides
 no automatic retry, replacement PLAN Attempt, phase rewind, or `goal resume`
 continuation. The
 existing M2 protected demo's FakeWorker delegation for the first two phases
-remains test composition and is not a permitted production fallback. ADR 0015
-keeps project-source Context closed, so proposed
-[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md), or an
-accepted replacement, must become binding before that mapping is implemented.
+remains test composition and is not a permitted production fallback. Accepted
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) now binds
+the project-source Context authority before that mapping is implemented.
 
 Proposed M2.6 Frontstage work adds no Workflow phase or
 writer: authorized actions would invoke only existing public Runtime commands,

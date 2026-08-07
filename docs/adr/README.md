@@ -48,17 +48,17 @@ supersedes it.
 | [0040](0040-local-runtime-host-lifecycle-and-attachment.md) | Move local execution ownership into one attachable Runtime Host | Proposed |
 | [0041](0041-project-control-lease-and-read-only-secondary-cli.md) | Give one CLI the project control lease and make later CLIs observers | Proposed |
 | [0042](0042-project-scoped-single-active-goal-slot.md) | Allow one started Goal per project without adding a scheduler | Proposed |
-| [0043](0043-candidate-free-codex-project-read-authority.md) | Bind candidate-free Codex phases to exact owned read-only source snapshots | Proposed |
+| [0043](0043-candidate-free-codex-project-read-authority.md) | Bind candidate-free Codex phases to exact owned read-only source snapshots | Accepted |
 
 M2.5 completed within ADRs 0027, 0034, and 0035. ADRs 0036 through 0039 are
 M2.6 proposals under review; they are not implementation authority until their
 status becomes `Accepted` or a replacement decision is accepted. ADRs 0040
 through 0042 are separate M2.7 proposals and do not enlarge M2.6.
 
-[ADR 0043](0043-candidate-free-codex-project-read-authority.md) is the required
+[ADR 0043](0043-candidate-free-codex-project-read-authority.md) is the accepted
 M2.5.1 project-read snapshot/Context/configuration, phase Worker-activity, and
-cleanup/crash-reconciliation decision; it is not implementation authority
-until accepted.
+cleanup/crash-reconciliation decision. It is binding only for the bounded
+M2.5.1 path and does not make later M2.6 or M2.7 proposals binding.
 
 ## ADR lifecycle
 

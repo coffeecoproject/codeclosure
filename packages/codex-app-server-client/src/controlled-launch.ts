@@ -9,7 +9,7 @@ import {
 } from './installation.js';
 
 const processLaunchBrand = Symbol('AppServerProcessLaunch');
-const processLaunchInstallation = Symbol('AppServerProcessLaunchInstallation');
+const processLaunchInstallations = new WeakMap<object, VerifiedCodexInstallation>();
 const credentialEnvironmentNames = new Set(['OPENAI_API_KEY']);
 const requiredEnvironmentNames = Object.freeze([
   'CODEX_HOME',
@@ -49,7 +49,6 @@ export interface AppServerLaunchSummary {
 
 export interface AppServerProcessLaunch {
   readonly [processLaunchBrand]: true;
-  readonly [processLaunchInstallation]: VerifiedCodexInstallation;
   readonly arguments: readonly string[];
   readonly cwd: string;
   readonly environment: Readonly<Record<string, string>>;
@@ -148,15 +147,16 @@ function makeLaunch(
     protocolSnapshotDigest: input.installation.profile.snapshotDigest,
     secretEnvironmentNames,
   });
-  return Object.freeze({
+  const launch: AppServerProcessLaunch = Object.freeze({
     [processLaunchBrand]: true as const,
-    [processLaunchInstallation]: input.installation,
     arguments: summary.arguments,
     cwd,
     environment,
     executablePath,
     summary,
   });
+  processLaunchInstallations.set(launch, input.installation);
+  return launch;
 }
 
 export function createControlledAppServerLaunch(
@@ -178,17 +178,22 @@ export function createControlledAppServerLaunch(
 export function assertAppServerProcessLaunch(
   launch: unknown,
 ): asserts launch is AppServerProcessLaunch {
+  const installation =
+    typeof launch === 'object' && launch !== null
+      ? processLaunchInstallations.get(launch)
+      : undefined;
   if (
     typeof launch !== 'object' ||
     launch === null ||
-    Reflect.get(launch, processLaunchBrand) !== true
+    Reflect.get(launch, processLaunchBrand) !== true ||
+    installation === undefined
   ) {
     throw clientError(
       AppServerClientErrorCode.INVALID_LAUNCH,
       'App Server process launch was not created by the controlled launch boundary',
     );
   }
-  assertCurrentVerifiedCodexInstallation(Reflect.get(launch, processLaunchInstallation));
+  assertCurrentVerifiedCodexInstallation(installation);
 }
 
 export function createFixtureProcessLaunch(

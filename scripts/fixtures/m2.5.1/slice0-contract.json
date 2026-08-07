@@ -1,0 +1,451 @@
+{
+  "schemaVersion": 1,
+  "contractId": "codeclosure-m2-5-1-slice0-contract",
+  "contractVersion": "codeclosure-m2-5-1-slice0-v2",
+  "toolchain": {
+    "selected": {
+      "codexVersion": "codex-cli 0.146.1",
+      "snapshotProfile": "codex-schema-snapshot-v1",
+      "snapshotDigest": "sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610",
+      "launcherDigest": "sha256:134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477",
+      "delegatedExecutableDigest": "sha256:35d248101b211d6248ad4e6b8c1d441fe81236da87afb9f3e9ea51a049e9f179",
+      "typescriptDigest": "sha256:29042407f5c2130f2996bd6c35dc9939139e43026ea21f279cbd3a86321ff2f4",
+      "typescriptFileCount": 622,
+      "jsonSchemaDigest": "sha256:a219496aedf9ac7da2260d9d44ffd5f96c2511e4abe81ca46d7983eb3bb08bcf",
+      "jsonSchemaFileCount": 275
+    },
+    "retainedHistorical": {
+      "codexVersion": "codex-cli 0.146.0",
+      "snapshotProfile": "codex-schema-snapshot-v1",
+      "snapshotDigest": "sha256:0b0bdf534386d796c41596693c451aabaec2526bbac5a7965ab558edc3de8e21",
+      "launcherDigest": "sha256:134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477",
+      "delegatedExecutableDigest": "sha256:ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02",
+      "typescriptDigest": "sha256:63c7a5d3d92b1ba1218d92711a81c39bf5b2ee60d978736166615efe5f947684",
+      "typescriptFileCount": 622,
+      "jsonSchemaDigest": "sha256:9c13d0c5385a5eeeed6b0f4f59e7b3b91ca07db451ee78724756d87b6f84e50e",
+      "jsonSchemaFileCount": 275
+    },
+    "reviewedProtocolDelta": {
+      "generatedTypescriptPaths": ["v2/Model.ts"],
+      "generatedJsonSchemaPaths": [
+        "codex_app_server_protocol.schemas.json",
+        "codex_app_server_protocol.v2.schemas.json",
+        "v2/ModelListResponse.json"
+      ],
+      "modelFieldAddition": "modelSpecialty: string | null",
+      "clientMethodSurfaceChanged": false,
+      "serverNotificationSurfaceChanged": false,
+      "serverRequestSurfaceChanged": false,
+      "threadItemSurfaceChanged": false
+    }
+  },
+  "intake": {
+    "assistantProfile": {
+      "schemaVersion": 2,
+      "id": "intake-assistant-profile_codeclosure-m2-5-local",
+      "version": "codeclosure-m2-5-1-local-assistant-v2"
+    },
+    "assistantAdapter": {
+      "id": "intake-assistant-adapter_codex-app-server",
+      "version": "codeclosure-m2-5-1-intake-adapter-v2"
+    },
+    "closedConfiguration": {
+      "schemaVersion": 1,
+      "id": "intake-config_codeclosure-m2-5-1-local",
+      "version": "codeclosure-m2-5-1-local-config-v1"
+    },
+    "protocolProjectionPolicy": {
+      "schemaVersion": 1,
+      "id": "intake-protocol-projection_codeclosure-m2-5-1",
+      "version": "codeclosure-m2-5-1-projection-v1"
+    },
+    "unchangedIdentities": {
+      "intentAnalysisResponseContract": {
+        "id": "intake-response_intent-analysis",
+        "version": "codeclosure-m2-5-intent-analysis-response-v1"
+      },
+      "answerOnlyResponseContract": {
+        "id": "intake-response_answer-only",
+        "version": "codeclosure-m2-5-answer-only-response-v1"
+      },
+      "budgetProfile": {
+        "id": "intake-budget_codeclosure-m2-5-local",
+        "version": "codeclosure-m2-5-local-budget-v1"
+      },
+      "intakeManifestSchemaVersion": 1,
+      "intakeAssistantObservationSchemaVersion": 1
+    },
+    "normalizedEventKinds": [
+      "BENIGN_PROCESS_PROJECTION",
+      "FORBIDDEN_EFFECT_OBSERVED",
+      "MESSAGE_COMPLETED",
+      "MESSAGE_STARTED",
+      "PROTOCOL_VIOLATION",
+      "REASONING_OBSERVED",
+      "STREAM_PROGRESS",
+      "THREAD_STARTED",
+      "TURN_COMPLETED",
+      "TURN_STARTED",
+      "USER_MESSAGE_OBSERVED"
+    ],
+    "notificationMethodDispositions": {
+      "THREAD_STARTED": ["thread/started"],
+      "TURN_STARTED": ["turn/started"],
+      "TURN_COMPLETED": ["turn/completed"],
+      "ITEM_DISCRIMINATED": ["item/completed", "item/started"],
+      "STREAM_PROGRESS": [
+        "item/agentMessage/delta",
+        "item/reasoning/summaryPartAdded",
+        "item/reasoning/summaryTextDelta",
+        "item/reasoning/textDelta",
+        "rawResponse/completed",
+        "rawResponseItem/completed"
+      ],
+      "BENIGN_PROCESS_PROJECTION": [
+        "account/rateLimits/updated",
+        "remoteControl/status/changed",
+        "thread/status/changed",
+        "thread/tokenUsage/updated"
+      ],
+      "FORBIDDEN_EFFECT_OBSERVED": [
+        "app/list/updated",
+        "command/exec/outputDelta",
+        "externalAgentConfig/import/completed",
+        "externalAgentConfig/import/progress",
+        "fs/changed",
+        "fuzzyFileSearch/sessionCompleted",
+        "fuzzyFileSearch/sessionUpdated",
+        "hook/completed",
+        "hook/started",
+        "item/autoApprovalReview/completed",
+        "item/autoApprovalReview/started",
+        "item/commandExecution/outputDelta",
+        "item/commandExecution/terminalInteraction",
+        "item/fileChange/outputDelta",
+        "item/fileChange/patchUpdated",
+        "item/mcpToolCall/progress",
+        "mcpServer/oauthLogin/completed",
+        "mcpServer/startupStatus/updated",
+        "process/exited",
+        "process/outputDelta",
+        "serverRequest/resolved",
+        "skills/changed",
+        "thread/environment/connected",
+        "thread/environment/disconnected",
+        "turn/diff/updated"
+      ],
+      "PROTOCOL_VIOLATION": [
+        "account/login/completed",
+        "account/updated",
+        "configWarning",
+        "deprecationNotice",
+        "error",
+        "guardianWarning",
+        "item/plan/delta",
+        "model/rerouted",
+        "model/safetyBuffering/updated",
+        "model/verification",
+        "thread/archived",
+        "thread/closed",
+        "thread/compacted",
+        "thread/deleted",
+        "thread/goal/cleared",
+        "thread/goal/updated",
+        "thread/name/updated",
+        "thread/realtime/closed",
+        "thread/realtime/error",
+        "thread/realtime/itemAdded",
+        "thread/realtime/outputAudio/delta",
+        "thread/realtime/sdp",
+        "thread/realtime/started",
+        "thread/realtime/transcript/delta",
+        "thread/realtime/transcript/done",
+        "thread/settings/updated",
+        "thread/unarchived",
+        "turn/moderationMetadata",
+        "turn/plan/updated",
+        "warning",
+        "windows/worldWritableWarning",
+        "windowsSandbox/setupCompleted"
+      ]
+    },
+    "threadItemDispositions": {
+      "MESSAGE": ["agentMessage"],
+      "REASONING_OBSERVED": ["reasoning"],
+      "USER_MESSAGE_OBSERVED": ["userMessage"],
+      "FORBIDDEN_EFFECT_OBSERVED": [
+        "collabAgentToolCall",
+        "commandExecution",
+        "dynamicToolCall",
+        "fileChange",
+        "imageGeneration",
+        "imageView",
+        "mcpToolCall",
+        "sleep",
+        "subAgentActivity",
+        "webSearch"
+      ],
+      "PROTOCOL_VIOLATION": [
+        "contextCompaction",
+        "enteredReviewMode",
+        "exitedReviewMode",
+        "hookPrompt",
+        "plan"
+      ]
+    },
+    "safeDiagnosticCategories": [
+      "LOWER_CLIENT_CORRELATION",
+      "LOWER_CLIENT_LIMIT",
+      "LOWER_CLIENT_UNSUPPORTED_OR_MALFORMED",
+      "OBSERVER_BUDGET",
+      "OBSERVER_CORRELATION",
+      "OBSERVER_ORDER",
+      "OBSERVER_TERMINAL_BINDING",
+      "PROCESS_INTERRUPTED",
+      "PROCESS_TIMEOUT",
+      "PROCESS_UNAVAILABLE",
+      "PROJECTED_FORBIDDEN_EFFECT",
+      "PROJECTED_MALFORMED_PARAMS",
+      "PROJECTED_UNMAPPED_LIFECYCLE",
+      "RESPONSE_REJECTED"
+    ]
+  },
+  "execution": {
+    "workflowPolicy": {
+      "id": "policy_codeclosure-m2-5-1-real-intake",
+      "version": "codeclosure-m2-5-1-real-intake-policy-v1"
+    },
+    "executionProfile": {
+      "schemaVersion": 2,
+      "id": "profile_m2-5-1-real-codex",
+      "version": "codeclosure-m2-5-1-real-codex-profile-v1"
+    },
+    "externalExecutionProfileDefinitionSchemaVersion": 3,
+    "externalExecutionIntentSchemaVersion": 2,
+    "externalExecutionRecordSchemaVersion": 2,
+    "codexWorkerDirectiveSchemaVersion": 3,
+    "codexAdapterObservationSchemaVersion": 2,
+    "contextPackageSchemaVersion": 5,
+    "contextManifestSchemaVersion": 5,
+    "workerActivityPolicy": {
+      "schemaVersion": 1,
+      "id": "codex-worker-activity-policy_codeclosure-m2-5-1-real",
+      "version": "codeclosure-m2-5-1-worker-activity-v1"
+    },
+    "phaseDispatch": {
+      "DISCOVERY": {
+        "workerMode": "REAL_CODEX",
+        "cwdKind": "PROJECT_READ_SNAPSHOT",
+        "projectReadSnapshotAuthority": "REQUIRED",
+        "candidateWorkspaceLease": "FORBIDDEN",
+        "responseContract": {
+          "schemaVersion": 1,
+          "workerEventSchemaVersion": 1,
+          "allowedResultKinds": ["PROPOSALS"],
+          "unknownFields": "REJECT",
+          "maxEventBytes": 65536
+        },
+        "canonicalDomainGrant": {
+          "projectRead": true,
+          "candidateAccess": "NONE",
+          "runOutputScope": "BOUNDED_DISCOVERY",
+          "controlSubmission": "PROPOSALS",
+          "acceptanceAccess": "NONE",
+          "allowedActions": ["READ_PROJECT", "WRITE_RUN_OUTPUT", "SUBMIT_PROPOSALS"]
+        }
+      },
+      "IMPLEMENT": {
+        "workerMode": "REAL_CODEX",
+        "cwdKind": "CANDIDATE_WORKSPACE",
+        "projectReadSnapshotAuthority": "FORBIDDEN",
+        "candidateWorkspaceLease": "REQUIRED",
+        "responseContract": {
+          "schemaVersion": 1,
+          "workerEventSchemaVersion": 1,
+          "allowedResultKinds": ["COMPLETION_REQUEST"],
+          "unknownFields": "REJECT",
+          "maxEventBytes": 65536
+        },
+        "canonicalDomainGrant": {
+          "projectRead": true,
+          "candidateAccess": "MUTABLE_WRITE",
+          "runOutputScope": "BOUNDED_IMPLEMENTATION",
+          "controlSubmission": "COMPLETION_REQUEST",
+          "acceptanceAccess": "NONE",
+          "allowedActions": [
+            "READ_PROJECT",
+            "READ_CANDIDATE",
+            "WRITE_CANDIDATE_SOURCE",
+            "WRITE_RUN_OUTPUT",
+            "SUBMIT_COMPLETION_REQUEST"
+          ]
+        }
+      },
+      "PLAN": {
+        "workerMode": "REAL_CODEX",
+        "cwdKind": "PROJECT_READ_SNAPSHOT",
+        "projectReadSnapshotAuthority": "REQUIRED",
+        "candidateWorkspaceLease": "FORBIDDEN",
+        "responseContract": {
+          "schemaVersion": 1,
+          "workerEventSchemaVersion": 1,
+          "allowedResultKinds": ["PROPOSALS"],
+          "unknownFields": "REJECT",
+          "maxEventBytes": 65536
+        },
+        "canonicalDomainGrant": {
+          "projectRead": true,
+          "candidateAccess": "NONE",
+          "runOutputScope": "PLAN_OBSERVATION",
+          "controlSubmission": "PROPOSALS",
+          "acceptanceAccess": "NONE",
+          "allowedActions": ["READ_PROJECT", "WRITE_RUN_OUTPUT", "SUBMIT_PROPOSALS"]
+        }
+      }
+    },
+    "workerActivityDispositions": {
+      "DISCOVERY": {
+        "lifecycle": "ADMIT_NON_AUTHORITATIVE",
+        "commandExecution": "ADMIT_SNAPSHOT_READ_ONLY",
+        "fileChange": "REJECT_DISCARD_RESULT",
+        "maintenanceCompaction": "ADMIT_SEPARATE_MAINTENANCE_ONLY",
+        "forbiddenOrUnknown": "REJECT_DISCARD_RESULT"
+      },
+      "IMPLEMENT": {
+        "lifecycle": "ADMIT_NON_AUTHORITATIVE",
+        "commandExecution": "ADMIT_CANDIDATE_BOUND",
+        "fileChange": "ADMIT_CANDIDATE_ALLOWED_PATHS",
+        "maintenanceCompaction": "ADMIT_SEPARATE_MAINTENANCE_ONLY",
+        "forbiddenOrUnknown": "REJECT_DISCARD_RESULT"
+      },
+      "PLAN": {
+        "lifecycle": "ADMIT_NON_AUTHORITATIVE",
+        "commandExecution": "ADMIT_SNAPSHOT_READ_ONLY",
+        "fileChange": "REJECT_DISCARD_RESULT",
+        "maintenanceCompaction": "ADMIT_SEPARATE_MAINTENANCE_ONLY",
+        "forbiddenOrUnknown": "REJECT_DISCARD_RESULT"
+      }
+    },
+    "projectReadSchemas": {
+      "authorityRecord": "ProjectSourceReadAuthorityRecordV1",
+      "workspaceAuthoritySnapshot": "ProjectReadWorkspaceAuthoritySnapshotV1",
+      "workspaceObservation": "ProjectReadWorkspaceObservationV1",
+      "cleanupGrant": "ProjectReadSnapshotCleanupGrantV1",
+      "cleanupObservation": "ProjectReadSnapshotCleanupObservationV1",
+      "cleanupOutcome": "ProjectReadSnapshotCleanupOutcomeV1"
+    },
+    "sourceProjectionVersions": {
+      "sourceTree": "codeclosure-project-read-source-tree-v1",
+      "gitState": "codeclosure-project-read-git-state-v1",
+      "ownershipMarker": "codeclosure-project-read-marker-v1",
+      "cleanupPolicy": "codeclosure-project-read-cleanup-v1"
+    },
+    "phaseOrder": ["DISCOVERY", "IMPLEMENT", "PLAN"],
+    "workflowExecutionOrder": ["DISCOVERY", "PLAN", "IMPLEMENT"],
+    "workerDispatchPolicy": "ALL_SELECTED_ATTEMPTS",
+    "unchangedSchemas": [
+      "ExternalExecutionObservationV1",
+      "WorkerEventReceiptV1",
+      "WorkerEventV1",
+      "WorkerRequestV2"
+    ],
+    "sourceDriftReasons": [
+      "PROJECT_READ_AUTHORITY_INVALID",
+      "PROJECT_READ_SNAPSHOT_DRIFT",
+      "PROJECT_SOURCE_DRIFT"
+    ],
+    "planSourceMismatchReason": "PLAN_SOURCE_NOT_CURRENT"
+  },
+  "demonstration": {
+    "projectFamily": "CodeClosureM25Demo",
+    "gitCommit": "1ad4bbb383d8ef38e29400b2625810ffa9dfb953",
+    "gitTree": "1e28086507ea644175065aaf6f4a8e2acce05036",
+    "sourceTreeDigest": "sha256:1e2478b7bb3034cc2750b1c0f9a168b6905cb9e81a44d0a861365a570179441b",
+    "sourceGitMetadataDigest": "sha256:d2ea0289e4b42f96247e4e958be85524baa8a058a84773b6687a80fd3d6b0701",
+    "selectedSourcePaths": [
+      ".gitignore",
+      "package.json",
+      "pnpm-lock.yaml",
+      "src/payment.js",
+      "test/payment.test.js"
+    ],
+    "allowedPaths": ["src/payment.js"],
+    "protectedCheck": {
+      "id": "check_m2-5-1-payment-idempotency",
+      "version": "codeclosure-m2-5-1-payment-idempotency-v1",
+      "assetPath": "scripts/fixtures/m2.5.1/payment-idempotency-check.mjs",
+      "assetDigest": "sha256:16a4a1c6c18dddc972cd8e51507f4e22d1c78b172da871687bca1d9d44f604af",
+      "acceptedExitCodes": [0]
+    },
+    "expectedResult": "duplicate callback is ignored, one charge is retained for one order, and different orders remain independent"
+  },
+  "proofOwners": {
+    "M251-E01": "scripts/run-m2.5.1-acceptance.mjs#environment-source-identity-preflight",
+    "M251-E02": "scripts/run-m2.5.1-acceptance.mjs#isolation-preflight",
+    "M251-E03": "scripts/m2.5.1-slice0-contract.test.mjs#identity-and-schema-freeze",
+    "M251-E04": "scripts/check-dependencies.test.mjs#m2.5.1-intake-adapter-boundary",
+    "M251-E05": "scripts/check-dependencies.test.mjs#m2.5.1-protocol-projection-boundary",
+    "M251-E06": "scripts/run-m2.5.1-acceptance.mjs#quality-gate",
+    "M251-E07": "scripts/check-dependencies.test.mjs#m2.5.1-project-read-port-boundary",
+    "M251-P01": "packages/adapter-codex-intake/test/adapter-v2.test.ts#observed-sequence-fixture",
+    "M251-P02": "packages/adapter-codex-intake/test/adapter-v2.test.ts#closed-configuration-v2",
+    "M251-P03": "packages/adapter-codex-intake/test/adapter-v2.test.ts#remote-control-matrix",
+    "M251-P04": "packages/adapter-codex-intake/test/adapter-v2.test.ts#message-stage-matrix",
+    "M251-P05": "packages/adapter-codex-intake/test/adapter-v2.test.ts#rate-limit-content-minimization",
+    "M251-P06": "packages/adapter-codex-intake/test/adapter-v2.test.ts#notification-and-item-disposition-matrix",
+    "M251-P07": "packages/adapter-codex-intake/test/adapter-v2.test.ts#terminal-response-matrix",
+    "M251-P08": "scripts/check-dependencies.test.mjs#m2.5.1-normalized-observer-only",
+    "M251-P09": "packages/adapter-codex-intake/test/adapter-v2.test.ts#original-sequence-regression",
+    "M251-P10": "scripts/m2.5.1-slice0-contract.test.mjs#pinned-notification-exhaustiveness",
+    "M251-V01": "packages/store-sqlite/test/m2.5.1-intake-compatibility.test.ts#v1-strict-reopen",
+    "M251-V02": "packages/store-sqlite/test/m2.5.1-intake-compatibility.test.ts#v1-completed-replay",
+    "M251-V03": "packages/store-sqlite/test/m2.5.1-intake-compatibility.test.ts#v1-incomplete-recovery",
+    "M251-V04": "packages/testing/test/m2.5.1-contracts.test.ts#new-intake-identity",
+    "M251-V05": "packages/store-sqlite/test/m2.5.1-intake-compatibility.test.ts#mixed-intake-version-rejection",
+    "M251-V06": "packages/store-sqlite/test/m2.5.1-external-compatibility.test.ts#external-schema-compatibility",
+    "M251-L01": "scripts/run-m2.5.1-acceptance.mjs#live-lower-client-prerequisite",
+    "M251-L02": "scripts/run-m2.5.1-acceptance.mjs#live-answer-only",
+    "M251-L03": "scripts/run-m2.5.1-acceptance.mjs#live-clear-intent-analysis",
+    "M251-L04": "scripts/run-m2.5.1-acceptance.mjs#live-ambiguous-intent-analysis",
+    "M251-L05": "scripts/run-m2.5.1-acceptance.mjs#live-intake-effect-trace",
+    "M251-L06": "scripts/run-m2.5.1-acceptance.mjs#live-intake-privacy",
+    "M251-C01": "apps/cli/test/m2.5.1-composition.test.ts#trusted-real-profile-installation",
+    "M251-C02": "apps/cli/test/m2.5.1-composition.test.ts#governed-preflight",
+    "M251-C03": "packages/store-sqlite/test/m2.5.1-materialization-start.test.ts#authorization-profile-binding",
+    "M251-C04": "apps/cli/test/m2.5.1-composition.test.ts#ordinary-start-profile-resolution",
+    "M251-C05": "apps/cli/test/m2.5.1-composition.test.ts#profile-substitution-and-absence",
+    "M251-C06": "packages/store-sqlite/test/m2.5.1-materialization-start.test.ts#historical-goal-non-rebinding",
+    "M251-C07": "scripts/check-dependencies.test.mjs#m2.5.1-fake-test-seam-only",
+    "M251-C08": "packages/store-sqlite/test/project-read-authority.test.ts#atomic-attempt-context-read-authority",
+    "M251-C09": "packages/testing/test/m2.5.1-contracts.test.ts#phase-dispatch-v3",
+    "M251-C10": "packages/adapter-codex/test/candidate-free-adapter.test.ts#worker-activity-policy-refinement",
+    "M251-X01": "scripts/run-m2.5.1-acceptance.mjs#live-phase-complete-worker-chain",
+    "M251-X02": "scripts/run-m2.5.1-acceptance.mjs#live-project-candidate-containment",
+    "M251-X03": "packages/workspace-local/test/project-read-workspace.test.ts#candidate-identity-and-drift",
+    "M251-X04": "scripts/run-m2.5.1-acceptance.mjs#protected-verification",
+    "M251-X05": "scripts/run-m2.5.1-acceptance.mjs#evidence-binding",
+    "M251-X06": "scripts/run-m2.5.1-acceptance.mjs#acceptance-closeout-binding",
+    "M251-X07": "scripts/run-m2.5.1-acceptance.mjs#source-baseline-closure",
+    "M251-X08": "scripts/run-m2.5.1-acceptance.mjs#correct-first-pass",
+    "M251-X09": "packages/store-sqlite/test/project-read-authority.test.ts#source-currency-and-plan-candidate-guard",
+    "M251-X10": "packages/adapter-codex/test/candidate-free-adapter.test.ts#configuration-instruction-containment",
+    "M251-X11": "packages/adapter-codex/test/candidate-free-adapter.test.ts#phase-item-effect-containment",
+    "M251-F01": "packages/adapter-codex-intake/test/adapter-v2.test.ts#process-timeout-interruption-closure",
+    "M251-F02": "packages/store-sqlite/test/m2.5.1-materialization-start.test.ts#materialization-start-crash-window",
+    "M251-F03": "packages/store-sqlite/test/m2.5.1-materialization-start.test.ts#start-replay-race",
+    "M251-F04": "apps/cli/test/m2.5.1-composition.test.ts#real-worker-containment-failure",
+    "M251-F05": "apps/cli/test/m2.5.1-composition.test.ts#protected-verification-rejection",
+    "M251-F06": "packages/store-sqlite/test/project-read-authority.test.ts#strict-reopen-full-authority-chain",
+    "M251-F07": "packages/workspace-local/test/project-read-cleanup.test.ts#request-and-failure-closure",
+    "M251-F08": "packages/store-sqlite/test/project-read-authority.test.ts#plan-source-not-current",
+    "M251-F09": "packages/store-sqlite/test/project-read-authority.test.ts#snapshot-dispatch-crash-windows",
+    "M251-F10": "packages/workspace-local/test/project-read-cleanup.test.ts#cleanup-effect-crash-windows",
+    "M251-F11": "packages/workspace-local/test/project-read-cleanup.test.ts#cross-process-same-grant-concurrency",
+    "M251-R01": "scripts/run-m2.5.1-acceptance.mjs#m1-regression",
+    "M251-R02": "scripts/run-m2.5.1-acceptance.mjs#m2-current-source-regression",
+    "M251-R03": "scripts/run-m2.5.1-acceptance.mjs#m2.5-current-source-regression",
+    "M251-R04": "scripts/check-dependencies.test.mjs#m2.5.1-authority-non-regression",
+    "M251-R05": "scripts/run-m2.5.1-acceptance.mjs#documentation-consistency",
+    "M251-R06": "scripts/run-m2.5.1-acceptance.mjs#source-evidence-closure"
+  }
+}

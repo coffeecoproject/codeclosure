@@ -275,9 +275,20 @@ export function assertVerifiedCodexInstallation(
   }
 }
 
-export function fixtureVerifiedInstallation(executablePath: string): VerifiedCodexInstallation {
+export function fixtureVerifiedInstallation(
+  executablePath: string,
+  protocolIdentity?: Readonly<{ version: string; snapshotDigest: string }>,
+): VerifiedCodexInstallation {
   const path = realpathSync(executablePath);
   const digest = digestFile(path, 'fixture executable');
+  if (
+    protocolIdentity !== undefined &&
+    (protocolIdentity.version.length === 0 ||
+      protocolIdentity.version.length > 4_096 ||
+      !digestPattern.test(protocolIdentity.snapshotDigest))
+  ) {
+    throw new TypeError('Fixture Codex protocol identity is invalid');
+  }
   const profile: BundledCodexProfile = Object.freeze({
     architecture: process.arch,
     delegatedExecutableDigest: digest,
@@ -286,10 +297,10 @@ export function fixtureVerifiedInstallation(executablePath: string): VerifiedCod
     launcherPath: path,
     launcherRealPath: path,
     platform: process.platform,
-    snapshotDigest: `sha256:${'0'.repeat(64)}`,
+    snapshotDigest: protocolIdentity?.snapshotDigest ?? `sha256:${'0'.repeat(64)}`,
     snapshotProfile: 'codex-schema-snapshot-v1',
     targetTriple: 'test-fixture',
-    version: 'test-fixture',
+    version: protocolIdentity?.version ?? 'test-fixture',
   });
   return Object.freeze({
     [verifiedInstallationBrand]: true as const,
