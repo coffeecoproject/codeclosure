@@ -87,6 +87,7 @@ import {
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   successCriterionId,
   verificationObligationId,
@@ -559,7 +560,7 @@ function materializePriorAttemptFeedback(
 
 const contextPackageSchema = z
   .object({
-    schemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+    schemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
     goalId: z.string(),
     goalRevision: z.number().int().positive(),
     workflowId: z.string(),
@@ -592,6 +593,10 @@ const contextPackageSchema = z
     policyBundleDigest: z.string(),
     acceptanceCriticalVerificationPlanId: z.string().optional(),
     acceptanceCriticalVerificationPlanDigest: z.string().optional(),
+    projectReadAuthorityId: z.string().optional(),
+    projectReadAuthorityRecordDigest: z.string().optional(),
+    projectReadSourceTreeProjectionDigest: z.string().optional(),
+    projectReadGitStateProjectionDigest: z.string().optional(),
     responseContract: z.unknown(),
   })
   .strict();
@@ -604,6 +609,10 @@ export function decodeContextPackage(value: unknown): ContextPackage {
     'priorAttemptFeedback',
     'acceptanceCriticalVerificationPlanId',
     'acceptanceCriticalVerificationPlanDigest',
+    'projectReadAuthorityId',
+    'projectReadAuthorityRecordDigest',
+    'projectReadSourceTreeProjectionDigest',
+    'projectReadGitStateProjectionDigest',
   ]);
   const parsed = contextPackageSchema.parse(value);
   for (const entry of parsed.selectedEntries) {
@@ -669,6 +678,28 @@ export function decodeContextPackage(value: unknown): ContextPackage {
             parsed.acceptanceCriticalVerificationPlanDigest,
           ),
         }),
+    ...(parsed.projectReadAuthorityId === undefined
+      ? {}
+      : { projectReadAuthorityId: projectSourceReadAuthorityId(parsed.projectReadAuthorityId) }),
+    ...(parsed.projectReadAuthorityRecordDigest === undefined
+      ? {}
+      : {
+          projectReadAuthorityRecordDigest: sha256Digest(parsed.projectReadAuthorityRecordDigest),
+        }),
+    ...(parsed.projectReadSourceTreeProjectionDigest === undefined
+      ? {}
+      : {
+          projectReadSourceTreeProjectionDigest: sha256Digest(
+            parsed.projectReadSourceTreeProjectionDigest,
+          ),
+        }),
+    ...(parsed.projectReadGitStateProjectionDigest === undefined
+      ? {}
+      : {
+          projectReadGitStateProjectionDigest: sha256Digest(
+            parsed.projectReadGitStateProjectionDigest,
+          ),
+        }),
     responseContract: decodeWorkerResponseContract(parsed.responseContract),
   });
   assertContextPackageInvariant(contextPackage);
@@ -712,7 +743,7 @@ const contextOmissionDecisionSchema = z
 const contextManifestSchema = z
   .object({
     id: z.string(),
-    schemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+    schemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
     compilerVersion: nonBlankStringSchema,
     createdAt: z.string(),
     goalId: z.string(),
@@ -729,6 +760,10 @@ const contextManifestSchema = z
     policyBundleDigest: z.string(),
     acceptanceCriticalVerificationPlanId: z.string().optional(),
     acceptanceCriticalVerificationPlanDigest: z.string().optional(),
+    projectReadAuthorityId: z.string().optional(),
+    projectReadAuthorityRecordDigest: z.string().optional(),
+    projectReadSourceTreeProjectionDigest: z.string().optional(),
+    projectReadGitStateProjectionDigest: z.string().optional(),
     capabilityGrantDigest: z.string(),
     responseContractDigest: z.string(),
     repairContextDigest: z.string().optional(),
@@ -748,6 +783,10 @@ export function decodeContextManifest(value: unknown): ContextManifest {
     'priorAttemptFeedbackDigest',
     'acceptanceCriticalVerificationPlanId',
     'acceptanceCriticalVerificationPlanDigest',
+    'projectReadAuthorityId',
+    'projectReadAuthorityRecordDigest',
+    'projectReadSourceTreeProjectionDigest',
+    'projectReadGitStateProjectionDigest',
   ]);
   const parsed = contextManifestSchema.parse(value);
   for (const entry of parsed.entries) {
@@ -792,6 +831,28 @@ export function decodeContextManifest(value: unknown): ContextManifest {
       : {
           acceptanceCriticalVerificationPlanDigest: sha256Digest(
             parsed.acceptanceCriticalVerificationPlanDigest,
+          ),
+        }),
+    ...(parsed.projectReadAuthorityId === undefined
+      ? {}
+      : { projectReadAuthorityId: projectSourceReadAuthorityId(parsed.projectReadAuthorityId) }),
+    ...(parsed.projectReadAuthorityRecordDigest === undefined
+      ? {}
+      : {
+          projectReadAuthorityRecordDigest: sha256Digest(parsed.projectReadAuthorityRecordDigest),
+        }),
+    ...(parsed.projectReadSourceTreeProjectionDigest === undefined
+      ? {}
+      : {
+          projectReadSourceTreeProjectionDigest: sha256Digest(
+            parsed.projectReadSourceTreeProjectionDigest,
+          ),
+        }),
+    ...(parsed.projectReadGitStateProjectionDigest === undefined
+      ? {}
+      : {
+          projectReadGitStateProjectionDigest: sha256Digest(
+            parsed.projectReadGitStateProjectionDigest,
           ),
         }),
     capabilityGrantDigest: sha256Digest(parsed.capabilityGrantDigest),

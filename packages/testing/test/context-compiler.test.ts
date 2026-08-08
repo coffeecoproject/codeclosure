@@ -6,18 +6,36 @@ import {
   ContextAuthorityClass,
   ContextEntryKind,
   GoalStatus,
+  PROJECT_READ_CLEANUP_POLICY,
+  PROJECT_READ_GIT_STATE_PROFILE,
+  PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+  PROJECT_READ_SOURCE_TREE_PROFILE,
+  ProjectReadLifecyclePolicy,
+  ProjectReadModelUsableNetworkPolicy,
+  ProjectReadRetentionPolicy,
+  ProjectReadSnapshotAccessMode,
+  ProjectReadSourceCheckoutAccess,
   RunStatus,
   WorkflowPhase,
+  acceptanceCriticalVerificationPlanId,
   attemptId,
   contextManifestId,
   createGoal,
   decodeAttemptSnapshot,
+  decodeContextManifest,
+  decodeContextPackage,
+  decodeProjectSourceReadAuthorityRecord,
   deriveCapabilityGrant,
   executionProfileId,
   goalId,
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectReadGitStateProjection,
+  projectReadSnapshotId,
+  projectReadSourceTreeProjection,
+  projectSourceReadAuthorityId,
+  projectSourceReadAuthorityProjection,
   sha256Digest,
   successCriterionId,
   workflowId,
@@ -25,6 +43,7 @@ import {
   type Attempt,
   type ContextManifestId,
   type Goal,
+  type ProjectSourceReadAuthorityRecord,
   type WorkflowInstance,
 } from '@codeclosure/domain';
 import {
@@ -32,6 +51,8 @@ import {
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
   canonicalizeJson,
+  contextManifestDigestProjection,
+  m1WorkerResponseContract,
 } from '@codeclosure/runtime';
 
 const digestA = sha256Digest(`sha256:${'a'.repeat(64)}`);
@@ -39,6 +60,10 @@ const digestB = sha256Digest(`sha256:${'b'.repeat(64)}`);
 const executionProfileAuthority = Object.freeze({
   executionProfileId: executionProfileId('profile_context-compiler'),
   executionProfileDigest: sha256Digest(`sha256:${'c'.repeat(64)}`),
+});
+const protectedPlanAuthority = Object.freeze({
+  id: acceptanceCriticalVerificationPlanId('verification-plan_context-compiler'),
+  digest: sha256Digest(`sha256:${'d'.repeat(64)}`),
 });
 
 interface CompilerFixture {
@@ -145,6 +170,86 @@ function compile(input: CompilerFixture, policyDigest = digestA) {
   });
 }
 
+function projectReadAuthority(input: CompilerFixture): ProjectSourceReadAuthorityRecord {
+  const digests = new CanonicalJsonSha256DigestProvider();
+  const digest = (value: unknown) => sha256Digest(digests.digest(value));
+  const sourceTreeWithoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_SOURCE_TREE_PROFILE,
+    entries: Object.freeze([]),
+    fileCount: 0,
+    totalBytes: 0,
+  });
+  const sourceTree = Object.freeze({
+    ...sourceTreeWithoutDigest,
+    projectionDigest: digest(projectReadSourceTreeProjection(sourceTreeWithoutDigest)),
+  });
+  const gitStateWithoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_GIT_STATE_PROFILE,
+    sourceProjectRoot: input.goal.scope.projectPath,
+    repositoryControlRootIdentity: `${input.goal.scope.projectPath}/.git`,
+    headCommit: 'a'.repeat(40),
+    selectedPathSetDigest: digestA,
+    stagedIndexManifestDigest: digestA,
+    porcelainV2Digest: digestA,
+  });
+  const gitState = Object.freeze({
+    ...gitStateWithoutDigest,
+    projectionDigest: digest(projectReadGitStateProjection(gitStateWithoutDigest)),
+  });
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    id: projectSourceReadAuthorityId('project-read_context-fixture'),
+    goalId: input.goal.id,
+    goalRevision: input.goal.revision,
+    workflowId: input.workflow.id,
+    workflowVersion: input.workflow.version,
+    phase: WorkflowPhase.DISCOVERY,
+    attemptId: input.attempt.id,
+    normalizedProjectRoot: input.goal.scope.projectPath,
+    resolvedProjectRoot: input.goal.scope.projectPath,
+    repositoryControlRootIdentity: `${input.goal.scope.projectPath}/.git`,
+    sourceTree,
+    gitState,
+    workspaceRootIdentity: '/fixture/project-read-workspace',
+    snapshotId: projectReadSnapshotId('project-read-snapshot_context-fixture'),
+    snapshotLeafRealpath: '/fixture/project-read-workspace/project-read-snapshot_context-fixture',
+    snapshotTreeDigest: sourceTree.projectionDigest,
+    ownershipMarkerProfile: PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+    ownershipMarkerDigest: digestB,
+    policyBundleId: policyBundleId('policy_m1'),
+    policyBundleVersion: 'm1-policy-v1',
+    policyBundleDigest: digestA,
+    executionProfileId: executionProfileAuthority.executionProfileId,
+    executionProfileVersion: 'm2.5.1-profile-v3',
+    executionProfileDigest: executionProfileAuthority.executionProfileDigest,
+    phaseDispatchEntryDigest: digestA,
+    capabilityGrantDigest: digest({
+      schemaVersion: 1,
+      capabilityGrant: input.attempt.capabilityGrant,
+    }),
+    responseContractDigest: digest({
+      schemaVersion: 1,
+      responseContract: m1WorkerResponseContract(input.workflow.phase),
+    }),
+    accessMode: ProjectReadSnapshotAccessMode.READ_ONLY,
+    sourceCheckoutAccess: ProjectReadSourceCheckoutAccess.NONE,
+    modelUsableNetworkPolicy: ProjectReadModelUsableNetworkPolicy.DENIED,
+    forbiddenRoots: Object.freeze([input.goal.scope.projectPath]),
+    isolationProfileId: 'project-read-isolation_test',
+    isolationProfileDigest: digestA,
+    issuedAt: isoTimestamp('2026-07-27T00:00:01.000Z'),
+    lifecyclePolicy: ProjectReadLifecyclePolicy.SINGLE_WORKER_ATTEMPT,
+    retentionPolicy: ProjectReadRetentionPolicy.RUNTIME_OWNED,
+    cleanupPolicy: PROJECT_READ_CLEANUP_POLICY,
+  });
+  return decodeProjectSourceReadAuthorityRecord({
+    ...withoutDigest,
+    recordDigest: digest(projectSourceReadAuthorityProjection(withoutDigest)),
+  });
+}
+
 void test('[I-019][I-021] Context digest excludes envelope identity but binds authority revisions', () => {
   const first = fixture(contextManifestId('context_fixture-0001'));
   const second = fixture(contextManifestId('context_fixture-0002'));
@@ -173,6 +278,243 @@ void test('[I-019][I-021] Context digest excludes envelope identity but binds au
   assert.notEqual(
     firstCompilation.manifest.manifestDigest,
     compile(first, digestB).manifest.manifestDigest,
+  );
+});
+
+void test('[I-019][I-020] candidate-free project-read authority compiles only into Context v5', () => {
+  const input = fixture(contextManifestId('context_project-read-v5'));
+  const authority = projectReadAuthority(input);
+  const compilation = input.compiler.compile({
+    manifestId: input.manifestId,
+    createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+    goal: input.goal,
+    workflow: input.workflow,
+    attempt: input.attempt,
+    ...executionProfileAuthority,
+    policyBundleId: policyBundleId('policy_m1'),
+    policyBundleDigest: digestA,
+    protectedPlan: protectedPlanAuthority,
+    projectReadAuthority: authority,
+  });
+
+  assert.equal(compilation.package.schemaVersion, 5);
+  assert.equal(compilation.manifest.schemaVersion, 5);
+  assert.equal(compilation.package.projectReadAuthorityId, authority.id);
+  assert.equal(compilation.package.projectReadAuthorityRecordDigest, authority.recordDigest);
+  assert.equal(
+    compilation.package.projectReadSourceTreeProjectionDigest,
+    authority.sourceTree.projectionDigest,
+  );
+  assert.equal(
+    compilation.package.projectReadGitStateProjectionDigest,
+    authority.gitState.projectionDigest,
+  );
+  assert.equal(compilation.package.acceptanceCriticalVerificationPlanId, protectedPlanAuthority.id);
+  assert.equal(
+    compilation.package.acceptanceCriticalVerificationPlanDigest,
+    protectedPlanAuthority.digest,
+  );
+  assert.equal(compilation.manifest.projectReadAuthorityId, authority.id);
+  assert.equal(compilation.manifest.projectReadAuthorityRecordDigest, authority.recordDigest);
+  assert.equal(
+    compilation.manifest.projectReadSourceTreeProjectionDigest,
+    authority.sourceTree.projectionDigest,
+  );
+  assert.equal(
+    compilation.manifest.projectReadGitStateProjectionDigest,
+    authority.gitState.projectionDigest,
+  );
+  assert.equal(
+    compilation.manifest.acceptanceCriticalVerificationPlanId,
+    protectedPlanAuthority.id,
+  );
+  assert.equal(
+    compilation.manifest.acceptanceCriticalVerificationPlanDigest,
+    protectedPlanAuthority.digest,
+  );
+  const digests = new CanonicalJsonSha256DigestProvider();
+  assert.notEqual(
+    compilation.manifest.manifestDigest,
+    sha256Digest(
+      digests.digest(
+        contextManifestDigestProjection({
+          ...compilation.manifest,
+          projectReadGitStateProjectionDigest: digestB,
+        }),
+      ),
+    ),
+  );
+  assert.throws(
+    () => decodeContextPackage({ ...compilation.package, schemaVersion: 2 }),
+    /Historical Context schema/,
+  );
+  assert.throws(
+    () => decodeContextManifest({ ...compilation.manifest, schemaVersion: 2 }),
+    /Historical Context schema/,
+  );
+});
+
+void test('[I-006][I-019] project-read Context rejects incomplete or false record authority', () => {
+  const input = fixture(contextManifestId('context_project-read-invalid'));
+  const authority = projectReadAuthority(input);
+  assert.throws(
+    () =>
+      input.compiler.compile({
+        manifestId: input.manifestId,
+        createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+        goal: input.goal,
+        workflow: input.workflow,
+        attempt: input.attempt,
+        ...executionProfileAuthority,
+        policyBundleId: policyBundleId('policy_m1'),
+        policyBundleDigest: digestA,
+        projectReadAuthority: authority,
+      }),
+    /requires exact protected Plan authority/,
+  );
+  assert.throws(
+    () =>
+      input.compiler.compile({
+        manifestId: input.manifestId,
+        createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+        goal: input.goal,
+        workflow: input.workflow,
+        attempt: input.attempt,
+        ...executionProfileAuthority,
+        policyBundleId: policyBundleId('policy_m1'),
+        policyBundleDigest: digestA,
+        protectedPlan: protectedPlanAuthority,
+        projectReadAuthority: { ...authority, recordDigest: digestB },
+      }),
+    /exact Context inputs/,
+  );
+  assert.throws(
+    () =>
+      input.compiler.compile({
+        manifestId: input.manifestId,
+        createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+        goal: input.goal,
+        workflow: input.workflow,
+        attempt: input.attempt,
+        ...executionProfileAuthority,
+        policyBundleId: policyBundleId('policy_m1'),
+        policyBundleDigest: digestA,
+        protectedPlan: protectedPlanAuthority,
+        projectReadAuthority: authority,
+        selectedEntries: [
+          {
+            kind: ContextEntryKind.FACT,
+            sourceRef: 'fact_not-authorized-for-project-read-v5',
+            sourceRevision: '1',
+            authorityClass: ContextAuthorityClass.NON_AUTHORITATIVE_WORKING,
+            renderedContent: 'This source is outside the bounded project-read reopening.',
+          },
+        ],
+      }),
+    /cannot contain selected/,
+  );
+
+  const valid = input.compiler.compile({
+    manifestId: input.manifestId,
+    createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+    goal: input.goal,
+    workflow: input.workflow,
+    attempt: input.attempt,
+    ...executionProfileAuthority,
+    policyBundleId: policyBundleId('policy_m1'),
+    policyBundleDigest: digestA,
+    protectedPlan: protectedPlanAuthority,
+    projectReadAuthority: authority,
+  });
+  const incomplete = Object.fromEntries(
+    Object.entries(valid.package).filter(([key]) => key !== 'projectReadGitStateProjectionDigest'),
+  );
+  assert.throws(() => decodeContextPackage(incomplete), /complete candidate-free phase binding/);
+  const incompleteManifest = Object.fromEntries(
+    Object.entries(valid.manifest).filter(
+      ([key]) => key !== 'projectReadSourceTreeProjectionDigest',
+    ),
+  );
+  assert.throws(
+    () => decodeContextManifest(incompleteManifest),
+    /complete candidate-free phase binding/,
+  );
+  const withoutPlan = Object.fromEntries(
+    Object.entries(valid.package).filter(
+      ([key]) =>
+        key !== 'acceptanceCriticalVerificationPlanId' &&
+        key !== 'acceptanceCriticalVerificationPlanDigest',
+    ),
+  );
+  assert.throws(() => decodeContextPackage(withoutPlan), /requires exact protected Plan authority/);
+  const partialManifestPlan = Object.fromEntries(
+    Object.entries(valid.manifest).filter(
+      ([key]) => key !== 'acceptanceCriticalVerificationPlanDigest',
+    ),
+  );
+  assert.throws(
+    () => decodeContextManifest(partialManifestPlan),
+    /protected Plan pair is incomplete/,
+  );
+
+  const digests = new CanonicalJsonSha256DigestProvider();
+  const digest = (value: unknown) => sha256Digest(digests.digest(value));
+  const falseSourceTree = Object.freeze({
+    ...authority.sourceTree,
+    projectionDigest: digestB,
+  });
+  const falseSourceAuthorityWithStaleDigest = Object.freeze({
+    ...authority,
+    sourceTree: falseSourceTree,
+    snapshotTreeDigest: falseSourceTree.projectionDigest,
+  });
+  const falseSourceAuthority = Object.freeze({
+    ...falseSourceAuthorityWithStaleDigest,
+    recordDigest: digest(projectSourceReadAuthorityProjection(falseSourceAuthorityWithStaleDigest)),
+  });
+  assert.throws(
+    () =>
+      input.compiler.compile({
+        manifestId: input.manifestId,
+        createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+        goal: input.goal,
+        workflow: input.workflow,
+        attempt: input.attempt,
+        ...executionProfileAuthority,
+        policyBundleId: policyBundleId('policy_m1'),
+        policyBundleDigest: digestA,
+        protectedPlan: protectedPlanAuthority,
+        projectReadAuthority: falseSourceAuthority,
+      }),
+    /exact Context inputs/,
+  );
+  const falseGitState = Object.freeze({
+    ...authority.gitState,
+    headCommit: 'b'.repeat(40),
+  });
+  const falseGitAuthorityWithStaleDigest = Object.freeze({
+    ...authority,
+    gitState: falseGitState,
+  });
+  const falseGitAuthority = Object.freeze({
+    ...falseGitAuthorityWithStaleDigest,
+    recordDigest: digest(projectSourceReadAuthorityProjection(falseGitAuthorityWithStaleDigest)),
+  });
+  assert.throws(
+    () =>
+      input.compiler.compile({
+        manifestId: input.manifestId,
+        createdAt: isoTimestamp('2026-07-27T00:00:10.000Z'),
+        goal: input.goal,
+        workflow: input.workflow,
+        attempt: input.attempt,
+        ...executionProfileAuthority,
+        policyBundleId: policyBundleId('policy_m1'),
+        policyBundleDigest: digestA,
+        protectedPlan: protectedPlanAuthority,
+        projectReadAuthority: falseGitAuthority,
+      }),
+    /exact Context inputs/,
   );
 });
 

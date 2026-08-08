@@ -43,13 +43,16 @@ The corrected canonical assessment and independent review completed bounded
 M2.5 on 2026-08-06. M2.5.1 Slice 0 accepted the contract to reopen exactly one
 Goal-bound project-source Context class for candidate-free real Codex
 `DISCOVERY`/`PLAN` under
-[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md). That ADR
-is accepted but not implemented. It requires an immutable project-read
-record and exact Runtime-owned read-only selected-source snapshot bound
-atomically to Context/Attempt authority, phase-specific isolation and exact
-configuration/instruction manifests, an opaque phase activity-policy binding,
-source/snapshot checks before and after the Turn, and exact equality with the
-later Candidate Source projection. The
+[ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md). Slice 3 now
+implements the immutable project-read authority and workspace contracts, the
+exact Runtime-owned read-only selected-source snapshot adapter, and additive
+Context Package/Manifest version 5 compilation from the complete decoded
+project-read record. Version 5 binds the record ID/digest plus exact source-tree
+and Git-state projection digests, retains the protected Verification Plan
+ID/digest required from the first Start, and rejects selected/omitted sources,
+Candidate, or repair authority. Atomic Store persistence with the
+Context/Attempt, phase-specific external execution, source/snapshot checks, and
+real composition remain pending. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.
@@ -154,6 +157,10 @@ ContextPackage
     candidateGenerationId?
     acceptanceCriticalVerificationPlanId?
     acceptanceCriticalVerificationPlanDigest?
+    projectReadAuthorityId?
+    projectReadAuthorityRecordDigest?
+    projectReadSourceTreeProjectionDigest?
+    projectReadGitStateProjectionDigest?
   phaseObjective
   capabilityGrant
   goal
@@ -265,6 +272,10 @@ ContextManifest
   candidateDigest?
   acceptanceCriticalVerificationPlanId?
   acceptanceCriticalVerificationPlanDigest?
+  projectReadAuthorityId?
+  projectReadAuthorityRecordDigest?
+  projectReadSourceTreeProjectionDigest?
+  projectReadGitStateProjectionDigest?
   executionProfileId
   executionProfileDigest
   policyBundleId
@@ -675,11 +686,12 @@ Worker Context. See
 [ADR 0017](adr/0017-derive-boundary-authority-and-replay-evidence-by-audit-sequence.md).
 
 Accepted ADR 0043 is the narrower candidate-free project-read decision for
-M2.5.1. Its later implementation will add only its exact project-source
-record, Runtime-owned selected-source snapshot, and Context/configuration/
-instruction binding for real `DISCOVERY`/`PLAN`; the checkout remains
-unreadable and the decision does not reinterpret the M1 subset above or pull
-M3 Fact/Decision selection forward.
+M2.5.1. Slice 3 now adds its exact project-source record, Runtime-owned
+selected-source snapshot adapter, and Context Package/Manifest version 5
+binding for real `DISCOVERY`/`PLAN`; Store/Attempt atomic persistence and the
+configuration/instruction/dispatch composition remain pending. The checkout
+remains unreadable and the decision does not reinterpret the M1 subset above
+or pull M3 Fact/Decision selection forward.
 
 Code relevance retrieval, full Fact Graph traversal, and token-aware packing
 belong to later milestones. Slice 6 implements the repair Context and Thread

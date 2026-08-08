@@ -13,11 +13,15 @@ import {
   decodeContextManifest,
   decodeContextPackage,
   decodeGoalSnapshot,
+  decodeProjectSourceReadAuthorityRecord,
   decodeWorkflowSnapshot,
   deriveGoalStatus,
   executionProfileId,
   isoTimestamp,
   policyBundleId,
+  projectReadGitStateProjection,
+  projectReadSourceTreeProjection,
+  projectSourceReadAuthorityProjection,
   sha256Digest,
   type Attempt,
   type AcceptanceCriticalVerificationPlanId,
@@ -34,6 +38,7 @@ import {
   type IsoTimestamp,
   type PolicyBundleId,
   type PriorAttemptFeedback,
+  type ProjectSourceReadAuthorityRecord,
   type RepairContext,
   type Sha256Digest,
   type WorkerResponseContract,
@@ -64,6 +69,7 @@ export interface CompileContextInput {
     readonly id: AcceptanceCriticalVerificationPlanId;
     readonly digest: Sha256Digest;
   };
+  readonly projectReadAuthority?: ProjectSourceReadAuthorityRecord;
   readonly selectedEntries?: readonly ContextSourceInput[];
   readonly omissionDecisions?: readonly ContextOmissionDecision[];
   readonly candidate?: ContextCandidateBinding;
@@ -386,6 +392,14 @@ export function contextManifestDigestProjection(
           acceptanceCriticalVerificationPlanDigest:
             manifest.acceptanceCriticalVerificationPlanDigest,
         }),
+    ...(manifest.projectReadAuthorityId === undefined
+      ? {}
+      : {
+          projectReadAuthorityId: manifest.projectReadAuthorityId,
+          projectReadAuthorityRecordDigest: manifest.projectReadAuthorityRecordDigest,
+          projectReadSourceTreeProjectionDigest: manifest.projectReadSourceTreeProjectionDigest,
+          projectReadGitStateProjectionDigest: manifest.projectReadGitStateProjectionDigest,
+        }),
     capabilityGrantDigest: manifest.capabilityGrantDigest,
     responseContractDigest: manifest.responseContractDigest,
     ...(manifest.repairContextDigest === undefined
@@ -436,6 +450,10 @@ export class MinimalContextCompiler {
             id: acceptanceCriticalVerificationPlanId(rawInput.protectedPlan.id),
             digest: sha256Digest(rawInput.protectedPlan.digest),
           });
+    const projectReadAuthority =
+      rawInput.projectReadAuthority === undefined
+        ? undefined
+        : decodeProjectSourceReadAuthorityRecord(rawInput.projectReadAuthority);
 
     if (
       workflow.goalId !== goal.id ||
@@ -504,6 +522,54 @@ export class MinimalContextCompiler {
     const selectedEntries = canonicalEntries(rawInput.selectedEntries ?? []);
     const omissionDecisions = canonicalOmissions(rawInput.omissionDecisions ?? []);
     const contract = m1WorkerResponseContract(workflow.phase);
+    const digest = (value: unknown): Sha256Digest => sha256Digest(this.#digests.digest(value));
+    const capabilityGrantDigest = digest({
+      schemaVersion: 1,
+      capabilityGrant: attempt.capabilityGrant,
+    });
+    const responseContractDigest = digest({
+      schemaVersion: 1,
+      responseContract: contract,
+    });
+    if (
+      projectReadAuthority !== undefined &&
+      (candidateBinding !== undefined ||
+        repair !== undefined ||
+        selectedEntries.length !== 0 ||
+        omissionDecisions.length !== 0)
+    ) {
+      throw new TypeError(
+        'Project-read Context cannot contain selected, omitted, Candidate, or repair authority',
+      );
+    }
+    if (projectReadAuthority !== undefined && protectedPlan === undefined) {
+      throw new TypeError('Project-read Context requires exact protected Plan authority');
+    }
+    if (
+      projectReadAuthority !== undefined &&
+      (projectReadAuthority.goalId !== goal.id ||
+        projectReadAuthority.goalRevision !== goal.revision ||
+        projectReadAuthority.workflowId !== workflow.id ||
+        projectReadAuthority.workflowVersion !== workflow.version ||
+        projectReadAuthority.phase !== workflow.phase ||
+        projectReadAuthority.attemptId !== attempt.id ||
+        projectReadAuthority.normalizedProjectRoot !== goal.scope.projectPath ||
+        projectReadAuthority.policyBundleId !== policyIdentifier ||
+        projectReadAuthority.policyBundleDigest !== policyDigest ||
+        projectReadAuthority.executionProfileId !== profileIdentifier ||
+        projectReadAuthority.executionProfileDigest !== profileDigest ||
+        projectReadAuthority.capabilityGrantDigest !== capabilityGrantDigest ||
+        projectReadAuthority.responseContractDigest !== responseContractDigest ||
+        projectReadAuthority.sourceTree.projectionDigest !==
+          digest(projectReadSourceTreeProjection(projectReadAuthority.sourceTree)) ||
+        projectReadAuthority.gitState.projectionDigest !==
+          digest(projectReadGitStateProjection(projectReadAuthority.gitState)) ||
+        projectReadAuthority.recordDigest !==
+          digest(projectSourceReadAuthorityProjection(projectReadAuthority)) ||
+        projectReadAuthority.issuedAt > createdAt)
+    ) {
+      throw new TypeError('Project-read authority does not bind the exact Context inputs');
+    }
     const objective = m1PhaseObjective(workflow.phase);
     const includedSourceRefs = new Set<string>([
       goal.id,
@@ -518,7 +584,14 @@ export class MinimalContextCompiler {
     }
 
     const contextPackage = decodeContextPackage({
-      schemaVersion: protectedPlan === undefined ? (repair === undefined ? 2 : 3) : 4,
+      schemaVersion:
+        projectReadAuthority === undefined
+          ? protectedPlan === undefined
+            ? repair === undefined
+              ? 2
+              : 3
+            : 4
+          : 5,
       goalId: goal.id,
       goalRevision: goal.revision,
       workflowId: workflow.id,
@@ -556,6 +629,14 @@ export class MinimalContextCompiler {
             acceptanceCriticalVerificationPlanId: protectedPlan.id,
             acceptanceCriticalVerificationPlanDigest: protectedPlan.digest,
           }),
+      ...(projectReadAuthority === undefined
+        ? {}
+        : {
+            projectReadAuthorityId: projectReadAuthority.id,
+            projectReadAuthorityRecordDigest: projectReadAuthority.recordDigest,
+            projectReadSourceTreeProjectionDigest: projectReadAuthority.sourceTree.projectionDigest,
+            projectReadGitStateProjectionDigest: projectReadAuthority.gitState.projectionDigest,
+          }),
       responseContract: contract,
     });
 
@@ -564,16 +645,7 @@ export class MinimalContextCompiler {
       throw new RangeError('Required Context Package exceeds the configured hard byte budget');
     }
 
-    const digest = (value: unknown): Sha256Digest => sha256Digest(this.#digests.digest(value));
     const packageDigest = digest(contextPackage);
-    const capabilityGrantDigest = digest({
-      schemaVersion: 1,
-      capabilityGrant: contextPackage.capabilityGrant,
-    });
-    const responseContractDigest = digest({
-      schemaVersion: 1,
-      responseContract: contract,
-    });
     const repairContextDigest = repair === undefined ? undefined : digest(repair.repairContext);
 
     const synthesizedEntries = deriveContextManifestEntries(contextPackage, this.#digests);
@@ -602,6 +674,14 @@ export class MinimalContextCompiler {
         : {
             acceptanceCriticalVerificationPlanId: protectedPlan.id,
             acceptanceCriticalVerificationPlanDigest: protectedPlan.digest,
+          }),
+      ...(projectReadAuthority === undefined
+        ? {}
+        : {
+            projectReadAuthorityId: projectReadAuthority.id,
+            projectReadAuthorityRecordDigest: projectReadAuthority.recordDigest,
+            projectReadSourceTreeProjectionDigest: projectReadAuthority.sourceTree.projectionDigest,
+            projectReadGitStateProjectionDigest: projectReadAuthority.gitState.projectionDigest,
           }),
       capabilityGrantDigest,
       responseContractDigest,

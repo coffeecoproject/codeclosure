@@ -11,6 +11,7 @@ import {
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   attemptId,
   verificationObligationId,
@@ -29,6 +30,7 @@ import {
   type GoalRevision,
   type IsoTimestamp,
   type PolicyBundleId,
+  type ProjectSourceReadAuthorityId,
   type Sha256Digest,
   type VerificationObligationId,
   type WorkflowId,
@@ -164,7 +166,7 @@ export interface PriorAttemptFeedback {
 }
 
 export interface ContextPackage {
-  readonly schemaVersion: 2 | 3 | 4;
+  readonly schemaVersion: 2 | 3 | 4 | 5;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
   readonly workflowId: WorkflowId;
@@ -185,6 +187,10 @@ export interface ContextPackage {
   readonly policyBundleDigest: Sha256Digest;
   readonly acceptanceCriticalVerificationPlanId?: AcceptanceCriticalVerificationPlanId;
   readonly acceptanceCriticalVerificationPlanDigest?: Sha256Digest;
+  readonly projectReadAuthorityId?: ProjectSourceReadAuthorityId;
+  readonly projectReadAuthorityRecordDigest?: Sha256Digest;
+  readonly projectReadSourceTreeProjectionDigest?: Sha256Digest;
+  readonly projectReadGitStateProjectionDigest?: Sha256Digest;
   readonly responseContract: WorkerResponseContract;
 }
 
@@ -205,7 +211,7 @@ export interface ContextOmissionDecision {
 
 export interface ContextManifest {
   readonly id: ContextManifestId;
-  readonly schemaVersion: 2 | 3 | 4;
+  readonly schemaVersion: 2 | 3 | 4 | 5;
   readonly compilerVersion: string;
   readonly createdAt: IsoTimestamp;
   readonly goalId: GoalId;
@@ -222,6 +228,10 @@ export interface ContextManifest {
   readonly policyBundleDigest: Sha256Digest;
   readonly acceptanceCriticalVerificationPlanId?: AcceptanceCriticalVerificationPlanId;
   readonly acceptanceCriticalVerificationPlanDigest?: Sha256Digest;
+  readonly projectReadAuthorityId?: ProjectSourceReadAuthorityId;
+  readonly projectReadAuthorityRecordDigest?: Sha256Digest;
+  readonly projectReadSourceTreeProjectionDigest?: Sha256Digest;
+  readonly projectReadGitStateProjectionDigest?: Sha256Digest;
   readonly capabilityGrantDigest: Sha256Digest;
   readonly responseContractDigest: Sha256Digest;
   readonly repairContextDigest?: Sha256Digest;
@@ -352,6 +362,56 @@ function assertCandidateBinding(
   }
 }
 
+function assertProjectReadContextBinding(
+  value: Pick<
+    ContextPackage | ContextManifest,
+    | 'schemaVersion'
+    | 'phase'
+    | 'candidateGenerationId'
+    | 'candidateDigest'
+    | 'projectReadAuthorityId'
+    | 'projectReadAuthorityRecordDigest'
+    | 'projectReadSourceTreeProjectionDigest'
+    | 'projectReadGitStateProjectionDigest'
+  >,
+): void {
+  const binding = [
+    value.projectReadAuthorityId,
+    value.projectReadAuthorityRecordDigest,
+    value.projectReadSourceTreeProjectionDigest,
+    value.projectReadGitStateProjectionDigest,
+  ];
+  const presentCount = binding.filter((entry) => entry !== undefined).length;
+  if (value.schemaVersion !== 5) {
+    if (presentCount !== 0) {
+      throw new TypeError('Historical Context schema cannot contain project-read authority');
+    }
+    return;
+  }
+  const authorityId = value.projectReadAuthorityId;
+  const authorityRecordDigest = value.projectReadAuthorityRecordDigest;
+  const sourceTreeProjectionDigest = value.projectReadSourceTreeProjectionDigest;
+  const gitStateProjectionDigest = value.projectReadGitStateProjectionDigest;
+  if (
+    presentCount !== binding.length ||
+    authorityId === undefined ||
+    authorityRecordDigest === undefined ||
+    sourceTreeProjectionDigest === undefined ||
+    gitStateProjectionDigest === undefined ||
+    (value.phase !== WorkflowPhase.DISCOVERY && value.phase !== WorkflowPhase.PLAN) ||
+    value.candidateGenerationId !== undefined ||
+    value.candidateDigest !== undefined
+  ) {
+    throw new TypeError(
+      'Project-read Context v5 requires one complete candidate-free phase binding',
+    );
+  }
+  projectSourceReadAuthorityId(authorityId);
+  sha256Digest(authorityRecordDigest);
+  sha256Digest(sourceTreeProjectionDigest);
+  sha256Digest(gitStateProjectionDigest);
+}
+
 function assertRepairContextInvariant(repair: RepairContext): void {
   if (field(repair, 'schemaVersion') !== 1) {
     throw new TypeError('Repair Context schema is unsupported');
@@ -473,7 +533,8 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
   if (
     field(contextPackage, 'schemaVersion') !== 2 &&
     field(contextPackage, 'schemaVersion') !== 3 &&
-    field(contextPackage, 'schemaVersion') !== 4
+    field(contextPackage, 'schemaVersion') !== 4 &&
+    field(contextPackage, 'schemaVersion') !== 5
   ) {
     throw new TypeError('Context Package schema version is unsupported');
   }
@@ -498,6 +559,7 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
     throw new TypeError('Context Package phase is not dispatchable');
   }
   assertCandidateBinding(contextPackage.candidateGenerationId, contextPackage.candidateDigest);
+  assertProjectReadContextBinding(contextPackage);
   assertNonBlank(contextPackage.phaseObjective, 'Context phase objective');
   if (
     contextPackage.capabilityGrant.phase !== contextPackage.phase ||
@@ -570,7 +632,7 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
     if (protectedPlanId !== undefined) {
       throw new TypeError('Repair Context Package v3 cannot contain protected Plan authority');
     }
-  } else {
+  } else if (contextPackage.schemaVersion === 4) {
     if (protectedPlanId === undefined || protectedPlanDigest === undefined) {
       throw new TypeError('Protected Context Package v4 requires exact Plan authority');
     }
@@ -602,6 +664,23 @@ export function assertContextPackageInvariant(contextPackage: ContextPackage): v
         throw new TypeError('Protected repair Context does not bind its Candidate child');
       }
     }
+  } else {
+    if (protectedPlanId === undefined || protectedPlanDigest === undefined) {
+      throw new TypeError(
+        'Project-read Context Package v5 requires exact protected Plan authority',
+      );
+    }
+    acceptanceCriticalVerificationPlanId(protectedPlanId);
+    sha256Digest(protectedPlanDigest);
+    if (
+      contextPackage.repairContext !== undefined ||
+      contextPackage.priorAttemptFeedback !== undefined ||
+      contextPackage.selectedEntries.length !== 0
+    ) {
+      throw new TypeError(
+        'Project-read Context Package v5 cannot contain selected or repair authority',
+      );
+    }
   }
   assertWorkerResponseContractInvariant(contextPackage.responseContract);
 }
@@ -610,7 +689,8 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
   if (
     field(manifest, 'schemaVersion') !== 2 &&
     field(manifest, 'schemaVersion') !== 3 &&
-    field(manifest, 'schemaVersion') !== 4
+    field(manifest, 'schemaVersion') !== 4 &&
+    field(manifest, 'schemaVersion') !== 5
   ) {
     throw new TypeError('Context Manifest schema version is unsupported');
   }
@@ -629,6 +709,7 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
     throw new TypeError('Context Manifest phase is not dispatchable');
   }
   assertCandidateBinding(manifest.candidateGenerationId, manifest.candidateDigest);
+  assertProjectReadContextBinding(manifest);
   sha256Digest(manifest.policyBundleDigest);
   const protectedPlanId = manifest.acceptanceCriticalVerificationPlanId;
   const protectedPlanDigest = manifest.acceptanceCriticalVerificationPlanDigest;
@@ -660,7 +741,7 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
     if (protectedPlanId !== undefined) {
       throw new TypeError('Context Manifest v3 cannot contain protected Plan authority');
     }
-  } else {
+  } else if (manifest.schemaVersion === 4) {
     if (protectedPlanId === undefined || protectedPlanDigest === undefined) {
       throw new TypeError('Protected Context Manifest v4 requires exact Plan authority');
     }
@@ -685,6 +766,20 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
       }
       sha256Digest(manifest.repairContextDigest);
       sha256Digest(manifest.priorAttemptFeedbackDigest);
+    }
+  } else {
+    if (protectedPlanId === undefined || protectedPlanDigest === undefined) {
+      throw new TypeError(
+        'Project-read Context Manifest v5 requires exact protected Plan authority',
+      );
+    }
+    acceptanceCriticalVerificationPlanId(protectedPlanId);
+    sha256Digest(protectedPlanDigest);
+    if (
+      manifest.repairContextDigest !== undefined ||
+      manifest.priorAttemptFeedbackDigest !== undefined
+    ) {
+      throw new TypeError('Project-read Context Manifest v5 cannot contain repair authority');
     }
   }
   sha256Digest(manifest.packageDigest);
@@ -715,6 +810,18 @@ export function assertContextManifestInvariant(manifest: ContextManifest): void 
     }
   }
   assertCanonicalOrder(manifest.entries, contextEntryKey, 'Context Manifest entries');
+  if (
+    manifest.schemaVersion === 5 &&
+    (manifest.omissionDecisions.length !== 0 ||
+      manifest.entries.some(
+        (entry) =>
+          entry.kind !== ContextEntryKind.GOAL && entry.kind !== ContextEntryKind.SUCCESS_CRITERION,
+      ))
+  ) {
+    throw new TypeError(
+      'Project-read Context Manifest v5 cannot contain selected or omitted sources',
+    );
+  }
   if (
     goalEntries.length !== 1 ||
     goalEntries[0]?.sourceRef !== manifest.goalId ||
