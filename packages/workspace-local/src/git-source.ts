@@ -2,7 +2,13 @@ import { execFileSync } from 'node:child_process';
 import { lstatSync, realpathSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { digestCandidateWorkspaceValue } from '@codeclosure/runtime';
+import {
+  digestCandidateWorkspaceValue,
+  decodeProjectReadSnapshotGitState,
+  digestProjectReadWorkspaceValue,
+  decodeProjectReadSnapshotSourceTree,
+  type ProjectReadSnapshotMaterializationRequest,
+} from '@codeclosure/runtime';
 
 import {
   DEFAULT_CANDIDATE_WORKSPACE_BOUNDS,
@@ -272,6 +278,109 @@ export function captureSourceSnapshot(
     tree,
     git: gitMetadata(sourceRoot, paths, maximumGitBytes),
   });
+}
+
+type ProjectReadSourceTree = ProjectReadSnapshotMaterializationRequest['sourceTree'];
+type ProjectReadGitState = ProjectReadSnapshotMaterializationRequest['gitState'];
+
+export interface LocalProjectReadSourceSnapshot {
+  readonly sourceTree: ProjectReadSourceTree;
+  readonly gitState: ProjectReadGitState;
+}
+
+export function captureProjectReadSourceSnapshotFromRoot(
+  sourceRootValue: string,
+  bounds: CandidateWorkspaceBounds,
+): LocalProjectReadSourceSnapshot {
+  const sourceRoot = resolveSourceRoot(sourceRootValue);
+  assertSupportedWorkingTreeEntries(sourceRoot, bounds);
+  const selectedPaths = selectedExistingPaths(sourceRoot, bounds);
+  const candidateTree = createTreeManifestFromPaths(
+    sourceRoot,
+    selectedPaths,
+    'candidate-source-tree-v1',
+    bounds,
+  );
+  const sourceTreeWithoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: 'codeclosure-project-read-source-tree-v1' as const,
+    entries: Object.freeze(
+      candidateTree.entries.map((entry) =>
+        Object.freeze({
+          schemaVersion: 1 as const,
+          path: entry.path,
+          mode: entry.mode,
+          size: entry.size,
+          contentDigest: entry.contentDigest,
+        }),
+      ),
+    ),
+    fileCount: candidateTree.fileCount,
+    totalBytes: candidateTree.totalBytes,
+  });
+  const sourceTree = decodeProjectReadSnapshotSourceTree({
+    ...sourceTreeWithoutDigest,
+    projectionDigest: digestProjectReadWorkspaceValue(sourceTreeWithoutDigest),
+  });
+
+  const candidateGit = gitMetadata(
+    sourceRoot,
+    selectedPaths,
+    Math.max(bounds.maximumTotalBytes, 1024 * 1024),
+  );
+  const gitStateWithoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: 'codeclosure-project-read-git-state-v1' as const,
+    sourceProjectRoot: candidateGit.sourceProjectRoot,
+    repositoryControlRootIdentity: candidateGit.gitCommonDirectory,
+    headCommit: candidateGit.headCommit,
+    selectedPathSetDigest: candidateGit.selectedPathSetDigest,
+    stagedIndexManifestDigest: candidateGit.stagedIndexManifestDigest,
+    porcelainV2Digest: candidateGit.porcelainV2Digest,
+  });
+  const gitState = decodeProjectReadSnapshotGitState({
+    ...gitStateWithoutDigest,
+    projectionDigest: digestProjectReadWorkspaceValue(gitStateWithoutDigest),
+  });
+  return Object.freeze({ sourceTree, gitState });
+}
+
+export function captureProjectReadSourceSnapshot(
+  request: ProjectReadSnapshotMaterializationRequest,
+  bounds: CandidateWorkspaceBounds,
+): LocalProjectReadSourceSnapshot {
+  const sourceRoot = resolveSourceRoot(request.resolvedProjectRoot);
+  if (sourceRoot !== request.resolvedProjectRoot) {
+    throw new LocalCandidateWorkspaceError(
+      LocalCandidateWorkspaceFailureCode.CONTAINMENT_VIOLATION,
+      'Project-read source root does not match its exact resolved identity',
+    );
+  }
+  const snapshot = captureProjectReadSourceSnapshotFromRoot(sourceRoot, bounds);
+  const selectedPaths = snapshot.sourceTree.entries.map((entry) => entry.path);
+  const expectedPaths = request.sourceTree.entries.map((entry) => entry.path);
+  if (JSON.stringify(selectedPaths) !== JSON.stringify(expectedPaths)) {
+    throw new LocalCandidateWorkspaceError(
+      LocalCandidateWorkspaceFailureCode.SOURCE_DRIFT,
+      'Project-read selected source paths do not match the admitted projection',
+    );
+  }
+  return snapshot;
+}
+
+export function assertProjectReadSourceSnapshotMatchesRequest(
+  snapshot: LocalProjectReadSourceSnapshot,
+  request: ProjectReadSnapshotMaterializationRequest,
+): void {
+  if (
+    JSON.stringify(snapshot.sourceTree) !== JSON.stringify(request.sourceTree) ||
+    JSON.stringify(snapshot.gitState) !== JSON.stringify(request.gitState)
+  ) {
+    throw new LocalCandidateWorkspaceError(
+      LocalCandidateWorkspaceFailureCode.SOURCE_DRIFT,
+      'Project-read source tree or Git state differs from the admitted projection',
+    );
+  }
 }
 
 export function observeLocalCandidateSourceIdentity(

@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import {
   PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+  decodeProjectSourceReadAuthorityRecord,
   attemptId,
   externalExecutionId,
   isoTimestamp,
@@ -16,6 +17,7 @@ import {
   type ProjectReadSnapshotId,
   type ProjectReadWorkspaceAuthoritySnapshotId,
   type ProjectReadWorkspaceObservationId,
+  type ProjectSourceReadAuthorityRecord,
   type ProjectSourceReadAuthorityId,
   type Sha256Digest,
 } from '@codeclosure/domain';
@@ -40,6 +42,35 @@ export const ProjectReadWorkspaceClassification = {
 } as const;
 export type ProjectReadWorkspaceClassification =
   (typeof ProjectReadWorkspaceClassification)[keyof typeof ProjectReadWorkspaceClassification];
+
+export interface ProjectReadOwnershipMarkerV1 {
+  readonly schemaVersion: 1;
+  readonly profile: typeof PROJECT_READ_OWNERSHIP_MARKER_PROFILE;
+  readonly projectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly snapshotId: ProjectReadSnapshotId;
+  readonly workspaceRootIdentity: string;
+  readonly snapshotLeafRealpath: string;
+  readonly snapshotTreeDigest: Sha256Digest;
+  readonly markerDigest: Sha256Digest;
+}
+
+export type ProjectReadOwnershipMarker = ProjectReadOwnershipMarkerV1;
+
+export interface ProjectReadSnapshotMaterializationReceiptV1 {
+  readonly schemaVersion: 1;
+  readonly projectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly authorityRecordDigest: Sha256Digest;
+  readonly snapshotId: ProjectReadSnapshotId;
+  readonly workspaceRootIdentity: string;
+  readonly snapshotLeafRealpath: string;
+  readonly snapshotTreeDigest: Sha256Digest;
+  readonly ownershipMarkerProfile: typeof PROJECT_READ_OWNERSHIP_MARKER_PROFILE;
+  readonly ownershipMarkerDigest: Sha256Digest;
+  readonly observedAt: IsoTimestamp;
+  readonly receiptDigest: Sha256Digest;
+}
+
+export type ProjectReadSnapshotMaterializationReceipt = ProjectReadSnapshotMaterializationReceiptV1;
 
 export interface ProjectReadWorkspaceExpectedSnapshotV1 {
   readonly attemptId: AttemptId;
@@ -102,6 +133,35 @@ const boundedStringSchema = z
   );
 const digestSchema = z.string();
 const positiveSafeIntegerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+
+const ownershipMarkerSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profile: z.literal(PROJECT_READ_OWNERSHIP_MARKER_PROFILE),
+    projectReadAuthorityId: z.string(),
+    snapshotId: z.string(),
+    workspaceRootIdentity: boundedStringSchema,
+    snapshotLeafRealpath: boundedStringSchema,
+    snapshotTreeDigest: digestSchema,
+    markerDigest: digestSchema,
+  })
+  .strict();
+
+const materializationReceiptSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectReadAuthorityId: z.string(),
+    authorityRecordDigest: digestSchema,
+    snapshotId: z.string(),
+    workspaceRootIdentity: boundedStringSchema,
+    snapshotLeafRealpath: boundedStringSchema,
+    snapshotTreeDigest: digestSchema,
+    ownershipMarkerProfile: z.literal(PROJECT_READ_OWNERSHIP_MARKER_PROFILE),
+    ownershipMarkerDigest: digestSchema,
+    observedAt: z.string(),
+    receiptDigest: digestSchema,
+  })
+  .strict();
 
 const expectedSnapshotSchema = z
   .object({
@@ -216,6 +276,158 @@ function sameOrderedStrings(left: readonly string[], right: readonly string[]): 
 
 export function digestProjectReadWorkspaceValue(value: unknown): Sha256Digest {
   return digests.digest(value);
+}
+
+export function projectReadOwnershipMarkerProjection(
+  marker: Omit<ProjectReadOwnershipMarker, 'markerDigest'>,
+): unknown {
+  return {
+    schemaVersion: marker.schemaVersion,
+    profile: marker.profile,
+    projectReadAuthorityId: marker.projectReadAuthorityId,
+    snapshotId: marker.snapshotId,
+    workspaceRootIdentity: marker.workspaceRootIdentity,
+    snapshotLeafRealpath: marker.snapshotLeafRealpath,
+    snapshotTreeDigest: marker.snapshotTreeDigest,
+  };
+}
+
+export function decodeProjectReadOwnershipMarker(value: unknown): ProjectReadOwnershipMarker {
+  const parsed = ownershipMarkerSchema.parse(value);
+  const workspaceRootIdentity = exactAbsolutePath(
+    parsed.workspaceRootIdentity,
+    'Project-read ownership-marker root',
+  );
+  const snapshotLeafRealpath = exactAbsolutePath(
+    parsed.snapshotLeafRealpath,
+    'Project-read ownership-marker leaf',
+  );
+  assertOwnedLeaf(workspaceRootIdentity, snapshotLeafRealpath);
+  const withoutDigest = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    profile: parsed.profile,
+    projectReadAuthorityId: projectSourceReadAuthorityId(parsed.projectReadAuthorityId),
+    snapshotId: projectReadSnapshotId(parsed.snapshotId),
+    workspaceRootIdentity,
+    snapshotLeafRealpath,
+    snapshotTreeDigest: sha256Digest(parsed.snapshotTreeDigest),
+  });
+  const markerDigest = sha256Digest(parsed.markerDigest);
+  if (
+    markerDigest !==
+    digestProjectReadWorkspaceValue(projectReadOwnershipMarkerProjection(withoutDigest))
+  ) {
+    throw new TypeError('Project-read ownership-marker digest is inconsistent');
+  }
+  return Object.freeze({ ...withoutDigest, markerDigest });
+}
+
+export function createProjectReadOwnershipMarker(
+  marker: Omit<ProjectReadOwnershipMarker, 'markerDigest'>,
+): ProjectReadOwnershipMarker {
+  return decodeProjectReadOwnershipMarker({
+    ...marker,
+    markerDigest: digestProjectReadWorkspaceValue(projectReadOwnershipMarkerProjection(marker)),
+  });
+}
+
+export function createProjectReadOwnershipMarkerForRecord(
+  value: ProjectSourceReadAuthorityRecord,
+): ProjectReadOwnershipMarker {
+  const record = decodeProjectSourceReadAuthorityRecord(value);
+  const marker = createProjectReadOwnershipMarker({
+    schemaVersion: 1,
+    profile: record.ownershipMarkerProfile,
+    projectReadAuthorityId: record.id,
+    snapshotId: record.snapshotId,
+    workspaceRootIdentity: record.workspaceRootIdentity,
+    snapshotLeafRealpath: record.snapshotLeafRealpath,
+    snapshotTreeDigest: record.snapshotTreeDigest,
+  });
+  if (marker.markerDigest !== record.ownershipMarkerDigest) {
+    throw new TypeError('Project-read authority record does not bind its canonical marker');
+  }
+  return marker;
+}
+
+export function projectReadSnapshotMaterializationReceiptProjection(
+  receipt: Omit<ProjectReadSnapshotMaterializationReceipt, 'receiptDigest'>,
+): unknown {
+  return {
+    schemaVersion: receipt.schemaVersion,
+    projectReadAuthorityId: receipt.projectReadAuthorityId,
+    authorityRecordDigest: receipt.authorityRecordDigest,
+    snapshotId: receipt.snapshotId,
+    workspaceRootIdentity: receipt.workspaceRootIdentity,
+    snapshotLeafRealpath: receipt.snapshotLeafRealpath,
+    snapshotTreeDigest: receipt.snapshotTreeDigest,
+    ownershipMarkerProfile: receipt.ownershipMarkerProfile,
+    ownershipMarkerDigest: receipt.ownershipMarkerDigest,
+    observedAt: receipt.observedAt,
+  };
+}
+
+export function decodeProjectReadSnapshotMaterializationReceipt(
+  value: unknown,
+): ProjectReadSnapshotMaterializationReceipt {
+  const parsed = materializationReceiptSchema.parse(value);
+  const workspaceRootIdentity = exactAbsolutePath(
+    parsed.workspaceRootIdentity,
+    'Project-read materialization receipt root',
+  );
+  const snapshotLeafRealpath = exactAbsolutePath(
+    parsed.snapshotLeafRealpath,
+    'Project-read materialization receipt leaf',
+  );
+  assertOwnedLeaf(workspaceRootIdentity, snapshotLeafRealpath);
+  const withoutDigest = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    projectReadAuthorityId: projectSourceReadAuthorityId(parsed.projectReadAuthorityId),
+    authorityRecordDigest: sha256Digest(parsed.authorityRecordDigest),
+    snapshotId: projectReadSnapshotId(parsed.snapshotId),
+    workspaceRootIdentity,
+    snapshotLeafRealpath,
+    snapshotTreeDigest: sha256Digest(parsed.snapshotTreeDigest),
+    ownershipMarkerProfile: parsed.ownershipMarkerProfile,
+    ownershipMarkerDigest: sha256Digest(parsed.ownershipMarkerDigest),
+    observedAt: isoTimestamp(parsed.observedAt),
+  });
+  const receiptDigest = sha256Digest(parsed.receiptDigest);
+  if (
+    receiptDigest !==
+    digestProjectReadWorkspaceValue(
+      projectReadSnapshotMaterializationReceiptProjection(withoutDigest),
+    )
+  ) {
+    throw new TypeError('Project-read materialization receipt digest is inconsistent');
+  }
+  return Object.freeze({ ...withoutDigest, receiptDigest });
+}
+
+export function createProjectReadSnapshotMaterializationReceipt(
+  value: ProjectSourceReadAuthorityRecord,
+  observedAtValue: string,
+): ProjectReadSnapshotMaterializationReceipt {
+  const record = decodeProjectSourceReadAuthorityRecord(value);
+  createProjectReadOwnershipMarkerForRecord(record);
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    projectReadAuthorityId: record.id,
+    authorityRecordDigest: record.recordDigest,
+    snapshotId: record.snapshotId,
+    workspaceRootIdentity: record.workspaceRootIdentity,
+    snapshotLeafRealpath: record.snapshotLeafRealpath,
+    snapshotTreeDigest: record.snapshotTreeDigest,
+    ownershipMarkerProfile: record.ownershipMarkerProfile,
+    ownershipMarkerDigest: record.ownershipMarkerDigest,
+    observedAt: isoTimestamp(observedAtValue),
+  });
+  return decodeProjectReadSnapshotMaterializationReceipt({
+    ...withoutDigest,
+    receiptDigest: digestProjectReadWorkspaceValue(
+      projectReadSnapshotMaterializationReceiptProjection(withoutDigest),
+    ),
+  });
 }
 
 export function projectReadWorkspaceAuthoritySnapshotProjection(

@@ -11,7 +11,12 @@ import {
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { TextDecoder } from 'node:util';
 
-import { digestCandidateWorkspaceValue } from '@codeclosure/runtime';
+import {
+  digestCandidateWorkspaceValue,
+  digestProjectReadWorkspaceValue,
+  decodeProjectReadSnapshotSourceTree,
+  type ProjectReadSnapshotMaterializationRequest,
+} from '@codeclosure/runtime';
 
 import {
   LocalCandidateWorkspaceError,
@@ -345,6 +350,40 @@ export function scanCandidateTree(
     'candidate-tree-manifest-v1',
     bounds,
   );
+}
+
+export function scanProjectReadTree(
+  root: string,
+  bounds: CandidateWorkspaceBounds,
+): ProjectReadSnapshotMaterializationRequest['sourceTree'] {
+  const realRoot = assertRealDirectory(root, 'Project-read snapshot root');
+  const manifest = createTreeManifestFromPaths(
+    realRoot,
+    walkCandidate(realRoot, bounds),
+    'candidate-tree-manifest-v1',
+    bounds,
+  );
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: 'codeclosure-project-read-source-tree-v1' as const,
+    entries: Object.freeze(
+      manifest.entries.map((entry) =>
+        Object.freeze({
+          schemaVersion: 1 as const,
+          path: entry.path,
+          mode: entry.mode,
+          size: entry.size,
+          contentDigest: entry.contentDigest,
+        }),
+      ),
+    ),
+    fileCount: manifest.fileCount,
+    totalBytes: manifest.totalBytes,
+  });
+  return decodeProjectReadSnapshotSourceTree({
+    ...withoutDigest,
+    projectionDigest: digestProjectReadWorkspaceValue(withoutDigest),
+  });
 }
 
 export function readManifestEntryBytes(

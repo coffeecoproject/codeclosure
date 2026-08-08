@@ -4,6 +4,8 @@ import type {
   CandidateWorkspaceLeaseAuthorityPort,
   CandidateWorkspaceLeasePort,
   CandidateSourcePort,
+  ProjectReadSnapshotMaterializationReceipt,
+  ProjectReadWorkspacePort,
 } from '@codeclosure/runtime';
 
 export interface CandidateWorkspaceBounds {
@@ -97,3 +99,48 @@ export class LocalCandidateWorkspaceError extends Error {
     this.code = code;
   }
 }
+
+export interface LocalProjectReadWorkspaceOptions {
+  /** Trusted roots that project-read storage must never overlap. */
+  readonly authorityRoots: readonly string[];
+  readonly bounds?: CandidateWorkspaceBounds;
+  /** Stable trusted composition identity recorded in root ownership. */
+  readonly ownerId: string;
+  /** Dedicated Runtime-owned project-read root, separate from Candidate storage. */
+  readonly workspaceRoot: string;
+}
+
+export interface LocalProjectReadWorkspace extends ProjectReadWorkspacePort {
+  snapshotLeafFor(snapshotId: string): string;
+  readonly workspaceRootIdentity: string;
+}
+
+export const LocalProjectReadWorkspaceFailureCode = {
+  AUTHORITY_SNAPSHOT_CONFLICT: 'AUTHORITY_SNAPSHOT_CONFLICT',
+  BOUNDS_EXCEEDED: 'BOUNDS_EXCEEDED',
+  CLEANUP_NOT_AUTHORIZED: 'CLEANUP_NOT_AUTHORIZED',
+  CONTAINMENT_VIOLATION: 'CONTAINMENT_VIOLATION',
+  COORDINATION_CONFLICT: 'COORDINATION_CONFLICT',
+  FILESYSTEM_FAILURE: 'FILESYSTEM_FAILURE',
+  GIT_INVOCATION_FAILED: 'GIT_INVOCATION_FAILED',
+  INVALID_CONFIGURATION: 'INVALID_CONFIGURATION',
+  INVALID_MARKER: 'INVALID_MARKER',
+  SOURCE_DRIFT: 'SOURCE_DRIFT',
+  SOURCE_UNSUPPORTED: 'SOURCE_UNSUPPORTED',
+  STALE_AUTHORITY_SNAPSHOT: 'STALE_AUTHORITY_SNAPSHOT',
+  WORKSPACE_CONFLICT: 'WORKSPACE_CONFLICT',
+} as const;
+export type LocalProjectReadWorkspaceFailureCode =
+  (typeof LocalProjectReadWorkspaceFailureCode)[keyof typeof LocalProjectReadWorkspaceFailureCode];
+
+export class LocalProjectReadWorkspaceError extends Error {
+  public readonly code: LocalProjectReadWorkspaceFailureCode;
+
+  public constructor(code: LocalProjectReadWorkspaceFailureCode, message: string) {
+    super(message);
+    this.name = 'LocalProjectReadWorkspaceError';
+    this.code = code;
+  }
+}
+
+export type LocalProjectReadMaterializationResult = ProjectReadSnapshotMaterializationReceipt;
