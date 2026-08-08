@@ -81,6 +81,7 @@ import {
   decodeRecoveryWorkflowEvent,
   decodeCloseoutRecord,
   decodePendingIssueSet,
+  decodeProjectSourceReadAuthorityRecord,
   decodeContextManifest,
   decodeAttemptEvent,
   decodeGoalSnapshot,
@@ -141,6 +142,10 @@ import {
   isTerminalAttemptWorkflowRunStatusAuthorized,
   policyBundleId,
   policyBundleProjection,
+  projectReadGitStateProjection,
+  projectReadSourceTreeProjection,
+  projectSourceReadAuthorityId,
+  projectSourceReadAuthorityProjection,
   protectedAssetManifestProjection,
   workflowPolicyBindingProjection,
   recoveryReconciliationId,
@@ -214,6 +219,8 @@ import {
   type IsoTimestamp,
   type PolicyBundle,
   type PolicyBundleId,
+  type ProjectSourceReadAuthorityId,
+  type ProjectSourceReadAuthorityRecord,
   type Sha256Digest,
   type WorkflowEvent,
   type WorkflowId,
@@ -392,6 +399,7 @@ import {
   decodeEvidenceSetRow,
   decodePendingIssueRow,
   decodeProcessedCommand,
+  decodeProjectSourceReadAuthorityRow,
   decodeWorkflow,
   decodeWorkerDispatchClaimRow,
   decodeWorkerEventReceiptRow,
@@ -432,6 +440,8 @@ export const WorkerTransactionStep = {
   AFTER_WORKFLOW_POLICY_BINDING_WRITE: 'AFTER_WORKFLOW_POLICY_BINDING_WRITE',
   AFTER_PROTECTED_VERIFICATION_PLAN_AUDIT_WRITE: 'AFTER_PROTECTED_VERIFICATION_PLAN_AUDIT_WRITE',
   AFTER_PROTECTED_VERIFICATION_PLAN_WRITE: 'AFTER_PROTECTED_VERIFICATION_PLAN_WRITE',
+  AFTER_PROJECT_READ_AUTHORITY_AUDIT_WRITE: 'AFTER_PROJECT_READ_AUTHORITY_AUDIT_WRITE',
+  AFTER_PROJECT_READ_AUTHORITY_WRITE: 'AFTER_PROJECT_READ_AUTHORITY_WRITE',
 } as const;
 export type WorkerTransactionStep =
   (typeof WorkerTransactionStep)[keyof typeof WorkerTransactionStep];
@@ -604,6 +614,17 @@ const authorityIdentifierRowSchema = z
     id: z.string(),
   })
   .strict();
+
+const projectReadContextAuthorityRowSchema = z
+  .object({
+    id: z.string(),
+    project_read_authority_id: z.string(),
+  })
+  .strict();
+
+const projectReadAuditSequenceRowSchema = z.looseObject({
+  audit_sequence: z.number().int().positive(),
+});
 
 const sqliteSchemaObjectRowsSchema = z.array(
   z
@@ -1534,6 +1555,10 @@ function validateRecordCommandRejection(rawInput: RecordCommandRejection): Recor
   });
 }
 
+function isProtectedContextManifest(manifest: ContextManifest): boolean {
+  return manifest.schemaVersion === 4 || manifest.schemaVersion === 5;
+}
+
 function validateCommitContextBoundAttemptStart(
   rawInput: CommitContextBoundAttemptStart,
 ): CommitContextBoundAttemptStart {
@@ -1557,6 +1582,14 @@ function validateCommitContextBoundAttemptStart(
     rawInput.acceptanceCriticalVerificationPlanAuditEventId === undefined
       ? undefined
       : auditEventId(rawInput.acceptanceCriticalVerificationPlanAuditEventId);
+  const projectReadAuthority =
+    rawInput.projectReadAuthority === undefined
+      ? undefined
+      : decodeProjectSourceReadAuthorityRecord(rawInput.projectReadAuthority);
+  const projectReadAuthorityAuditEventId =
+    rawInput.projectReadAuthorityAuditEventId === undefined
+      ? undefined
+      : auditEventId(rawInput.projectReadAuthorityAuditEventId);
   if (
     input.event.type !== 'ATTEMPT_STARTED' ||
     input.event.attempt.contextManifestId !== contextManifest.id ||
@@ -1578,11 +1611,33 @@ function validateCommitContextBoundAttemptStart(
     (input.event.attempt.sequence === 1) !== (policyBindingAuditEventId !== undefined) ||
     (input.event.attempt.sequence === 1) !== (executionProfileBindingAuditEventId !== undefined) ||
     (protectedPlan === undefined) !== (protectedPlanAuditEventId === undefined) ||
-    (contextManifest.schemaVersion === 4) !==
+    isProtectedContextManifest(contextManifest) !==
       (contextManifest.acceptanceCriticalVerificationPlanId !== undefined) ||
-    (input.event.attempt.sequence === 1 && contextManifest.schemaVersion === 4) !==
+    (input.event.attempt.sequence === 1 && isProtectedContextManifest(contextManifest)) !==
       (protectedPlan !== undefined) ||
     (input.event.attempt.sequence !== 1 && protectedPlan !== undefined) ||
+    (projectReadAuthority === undefined) !== (projectReadAuthorityAuditEventId === undefined) ||
+    (contextManifest.schemaVersion === 5) !== (projectReadAuthority !== undefined) ||
+    (projectReadAuthority !== undefined &&
+      (projectReadAuthority.id !== contextManifest.projectReadAuthorityId ||
+        projectReadAuthority.recordDigest !== contextManifest.projectReadAuthorityRecordDigest ||
+        projectReadAuthority.sourceTree.projectionDigest !==
+          contextManifest.projectReadSourceTreeProjectionDigest ||
+        projectReadAuthority.gitState.projectionDigest !==
+          contextManifest.projectReadGitStateProjectionDigest ||
+        projectReadAuthority.goalId !== contextManifest.goalId ||
+        projectReadAuthority.goalRevision !== contextManifest.goalRevision ||
+        projectReadAuthority.workflowId !== contextManifest.workflowId ||
+        projectReadAuthority.workflowVersion !== contextManifest.workflowVersion ||
+        projectReadAuthority.phase !== contextManifest.phase ||
+        projectReadAuthority.attemptId !== contextManifest.attemptId ||
+        projectReadAuthority.policyBundleId !== contextManifest.policyBundleId ||
+        projectReadAuthority.policyBundleDigest !== contextManifest.policyBundleDigest ||
+        projectReadAuthority.executionProfileId !== contextManifest.executionProfileId ||
+        projectReadAuthority.executionProfileDigest !== contextManifest.executionProfileDigest ||
+        projectReadAuthority.capabilityGrantDigest !== contextManifest.capabilityGrantDigest ||
+        projectReadAuthority.responseContractDigest !== contextManifest.responseContractDigest ||
+        projectReadAuthority.issuedAt > contextManifest.createdAt)) ||
     (protectedPlan !== undefined &&
       (protectedPlan.id !== contextManifest.acceptanceCriticalVerificationPlanId ||
         protectedPlan.planDigest !== contextManifest.acceptanceCriticalVerificationPlanDigest ||
@@ -1618,6 +1673,8 @@ function validateCommitContextBoundAttemptStart(
     ...(protectedPlanAuditEventId === undefined
       ? {}
       : { acceptanceCriticalVerificationPlanAuditEventId: protectedPlanAuditEventId }),
+    ...(projectReadAuthority === undefined ? {} : { projectReadAuthority }),
+    ...(projectReadAuthorityAuditEventId === undefined ? {} : { projectReadAuthorityAuditEventId }),
   });
 }
 
@@ -2399,6 +2456,7 @@ export class SqliteControlStore
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
       store.assertRetainedProtectedVerificationAuthorityClosure();
+      store.assertRetainedProjectReadAuthorityClosure();
       store.assertRetainedIntakeAuthorityClosure();
       return store;
     } catch (error) {
@@ -2458,6 +2516,7 @@ export class SqliteControlStore
       store.assertRetainedRecoveryAuthorityClosure();
       store.assertRetainedAcceptanceAuthorityClosure();
       store.assertRetainedProtectedVerificationAuthorityClosure();
+      store.assertRetainedProjectReadAuthorityClosure();
       store.assertRetainedIntakeAuthorityClosure();
       store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
       isolationLease.assertCurrent();
@@ -6554,8 +6613,9 @@ export class SqliteControlStore
     const manifestIdentifier = contextManifestId(rawContextManifestIdentifier);
     const hasRepair = this.hasTable('repair_context_manifest_extensions');
     const hasProtected = this.hasTable('protected_context_manifest_extensions');
+    const hasProjectRead = this.hasTable('project_read_context_manifest_extensions');
     const row =
-      hasRepair || hasProtected
+      hasRepair || hasProtected || hasProjectRead
         ? this.#database
             .prepare(
               `SELECT context.*,
@@ -6564,10 +6624,18 @@ export class SqliteControlStore
                     repair.prior_attempt_feedback_digest,
                     protected.logical_schema_version AS protected_logical_schema_version,
                     protected.verification_plan_id,
-                    protected.verification_plan_digest
+                    protected.verification_plan_digest,
+                    project_read.logical_schema_version AS project_read_logical_schema_version,
+                    project_read.project_read_authority_id,
+                    project_read.project_read_authority_record_digest,
+                    project_read.source_tree_projection_digest AS project_read_source_tree_projection_digest,
+                    project_read.git_state_projection_digest AS project_read_git_state_projection_digest,
+                    project_read.verification_plan_id AS project_read_verification_plan_id,
+                    project_read.verification_plan_digest AS project_read_verification_plan_digest
                FROM context_manifests AS context
                ${hasRepair ? 'LEFT JOIN repair_context_manifest_extensions AS repair ON repair.context_manifest_id = context.id' : 'LEFT JOIN (SELECT NULL AS context_manifest_id, NULL AS logical_schema_version, NULL AS repair_context_digest, NULL AS prior_attempt_feedback_digest) AS repair ON 0'}
                ${hasProtected ? 'LEFT JOIN protected_context_manifest_extensions AS protected ON protected.context_manifest_id = context.id' : 'LEFT JOIN (SELECT NULL AS context_manifest_id, NULL AS logical_schema_version, NULL AS verification_plan_id, NULL AS verification_plan_digest) AS protected ON 0'}
+               ${hasProjectRead ? 'LEFT JOIN project_read_context_manifest_extensions AS project_read ON project_read.context_manifest_id = context.id' : 'LEFT JOIN (SELECT NULL AS context_manifest_id, NULL AS logical_schema_version, NULL AS project_read_authority_id, NULL AS project_read_authority_record_digest, NULL AS source_tree_projection_digest, NULL AS git_state_projection_digest, NULL AS verification_plan_id, NULL AS verification_plan_digest) AS project_read ON 0'}
               WHERE context.id = ?`,
             )
             .get(manifestIdentifier)
@@ -6575,6 +6643,87 @@ export class SqliteControlStore
             .prepare('SELECT * FROM context_manifests WHERE id = ?')
             .get(manifestIdentifier);
     return row === undefined ? undefined : this.decodeVerifiedContextManifestRow(row);
+  }
+
+  public getProjectSourceReadAuthority(
+    rawProjectReadAuthorityIdentifier: ProjectSourceReadAuthorityId,
+  ): ProjectSourceReadAuthorityRecord | undefined {
+    this.assertOpen();
+    const identifier = projectSourceReadAuthorityId(rawProjectReadAuthorityIdentifier);
+    if (!this.hasTable('project_source_read_authorities')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare('SELECT * FROM project_source_read_authorities WHERE id = ?')
+      .get(identifier);
+    if (row === undefined) {
+      return undefined;
+    }
+    const retainedAuditSequence = projectReadAuditSequenceRowSchema.parse(row).audit_sequence;
+    const record = decodeProjectSourceReadAuthorityRow(row);
+    const { projectionDigest: sourceTreeDigest, ...sourceTree } = record.sourceTree;
+    const { projectionDigest: gitStateDigest, ...gitState } = record.gitState;
+    const { recordDigest, ...semanticRecord } = record;
+    if (
+      sourceTreeDigest !==
+        sha256Digest(
+          canonicalAuthorityDigests.digest(projectReadSourceTreeProjection(sourceTree)),
+        ) ||
+      gitStateDigest !==
+        sha256Digest(canonicalAuthorityDigests.digest(projectReadGitStateProjection(gitState))) ||
+      recordDigest !==
+        sha256Digest(
+          canonicalAuthorityDigests.digest(
+            projectSourceReadAuthorityProjection(Object.freeze(semanticRecord)),
+          ),
+        )
+    ) {
+      throw new StoreInvariantError(
+        `Project-source read authority ${record.id} has a false canonical digest`,
+      );
+    }
+    const goal = this.getGoal(record.goalId);
+    const workflow = this.getWorkflow(record.workflowId);
+    const attempt = this.getAttempt(record.attemptId);
+    const policy = this.getPolicyBundle(record.policyBundleId)?.bundle;
+    const profile = this.getExecutionProfile(record.executionProfileId)?.profile;
+    const startAudit =
+      attempt === undefined
+        ? undefined
+        : this.listAuditEvents('ATTEMPT', attempt.id).find(
+            (audit) => audit.eventType === 'ATTEMPT_STARTED',
+          );
+    const authorityAudits = this.listAuditEvents('PROJECT_SOURCE_READ_AUTHORITY', record.id).filter(
+      (audit) => audit.eventType === 'PROJECT_SOURCE_READ_AUTHORITY_RECORDED',
+    );
+    const authorityAudit = authorityAudits[0];
+    if (
+      goal?.revision !== record.goalRevision ||
+      goal.scope.projectPath !== record.normalizedProjectRoot ||
+      workflow?.goalId !== record.goalId ||
+      workflow.goalRevision !== record.goalRevision ||
+      workflow.version < record.workflowVersion ||
+      attempt?.workflowId !== record.workflowId ||
+      attempt.phase !== record.phase ||
+      attempt.contextManifestId === undefined ||
+      attempt.startedAt < record.issuedAt ||
+      policy?.version !== record.policyBundleVersion ||
+      policy.digest !== record.policyBundleDigest ||
+      profile?.version !== record.executionProfileVersion ||
+      profile.digest !== record.executionProfileDigest ||
+      authorityAudits.length !== 1 ||
+      authorityAudit?.sequence !== retainedAuditSequence ||
+      authorityAudit.actorType !== 'RUNTIME' ||
+      authorityAudit.commandId === undefined ||
+      authorityAudit.commandId !== startAudit?.commandId ||
+      authorityAudit.payloadDigest !== record.recordDigest ||
+      authorityAudit.occurredAt !== attempt.startedAt
+    ) {
+      throw new StoreInvariantError(
+        `Project-source read authority ${record.id} has incomplete retained authority`,
+      );
+    }
+    return record;
   }
 
   public getAcceptanceCriticalVerificationPlan(
@@ -8675,6 +8824,10 @@ export class SqliteControlStore
         const existingPlan = this.getAcceptanceCriticalVerificationPlan(
           input.executionProfileBinding.workflowId,
         );
+        const existingProjectReadAuthority =
+          input.projectReadAuthority === undefined
+            ? undefined
+            : this.getProjectSourceReadAuthority(input.projectReadAuthority.id);
         if (
           existing?.attemptId !== input.contextManifest.attemptId ||
           existingPolicyBinding === undefined ||
@@ -8682,7 +8835,9 @@ export class SqliteControlStore
           existingBinding === undefined ||
           canonicalizeJson(existingBinding) !== canonicalizeJson(input.executionProfileBinding) ||
           canonicalizeJson(existingPlan) !==
-            canonicalizeJson(input.acceptanceCriticalVerificationPlan)
+            canonicalizeJson(input.acceptanceCriticalVerificationPlan) ||
+          canonicalizeJson(existingProjectReadAuthority) !==
+            canonicalizeJson(input.projectReadAuthority)
         ) {
           throw new StoreInvariantError(
             `Replayed Attempt ${input.contextManifest.attemptId} has no exact Context/Policy/Profile binding`,
@@ -8697,6 +8852,7 @@ export class SqliteControlStore
       let persistedPolicyBinding: WorkflowPolicyBinding;
       let persistedBinding: ExecutionProfileBinding;
       let persistedPlan: AcceptanceCriticalVerificationPlan | undefined;
+      let persistedProjectReadAuthority: ProjectSourceReadAuthorityRecord | undefined;
       if (startEvent.attempt.sequence === 1) {
         if (input.policyBindingAuditEventId === undefined) {
           throw new StoreInvariantError('First Worker Attempt has no Policy binding audit');
@@ -8747,7 +8903,7 @@ export class SqliteControlStore
           ) {
             throw new StoreInvariantError('Protected Verification Plan was not retained exactly');
           }
-        } else if (input.contextManifest.schemaVersion === 4) {
+        } else if (isProtectedContextManifest(input.contextManifest)) {
           throw new StoreInvariantError('First protected Context has no atomically created Plan');
         }
       } else {
@@ -8771,13 +8927,37 @@ export class SqliteControlStore
           input.executionProfileBinding.workflowId,
         );
         if (
-          (input.contextManifest.schemaVersion === 4) !== (persistedPlan !== undefined) ||
+          isProtectedContextManifest(input.contextManifest) !== (persistedPlan !== undefined) ||
           (persistedPlan !== undefined &&
             (input.contextManifest.acceptanceCriticalVerificationPlanId !== persistedPlan.id ||
               input.contextManifest.acceptanceCriticalVerificationPlanDigest !==
                 persistedPlan.planDigest))
         ) {
           throw new StoreInvariantError('Later Worker Context changed protected Plan authority');
+        }
+      }
+
+      if (input.projectReadAuthority !== undefined) {
+        if (input.projectReadAuthorityAuditEventId === undefined) {
+          throw new StoreInvariantError('Project-read Context has no authority audit');
+        }
+        this.insertProjectSourceReadAuthority(
+          input.projectReadAuthority,
+          input.projectReadAuthorityAuditEventId,
+          input.event.commandId,
+          input.contextManifest.createdAt,
+          input.correlationId,
+          input.causationId,
+        );
+        persistedProjectReadAuthority = this.getProjectSourceReadAuthority(
+          input.projectReadAuthority.id,
+        );
+        if (
+          persistedProjectReadAuthority === undefined ||
+          canonicalizeJson(persistedProjectReadAuthority) !==
+            canonicalizeJson(input.projectReadAuthority)
+        ) {
+          throw new StoreInvariantError('Project-source read authority was not retained exactly');
         }
       }
 
@@ -8802,6 +8982,9 @@ export class SqliteControlStore
           ...(persistedPlan === undefined
             ? {}
             : { acceptanceCriticalVerificationPlan: persistedPlan }),
+          ...(persistedProjectReadAuthority === undefined
+            ? {}
+            : { projectReadAuthority: persistedProjectReadAuthority }),
         }),
       };
     });
@@ -13012,6 +13195,38 @@ export class SqliteControlStore
           manifest.acceptanceCriticalVerificationPlanDigest,
         );
     }
+    if (manifest.schemaVersion === 5) {
+      if (
+        manifest.projectReadAuthorityId === undefined ||
+        manifest.projectReadAuthorityRecordDigest === undefined ||
+        manifest.projectReadSourceTreeProjectionDigest === undefined ||
+        manifest.projectReadGitStateProjectionDigest === undefined ||
+        manifest.acceptanceCriticalVerificationPlanId === undefined ||
+        manifest.acceptanceCriticalVerificationPlanDigest === undefined ||
+        !this.hasTable('project_read_context_manifest_extensions')
+      ) {
+        throw new StoreInvariantError(
+          `Project-read Context Manifest ${manifest.id} lacks its exact authority`,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_context_manifest_extensions(
+             context_manifest_id, logical_schema_version, project_read_authority_id,
+             project_read_authority_record_digest, source_tree_projection_digest,
+             git_state_projection_digest, verification_plan_id, verification_plan_digest
+           ) VALUES (?, 5, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          manifest.id,
+          manifest.projectReadAuthorityId,
+          manifest.projectReadAuthorityRecordDigest,
+          manifest.projectReadSourceTreeProjectionDigest,
+          manifest.projectReadGitStateProjectionDigest,
+          manifest.acceptanceCriticalVerificationPlanId,
+          manifest.acceptanceCriticalVerificationPlanDigest,
+        );
+    }
   }
 
   private insertAcceptanceCriticalVerificationPlan(
@@ -13069,6 +13284,119 @@ export class SqliteControlStore
         auditSequence,
       );
     this.probe(WorkerTransactionStep.AFTER_PROTECTED_VERIFICATION_PLAN_WRITE);
+  }
+
+  private insertProjectSourceReadAuthority(
+    record: ProjectSourceReadAuthorityRecord,
+    auditIdentifier: AuditEventId,
+    startCommandId: CommandId,
+    occurredAt: IsoTimestamp,
+    correlationId?: string,
+    causationId?: string,
+  ): void {
+    const { projectionDigest: sourceTreeDigest, ...sourceTree } = record.sourceTree;
+    const { projectionDigest: gitStateDigest, ...gitState } = record.gitState;
+    const { recordDigest, ...semanticRecord } = record;
+    if (
+      sourceTreeDigest !==
+        sha256Digest(
+          canonicalAuthorityDigests.digest(projectReadSourceTreeProjection(sourceTree)),
+        ) ||
+      gitStateDigest !==
+        sha256Digest(canonicalAuthorityDigests.digest(projectReadGitStateProjection(gitState))) ||
+      recordDigest !==
+        sha256Digest(
+          canonicalAuthorityDigests.digest(
+            projectSourceReadAuthorityProjection(Object.freeze(semanticRecord)),
+          ),
+        )
+    ) {
+      throw new StoreInvariantError(
+        `Project-source read authority ${record.id} has a false canonical digest`,
+      );
+    }
+    const goal = this.getGoal(record.goalId);
+    const workflow = this.getWorkflow(record.workflowId);
+    const attempt = this.getAttempt(record.attemptId);
+    const policy = this.getPolicyBundle(record.policyBundleId)?.bundle;
+    const profile = this.getExecutionProfile(record.executionProfileId)?.profile;
+    if (
+      goal?.revision !== record.goalRevision ||
+      goal.scope.projectPath !== record.normalizedProjectRoot ||
+      workflow?.goalId !== record.goalId ||
+      workflow.goalRevision !== record.goalRevision ||
+      workflow.version !== record.workflowVersion ||
+      workflow.phase !== record.phase ||
+      workflow.runStatus !== RunStatus.RUNNING ||
+      workflow.activeAttemptId !== record.attemptId ||
+      attempt?.workflowId !== record.workflowId ||
+      attempt.phase !== record.phase ||
+      attempt.status !== AttemptStatus.RUNNING ||
+      attempt.contextManifestId === undefined ||
+      attempt.startedAt !== occurredAt ||
+      record.issuedAt > occurredAt ||
+      policy?.version !== record.policyBundleVersion ||
+      policy.digest !== record.policyBundleDigest ||
+      profile?.version !== record.executionProfileVersion ||
+      profile.digest !== record.executionProfileDigest
+    ) {
+      throw new StoreInvariantError(
+        `Project-source read authority ${record.id} does not bind the active Attempt`,
+      );
+    }
+    this.insertAuditEvent({
+      id: auditIdentifier,
+      aggregateType: 'PROJECT_SOURCE_READ_AUTHORITY',
+      aggregateId: record.id,
+      eventType: 'PROJECT_SOURCE_READ_AUTHORITY_RECORDED',
+      commandId: startCommandId,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(causationId === undefined ? {} : { causationId }),
+      payloadDigest: record.recordDigest,
+      occurredAt,
+    });
+    this.probe(WorkerTransactionStep.AFTER_PROJECT_READ_AUTHORITY_AUDIT_WRITE);
+    const auditSequence = this.auditSequence(auditIdentifier);
+    this.#database
+      .prepare(
+        `INSERT INTO project_source_read_authorities(
+           id, schema_version, goal_id, goal_revision, workflow_id, workflow_version,
+           phase, attempt_id, normalized_project_root, source_tree_projection_digest,
+           git_state_projection_digest, snapshot_id, workspace_root_identity,
+           snapshot_leaf_realpath, ownership_marker_digest, policy_bundle_id,
+           policy_bundle_digest, execution_profile_id, execution_profile_digest,
+           capability_grant_digest, response_contract_digest, issued_at, canonical_json,
+           record_digest, audit_sequence
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.goalId,
+        record.goalRevision,
+        record.workflowId,
+        record.workflowVersion,
+        record.phase,
+        record.attemptId,
+        record.normalizedProjectRoot,
+        record.sourceTree.projectionDigest,
+        record.gitState.projectionDigest,
+        record.snapshotId,
+        record.workspaceRootIdentity,
+        record.snapshotLeafRealpath,
+        record.ownershipMarkerDigest,
+        record.policyBundleId,
+        record.policyBundleDigest,
+        record.executionProfileId,
+        record.executionProfileDigest,
+        record.capabilityGrantDigest,
+        record.responseContractDigest,
+        record.issuedAt,
+        serializeJson(decodeJsonValue(record)),
+        record.recordDigest,
+        auditSequence,
+      );
+    this.probe(WorkerTransactionStep.AFTER_PROJECT_READ_AUTHORITY_WRITE);
   }
 
   private assertRecoveryMatchesCurrentAuthority(
@@ -14372,6 +14700,37 @@ export class SqliteControlStore
       );
     }
     const { goal, workflow } = goalView;
+    const projectReadAuthority =
+      manifest.schemaVersion === 5 && manifest.projectReadAuthorityId !== undefined
+        ? this.getProjectSourceReadAuthority(manifest.projectReadAuthorityId)
+        : undefined;
+    if (
+      (manifest.schemaVersion === 5) !== (projectReadAuthority !== undefined) ||
+      (projectReadAuthority !== undefined &&
+        (projectReadAuthority.recordDigest !== manifest.projectReadAuthorityRecordDigest ||
+          projectReadAuthority.sourceTree.projectionDigest !==
+            manifest.projectReadSourceTreeProjectionDigest ||
+          projectReadAuthority.gitState.projectionDigest !==
+            manifest.projectReadGitStateProjectionDigest ||
+          projectReadAuthority.goalId !== goal.id ||
+          projectReadAuthority.goalRevision !== goal.revision ||
+          projectReadAuthority.workflowId !== workflow.id ||
+          projectReadAuthority.workflowVersion !== manifest.workflowVersion ||
+          projectReadAuthority.phase !== manifest.phase ||
+          projectReadAuthority.attemptId !== attempt.id ||
+          projectReadAuthority.normalizedProjectRoot !== goal.scope.projectPath ||
+          projectReadAuthority.policyBundleId !== manifest.policyBundleId ||
+          projectReadAuthority.policyBundleDigest !== manifest.policyBundleDigest ||
+          projectReadAuthority.executionProfileId !== manifest.executionProfileId ||
+          projectReadAuthority.executionProfileDigest !== manifest.executionProfileDigest ||
+          projectReadAuthority.capabilityGrantDigest !== manifest.capabilityGrantDigest ||
+          projectReadAuthority.responseContractDigest !== manifest.responseContractDigest ||
+          projectReadAuthority.issuedAt > manifest.createdAt))
+    ) {
+      throw new StoreInvariantError(
+        `Context Manifest ${manifest.id} has no exact project-read authority`,
+      );
+    }
     let candidateBinding:
       { readonly generationId: CandidateGenerationId; readonly digest: Sha256Digest } | undefined;
     if (manifest.phase === WorkflowPhase.IMPLEMENT) {
@@ -14585,13 +14944,21 @@ export class SqliteControlStore
       executionProfileDigest: installedProfile.profile.digest,
       policyBundleId: installedPolicy.bundle.id,
       policyBundleDigest: installedPolicy.bundle.digest,
-      ...(manifest.schemaVersion === 4
+      ...(isProtectedContextManifest(manifest)
         ? {
             acceptanceCriticalVerificationPlanId: manifest.acceptanceCriticalVerificationPlanId,
             acceptanceCriticalVerificationPlanDigest:
               manifest.acceptanceCriticalVerificationPlanDigest,
           }
         : {}),
+      ...(projectReadAuthority === undefined
+        ? {}
+        : {
+            projectReadAuthorityId: projectReadAuthority.id,
+            projectReadAuthorityRecordDigest: projectReadAuthority.recordDigest,
+            projectReadSourceTreeProjectionDigest: projectReadAuthority.sourceTree.projectionDigest,
+            projectReadGitStateProjectionDigest: projectReadAuthority.gitState.projectionDigest,
+          }),
       responseContract: m1WorkerResponseContract(manifest.phase),
     });
     const expectedEntries = deriveContextManifestEntries(
@@ -15292,6 +15659,63 @@ export class SqliteControlStore
     }
   }
 
+  private assertRetainedProjectReadAuthorityClosure(): void {
+    if (!this.hasTable('project_source_read_authorities')) {
+      return;
+    }
+    const rows = this.#database
+      .prepare('SELECT * FROM project_source_read_authorities ORDER BY id')
+      .all();
+    const authorityIds = new Set<ProjectSourceReadAuthorityId>();
+    for (const row of rows) {
+      const decoded = decodeProjectSourceReadAuthorityRow(row);
+      const record = this.getProjectSourceReadAuthority(decoded.id);
+      const attempt = this.getAttempt(decoded.attemptId);
+      const manifest =
+        attempt?.contextManifestId === undefined
+          ? undefined
+          : this.getContextManifest(attempt.contextManifestId);
+      if (
+        record === undefined ||
+        canonicalizeJson(record) !== canonicalizeJson(decoded) ||
+        authorityIds.has(decoded.id) ||
+        manifest?.schemaVersion !== 5 ||
+        manifest.projectReadAuthorityId !== decoded.id ||
+        manifest.projectReadAuthorityRecordDigest !== decoded.recordDigest ||
+        manifest.projectReadSourceTreeProjectionDigest !== decoded.sourceTree.projectionDigest ||
+        manifest.projectReadGitStateProjectionDigest !== decoded.gitState.projectionDigest
+      ) {
+        throw new StoreInvariantError(
+          `Project-source read authority ${decoded.id} has incomplete retained Context authority`,
+        );
+      }
+      authorityIds.add(decoded.id);
+    }
+
+    const extensionRows = z.array(projectReadContextAuthorityRowSchema).parse(
+      this.#database
+        .prepare(
+          `SELECT context_manifest_id AS id, project_read_authority_id
+             FROM project_read_context_manifest_extensions
+            ORDER BY context_manifest_id`,
+        )
+        .all(),
+    );
+    for (const row of extensionRows) {
+      const manifest = this.getContextManifest(contextManifestId(row.id));
+      const authorityIdentifier = projectSourceReadAuthorityId(row.project_read_authority_id);
+      if (
+        manifest?.schemaVersion !== 5 ||
+        manifest.projectReadAuthorityId !== authorityIdentifier ||
+        !authorityIds.has(authorityIdentifier)
+      ) {
+        throw new StoreInvariantError(
+          `Project-read Context ${row.id} has no retained source authority`,
+        );
+      }
+    }
+  }
+
   private assertRetainedProtectedVerificationAuthorityClosure(): void {
     if (!this.hasTable('acceptance_critical_verification_plans')) {
       return;
@@ -15365,7 +15789,8 @@ export class SqliteControlStore
         planAudits[0].payloadDigest !== decoded.planDigest ||
         planAudits[0].occurredAt !== decoded.createdAt ||
         firstAttempt?.startedAt !== decoded.createdAt ||
-        firstManifest?.schemaVersion !== 4 ||
+        firstManifest === undefined ||
+        !isProtectedContextManifest(firstManifest) ||
         firstManifest.workflowVersion !== decoded.workflowVersionAtLock ||
         firstManifest.acceptanceCriticalVerificationPlanId !== decoded.id ||
         firstManifest.acceptanceCriticalVerificationPlanDigest !== decoded.planDigest
@@ -15381,7 +15806,8 @@ export class SqliteControlStore
         const identifier = contextManifestId(authorityIdentifierRowSchema.parse(identifierRow).id);
         const manifest = this.getContextManifest(identifier);
         if (
-          manifest?.schemaVersion !== 4 ||
+          manifest === undefined ||
+          !isProtectedContextManifest(manifest) ||
           manifest.acceptanceCriticalVerificationPlanId !== decoded.id ||
           manifest.acceptanceCriticalVerificationPlanDigest !== decoded.planDigest
         ) {

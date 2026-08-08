@@ -51,7 +51,10 @@ project-read record. Version 5 binds the record ID/digest plus exact source-tree
 and Git-state projection digests, retains the protected Verification Plan
 ID/digest required from the first Start, and rejects selected/omitted sources,
 Candidate, or repair authority. Atomic Store persistence with the
-Context/Attempt, phase-specific external execution, source/snapshot checks, and
+Context/Attempt is now implemented through an additive SQLite migration,
+canonical/relationship revalidation, strict reopen, exact replay, and rollback
+at the project-read audit and record boundaries. Phase-specific external
+execution, pre/post-dispatch source/snapshot checks, cleanup persistence, and
 real composition remain pending. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
@@ -688,10 +691,13 @@ Worker Context. See
 Accepted ADR 0043 is the narrower candidate-free project-read decision for
 M2.5.1. Slice 3 now adds its exact project-source record, Runtime-owned
 selected-source snapshot adapter, and Context Package/Manifest version 5
-binding for real `DISCOVERY`/`PLAN`; Store/Attempt atomic persistence and the
-configuration/instruction/dispatch composition remain pending. The checkout
-remains unreadable and the decision does not reinterpret the M1 subset above
-or pull M3 Fact/Decision selection forward.
+binding for real `DISCOVERY`/`PLAN`. Its project-read record, protected Plan,
+Context v5, first or later Attempt start, Workflow effect, command outcome, and
+audits now persist in one SQLite transaction and reconstruct strictly on
+reopen. Configuration/instruction/external-dispatch composition and cleanup
+persistence remain pending. The checkout remains unreadable and the decision
+does not reinterpret the M1 subset above or pull M3 Fact/Decision selection
+forward.
 
 Code relevance retrieval, full Fact Graph traversal, and token-aware packing
 belong to later milestones. Slice 6 implements the repair Context and Thread

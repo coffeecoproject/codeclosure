@@ -84,13 +84,17 @@ owned read-only selected-source snapshot for candidate-free real Codex
 `DISCOVERY`/`PLAN`. The record binds Context/Attempt, source/snapshot currency,
 configuration/instruction policy, snapshot ownership, and cleanup without
 creating a Candidate, Fact, Evidence, or Acceptance record or exposing the
-checkout. The authority is accepted but not implemented. The additive external-
-execution v3 phase-dispatch, `ExternalExecutionIntentV2`/
+checkout. Slice 3 now implements the project-source record and codecs, exact
+read-only workspace contracts and local adapter, cleanup contracts, Context
+Package/Manifest v5 compilation, and additive SQLite record/Context persistence
+with atomic Attempt/Workflow/command/audit binding, exact replay, and strict
+reopen. The additive external-execution v3 phase-dispatch, `ExternalExecutionIntentV2`/
 `ExternalExecutionRecordV2`, `CodexWorkerDirectiveV3`,
 `CodexAdapterObservationV2`, monotonic project-read workspace-authority
 snapshot, consume-once terminal/orphan snapshot cleanup grant/observation/
 Outcome with same-grant unknown-result reconciliation, and
-Profile/Context/persistence schemas remain planned M2.5.1 work. The proposed v3
+Profile composition remain planned M2.5.1 work. Cleanup persistence and real
+external dispatch have not started. The proposed v3
 Profile has no duplicated global/phase field authority, binds one opaque
 Adapter-local Worker activity-policy identity per phase, and uses the existing
 canonical string-sorted phase set with `ALL_SELECTED_ATTEMPTS`.
@@ -1643,7 +1647,7 @@ describes.
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
-| Project-source read authority, workspace-authority snapshot, cleanup grant, and cleanup outcome — proposed M2.5.1 | Goal scope, Candidate Manager observation, and strict persisted project-read/external-execution authority | Workflow Runtime, Candidate Manager, and Store canonical/relationship backstops | Runtime compound transaction, one persisted consume-once cleanup grant, same-grant idempotent unknown-result reconciliation, and atomic outcome/audit/consumption; workspace adapter cannot issue authority |
+| Project-source read authority — implemented M2.5.1 Slice 3 foundation; workspace-authority snapshot and cleanup records remain planned | Goal scope, Candidate Manager observation, and strict persisted project-read authority | Workflow Runtime, Candidate Manager, and Store canonical/relationship backstops | project-read record plus Context/Attempt/Workflow/command/audits persist atomically and reopen strictly; future cleanup uses one persisted consume-once grant and same-grant reconciliation; workspace adapter cannot issue authority |
 | Acceptance-critical Verification Plan and protected-asset manifest — implemented M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |

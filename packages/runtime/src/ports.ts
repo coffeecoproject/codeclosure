@@ -42,6 +42,8 @@ import type {
   PolicyBundleId,
   PendingIssue,
   PendingIssueSet,
+  ProjectSourceReadAuthorityId,
+  ProjectSourceReadAuthorityRecord,
   RecoveryReconciliationId,
   RecoveryReconciliationRecord,
   RecoveryWorkflowReconciled,
@@ -396,6 +398,8 @@ export interface CommitContextBoundAttemptStart extends CommitAttemptEvent {
   readonly executionProfileBindingAuditEventId?: AuditEventId;
   readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
   readonly acceptanceCriticalVerificationPlanAuditEventId?: AuditEventId;
+  readonly projectReadAuthority?: ProjectSourceReadAuthorityRecord;
+  readonly projectReadAuthorityAuditEventId?: AuditEventId;
 }
 
 export interface CommittedContextAttempt {
@@ -405,6 +409,7 @@ export interface CommittedContextAttempt {
   readonly policyBinding: WorkflowPolicyBinding;
   readonly executionProfileBinding: ExecutionProfileBinding;
   readonly acceptanceCriticalVerificationPlan?: AcceptanceCriticalVerificationPlan;
+  readonly projectReadAuthority?: ProjectSourceReadAuthorityRecord;
 }
 
 export interface CandidateAuthorityView {
@@ -789,6 +794,9 @@ export interface WorkerControlStore extends WorkflowControlStore {
   getAcceptanceCriticalVerificationPlan?(
     workflowId: WorkflowId,
   ): AcceptanceCriticalVerificationPlan | undefined;
+  getProjectSourceReadAuthority?(
+    projectReadAuthorityId: ProjectSourceReadAuthorityId,
+  ): ProjectSourceReadAuthorityRecord | undefined;
   installPolicyBundle(input: InstallPolicyBundle): PolicyInstallResult;
   installExecutionProfile(input: InstallExecutionProfile): ExecutionProfileInstallResult;
   claimWorkerDispatch(input: ClaimWorkerDispatch): WorkerDispatchClaimResult;

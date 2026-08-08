@@ -682,6 +682,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0027_intake_project_correction.sql',
       '0028_rejected_clarification_reservation.sql',
       '0029_intent_projection_schema_v2.sql',
+      '0030_project_read_authority.sql',
     ],
   );
   store.close();

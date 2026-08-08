@@ -28,6 +28,7 @@ import {
   decodeRecoveryReconciliationRecord,
   decodeCloseoutRecord,
   decodePendingIssue,
+  decodeProjectSourceReadAuthorityRecord,
   commandId,
   decodeAttemptSnapshot,
   decodeContextManifest,
@@ -67,6 +68,7 @@ import {
   type IsoTimestamp,
   type PolicyBundle,
   type PendingIssue,
+  type ProjectSourceReadAuthorityRecord,
   type Sha256Digest,
   type WorkflowInstance,
   type WorkflowId,
@@ -233,6 +235,41 @@ const contextManifestRowSchema = z.object({
   protected_logical_schema_version: z.number().int().positive().nullable().optional(),
   verification_plan_id: z.string().nullable().optional(),
   verification_plan_digest: z.string().nullable().optional(),
+  project_read_logical_schema_version: z.number().int().positive().nullable().optional(),
+  project_read_authority_id: z.string().nullable().optional(),
+  project_read_authority_record_digest: z.string().nullable().optional(),
+  project_read_source_tree_projection_digest: z.string().nullable().optional(),
+  project_read_git_state_projection_digest: z.string().nullable().optional(),
+  project_read_verification_plan_id: z.string().nullable().optional(),
+  project_read_verification_plan_digest: z.string().nullable().optional(),
+});
+
+const projectSourceReadAuthorityRowSchema = z.object({
+  id: z.string(),
+  schema_version: z.literal(1),
+  goal_id: z.string(),
+  goal_revision: z.number().int().positive(),
+  workflow_id: z.string(),
+  workflow_version: z.number().int().positive(),
+  phase: z.enum([WorkflowPhase.DISCOVERY, WorkflowPhase.PLAN]),
+  attempt_id: z.string(),
+  normalized_project_root: z.string(),
+  source_tree_projection_digest: z.string(),
+  git_state_projection_digest: z.string(),
+  snapshot_id: z.string(),
+  workspace_root_identity: z.string(),
+  snapshot_leaf_realpath: z.string(),
+  ownership_marker_digest: z.string(),
+  policy_bundle_id: z.string(),
+  policy_bundle_digest: z.string(),
+  execution_profile_id: z.string(),
+  execution_profile_digest: z.string(),
+  capability_grant_digest: z.string(),
+  response_contract_digest: z.string(),
+  issued_at: z.string(),
+  canonical_json: z.string(),
+  record_digest: z.string(),
+  audit_sequence: z.number().int().positive(),
 });
 
 const acceptanceCriticalVerificationPlanRowSchema = z.object({
@@ -775,9 +812,18 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
   try {
     const parsed = contextManifestRowSchema.parse(row);
     const logicalSchemaVersion =
+      parsed.project_read_logical_schema_version ??
       parsed.protected_logical_schema_version ??
       parsed.logical_schema_version ??
       parsed.schema_version;
+    const hasProjectReadExtension =
+      parsed.project_read_logical_schema_version !== null &&
+      parsed.project_read_logical_schema_version !== undefined;
+    const hasProtectedExtension =
+      parsed.protected_logical_schema_version !== null &&
+      parsed.protected_logical_schema_version !== undefined;
+    const hasRepairExtension =
+      parsed.logical_schema_version !== null && parsed.logical_schema_version !== undefined;
     const hasRepairContext =
       parsed.repair_context_digest !== null &&
       parsed.repair_context_digest !== undefined &&
@@ -787,6 +833,9 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
       (parsed.repair_context_digest !== null && parsed.repair_context_digest !== undefined) !==
       (parsed.prior_attempt_feedback_digest !== null &&
         parsed.prior_attempt_feedback_digest !== undefined);
+    if (hasProjectReadExtension && (hasProtectedExtension || hasRepairExtension)) {
+      throw new TypeError('Context Manifest extensions overlap');
+    }
     if (
       hasPartialRepairContext ||
       (logicalSchemaVersion === 3 && !hasRepairContext) ||
@@ -794,14 +843,36 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
     ) {
       throw new TypeError('Repair Context Manifest extension is incomplete');
     }
-    if (
-      (logicalSchemaVersion === 4) !==
-      (parsed.verification_plan_id !== null &&
-        parsed.verification_plan_id !== undefined &&
-        parsed.verification_plan_digest !== null &&
-        parsed.verification_plan_digest !== undefined)
-    ) {
+    const verificationPlanId =
+      logicalSchemaVersion === 5
+        ? parsed.project_read_verification_plan_id
+        : parsed.verification_plan_id;
+    const verificationPlanDigest =
+      logicalSchemaVersion === 5
+        ? parsed.project_read_verification_plan_digest
+        : parsed.verification_plan_digest;
+    const hasProtectedPlan =
+      verificationPlanId !== null &&
+      verificationPlanId !== undefined &&
+      verificationPlanDigest !== null &&
+      verificationPlanDigest !== undefined;
+    const projectReadValues = [
+      parsed.project_read_authority_id,
+      parsed.project_read_authority_record_digest,
+      parsed.project_read_source_tree_projection_digest,
+      parsed.project_read_git_state_projection_digest,
+    ];
+    const projectReadFieldCount = projectReadValues.filter(
+      (value) => value !== null && value !== undefined,
+    ).length;
+    if ((logicalSchemaVersion === 4 || logicalSchemaVersion === 5) !== hasProtectedPlan) {
       throw new TypeError('Protected Context Manifest extension is incomplete');
+    }
+    if (
+      (logicalSchemaVersion === 5 && projectReadFieldCount !== projectReadValues.length) ||
+      (logicalSchemaVersion !== 5 && projectReadFieldCount !== 0)
+    ) {
+      throw new TypeError('Project-read Context Manifest extension is incomplete');
     }
     return decodeContextManifest({
       id: parsed.id,
@@ -822,11 +893,20 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
       executionProfileDigest: parsed.execution_profile_digest,
       policyBundleId: parsed.policy_bundle_id,
       policyBundleDigest: parsed.policy_bundle_digest,
-      ...(logicalSchemaVersion !== 4
+      ...(logicalSchemaVersion !== 4 && logicalSchemaVersion !== 5
         ? {}
         : {
-            acceptanceCriticalVerificationPlanId: parsed.verification_plan_id,
-            acceptanceCriticalVerificationPlanDigest: parsed.verification_plan_digest,
+            acceptanceCriticalVerificationPlanId: verificationPlanId,
+            acceptanceCriticalVerificationPlanDigest: verificationPlanDigest,
+          }),
+      ...(logicalSchemaVersion !== 5
+        ? {}
+        : {
+            projectReadAuthorityId: parsed.project_read_authority_id,
+            projectReadAuthorityRecordDigest: parsed.project_read_authority_record_digest,
+            projectReadSourceTreeProjectionDigest:
+              parsed.project_read_source_tree_projection_digest,
+            projectReadGitStateProjectionDigest: parsed.project_read_git_state_projection_digest,
           }),
       capabilityGrantDigest: parsed.capability_grant_digest,
       responseContractDigest: parsed.response_contract_digest,
@@ -849,6 +929,49 @@ export function decodeContextManifestRow(row: unknown): ContextManifest {
       throw error;
     }
     throw new PersistenceDecodeError('ContextManifest', { cause: error });
+  }
+}
+
+export function decodeProjectSourceReadAuthorityRow(
+  row: unknown,
+): ProjectSourceReadAuthorityRecord {
+  try {
+    const parsed = projectSourceReadAuthorityRowSchema.parse(row);
+    const record = decodeProjectSourceReadAuthorityRecord(
+      parseJson(parsed.canonical_json, 'ProjectSourceReadAuthorityRecord'),
+    );
+    if (
+      record.id !== parsed.id ||
+      record.goalId !== parsed.goal_id ||
+      record.goalRevision !== parsed.goal_revision ||
+      record.workflowId !== parsed.workflow_id ||
+      record.workflowVersion !== parsed.workflow_version ||
+      record.phase !== parsed.phase ||
+      record.attemptId !== parsed.attempt_id ||
+      record.normalizedProjectRoot !== parsed.normalized_project_root ||
+      record.sourceTree.projectionDigest !== parsed.source_tree_projection_digest ||
+      record.gitState.projectionDigest !== parsed.git_state_projection_digest ||
+      record.snapshotId !== parsed.snapshot_id ||
+      record.workspaceRootIdentity !== parsed.workspace_root_identity ||
+      record.snapshotLeafRealpath !== parsed.snapshot_leaf_realpath ||
+      record.ownershipMarkerDigest !== parsed.ownership_marker_digest ||
+      record.policyBundleId !== parsed.policy_bundle_id ||
+      record.policyBundleDigest !== parsed.policy_bundle_digest ||
+      record.executionProfileId !== parsed.execution_profile_id ||
+      record.executionProfileDigest !== parsed.execution_profile_digest ||
+      record.capabilityGrantDigest !== parsed.capability_grant_digest ||
+      record.responseContractDigest !== parsed.response_contract_digest ||
+      record.issuedAt !== parsed.issued_at ||
+      record.recordDigest !== parsed.record_digest
+    ) {
+      throw new TypeError('Project-source read authority columns disagree with canonical JSON');
+    }
+    return record;
+  } catch (error) {
+    if (error instanceof PersistenceDecodeError) {
+      throw error;
+    }
+    throw new PersistenceDecodeError('ProjectSourceReadAuthorityRecord', { cause: error });
   }
 }
 
