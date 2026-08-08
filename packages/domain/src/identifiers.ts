@@ -46,6 +46,8 @@ export type AnswerOnlyResponseId = Brand<string, 'AnswerOnlyResponseId'>;
 export type IntakeFailureRecordId = Brand<string, 'IntakeFailureRecordId'>;
 export type GoalMaterializationId = Brand<string, 'GoalMaterializationId'>;
 export type GoalStartAuthorizationId = Brand<string, 'GoalStartAuthorizationId'>;
+export type ProjectSourceReadAuthorityId = Brand<string, 'ProjectSourceReadAuthorityId'>;
+export type ProjectReadSnapshotId = Brand<string, 'ProjectReadSnapshotId'>;
 
 export type GoalRevision = Brand<number, 'GoalRevision'>;
 export type WorkflowVersion = Brand<number, 'WorkflowVersion'>;
@@ -165,6 +167,10 @@ export const goalMaterializationId = (value: string): GoalMaterializationId =>
   parseIdentifier('materialization', value, 'GoalMaterializationId');
 export const goalStartAuthorizationId = (value: string): GoalStartAuthorizationId =>
   parseIdentifier('start-authorization', value, 'GoalStartAuthorizationId');
+export const projectSourceReadAuthorityId = (value: string): ProjectSourceReadAuthorityId =>
+  parseIdentifier('project-read', value, 'ProjectSourceReadAuthorityId');
+export const projectReadSnapshotId = (value: string): ProjectReadSnapshotId =>
+  parseIdentifier('project-read-snapshot', value, 'ProjectReadSnapshotId');
 
 export const goalRevision = (value: number): GoalRevision =>
   parsePositiveInteger(value, 'GoalRevision');
