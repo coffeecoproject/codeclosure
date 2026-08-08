@@ -61,6 +61,24 @@ const disabledFeatures = [
   'web_search_request',
   'workspace_dependencies',
 ];
+const v2AdditionalDisabledFeatures = [
+  'apply_patch_streaming_events',
+  'concurrent_reasoning_summaries',
+  'enable_request_compression',
+  'fast_mode',
+  'guardian_approval',
+  'guardianv2',
+  'in_app_updates',
+  'local_thread_store_compression',
+  'mcp_2026_07_28',
+  'mentions_v2',
+  'prevent_idle_sleep',
+  'realtime_conversation',
+  'runtime_metrics',
+  'secret_auth_storage',
+  'terminal_visualization_instructions',
+  'use_agent_identity',
+];
 
 function send(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -79,11 +97,34 @@ function turn(status, items, error = null, selectedTurnId = turnId) {
   };
 }
 
+function encodeIntentResponse(response) {
+  if (!isM251Scenario) {
+    return JSON.stringify(response);
+  }
+  return JSON.stringify({
+    proposedObjective: response.proposedObjective ?? null,
+    proposedCriteria: response.proposedCriteria,
+    proposedScope: response.proposedScope ?? null,
+    proposedNonGoals: response.proposedNonGoals,
+    proposedAssumptions: response.proposedAssumptions,
+    proposedQuestions: response.proposedQuestions,
+    candidateSourceSpanSuggestions: [],
+    proposedClassification: response.proposedClassification ?? null,
+  });
+}
+
 function closedConfig() {
   const selectedDisabledFeatures = isM251Scenario
-    ? disabledFeatures.filter(
-        (feature) => feature !== 'web_search_cached' && feature !== 'web_search_request',
-      )
+    ? [
+        ...disabledFeatures.filter(
+          (feature) =>
+            feature !== 'search_tool' &&
+            feature !== 'web_search_cached' &&
+            feature !== 'web_search_request',
+        ),
+        ...v2AdditionalDisabledFeatures,
+        'remote_control',
+      ].sort()
     : disabledFeatures;
   const config = {
     approval_policy: 'never',
@@ -99,20 +140,58 @@ function closedConfig() {
     skills: { bundled: { enabled: false }, include_instructions: false },
     web_search: 'disabled',
   };
+  if (isM251Scenario) {
+    Object.assign(config, {
+      agents: { enabled: false },
+      allow_login_shell: false,
+      analytics: { enabled: false },
+      apps: {
+        _default: {
+          destructive_enabled: false,
+          enabled: false,
+          open_world_enabled: false,
+        },
+      },
+      approvals_reviewer: 'user',
+      check_for_update_on_startup: false,
+      cli_auth_credentials_store: 'file',
+      compact_prompt: null,
+      developer_instructions: null,
+      feedback: { enabled: false },
+      history: { persistence: 'none' },
+      instructions: null,
+      shell_environment_policy: { experimental_use_profile: false, inherit: 'none' },
+      tools: null,
+    });
+  }
   if (scenario === 'shell-tool-enabled') {
     config.features.shell_tool = true;
+  }
+  if (scenario === 'v2-config-mismatch') {
+    config.features.apps = true;
+  }
+  if (scenario === 'v2-config-extra-feature') {
+    config.features.future_feature = false;
+  }
+  if (scenario === 'v2-config-instruction-override') {
+    config.developer_instructions = 'sensitive-instruction-content';
+  }
+  if (scenario === 'v2-config-agents-enabled') {
+    config.agents.enabled = true;
   }
   return config;
 }
 
 function fullThread() {
   return {
+    canAcceptDirectInput: true,
     id: threadId,
     sessionId: 'session-intake-fixture',
     forkedFromId: null,
     parentThreadId: null,
     preview: '',
     ephemeral: true,
+    extra: null,
     isPinned: false,
     modelProvider: 'openai',
     createdAt: 1,
@@ -127,6 +206,7 @@ function fullThread() {
     agentNickname: null,
     agentRole: null,
     gitInfo: null,
+    historyMode: scenario === 'v2-thread-history-paginated' ? 'paginated' : 'legacy',
     name: null,
     turns: [],
   };
@@ -174,7 +254,7 @@ function finalText(message) {
       scenario === 'v2-cli-exact-source' ||
       scenario === 'v2-cli-unsupported-assumption')
   ) {
-    return JSON.stringify({
+    return encodeIntentResponse({
       proposedObjective: 'Ship slice 7',
       proposedCriteria: ['Ship slice 7'],
       proposedNonGoals: [],
@@ -202,7 +282,7 @@ function finalText(message) {
   }
   return answerOnly
     ? JSON.stringify({ answerContent: 'This is a bounded non-authoritative answer.' })
-    : JSON.stringify({
+    : encodeIntentResponse({
         proposedObjective: 'Prepare the bounded requested change.',
         proposedCriteria: ['The bounded request is represented.'],
         proposedNonGoals: [],
@@ -402,25 +482,43 @@ function handleRequest(message) {
   if (message.method === 'configRequirements/read') {
     send({
       id: message.id,
-      result: { requirements: { managed: true, profile: 'codeclosure-m2-5-intake' } },
+      result: isM251Scenario
+        ? { requirements: scenario === 'v2-managed-requirements-mismatch' ? {} : null }
+        : { requirements: { managed: true, profile: 'codeclosure-m2-5-intake' } },
     });
     return;
   }
   if (message.method === 'config/read') {
-    send({ id: message.id, result: { config: closedConfig(), layers: [] } });
+    send({
+      id: message.id,
+      result: {
+        config: closedConfig(),
+        layers: [],
+        ...(isM251Scenario ? { origins: {} } : {}),
+      },
+    });
     return;
   }
   if (message.method === 'permissionProfile/list') {
     send({
       id: message.id,
       result: {
-        data: [
-          {
-            allowed: true,
-            id: 'codeclosure-m2-5-intake-no-authority-effects',
-            name: 'CodeClosure M2.5 Intake (isolated read-only)',
-          },
-        ],
+        data: isM251Scenario
+          ? [
+              { allowed: true, description: 'Built-in read-only', id: ':read-only' },
+              {
+                allowed: scenario !== 'v2-permission-profile-mismatch',
+                description: 'CodeClosure M2.5 Intake isolated read-only',
+                id: 'codeclosure-m2-5-intake-no-authority-effects',
+              },
+            ]
+          : [
+              {
+                allowed: true,
+                id: 'codeclosure-m2-5-intake-no-authority-effects',
+                name: 'CodeClosure M2.5 Intake (isolated read-only)',
+              },
+            ],
         nextCursor: null,
       },
     });
@@ -448,7 +546,12 @@ function handleRequest(message) {
         modelProvider: 'openai',
         reasoningEffort: 'low',
         sandbox: { type: 'readOnly', networkAccess: false },
-        serviceTier: 'default',
+        serviceTier:
+          scenario === 'v2-thread-service-tier-drift'
+            ? 'priority'
+            : isM251Scenario
+              ? null
+              : 'default',
         thread: { id: threadId },
       },
     });

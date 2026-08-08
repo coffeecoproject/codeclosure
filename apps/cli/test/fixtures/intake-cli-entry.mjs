@@ -7,7 +7,7 @@ import { URL, fileURLToPath } from 'node:url';
 
 import { createCodexIntakeAssistantAdapter } from '@codeclosure/adapter-codex-intake';
 import { createFixtureAppServerLaunch } from '@codeclosure/codex-app-server-client/testing';
-import { m251IntakeAssistantProfile } from '@codeclosure/runtime';
+import { m251LiveIntakeAssistantProfile } from '@codeclosure/runtime';
 
 import { runCli } from '../../dist/index.js';
 import { createIntakeCliInvocationCompositionWithAssistant } from '../../dist/composition/trusted-intake-composition.js';
@@ -56,8 +56,8 @@ class FixtureIntakeAssistant {
       executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
       processHome,
       protocolIdentity: Object.freeze({
-        version: `codex-cli ${m251IntakeAssistantProfile.codexVersion}`,
-        snapshotDigest: m251IntakeAssistantProfile.protocolSnapshotDigest,
+        version: `codex-cli ${m251LiveIntakeAssistantProfile.codexVersion}`,
+        snapshotDigest: m251LiveIntakeAssistantProfile.protocolSnapshotDigest,
       }),
       scenario,
       scriptPath: fixtureScript,

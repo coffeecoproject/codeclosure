@@ -61,7 +61,16 @@ versioned correction, Adapter-local typed protocol projection, and mandatory
 real composition proof. M2.5.1 Slice 1 implements and offline-validates the
 versioned closed configuration, typed Projection, normalized-event Observer,
 stage-aware messages, safe diagnostics, and retained-v1 compatibility. It does
-not make or satisfy the mandatory real Slice 2 calls. The normalized events
+not retroactively satisfy the mandatory real calls. Slice 2 preserves those
+v2 records without silent recall and adds Profile/Adapter v3, configuration and
+protocol projection v2, the strict Intent response and exact-source
+instruction contracts, and requires an
+empty assistant span-suggestion list, and selects a versioned Runtime policy
+that derives `USER_STATED` bindings only from byte-identical proposed values in
+retained user content. A paraphrase remains `MODEL_PROPOSED`; the model never
+chooses the authority class. The explicit live compatibility command passes
+the lower-client prerequisite plus real Answer-only, clear Intent, and
+ambiguous Intent paths with metadata-only evidence. The normalized events
 remain inside the Adapter and do not change the accepted Intake authority
 contract or retroactively enlarge M2.5 evidence. The existing M2 protected
 demonstration is not the target composition because it uses external Codex only
@@ -1714,9 +1723,10 @@ long-term business knowledge base.
 ### M2.5.1
 
 The post-completion closure has accepted its Slice 0 contract. Slice 1 versions
-and implements the corrected Intake Assistant Profile and Adapter, preserves
-retained version-1 authority, and keeps real Answer-only and Intent-analysis
-compatibility as mandatory Slice 2 evidence. Its bounded
+and implements the corrected Intake Assistant Profile and Adapter and
+preserves retained version-1 authority. Slice 2 passes the mandatory real
+Answer-only and Intent-analysis compatibility evidence under the versioned
+strict response, instruction, and Runtime exact-value projection policies. Its bounded
 supported composition requires an exact real Codex Execution Profile rather
 than the M1 FakeWorker Profile before Materialization, records it in
 `GoalStartAuthorization`, and resolves it through the separate ordinary Start

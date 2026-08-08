@@ -33,6 +33,7 @@ import {
 
 import {
   M25_INTAKE_DEVELOPER_INSTRUCTIONS,
+  M251_INTAKE_DEVELOPER_INSTRUCTIONS,
   adapterFailure,
   assertAnswerOnlyInput,
   assertIntentAnalysisInput,
@@ -40,13 +41,16 @@ import {
   decodeIntentAnalysisResponse,
   m25IntakeClosedConfig,
   m25IntakeConfigRead,
-  m251IntakeClosedConfig,
-  m251IntakeConfigRead,
+  m25IntakeManagedRequirements,
+  m251LiveIntakeClosedConfig,
+  m251LiveIntakeManagedRequirements,
   renderIntakePrompt,
   type SafeAdapterFailure,
 } from './contracts.js';
 import {
   assertClosedConfiguration,
+  assertM251ClosedConfiguration,
+  assertM251PermissionProfile,
   assertManagedRequirements,
   assertPermissionProfile,
   decodeEffectiveThread,
@@ -261,6 +265,16 @@ function safeDiagnosticTokenForFailure(error: unknown): IntakeDiagnosticToken {
   if (error instanceof Error && 'adapterReason' in error) {
     return (error as SafeAdapterFailure).adapterReason;
   }
+  if (error instanceof Error) {
+    const token: unknown = Reflect.get(error, 'safeDiagnosticToken');
+    if (
+      typeof token === 'string' &&
+      Buffer.byteLength(token, 'utf8') <= 512 &&
+      /^[A-Za-z0-9_./:-]+$/u.test(token)
+    ) {
+      return token;
+    }
+  }
   return 'UNCLASSIFIED';
 }
 
@@ -409,11 +423,17 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         operation === 'INTENT_ANALYSIS'
           ? assertIntentAnalysisInput(input as IntentAnalysisAssistantInput)
           : assertAnswerOnlyInput(input as AnswerOnlyAssistantInput);
+      if (protocolVersion === 'M251_V2') {
+        throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_UNAVAILABLE);
+      }
       const activeObserver = createIntakeProtocolObserverStrategy(protocolVersion);
       observer = activeObserver;
       const closedConfig =
-        protocolVersion === 'M25_V1' ? m25IntakeClosedConfig : m251IntakeClosedConfig;
-      const configRead = protocolVersion === 'M25_V1' ? m25IntakeConfigRead : m251IntakeConfigRead;
+        protocolVersion === 'M25_V1' ? m25IntakeClosedConfig : m251LiveIntakeClosedConfig;
+      const managedRequirements =
+        protocolVersion === 'M25_V1'
+          ? m25IntakeManagedRequirements
+          : m251LiveIntakeManagedRequirements;
       diagnosticLocation = 'LAUNCH_BINDING';
       assertAssistantProfileLaunchBinding(this.#input, input);
       diagnosticLocation = 'ISOLATION';
@@ -447,56 +467,72 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
       const requestOptions = Object.freeze({ signal });
       assertManagedRequirements(
         await client.request('configRequirements/read', undefined, decoderIdentity, requestOptions),
+        managedRequirements,
       );
-      assertClosedConfiguration(
-        await client.request(
-          'config/read',
-          { cwd: this.#input.launch.summary.cwd, includeLayers: true },
-          decoderIdentity,
-          requestOptions,
-        ),
-        configRead,
+      const initialConfiguration = await client.request(
+        'config/read',
+        { cwd: this.#input.launch.summary.cwd, includeLayers: true },
+        decoderIdentity,
+        requestOptions,
       );
-      assertPermissionProfile(
-        await client.request(
-          'permissionProfile/list',
-          { cwd: this.#input.launch.summary.cwd },
-          decoderIdentity,
-          requestOptions,
-        ),
+      if (protocolVersion === 'M25_V1') {
+        assertClosedConfiguration(initialConfiguration, m25IntakeConfigRead);
+      } else {
+        assertM251ClosedConfiguration(initialConfiguration);
+      }
+      const permissionProfiles = await client.request(
+        'permissionProfile/list',
+        { cwd: this.#input.launch.summary.cwd },
+        decoderIdentity,
+        requestOptions,
       );
+      if (protocolVersion === 'M25_V1') {
+        assertPermissionProfile(permissionProfiles);
+      } else {
+        assertM251PermissionProfile(permissionProfiles);
+      }
       diagnosticLocation = 'THREAD_START';
       counters.threadStartCount += 1;
-      const effective = await client.request(
+      const threadStartResponse = await client.request(
         'thread/start',
         {
           approvalPolicy: 'never',
           approvalsReviewer: 'user',
           config: closedConfig,
           cwd: this.#input.launch.summary.cwd,
-          developerInstructions: M25_INTAKE_DEVELOPER_INSTRUCTIONS,
+          developerInstructions:
+            protocolVersion === 'M25_V1'
+              ? M25_INTAKE_DEVELOPER_INSTRUCTIONS
+              : M251_INTAKE_DEVELOPER_INSTRUCTIONS,
           ephemeral: true,
           model: M25_INTAKE_MODEL,
           modelProvider: M25_INTAKE_MODEL_PROVIDER,
           sandbox: 'read-only',
           serviceTier: M25_INTAKE_SERVICE_TIER,
         },
-        (value) => decodeEffectiveThread(value, this.#input.launch.summary.cwd),
+        decoderIdentity,
         requestOptions,
+      );
+      const effective = decodeEffectiveThread(
+        threadStartResponse,
+        this.#input.launch.summary.cwd,
+        protocolVersion === 'M25_V1' ? M25_INTAKE_SERVICE_TIER : null,
       );
       activeObserver.bindThread(effective.threadId);
       if (activeObserver.failureReason !== undefined) {
         throw adapterFailure(activeObserver.failureReason);
       }
-      assertClosedConfiguration(
-        await client.request(
-          'config/read',
-          { cwd: this.#input.launch.summary.cwd, includeLayers: true },
-          decoderIdentity,
-          requestOptions,
-        ),
-        configRead,
+      const threadConfiguration = await client.request(
+        'config/read',
+        { cwd: this.#input.launch.summary.cwd, includeLayers: true },
+        decoderIdentity,
+        requestOptions,
       );
+      if (protocolVersion === 'M25_V1') {
+        assertClosedConfiguration(threadConfiguration, m25IntakeConfigRead);
+      } else {
+        assertM251ClosedConfiguration(threadConfiguration);
+      }
       const prompt = renderIntakePrompt(input);
       if (Buffer.byteLength(prompt, 'utf8') > 1_048_576) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR);
@@ -556,7 +592,13 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
       diagnosticLocation = 'RESPONSE';
       try {
         response = decodeResponse(finalText);
-      } catch {
+      } catch (error) {
+        recordFailure(
+          IntakeAssistantFailureReasonCode.RESPONSE_REJECTED,
+          'RESPONSE_REJECTED',
+          'RESPONSE',
+          safeDiagnosticTokenForFailure(error),
+        );
         throw adapterFailure(IntakeAssistantFailureReasonCode.RESPONSE_REJECTED);
       }
     } catch (error) {

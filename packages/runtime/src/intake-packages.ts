@@ -60,7 +60,14 @@ import {
   M251_INTAKE_CODEX_VERSION,
   M251_INTAKE_PROTOCOL_PROJECTION_ID,
   M251_INTAKE_PROTOCOL_PROJECTION_VERSION,
+  M251_INTAKE_INSTRUCTION_POLICY_ID,
+  M251_INTAKE_INSTRUCTION_POLICY_VERSION,
+  M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M251_LIVE_INTAKE_ASSISTANT_PROFILE_VERSION,
+  M251_LIVE_INTAKE_CLOSED_CONFIGURATION_VERSION,
+  M251_LIVE_INTAKE_PROTOCOL_PROJECTION_VERSION,
   M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST,
+  M251_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
   M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_ID,
   M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
   m25IntakeBudgetDefinition,
@@ -112,6 +119,38 @@ export interface M251IntakeAssistantProfileDescriptor {
   }>;
 }
 
+export interface M251LiveIntakeAssistantProfileDescriptor {
+  readonly schemaVersion: 3;
+  readonly id: typeof M25_INTAKE_ASSISTANT_PROFILE_ID;
+  readonly version: typeof M251_LIVE_INTAKE_ASSISTANT_PROFILE_VERSION;
+  readonly codexVersion: typeof M251_INTAKE_CODEX_VERSION;
+  readonly protocolSnapshotDigest: typeof M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST;
+  readonly modelProvider: typeof M25_INTAKE_MODEL_PROVIDER;
+  readonly model: typeof M25_INTAKE_MODEL;
+  readonly serviceTier: typeof M25_INTAKE_SERVICE_TIER;
+  readonly reasoningEffort: typeof M25_INTAKE_REASONING_EFFORT;
+  readonly threadPolicy: 'FRESH_PROCESS_THREAD_TURN';
+  readonly compactionPolicy: 'FAIL_ON_OBSERVATION';
+  readonly fallbackPolicy: 'FAIL_CLOSED';
+  readonly effectPolicy: 'ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION';
+  readonly selectedAuthorityCapabilities: readonly never[];
+  readonly closedConfiguration: Readonly<{
+    schemaVersion: 1;
+    id: typeof M251_INTAKE_CLOSED_CONFIGURATION_ID;
+    version: typeof M251_LIVE_INTAKE_CLOSED_CONFIGURATION_VERSION;
+  }>;
+  readonly protocolProjectionPolicy: Readonly<{
+    schemaVersion: 1;
+    id: typeof M251_INTAKE_PROTOCOL_PROJECTION_ID;
+    version: typeof M251_LIVE_INTAKE_PROTOCOL_PROJECTION_VERSION;
+  }>;
+  readonly instructionPolicy: Readonly<{
+    schemaVersion: 1;
+    id: typeof M251_INTAKE_INSTRUCTION_POLICY_ID;
+    version: typeof M251_INTAKE_INSTRUCTION_POLICY_VERSION;
+  }>;
+}
+
 export const m25IntakeAssistantProfile: IntakeAssistantProfileDescriptor = Object.freeze({
   schemaVersion: 1,
   id: M25_INTAKE_ASSISTANT_PROFILE_ID,
@@ -156,13 +195,50 @@ export const m251IntakeAssistantProfile: M251IntakeAssistantProfileDescriptor = 
   }),
 });
 
+export const m251LiveIntakeAssistantProfile: M251LiveIntakeAssistantProfileDescriptor =
+  Object.freeze({
+    schemaVersion: 3,
+    id: M25_INTAKE_ASSISTANT_PROFILE_ID,
+    version: M251_LIVE_INTAKE_ASSISTANT_PROFILE_VERSION,
+    codexVersion: M251_INTAKE_CODEX_VERSION,
+    protocolSnapshotDigest: M251_INTAKE_PROTOCOL_SNAPSHOT_DIGEST,
+    modelProvider: M25_INTAKE_MODEL_PROVIDER,
+    model: M25_INTAKE_MODEL,
+    serviceTier: M25_INTAKE_SERVICE_TIER,
+    reasoningEffort: M25_INTAKE_REASONING_EFFORT,
+    threadPolicy: 'FRESH_PROCESS_THREAD_TURN',
+    compactionPolicy: 'FAIL_ON_OBSERVATION',
+    fallbackPolicy: 'FAIL_CLOSED',
+    effectPolicy: 'ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION',
+    selectedAuthorityCapabilities: Object.freeze([]),
+    closedConfiguration: Object.freeze({
+      schemaVersion: 1,
+      id: M251_INTAKE_CLOSED_CONFIGURATION_ID,
+      version: M251_LIVE_INTAKE_CLOSED_CONFIGURATION_VERSION,
+    }),
+    protocolProjectionPolicy: Object.freeze({
+      schemaVersion: 1,
+      id: M251_INTAKE_PROTOCOL_PROJECTION_ID,
+      version: M251_LIVE_INTAKE_PROTOCOL_PROJECTION_VERSION,
+    }),
+    instructionPolicy: Object.freeze({
+      schemaVersion: 1,
+      id: M251_INTAKE_INSTRUCTION_POLICY_ID,
+      version: M251_INTAKE_INSTRUCTION_POLICY_VERSION,
+    }),
+  });
+
 export type VersionedIntakeAssistantProfileDescriptor =
-  IntakeAssistantProfileDescriptor | M251IntakeAssistantProfileDescriptor;
+  | IntakeAssistantProfileDescriptor
+  | M251IntakeAssistantProfileDescriptor
+  | M251LiveIntakeAssistantProfileDescriptor;
 
 export type IntakeAssistantAdapterDescriptor = Readonly<{
   id: typeof M25_INTAKE_ASSISTANT_ADAPTER_ID;
   version:
-    typeof M25_INTAKE_ASSISTANT_ADAPTER_VERSION | typeof M251_INTAKE_ASSISTANT_ADAPTER_VERSION;
+    | typeof M25_INTAKE_ASSISTANT_ADAPTER_VERSION
+    | typeof M251_INTAKE_ASSISTANT_ADAPTER_VERSION
+    | typeof M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION;
 }>;
 
 export const m25IntakeAssistantAdapter: IntakeAssistantAdapterDescriptor = Object.freeze({
@@ -173,6 +249,11 @@ export const m25IntakeAssistantAdapter: IntakeAssistantAdapterDescriptor = Objec
 export const m251IntakeAssistantAdapter: IntakeAssistantAdapterDescriptor = Object.freeze({
   id: M25_INTAKE_ASSISTANT_ADAPTER_ID,
   version: M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
+});
+
+export const m251LiveIntakeAssistantAdapter: IntakeAssistantAdapterDescriptor = Object.freeze({
+  id: M25_INTAKE_ASSISTANT_ADAPTER_ID,
+  version: M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION,
 });
 
 export const m25IntentAnalysisResponseSchema = Object.freeze({
@@ -243,6 +324,97 @@ export const m25IntentAnalysisResponseSchema = Object.freeze({
       }),
     }),
     proposedClassification: Object.freeze({ type: 'string', minLength: 1 }),
+  }),
+});
+
+export const m251IntentAnalysisResponseSchema = Object.freeze({
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  type: 'object',
+  additionalProperties: false,
+  required: Object.freeze([
+    'proposedObjective',
+    'proposedCriteria',
+    'proposedScope',
+    'proposedNonGoals',
+    'proposedAssumptions',
+    'proposedQuestions',
+    'candidateSourceSpanSuggestions',
+    'proposedClassification',
+  ]),
+  properties: Object.freeze({
+    proposedObjective: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'string', minLength: 1 }),
+        Object.freeze({ type: 'null' }),
+      ]),
+    }),
+    proposedCriteria: Object.freeze({
+      type: 'array',
+      maxItems: 16,
+      items: Object.freeze({ type: 'string', minLength: 1 }),
+    }),
+    proposedScope: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'string', minLength: 1 }),
+        Object.freeze({ type: 'null' }),
+      ]),
+    }),
+    proposedNonGoals: Object.freeze({
+      type: 'array',
+      maxItems: 16,
+      items: Object.freeze({ type: 'string', minLength: 1 }),
+    }),
+    proposedAssumptions: Object.freeze({
+      type: 'array',
+      maxItems: 16,
+      items: Object.freeze({ type: 'string', minLength: 1 }),
+    }),
+    proposedQuestions: Object.freeze({
+      type: 'array',
+      maxItems: 8,
+      items: Object.freeze({ type: 'string', minLength: 1 }),
+    }),
+    candidateSourceSpanSuggestions: Object.freeze({
+      type: 'array',
+      maxItems: 0,
+      items: Object.freeze({
+        type: 'object',
+        additionalProperties: false,
+        required: Object.freeze([
+          'projectionFieldRef',
+          'itemIndex',
+          'rawRequestRevision',
+          'startByte',
+          'endByte',
+        ]),
+        properties: Object.freeze({
+          projectionFieldRef: Object.freeze({
+            enum: Object.freeze([
+              'OBJECTIVE',
+              'REQUIRED_CRITERION',
+              'SCOPE',
+              'NON_GOAL',
+              'ASSUMPTION',
+            ]),
+          }),
+          itemIndex: Object.freeze({
+            anyOf: Object.freeze([
+              Object.freeze({ type: 'integer', minimum: 0 }),
+              Object.freeze({ type: 'null' }),
+            ]),
+          }),
+          rawRequestRevision: Object.freeze({ type: 'integer', minimum: 1 }),
+          startByte: Object.freeze({ type: 'integer', minimum: 0 }),
+          endByte: Object.freeze({ type: 'integer', minimum: 1 }),
+        }),
+      }),
+    }),
+    proposedClassification: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'string', minLength: 1 }),
+        Object.freeze({ type: 'null' }),
+      ]),
+    }),
   }),
 });
 
@@ -393,21 +565,37 @@ function canonicalOmissions(
   return Object.freeze(sorted);
 }
 
+interface IntentAnalysisResponseContractDefinition {
+  readonly version: string;
+  readonly schema: JsonValue;
+}
+
+const m25IntentAnalysisResponseContractDefinition = Object.freeze({
+  version: M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
+  schema: m25IntentAnalysisResponseSchema,
+});
+
+const m251IntentAnalysisResponseContractDefinition = Object.freeze({
+  version: M251_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
+  schema: m251IntentAnalysisResponseSchema,
+});
+
 function responseContract(
   operation: 'INTENT_ANALYSIS' | 'ANSWER_ONLY',
   digests: DigestProvider & IntakeDigestVerifier,
+  intentAnalysisDefinition: IntentAnalysisResponseContractDefinition,
 ): IntakeResponseContractDescriptor {
   const base = Object.freeze(
     operation === 'INTENT_ANALYSIS'
       ? {
           schemaVersion: 1 as const,
           id: M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_ID,
-          version: M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
+          version: intentAnalysisDefinition.version,
           operation,
           maximumCanonicalResponseBytes:
             m25IntakeBudgetDefinition.maximumIntentAnalysisResponseBytes,
           unknownFields: 'REJECT' as const,
-          schema: m25IntentAnalysisResponseSchema,
+          schema: intentAnalysisDefinition.schema,
         }
       : {
           schemaVersion: 1 as const,
@@ -588,16 +776,19 @@ class VersionedIntakePackageCompiler {
   readonly #digests: DigestProvider & IntakeDigestVerifier;
   readonly #assistantProfile: VersionedIntakeAssistantProfileDescriptor;
   readonly #assistantAdapter: IntakeAssistantAdapterDescriptor;
+  readonly #intentAnalysisResponseContract: IntentAnalysisResponseContractDefinition;
 
   public constructor(
     options: IntakePackageCompilerOptions,
     assistantProfile: VersionedIntakeAssistantProfileDescriptor,
     assistantAdapter: IntakeAssistantAdapterDescriptor,
+    intentAnalysisResponseContract: IntentAnalysisResponseContractDefinition,
   ) {
     this.#canonicalizer = options.canonicalizer;
     this.#digests = options.digests;
     this.#assistantProfile = assistantProfile;
     this.#assistantAdapter = assistantAdapter;
+    this.#intentAnalysisResponseContract = intentAnalysisResponseContract;
   }
 
   public validateIntentAnalysisCompilation(
@@ -657,7 +848,11 @@ class VersionedIntakePackageCompiler {
       reasonCode: IntentAdmissionReasonCode.ANSWER_ONLY,
       executionDisposition: IntentExecutionDisposition.NONE,
     });
-    const response = responseContract('ANSWER_ONLY', this.#digests);
+    const response = responseContract(
+      'ANSWER_ONLY',
+      this.#digests,
+      this.#intentAnalysisResponseContract,
+    );
     const budget = budgetProfile(this.#digests);
     const packageValue: AnswerOnlyPackage = Object.freeze({
       schemaVersion: 1,
@@ -811,7 +1006,11 @@ class VersionedIntakePackageCompiler {
       throw new TypeError('Current Intent Projection does not bind the current Raw Request');
     }
     const declaredProjectRef = latestRawRequestRevision.declaredProjectRef;
-    const response = responseContract('INTENT_ANALYSIS', this.#digests);
+    const response = responseContract(
+      'INTENT_ANALYSIS',
+      this.#digests,
+      this.#intentAnalysisResponseContract,
+    );
     const budget = budgetProfile(this.#digests);
     const packageValue: IntakePackage = Object.freeze({
       schemaVersion: 1,
@@ -937,7 +1136,11 @@ class VersionedIntakePackageCompiler {
     ) {
       throw new TypeError('Prepared Answer-only Decision does not bind the exact operation input');
     }
-    const response = responseContract('ANSWER_ONLY', this.#digests);
+    const response = responseContract(
+      'ANSWER_ONLY',
+      this.#digests,
+      this.#intentAnalysisResponseContract,
+    );
     const budget = budgetProfile(this.#digests);
     const preparedDecisionBinding: PreparedAnswerOnlyDecisionBinding = Object.freeze({
       decisionId: preparedDecision.id,
@@ -1056,37 +1259,51 @@ export class M25IntakePackageCompiler
   implements IntakePackageCompilerPort
 {
   public constructor(options: IntakePackageCompilerOptions) {
-    super(options, m25IntakeAssistantProfile, m25IntakeAssistantAdapter);
+    super(
+      options,
+      m25IntakeAssistantProfile,
+      m25IntakeAssistantAdapter,
+      m25IntentAnalysisResponseContractDefinition,
+    );
   }
 }
 
 export class M251IntakePackageCompiler implements IntakePackageCompilerPort {
   readonly #v1: VersionedIntakePackageCompiler;
   readonly #v2: VersionedIntakePackageCompiler;
+  readonly #v3: VersionedIntakePackageCompiler;
 
   public constructor(options: IntakePackageCompilerOptions) {
     this.#v1 = new VersionedIntakePackageCompiler(
       options,
       m25IntakeAssistantProfile,
       m25IntakeAssistantAdapter,
+      m25IntentAnalysisResponseContractDefinition,
     );
     this.#v2 = new VersionedIntakePackageCompiler(
       options,
       m251IntakeAssistantProfile,
       m251IntakeAssistantAdapter,
+      m25IntentAnalysisResponseContractDefinition,
+    );
+    this.#v3 = new VersionedIntakePackageCompiler(
+      options,
+      m251LiveIntakeAssistantProfile,
+      m251LiveIntakeAssistantAdapter,
+      m251IntentAnalysisResponseContractDefinition,
     );
   }
 
   public compileIntentAnalysis(
     input: CompileIntentAnalysisPackageInput,
   ): IntakePackageCompilation<IntakePackage> {
-    return this.#v2.compileIntentAnalysis(input);
+    return this.#v3.compileIntentAnalysis(input);
   }
 
   public compileAnswerOnly(
     input: CompileAnswerOnlyPackageInput,
   ): IntakePackageCompilation<AnswerOnlyPackage> {
-    return this.#v2.compileAnswerOnly(input);
+    return this.#v3.compileAnswerOnly(input);
   }
 
   public validateIntentAnalysisCompilation(
@@ -1114,12 +1331,22 @@ export class M251IntakePackageCompiler implements IntakePackageCompilerPort {
     if (retainedManifest.assistantAdapter.version === M251_INTAKE_ASSISTANT_ADAPTER_VERSION) {
       return this.#v2.recompileAnswerOnly(input, retainedManifest);
     }
+    if (retainedManifest.assistantAdapter.version === M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION) {
+      return this.#v3.recompileAnswerOnly(input, retainedManifest);
+    }
     throw new TypeError('Retained Intake Manifest selects an unsupported Adapter version');
   }
 
   #compilerForPackage(
     packageValue: IntakePackage | AnswerOnlyPackage,
   ): VersionedIntakePackageCompiler {
-    return packageValue.assistantProfile.schemaVersion === 1 ? this.#v1 : this.#v2;
+    switch (packageValue.assistantProfile.schemaVersion) {
+      case 1:
+        return this.#v1;
+      case 2:
+        return this.#v2;
+      case 3:
+        return this.#v3;
+    }
   }
 }

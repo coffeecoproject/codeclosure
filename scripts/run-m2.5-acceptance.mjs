@@ -372,9 +372,9 @@ async function proofConfigurationIdentity() {
     availability: 'AVAILABLE',
     admissionPolicy: versioned(admissionPolicy.id, admissionPolicy.version, admissionPolicy.digest),
     assistantProfile: versioned(
-      runtime.m251IntakeAssistantProfile.id,
-      runtime.m251IntakeAssistantProfile.version,
-      digests.digest(runtime.m251IntakeAssistantProfile),
+      runtime.m251LiveIntakeAssistantProfile.id,
+      runtime.m251LiveIntakeAssistantProfile.version,
+      digests.digest(runtime.m251LiveIntakeAssistantProfile),
     ),
     workflowPolicy: versioned(
       workflowPolicy.id,
@@ -388,10 +388,10 @@ async function proofConfigurationIdentity() {
     ),
     assistantAdapter: versioned(
       runtime.M25_INTAKE_ASSISTANT_ADAPTER_ID,
-      runtime.M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
+      runtime.M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION,
       digests.digest({
         id: runtime.M25_INTAKE_ASSISTANT_ADAPTER_ID,
-        version: runtime.M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
+        version: runtime.M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION,
       }),
     ),
     budgetProfile: versioned(
@@ -406,8 +406,8 @@ async function proofConfigurationIdentity() {
     responseContracts: Object.freeze([
       versioned(
         runtime.M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_ID,
-        runtime.M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
-        digests.digest(runtime.m25IntentAnalysisResponseSchema),
+        runtime.M251_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
+        digests.digest(runtime.m251IntentAnalysisResponseSchema),
       ),
       versioned(
         runtime.M25_ANSWER_ONLY_RESPONSE_CONTRACT_ID,
@@ -417,9 +417,9 @@ async function proofConfigurationIdentity() {
     ]),
     closedInvocation: Object.freeze({
       permissionProfileId: adapter.M25_INTAKE_PERMISSION_PROFILE_ID,
-      configurationDigest: digests.digest(adapter.m251IntakeClosedConfig),
-      managedRequirementsDigest: digests.digest(adapter.m25IntakeManagedRequirements),
-      permissionProfileDigest: digests.digest(adapter.m25IntakePermissionProfile),
+      configurationDigest: digests.digest(adapter.m251LiveIntakeClosedConfig),
+      managedRequirementsDigest: digests.digest(adapter.m251LiveIntakeManagedRequirements),
+      permissionProfileDigest: digests.digest(adapter.m251LiveIntakePermissionProfile),
     }),
   });
 }

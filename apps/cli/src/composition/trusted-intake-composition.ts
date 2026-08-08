@@ -3,8 +3,8 @@ import {
   CanonicalJsonSha256DigestProvider,
   M25IntakeCoordinator,
   M251IntakePackageCompiler,
+  M251IntentProjectionCompiler,
   M25IntentAdmissionEngine,
-  M25IntentProjectionCompiler,
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
   createCodeClosureApplication,
@@ -251,7 +251,7 @@ export function createIntakeCliComposition(
       store,
       assistant: options.assistant,
       packageCompiler: new M251IntakePackageCompiler({ canonicalizer, digests }),
-      projectionCompiler: new M25IntentProjectionCompiler({ canonicalizer, digests }),
+      projectionCompiler: new M251IntentProjectionCompiler({ canonicalizer, digests }),
       admissionEngine: new M25IntentAdmissionEngine(digests),
       admissionPolicyId: intentPolicy.id,
       governedExecutionPreflight: Object.freeze({

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "codeclosure-m2-5-1-slice0-contract",
-  "contractVersion": "codeclosure-m2-5-1-slice0-v3",
+  "contractVersion": "codeclosure-m2-5-1-slice0-v4",
   "toolchain": {
     "selected": {
       "codexVersion": "codex-cli 0.146.1",
@@ -42,29 +42,56 @@
   },
   "intake": {
     "assistantProfile": {
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "id": "intake-assistant-profile_codeclosure-m2-5-local",
-      "version": "codeclosure-m2-5-1-local-assistant-v2"
+      "version": "codeclosure-m2-5-1-local-assistant-v3"
     },
     "assistantAdapter": {
       "id": "intake-assistant-adapter_codex-app-server",
-      "version": "codeclosure-m2-5-1-intake-adapter-v2"
+      "version": "codeclosure-m2-5-1-intake-adapter-v3"
     },
     "closedConfiguration": {
       "schemaVersion": 1,
       "id": "intake-config_codeclosure-m2-5-1-local",
-      "version": "codeclosure-m2-5-1-local-config-v1"
+      "version": "codeclosure-m2-5-1-local-config-v2"
     },
     "protocolProjectionPolicy": {
       "schemaVersion": 1,
       "id": "intake-protocol-projection_codeclosure-m2-5-1",
-      "version": "codeclosure-m2-5-1-projection-v1"
+      "version": "codeclosure-m2-5-1-projection-v2"
+    },
+    "instructionPolicy": {
+      "schemaVersion": 1,
+      "id": "intake-instructions_codeclosure-m2-5-1",
+      "version": "codeclosure-m2-5-1-exact-source-instructions-v1"
+    },
+    "intentAnalysisResponseContract": {
+      "id": "intake-response_intent-analysis",
+      "version": "codeclosure-m2-5-1-intent-analysis-response-v2"
+    },
+    "intentProjectionProfileVersion": "codeclosure-m2-5-1-exact-value-match-v3",
+    "retainedSlice1Identities": {
+      "assistantProfile": {
+        "schemaVersion": 2,
+        "id": "intake-assistant-profile_codeclosure-m2-5-local",
+        "version": "codeclosure-m2-5-1-local-assistant-v2"
+      },
+      "assistantAdapter": {
+        "id": "intake-assistant-adapter_codex-app-server",
+        "version": "codeclosure-m2-5-1-intake-adapter-v2"
+      },
+      "closedConfiguration": {
+        "schemaVersion": 1,
+        "id": "intake-config_codeclosure-m2-5-1-local",
+        "version": "codeclosure-m2-5-1-local-config-v1"
+      },
+      "protocolProjectionPolicy": {
+        "schemaVersion": 1,
+        "id": "intake-protocol-projection_codeclosure-m2-5-1",
+        "version": "codeclosure-m2-5-1-projection-v1"
+      }
     },
     "unchangedIdentities": {
-      "intentAnalysisResponseContract": {
-        "id": "intake-response_intent-analysis",
-        "version": "codeclosure-m2-5-intent-analysis-response-v1"
-      },
       "answerOnlyResponseContract": {
         "id": "intake-response_answer-only",
         "version": "codeclosure-m2-5-answer-only-response-v1"
@@ -422,12 +449,12 @@
     "M251-V04": "packages/testing/test/m2.5.1-contracts.test.ts#new-intake-identity",
     "M251-V05": "packages/store-sqlite/test/m2.5.1-intake-compatibility.test.ts#mixed-intake-version-rejection",
     "M251-V06": "packages/store-sqlite/test/m2.5.1-external-compatibility.test.ts#external-schema-compatibility",
-    "M251-L01": "scripts/run-m2.5.1-acceptance.mjs#live-lower-client-prerequisite",
-    "M251-L02": "scripts/run-m2.5.1-acceptance.mjs#live-answer-only",
-    "M251-L03": "scripts/run-m2.5.1-acceptance.mjs#live-clear-intent-analysis",
-    "M251-L04": "scripts/run-m2.5.1-acceptance.mjs#live-ambiguous-intent-analysis",
-    "M251-L05": "scripts/run-m2.5.1-acceptance.mjs#live-intake-effect-trace",
-    "M251-L06": "scripts/run-m2.5.1-acceptance.mjs#live-intake-privacy",
+    "M251-L01": "scripts/run-m2.5.1-live-intake.mjs#live-lower-client-prerequisite",
+    "M251-L02": "scripts/run-m2.5.1-live-intake.mjs#live-answer-only",
+    "M251-L03": "scripts/run-m2.5.1-live-intake.mjs#live-clear-intent-analysis",
+    "M251-L04": "scripts/run-m2.5.1-live-intake.mjs#live-ambiguous-intent-analysis",
+    "M251-L05": "scripts/run-m2.5.1-live-intake.mjs#live-intake-effect-trace",
+    "M251-L06": "scripts/run-m2.5.1-live-intake.mjs#live-intake-privacy",
     "M251-C01": "apps/cli/test/m2.5.1-composition.test.ts#trusted-real-profile-installation",
     "M251-C02": "apps/cli/test/m2.5.1-composition.test.ts#governed-preflight",
     "M251-C03": "packages/store-sqlite/test/m2.5.1-materialization-start.test.ts#authorization-profile-binding",

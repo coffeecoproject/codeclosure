@@ -486,6 +486,7 @@ interface ProjectedRawResponseItem {
 }
 
 interface ValidatedProtocolFact {
+  readonly errorToken?: string;
   readonly item?: Readonly<{ message?: ProjectedIntakeMessage; type: ThreadItemType }>;
   readonly method: NotificationMethod;
   readonly rawResponseItem?: ProjectedRawResponseItem;
@@ -494,6 +495,37 @@ interface ValidatedProtocolFact {
   readonly terminal?: TerminalIntakeTurn;
   readonly threadId?: string;
   readonly turnId?: string;
+}
+
+function projectErrorToken(params: JsonObject): string {
+  const error = params['error'];
+  if (!isJsonObject(error)) {
+    throw new TypeError('Turn error projection is malformed');
+  }
+  validateShape(
+    error,
+    shape({
+      additionalDetails: 'NULLABLE_STRING',
+      codexErrorInfo: 'ANY',
+      message: 'STRING',
+    }),
+  );
+  const info = error['codexErrorInfo'];
+  let token: string;
+  if (info === null) {
+    token = 'unclassified';
+  } else if (typeof info === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(info)) {
+    token = info;
+  } else if (isJsonObject(info) && Object.keys(info).length === 1) {
+    const variant = Object.keys(info)[0];
+    if (variant === undefined || !/^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(variant)) {
+      throw new TypeError('Turn error variant is malformed');
+    }
+    token = variant;
+  } else {
+    throw new TypeError('Turn error info is outside the pinned union');
+  }
+  return `error/${token}/${params['willRetry'] === true ? 'WILL_RETRY' : 'NO_RETRY'}`;
 }
 
 function exactKeys(value: JsonObject, objectShape: ObjectShape): void {
@@ -505,6 +537,15 @@ function exactKeys(value: JsonObject, objectShape: ObjectShape): void {
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expected)) {
     throw new TypeError('Protocol object has unknown or missing fields');
   }
+}
+
+function projectionAssertion(token: string): TypeError {
+  const error = new TypeError('Protocol projection does not match the pinned shape');
+  Object.defineProperty(error, 'safeProjectionToken', {
+    enumerable: false,
+    value: token.slice(0, 512),
+  });
+  return error;
 }
 
 function matchesKind(value: JsonValue | undefined, kind: ValueKind): boolean {
@@ -702,35 +743,63 @@ function validateTurn(value: JsonObject): void {
 }
 
 function validateStartedThread(value: JsonObject): string {
-  validateShape(
-    value,
-    shape({
-      id: 'STRING',
-      sessionId: 'STRING',
-      forkedFromId: 'NULLABLE_STRING',
-      parentThreadId: 'NULLABLE_STRING',
-      preview: 'STRING',
-      ephemeral: 'BOOLEAN',
-      isPinned: 'BOOLEAN',
-      modelProvider: 'STRING',
-      createdAt: 'NUMBER',
-      updatedAt: 'NUMBER',
-      recencyAt: 'NULLABLE_NUMBER',
-      status: 'OBJECT',
-      path: 'NULLABLE_STRING',
-      cwd: 'STRING',
-      cliVersion: 'STRING',
-      source: 'ANY',
-      threadSource: 'ANY',
-      agentNickname: 'NULLABLE_STRING',
-      agentRole: 'NULLABLE_STRING',
-      gitInfo: 'NULLABLE_OBJECT',
-      name: 'NULLABLE_STRING',
-      turns: 'ARRAY',
-    }),
-  );
-  validateThreadStatusValue(value['status']);
-  return boundedIdentifier(value['id']);
+  const threadShape = shape({
+    id: 'STRING',
+    sessionId: 'STRING',
+    forkedFromId: 'NULLABLE_STRING',
+    parentThreadId: 'NULLABLE_STRING',
+    preview: 'STRING',
+    ephemeral: 'BOOLEAN',
+    isPinned: 'BOOLEAN',
+    modelProvider: 'STRING',
+    createdAt: 'NUMBER',
+    updatedAt: 'NUMBER',
+    recencyAt: 'NULLABLE_NUMBER',
+    status: 'OBJECT',
+    path: 'NULLABLE_STRING',
+    cwd: 'STRING',
+    cliVersion: 'STRING',
+    source: 'ANY',
+    threadSource: 'ANY',
+    agentNickname: 'NULLABLE_STRING',
+    agentRole: 'NULLABLE_STRING',
+    gitInfo: 'NULLABLE_OBJECT',
+    name: 'NULLABLE_STRING',
+    turns: 'ARRAY',
+    canAcceptDirectInput: 'BOOLEAN',
+    extra: 'NULLABLE_OBJECT',
+    historyMode: 'STRING',
+  });
+  const expectedKeys = Object.keys(threadShape.required).sort();
+  for (const key of expectedKeys) {
+    if (!(key in value) || !matchesKind(value[key], threadShape.required[key] ?? 'ANY')) {
+      throw projectionAssertion(`thread/started/thread/${key}`);
+    }
+  }
+  const extraKeys = Object.keys(value)
+    .filter((key) => !(key in threadShape.required))
+    .sort();
+  if (extraKeys.length !== 0) {
+    const safeKeys = extraKeys.filter((key) => /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(key));
+    throw projectionAssertion(
+      safeKeys.length === extraKeys.length
+        ? `thread/started/thread/EXTRA_KEYS/${safeKeys.join('.')}`
+        : 'thread/started/thread/UNKNOWN_KEY',
+    );
+  }
+  try {
+    validateThreadStatusValue(value['status']);
+  } catch {
+    throw projectionAssertion('thread/started/thread/status');
+  }
+  if (value['historyMode'] !== 'legacy') {
+    throw projectionAssertion('thread/started/thread/historyMode');
+  }
+  try {
+    return boundedIdentifier(value['id']);
+  } catch {
+    throw projectionAssertion('thread/started/thread/id');
+  }
 }
 
 function projectTerminal(params: JsonObject): TerminalIntakeTurn {
@@ -996,6 +1065,9 @@ function projectValidatedFact(notification: AppServerNotification): ValidatedPro
       validateTokenUsageBreakdown(usage);
     }
   }
+  if (notification.method === 'error') {
+    return Object.freeze({ ...base, errorToken: projectErrorToken(notification.params) });
+  }
   if (notification.method === 'account/rateLimits/updated') {
     validateRateLimits(notification.params);
   }
@@ -1237,11 +1309,12 @@ function classifyIntakeEffect(fact: ValidatedProtocolFact): IntakeObservedEvent 
     case 'thread/environment/disconnected':
     case 'turn/diff/updated':
       return failureEvent(fact, 'FORBIDDEN_EFFECT_OBSERVED');
+    case 'error':
+      return failureEvent(fact, 'PROTOCOL_VIOLATION', fact.errorToken ?? fact.method);
     case 'account/login/completed':
     case 'account/updated':
     case 'configWarning':
     case 'deprecationNotice':
-    case 'error':
     case 'guardianWarning':
     case 'item/plan/delta':
     case 'model/rerouted':
@@ -1287,7 +1360,9 @@ export class IntakeProtocolProjection {
   public project(notification: AppServerNotification): IntakeObservedEvent {
     try {
       return classifyIntakeEffect(projectValidatedFact(notification));
-    } catch {
+    } catch (error) {
+      const safeProjectionToken: unknown =
+        error instanceof Error ? Reflect.get(error, 'safeProjectionToken') : undefined;
       return Object.freeze({
         diagnostic: 'PROJECTED_MALFORMED_PARAMS',
         kind: 'PROTOCOL_VIOLATION',
@@ -1295,7 +1370,12 @@ export class IntakeProtocolProjection {
           Number.isSafeInteger(notification.sequence) && notification.sequence > 0
             ? notification.sequence
             : 1,
-        token: notification.method,
+        token:
+          typeof safeProjectionToken === 'string' &&
+          Buffer.byteLength(safeProjectionToken, 'utf8') <= 512 &&
+          /^[A-Za-z0-9_./:-]+$/u.test(safeProjectionToken)
+            ? safeProjectionToken
+            : notification.method,
       });
     }
   }

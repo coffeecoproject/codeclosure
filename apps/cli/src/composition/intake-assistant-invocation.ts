@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
-  M251_INTAKE_DISABLED_FEATURES,
+  M251_LIVE_INTAKE_DISABLED_FEATURES,
   M25_INTAKE_PERMISSION_PROFILE_ID,
   createCodexIntakeAssistantAdapter,
 } from '@codeclosure/adapter-codex-intake';
@@ -37,6 +37,9 @@ import {
 export interface CreateProductionIntakeAssistantOptions {
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly forbiddenRoots: readonly string[];
+  readonly onSafeDiagnostic?: NonNullable<
+    Parameters<typeof createCodexIntakeAssistantAdapter>[0]['onSafeDiagnostic']
+  >;
 }
 
 export interface ProductionIntakeAssistantResource {
@@ -45,17 +48,38 @@ export interface ProductionIntakeAssistantResource {
 }
 
 function controlledConfiguration(): string {
-  const disabledFeatures = M251_INTAKE_DISABLED_FEATURES.map(
+  const disabledFeatures = M251_LIVE_INTAKE_DISABLED_FEATURES.map(
     (feature) => `${feature} = false`,
   ).join('\n');
   return `model = ${JSON.stringify(M25_INTAKE_MODEL)}
 model_provider = ${JSON.stringify(M25_INTAKE_MODEL_PROVIDER)}
 model_reasoning_effort = ${JSON.stringify(M25_INTAKE_REASONING_EFFORT)}
 approval_policy = "never"
+approvals_reviewer = "user"
 default_permissions = "${M25_INTAKE_PERMISSION_PROFILE_ID}"
 web_search = "disabled"
+check_for_update_on_startup = false
+allow_login_shell = false
+cli_auth_credentials_store = "file"
 include_apps_instructions = false
 include_collaboration_mode_instructions = false
+
+[analytics]
+enabled = false
+
+[feedback]
+enabled = false
+
+[history]
+persistence = "none"
+
+[agents]
+enabled = false
+
+[apps._default]
+enabled = false
+destructive_enabled = false
+open_world_enabled = false
 
 [features]
 ${disabledFeatures}
@@ -71,6 +95,10 @@ include_instructions = false
 
 [skills.bundled]
 enabled = false
+
+[shell_environment_policy]
+inherit = "none"
+experimental_use_profile = false
 
 [permissions.${JSON.stringify(M25_INTAKE_PERMISSION_PROFILE_ID)}]
 description = "CodeClosure M2.5 Intake isolated read-only"
@@ -113,6 +141,7 @@ function launchNonce(launch: AppServerProcessLaunch, sequence: number): string {
 class FreshCodexIntakeAssistant implements IntakeAssistantPort {
   readonly #environment: Readonly<Record<string, string | undefined>>;
   readonly #forbiddenRoots: readonly string[];
+  readonly #onSafeDiagnostic: CreateProductionIntakeAssistantOptions['onSafeDiagnostic'];
   #root: string | undefined;
   #launch: AppServerProcessLaunch | undefined;
   #sequence = 0;
@@ -121,6 +150,7 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
   public constructor(options: CreateProductionIntakeAssistantOptions) {
     this.#environment = options.environment;
     this.#forbiddenRoots = Object.freeze([...options.forbiddenRoots]);
+    this.#onSafeDiagnostic = options.onSafeDiagnostic;
   }
 
   public analyze(
@@ -162,6 +192,7 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
       launch,
       launchNonce: launchNonce(launch, this.#sequence),
       forbiddenRoots: this.#forbiddenRoots,
+      ...(this.#onSafeDiagnostic === undefined ? {} : { onSafeDiagnostic: this.#onSafeDiagnostic }),
     });
   }
 
@@ -179,11 +210,6 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
       mkdirSync(path, { mode: 0o700 });
     }
     writeFileSync(join(codexHome, 'config.toml'), controlledConfiguration(), { mode: 0o600 });
-    writeFileSync(
-      join(codexHome, 'requirements.toml'),
-      'managed = true\nprofile = "codeclosure-m2-5-intake"\n',
-      { mode: 0o600 },
-    );
     const authSource = optionalAuthSource(this.#environment);
     if (authSource !== undefined) {
       copyFileSync(authSource, join(codexHome, 'auth.json'));

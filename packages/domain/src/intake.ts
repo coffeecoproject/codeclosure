@@ -97,6 +97,7 @@ export type IntentProjectionField =
 export const IntentProjectionCanonicalProfileVersion = {
   M25_LOCAL_V1: 'codeclosure-m2-5-projection-v1',
   M25_LOCAL_V2: 'codeclosure-m2-5-projection-v2',
+  M251_EXACT_VALUE_MATCH_V3: 'codeclosure-m2-5-1-exact-value-match-v3',
 } as const;
 export type IntentProjectionCanonicalProfileVersion =
   (typeof IntentProjectionCanonicalProfileVersion)[keyof typeof IntentProjectionCanonicalProfileVersion];
@@ -446,7 +447,9 @@ export interface IntentProjectionRevisionV1 extends IntentProjectionRevisionReco
 export interface IntentProjectionRevisionV2 extends IntentProjectionRevisionRecordCommon {
   readonly schemaVersion: 2;
   readonly objective?: string;
-  readonly canonicalProfileVersion: typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2;
+  readonly canonicalProfileVersion:
+    | typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2
+    | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3;
 }
 
 export type IntentProjectionRevisionRecord =

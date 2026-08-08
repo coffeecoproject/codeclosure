@@ -302,14 +302,14 @@ void test('only named composition owners may import their exact privileged packa
   );
   assert.deepEqual(
     violations(
-      "import { M251_INTAKE_DISABLED_FEATURES } from '@codeclosure/adapter-codex-intake';",
+      "import { M251_LIVE_INTAKE_DISABLED_FEATURES } from '@codeclosure/adapter-codex-intake';",
       m251IntakeInvocationFixturePath,
     ),
     [],
   );
   assert.equal(
     violations(
-      "import { M251_INTAKE_DISABLED_FEATURES } from '@codeclosure/adapter-codex-intake';",
+      "import { M251_LIVE_INTAKE_DISABLED_FEATURES } from '@codeclosure/adapter-codex-intake';",
       compositionFixturePath,
     ).length,
     1,

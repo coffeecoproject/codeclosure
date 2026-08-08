@@ -66,6 +66,7 @@ import {
   M25_INTAKE_ASSISTANT_ADAPTER_ID,
   M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
   M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION,
   m25IntakeBudgetDefinition,
   type IntakeAssistantFailureReasonCode,
   type IntakeAssistantPort,
@@ -2072,7 +2073,8 @@ export class M25IntakeCoordinator {
     if (
       manifest.assistantAdapter.id !== M25_INTAKE_ASSISTANT_ADAPTER_ID ||
       (manifest.assistantAdapter.version !== M25_INTAKE_ASSISTANT_ADAPTER_VERSION &&
-        manifest.assistantAdapter.version !== M251_INTAKE_ASSISTANT_ADAPTER_VERSION)
+        manifest.assistantAdapter.version !== M251_INTAKE_ASSISTANT_ADAPTER_VERSION &&
+        manifest.assistantAdapter.version !== M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION)
     ) {
       throw new TypeError('Intake Manifest selects an unsupported Assistant Adapter');
     }

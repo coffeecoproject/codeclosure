@@ -12,13 +12,22 @@ export const M25_INTAKE_ASSISTANT_ADAPTER_ID = 'intake-assistant-adapter_codex-a
 export const M25_INTAKE_ASSISTANT_ADAPTER_VERSION = 'codeclosure-m2-5-intake-adapter-v1';
 export const M251_INTAKE_ASSISTANT_PROFILE_VERSION = 'codeclosure-m2-5-1-local-assistant-v2';
 export const M251_INTAKE_ASSISTANT_ADAPTER_VERSION = 'codeclosure-m2-5-1-intake-adapter-v2';
+export const M251_LIVE_INTAKE_ASSISTANT_PROFILE_VERSION = 'codeclosure-m2-5-1-local-assistant-v3';
+export const M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION = 'codeclosure-m2-5-1-intake-adapter-v3';
 export const M251_INTAKE_CLOSED_CONFIGURATION_ID = 'intake-config_codeclosure-m2-5-1-local';
 export const M251_INTAKE_CLOSED_CONFIGURATION_VERSION = 'codeclosure-m2-5-1-local-config-v1';
+export const M251_LIVE_INTAKE_CLOSED_CONFIGURATION_VERSION = 'codeclosure-m2-5-1-local-config-v2';
 export const M251_INTAKE_PROTOCOL_PROJECTION_ID = 'intake-protocol-projection_codeclosure-m2-5-1';
 export const M251_INTAKE_PROTOCOL_PROJECTION_VERSION = 'codeclosure-m2-5-1-projection-v1';
+export const M251_LIVE_INTAKE_PROTOCOL_PROJECTION_VERSION = 'codeclosure-m2-5-1-projection-v2';
+export const M251_INTAKE_INSTRUCTION_POLICY_ID = 'intake-instructions_codeclosure-m2-5-1';
+export const M251_INTAKE_INSTRUCTION_POLICY_VERSION =
+  'codeclosure-m2-5-1-exact-source-instructions-v1';
 export const M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_ID = 'intake-response_intent-analysis';
 export const M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION =
   'codeclosure-m2-5-intent-analysis-response-v1';
+export const M251_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION =
+  'codeclosure-m2-5-1-intent-analysis-response-v2';
 export const M25_ANSWER_ONLY_RESPONSE_CONTRACT_ID = 'intake-response_answer-only';
 export const M25_ANSWER_ONLY_RESPONSE_CONTRACT_VERSION = 'codeclosure-m2-5-answer-only-response-v1';
 export const M25_INTAKE_BUDGET_PROFILE_ID = 'intake-budget_codeclosure-m2-5-local';

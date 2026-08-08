@@ -148,7 +148,7 @@ function v1Compiler(): IntakePackageCompilerPort {
   return new M25IntakePackageCompiler({ canonicalizer, digests });
 }
 
-function v2Compiler(): IntakePackageCompilerPort {
+function currentCompiler(): IntakePackageCompilerPort {
   return new M251IntakePackageCompiler({ canonicalizer, digests });
 }
 
@@ -222,7 +222,7 @@ void test('completed v1 failure replays without another assistant effect', async
     const replayRuntime = coordinator(
       reopened,
       noCall,
-      v2Compiler(),
+      currentCompiler(),
       'm251-v1-fail-replay',
       policy.id,
     );
@@ -239,7 +239,7 @@ void test('completed v1 failure replays without another assistant effect', async
   }
 });
 
-void test('incomplete v1 operations reconcile closed and never resume through v2', async (t) => {
+void test('incomplete v1 operations reconcile closed and never resume through the current version', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);
@@ -281,7 +281,13 @@ void test('incomplete v1 operations reconcile closed and never resume through v2
   const reopened = SqliteControlStore.open({ filename });
   try {
     const noCall = new AnswerScriptAssistant([]);
-    const recovery = coordinator(reopened, noCall, v2Compiler(), 'm251-v2-recovery', policy.id);
+    const recovery = coordinator(
+      reopened,
+      noCall,
+      currentCompiler(),
+      'm251-v3-recovery',
+      policy.id,
+    );
     assert.deepEqual(recovery.reconcileStartup(), {
       scanned: 2,
       reconciledAnalysisFailures: 1,
@@ -314,19 +320,19 @@ void test('incomplete v1 operations reconcile closed and never resume through v2
   }
 });
 
-void test('new v2 operation persists one exact Manifest, reservation, and response binding', async (t) => {
+void test('new v3 operation persists one exact Manifest, reservation, and response binding', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);
   const operation = coordinator(
     initial,
-    new AnswerScriptAssistant([completedAnswer('A new v2 non-authoritative answer.')]),
-    v2Compiler(),
-    'm251-v2-new-operation',
+    new AnswerScriptAssistant([completedAnswer('A new v3 non-authoritative answer.')]),
+    currentCompiler(),
+    'm251-v3-new-operation',
     policy.id,
   );
   const result = await operation.submit({
-    commandId: commandId('command_m251-v2-new-operation'),
+    commandId: commandId('command_m251-v3-new-operation'),
     interactionAction: IntakeInteractionAction.ANSWER_ONLY,
     admittedUserContent: 'Explain the new versioned topic.',
   });
@@ -336,7 +342,7 @@ void test('new v2 operation persists one exact Manifest, reservation, and respon
   const manifest = authority.manifests[0];
   const reservation = authority.reservations[0];
   const response = authority.answerOnlyResponses[0];
-  assert.equal(manifest?.assistantAdapter.version, 'codeclosure-m2-5-1-intake-adapter-v2');
+  assert.equal(manifest?.assistantAdapter.version, 'codeclosure-m2-5-1-intake-adapter-v3');
   assert.ok(reservation !== undefined && 'externalOperationBinding' in reservation);
   assert.deepEqual(
     {
@@ -358,7 +364,7 @@ void test('new v2 operation persists one exact Manifest, reservation, and respon
   }
 });
 
-void test('stored v1/v2 Adapter substitution fails strict reopen', async (t) => {
+void test('stored v1/current Adapter substitution fails strict reopen', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);
@@ -381,7 +387,7 @@ void test('stored v1/v2 Adapter substitution fails strict reopen', async (t) => 
     const manifest = JSON.parse(row.record_json) as {
       assistantAdapter: { version: string };
     };
-    manifest.assistantAdapter.version = 'codeclosure-m2-5-1-intake-adapter-v2';
+    manifest.assistantAdapter.version = 'codeclosure-m2-5-1-intake-adapter-v3';
     raw.exec('DROP TRIGGER intake_manifests_no_update');
     raw
       .prepare('UPDATE intake_manifests SET record_json = ? WHERE id = ?')

@@ -19,6 +19,8 @@ import {
   m25IntakeConfigRead,
   m25IntakeManagedRequirements,
   m25IntakePermissionProfile,
+  m251LiveIntakeEffectiveConfigProjection,
+  m251LiveIntakePermissionProfile,
 } from './contracts.js';
 
 export interface EffectiveIntakeThread {
@@ -79,6 +81,114 @@ function exactKeys(value: JsonObject, expected: readonly string[], field: string
   }
 }
 
+function firstMismatchPath(
+  actual: JsonValue,
+  expected: JsonValue,
+  path: string,
+): string | undefined {
+  if (isJsonArray(actual) || isJsonArray(expected)) {
+    if (!isJsonArray(actual) || !isJsonArray(expected) || actual.length !== expected.length) {
+      return path;
+    }
+    for (const [index, expectedEntry] of expected.entries()) {
+      const actualEntry = actual[index];
+      if (actualEntry === undefined) {
+        return `${path}/${index}`;
+      }
+      const mismatch = firstMismatchPath(actualEntry, expectedEntry, `${path}/${index}`);
+      if (mismatch !== undefined) {
+        return mismatch;
+      }
+    }
+    return undefined;
+  }
+  if (isJsonObject(actual) || isJsonObject(expected)) {
+    if (!isJsonObject(actual) || !isJsonObject(expected)) {
+      return path;
+    }
+    const expectedKeys = Object.keys(expected).sort();
+    for (const key of expectedKeys) {
+      if (!(key in actual)) {
+        return `${path}/${key}`;
+      }
+      const actualEntry = actual[key];
+      const expectedEntry = expected[key];
+      if (actualEntry === undefined || expectedEntry === undefined) {
+        return `${path}/${key}`;
+      }
+      const mismatch = firstMismatchPath(actualEntry, expectedEntry, `${path}/${key}`);
+      if (mismatch !== undefined) {
+        return mismatch;
+      }
+    }
+    if (Object.keys(actual).length !== expectedKeys.length) {
+      const extraKeys = Object.keys(actual)
+        .filter((key) => !(key in expected))
+        .sort();
+      if (path === '/config/features') {
+        const safeKeys: string[] = [];
+        for (const key of extraKeys) {
+          if (!/^[a-z][a-z0-9_]{0,63}$/u.test(key)) {
+            continue;
+          }
+          const candidate = [...safeKeys, key].join('.');
+          if (Buffer.byteLength(candidate, 'utf8') > 384) {
+            break;
+          }
+          safeKeys.push(key);
+        }
+        if (safeKeys.length > 0) {
+          const maskedCount = extraKeys.length - safeKeys.length;
+          const projected = [
+            ...safeKeys,
+            ...(maskedCount === 0 ? [] : [`UNKNOWN_${String(maskedCount)}`]),
+          ].join('.');
+          return extraKeys.length === 1
+            ? `${path}/${projected}`
+            : `${path}/EXTRA_KEYS/${projected}`;
+        }
+      }
+      return `${path}/UNKNOWN_KEY`;
+    }
+    return undefined;
+  }
+  return actual === expected ? undefined : path;
+}
+
+function firstProjectionMismatchPath(
+  actual: JsonValue,
+  expected: JsonValue,
+  path: string,
+): string | undefined {
+  if (isJsonObject(expected)) {
+    if (!isJsonObject(actual)) {
+      return path;
+    }
+    for (const key of Object.keys(expected).sort()) {
+      const actualEntry = actual[key];
+      const expectedEntry = expected[key];
+      if (actualEntry === undefined || expectedEntry === undefined) {
+        return `${path}/${key}`;
+      }
+      const mismatch = firstProjectionMismatchPath(actualEntry, expectedEntry, `${path}/${key}`);
+      if (mismatch !== undefined) {
+        return mismatch;
+      }
+    }
+    return undefined;
+  }
+  return firstMismatchPath(actual, expected, path);
+}
+
+function protocolAssertion(message: string, token: string): TypeError {
+  const error = new TypeError(message);
+  Object.defineProperty(error, 'safeDiagnosticToken', {
+    enumerable: false,
+    value: token.slice(0, 512),
+  });
+  return error;
+}
+
 function validateAgentMessage(value: JsonObject): void {
   exactKeys(value, ['id', 'memoryCitation', 'phase', 'text', 'type'], 'agent message');
   if (
@@ -102,9 +212,15 @@ function notificationRef(
   return typeof value === 'string' ? value : undefined;
 }
 
-export function assertManagedRequirements(value: JsonValue): void {
-  if (digestCanonical(value) !== digestCanonical(m25IntakeManagedRequirements)) {
-    throw new TypeError('managed requirements do not match the closed Intake profile');
+export function assertManagedRequirements(
+  value: JsonValue,
+  expected: JsonValue = m25IntakeManagedRequirements,
+): void {
+  if (digestCanonical(value) !== digestCanonical(expected)) {
+    throw protocolAssertion(
+      'managed requirements do not match the closed Intake profile',
+      `MANAGED_REQUIREMENTS${firstMismatchPath(value, expected, '') ?? '/DIGEST'}`,
+    );
   }
 }
 
@@ -113,46 +229,145 @@ export function assertClosedConfiguration(
   expected: JsonValue = m25IntakeConfigRead,
 ): void {
   if (digestCanonical(value) !== digestCanonical(expected)) {
-    throw new TypeError('effective configuration does not match the closed Intake profile');
+    throw protocolAssertion(
+      'effective configuration does not match the closed Intake profile',
+      `CONFIG${firstMismatchPath(value, expected, '') ?? '/DIGEST'}`,
+    );
+  }
+}
+
+export function assertM251ClosedConfiguration(value: JsonValue): void {
+  const result = object(value, 'M2.5.1 configuration read');
+  exactKeys(result, ['config', 'layers', 'origins'], 'M2.5.1 configuration read');
+  const config = object(result['config'], 'M2.5.1 effective configuration');
+  const layers = array(result['layers'], 'M2.5.1 configuration layers');
+  const origins = object(result['origins'], 'M2.5.1 configuration origins');
+  if (layers.length > 128 || Object.keys(origins).length > 1_024) {
+    throw protocolAssertion(
+      'configuration provenance exceeds its bounded projection',
+      'CONFIG/PROVENANCE',
+    );
+  }
+  for (const [key, expected] of Object.entries(m251LiveIntakeEffectiveConfigProjection)) {
+    const actual = config[key];
+    const mismatch =
+      actual === undefined
+        ? `/config/${key}`
+        : key === 'features' || key === 'mcp_servers'
+          ? firstMismatchPath(actual, expected, `/config/${key}`)
+          : firstProjectionMismatchPath(actual, expected, `/config/${key}`);
+    if (mismatch !== undefined) {
+      throw protocolAssertion(
+        'effective configuration does not match the M2.5.1 closed projection',
+        `CONFIG${mismatch}`,
+      );
+    }
+  }
+  for (const key of ['compact_prompt', 'developer_instructions', 'instructions', 'tools']) {
+    if (!(key in config) || config[key] !== null) {
+      throw protocolAssertion(
+        'effective configuration contains an instruction or tool override',
+        `CONFIG/config/${key}`,
+      );
+    }
   }
 }
 
 export function assertPermissionProfile(value: JsonValue): void {
-  const result = object(value, 'permission profile list');
-  exactKeys(result, ['data', 'nextCursor'], 'permission profile list');
-  const data = array(result['data'], 'permission profile data');
-  if (
-    data.length !== 1 ||
-    result['nextCursor'] !== null ||
-    digestCanonical(data[0]) !== digestCanonical(m25IntakePermissionProfile)
-  ) {
-    throw new TypeError('permission profile does not match the closed Intake profile');
+  const expected = Object.freeze({
+    data: Object.freeze([m25IntakePermissionProfile]),
+    nextCursor: null,
+  });
+  if (digestCanonical(value) !== digestCanonical(expected)) {
+    throw protocolAssertion(
+      'permission profile does not match the closed Intake profile',
+      `PERMISSION_PROFILE${firstMismatchPath(value, expected, '') ?? '/DIGEST'}`,
+    );
+  }
+}
+
+export function assertM251PermissionProfile(value: JsonValue): void {
+  const result = object(value, 'M2.5.1 permission profile list');
+  exactKeys(result, ['data', 'nextCursor'], 'M2.5.1 permission profile list');
+  const data = array(result['data'], 'M2.5.1 permission profile data');
+  if (data.length > 256 || result['nextCursor'] !== null) {
+    throw protocolAssertion(
+      'permission profile projection exceeds its bounded list',
+      'PERMISSION_PROFILE/data/BOUNDS',
+    );
+  }
+  const selected: JsonObject[] = [];
+  for (const entry of data) {
+    if (!isJsonObject(entry)) {
+      throw protocolAssertion(
+        'permission profile projection contains a malformed entry',
+        'PERMISSION_PROFILE/data/SCHEMA',
+      );
+    }
+    exactKeys(entry, ['allowed', 'description', 'id'], 'M2.5.1 permission profile entry');
+    if (
+      typeof entry['allowed'] !== 'boolean' ||
+      typeof entry['id'] !== 'string' ||
+      Buffer.byteLength(entry['id'], 'utf8') > 1_024 ||
+      (entry['description'] !== null &&
+        (typeof entry['description'] !== 'string' ||
+          Buffer.byteLength(entry['description'], 'utf8') > 16_384))
+    ) {
+      throw protocolAssertion(
+        'permission profile projection contains an invalid entry',
+        'PERMISSION_PROFILE/data/SCHEMA',
+      );
+    }
+    if (entry['id'] === m251LiveIntakePermissionProfile.id) {
+      selected.push(entry);
+    }
+  }
+  const selectedProfile = selected[0];
+  const mismatch =
+    selected.length !== 1 || selectedProfile === undefined
+      ? '/selected'
+      : firstMismatchPath(selectedProfile, m251LiveIntakePermissionProfile, '/selected');
+  if (mismatch !== undefined) {
+    throw protocolAssertion(
+      'permission profile does not match the M2.5.1 closed projection',
+      `PERMISSION_PROFILE${mismatch}`,
+    );
   }
 }
 
 export function decodeEffectiveThread(
   value: JsonValue,
   expectedCwd: string,
+  expectedServiceTier: JsonValue = M25_INTAKE_SERVICE_TIER,
 ): EffectiveIntakeThread {
-  const result = object(value, 'Thread response');
-  const thread = object(result['thread'], 'Thread response.thread');
-  const sandbox = object(result['sandbox'], 'Thread response.sandbox');
-  if (
-    boundedString(result['model'], 'Thread model') !== M25_INTAKE_MODEL ||
-    boundedString(result['modelProvider'], 'Thread model provider') !== M25_INTAKE_MODEL_PROVIDER ||
-    result['serviceTier'] !== M25_INTAKE_SERVICE_TIER ||
-    boundedString(result['cwd'], 'Thread cwd') !== expectedCwd ||
-    result['approvalPolicy'] !== 'never' ||
-    result['approvalsReviewer'] !== 'user' ||
-    result['reasoningEffort'] !== M25_INTAKE_REASONING_EFFORT ||
-    sandbox['type'] !== 'readOnly' ||
-    sandbox['networkAccess'] !== false ||
-    array(result['instructionSources'], 'Thread instruction sources').length !== 0
-  ) {
-    throw new TypeError('effective Thread does not match the closed Intake profile');
+  if (!isJsonObject(value)) {
+    throw protocolAssertion('Thread response must be an object', 'THREAD/SCHEMA');
   }
+  const expected = Object.freeze({
+    approvalPolicy: 'never',
+    approvalsReviewer: 'user',
+    cwd: expectedCwd,
+    instructionSources: Object.freeze([]),
+    model: M25_INTAKE_MODEL,
+    modelProvider: M25_INTAKE_MODEL_PROVIDER,
+    reasoningEffort: M25_INTAKE_REASONING_EFFORT,
+    sandbox: Object.freeze({ networkAccess: false, type: 'readOnly' }),
+    serviceTier: expectedServiceTier,
+  });
+  const mismatch = firstProjectionMismatchPath(value, expected, '');
+  if (mismatch !== undefined) {
+    throw protocolAssertion(
+      'effective Thread does not match the closed Intake projection',
+      `THREAD${mismatch}`,
+    );
+  }
+  const thread = value['thread'];
+  if (!isJsonObject(thread) || typeof thread['id'] !== 'string') {
+    throw protocolAssertion('Thread response has no bounded Thread id', 'THREAD/thread/id');
+  }
+  const threadId = boundedString(thread['id'], 'Thread id', 1_024);
   return Object.freeze({
-    threadId: boundedString(thread['id'], 'Thread id', 1_024),
+    threadId,
     cwd: expectedCwd,
   });
 }

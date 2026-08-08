@@ -490,7 +490,10 @@ const projectionSchema = z.discriminatedUnion('schemaVersion', [
       ...projectionSchemaBase,
       schemaVersion: z.literal(2),
       objective: nonBlankStringSchema.optional(),
-      canonicalProfileVersion: z.literal(IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2),
+      canonicalProfileVersion: z.enum([
+        IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2,
+        IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3,
+      ]),
     })
     .strict(),
 ]);

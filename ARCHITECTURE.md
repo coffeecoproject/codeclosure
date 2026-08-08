@@ -115,8 +115,14 @@ cross-version substitution fails closed. The Slice 0 closure review passed.
 Slice 1 now implements the versioned closed Intake configuration,
 Adapter-local typed protocol Projection, closed normalized-event Observer,
 stage-aware message handling, safe diagnostics, and strict retained-v1
-compatibility. Mandatory real Intake calls and the real phase composition
-remain unimplemented.
+compatibility. Slice 2 versions the strict Intent response and exact-source
+instruction contracts, keeps assistant-authored byte coordinates out of the
+new wire contract, and lets a versioned Runtime projection policy derive only
+byte-identical retained-value matches as `USER_STATED`; non-matches remain
+model proposals and cannot satisfy Admission. Its explicit live command passes
+the lower-client prerequisite plus isolated Answer-only, clear Intent, and
+ambiguous Intent paths with metadata-only receipts. The real phase composition
+remains unimplemented.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -135,8 +141,8 @@ The proposed [M2.7 Local Runtime Host contract](docs/runtime-host.md),
 and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
 post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
-Only M2.5.1 Slice 1 production behavior is implemented; mandatory live Intake
-compatibility, real phase composition, and M2.5.1 assessment have not started.
+Only M2.5.1 Slices 1 and 2 production behavior is implemented; real phase
+composition and M2.5.1 assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice

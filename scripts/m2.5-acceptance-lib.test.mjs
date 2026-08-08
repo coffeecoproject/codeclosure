@@ -390,7 +390,7 @@ function passingManifest() {
                 intakeRunStatus: 'MATERIALIZED',
                 intakeRunVersion: 2,
                 assistantAdapterId: 'intake-assistant-adapter_codex-app-server',
-                assistantAdapterVersion: 'codeclosure-m2-5-1-intake-adapter-v2',
+                assistantAdapterVersion: 'codeclosure-m2-5-1-intake-adapter-v3',
                 rawRequestDigests: [digest, digest],
                 proposalDigests: [digest, digest],
                 projectionDigests: [digest, digest],
@@ -439,15 +439,15 @@ function passingManifest() {
         admissionPolicy: { id: 'admission', version: 'v1', digest },
         assistantProfile: {
           id: 'intake-assistant-profile_codeclosure-m2-5-local',
-          version: 'codeclosure-m2-5-1-local-assistant-v2',
-          digest: 'sha256:d97af90580601c1618cb45a49333b5d7248eaa5454ed7b2f9e12707eed49c755',
+          version: 'codeclosure-m2-5-1-local-assistant-v3',
+          digest: 'sha256:f0a3b891c1ecb4828ae32a2b16276891f49d6b106bd2a194fc82b9b88c8e19f2',
         },
         workflowPolicy: { id: 'workflow', version: 'v1', digest },
         executionProfile: { id: 'execution', version: 'v1', digest },
         assistantAdapter: {
           id: 'intake-assistant-adapter_codex-app-server',
-          version: 'codeclosure-m2-5-1-intake-adapter-v2',
-          digest: 'sha256:4b860931668d2d295d4fa8749333541355591b2229942a7866353a593c5ae9ab',
+          version: 'codeclosure-m2-5-1-intake-adapter-v3',
+          digest: 'sha256:650fad7dee55a8c4fb7e950356689828fcd173303f62ea863a8043ecb2d3b975',
         },
         budgetProfile: { id: 'budget', version: 'v1', digest },
         protocol: {
@@ -461,11 +461,11 @@ function passingManifest() {
         closedInvocation: {
           permissionProfileId: 'codeclosure-m2-5-intake-no-authority-effects',
           configurationDigest:
-            'sha256:401be11e8a3e1056fcbff1a0f715b1261b426da6c66f86a6ce9b6e01e9805a31',
+            'sha256:b28e1eaedb86dd3295e115d951eac7e77920ad07aa58235c7e3a9814dbd00197',
           managedRequirementsDigest:
-            'sha256:e4ad87b63fa4aa90830a85d180ef2886d589c3f2fa9da0dac6682ef09e302d42',
+            'sha256:25b86fa3671a4ee1ea904a1f5777c164347763d01dda591fcac3022b64235e10',
           permissionProfileDigest:
-            'sha256:142c727167440f24fd85b129a0e4c0dd3a8f7f04f62cd3fe57c277077067960c',
+            'sha256:6e4841ccf5e56ded5cc0d7d9d774e61d0ede8cf1dafa0f2493da09b6d4939bde',
         },
       },
       matrixContractDigest: M25_ACCEPTANCE_MATRIX_CONTRACT_DIGEST,
@@ -745,6 +745,10 @@ void test('governed scenario and proof configuration require one exact Intake ve
             ...fixture.manifest.proofConfiguration.closedInvocation,
             configurationDigest:
               'sha256:6256ec8073b91704258b7d974685b682f140747bdfd5ec2ae8c11404fa72ff2e',
+            managedRequirementsDigest:
+              'sha256:e4ad87b63fa4aa90830a85d180ef2886d589c3f2fa9da0dac6682ef09e302d42',
+            permissionProfileDigest:
+              'sha256:142c727167440f24fd85b129a0e4c0dd3a8f7f04f62cd3fe57c277077067960c',
           },
         },
         scenarioEvidence: fixture.manifest.scenarioEvidence.map((entry) =>
@@ -754,6 +758,51 @@ void test('governed scenario and proof configuration require one exact Intake ve
         ),
       },
       (path) => mismatchedArtifacts.get(path),
+    ),
+  );
+  const retainedV2Artifact = {
+    ...artifact,
+    finalSafeAuthorityProjection: {
+      ...artifact.finalSafeAuthorityProjection,
+      assistantAdapterVersion: 'codeclosure-m2-5-1-intake-adapter-v2',
+    },
+  };
+  const retainedV2Bytes = Buffer.from(`${JSON.stringify(retainedV2Artifact)}\n`, 'utf8');
+  const retainedV2Artifacts = new Map(fixture.artifacts);
+  retainedV2Artifacts.set(evidence.artifactPath, retainedV2Bytes);
+  assert.doesNotThrow(() =>
+    validateM25EvidenceManifest(
+      {
+        ...fixture.manifest,
+        proofConfiguration: {
+          ...fixture.manifest.proofConfiguration,
+          assistantProfile: {
+            ...fixture.manifest.proofConfiguration.assistantProfile,
+            version: 'codeclosure-m2-5-1-local-assistant-v2',
+            digest: 'sha256:d97af90580601c1618cb45a49333b5d7248eaa5454ed7b2f9e12707eed49c755',
+          },
+          assistantAdapter: {
+            ...fixture.manifest.proofConfiguration.assistantAdapter,
+            version: 'codeclosure-m2-5-1-intake-adapter-v2',
+            digest: 'sha256:4b860931668d2d295d4fa8749333541355591b2229942a7866353a593c5ae9ab',
+          },
+          closedInvocation: {
+            ...fixture.manifest.proofConfiguration.closedInvocation,
+            configurationDigest:
+              'sha256:401be11e8a3e1056fcbff1a0f715b1261b426da6c66f86a6ce9b6e01e9805a31',
+            managedRequirementsDigest:
+              'sha256:e4ad87b63fa4aa90830a85d180ef2886d589c3f2fa9da0dac6682ef09e302d42',
+            permissionProfileDigest:
+              'sha256:142c727167440f24fd85b129a0e4c0dd3a8f7f04f62cd3fe57c277077067960c',
+          },
+        },
+        scenarioEvidence: fixture.manifest.scenarioEvidence.map((entry) =>
+          entry.scenarioId === evidence.scenarioId
+            ? { ...entry, artifactDigest: sha256Bytes(retainedV2Bytes) }
+            : entry,
+        ),
+      },
+      (path) => retainedV2Artifacts.get(path),
     ),
   );
   assert.throws(

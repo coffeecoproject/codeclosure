@@ -63,11 +63,15 @@ demonstration baseline, and accepted ADR 0043. Its exact new-operation
 toolchain baseline is now the reviewed Codex CLI `0.146.1` binary and protocol
 snapshot; retained M2/M2.5 `0.146.0` authority keeps its historical meaning
 and cannot be substituted into the selected installation. The Slice 0 closure
-review passed. Slice 1 subsequently implemented and reviewed the versioned
+review passed. Slice 1 subsequently implemented and reviewed its versioned v2
 Intake compatibility correction, Adapter-local typed protocol Projection,
 normalized-event Observer, safe diagnostics, and retained-v1 compatibility.
-Slice 2 may begin, but mandatory real Intake compatibility, real phase
-composition, and milestone assessment have not started. A real pinned-version
+Slice 2 now adds a v3 Profile/Adapter identity, preserves Slice 1 v2 records
+without silent recall, and passes the explicitly authorized real Answer-only,
+clear Intent, and ambiguous Intent compatibility paths with metadata-only
+receipts, versioned strict structured-output and exact-source instruction
+contracts, and Runtime-owned exact retained-value matching. Slice 3 may begin,
+but real phase composition and milestone assessment have not started. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

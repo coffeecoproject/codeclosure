@@ -9,6 +9,7 @@ import { createFixtureAppServerLaunch } from '@codeclosure/codex-app-server-clie
 import type { AppServerNotification, JsonObject } from '@codeclosure/codex-app-server-client';
 import {
   intakeManifestId,
+  intakeManifestProjection,
   intakeRunId,
   intakeRunVersion,
   intentAdmissionDecisionId,
@@ -28,19 +29,28 @@ import {
 import {
   CanonicalJsonSha256DigestProvider,
   M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
+  M251_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
   M251IntakePackageCompiler,
+  M25IntakePackageCompiler,
   Rfc8785Canonicalizer,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
+  m25IntentAnalysisResponseSchema,
+  m251LiveIntakeAssistantProfile,
+  m251IntakeAssistantAdapter,
   m251IntakeAssistantProfile,
+  m251IntentAnalysisResponseSchema,
   type AnswerOnlyAssistantInput,
   type IntentAnalysisAssistantInput,
 } from '@codeclosure/runtime';
 import {
   IntakeProtocolProjection,
-  M251_INTAKE_DISABLED_FEATURES,
+  M251_LIVE_INTAKE_DISABLED_FEATURES,
   createCodexIntakeAssistantAdapter,
-  m251IntakeClosedConfig,
+  decodeIntentAnalysisResponse,
+  m251LiveIntakeClosedConfig,
+  m251LiveIntakeEffectiveConfigProjection,
   type IntakeObservedEvent,
 } from '@codeclosure/adapter-codex-intake';
 
@@ -133,6 +143,32 @@ function intentInput(): IntentAnalysisAssistantInput {
   });
 }
 
+function retainedV2AnswerInput(): AnswerOnlyAssistantInput {
+  const current = answerInput();
+  const packageValue = Object.freeze({
+    ...current.package,
+    assistantProfile: m251IntakeAssistantProfile,
+    assistantAdapter: m251IntakeAssistantAdapter,
+  });
+  const { manifestDigest: currentDigest, ...currentManifest } = current.manifest;
+  void currentDigest;
+  const manifestBase = Object.freeze({
+    ...currentManifest,
+    assistantAdapter: m251IntakeAssistantAdapter,
+    packageDigest: digests.digest(packageValue),
+  });
+  const manifest = Object.freeze({
+    ...manifestBase,
+    manifestDigest: digests.digest(
+      intakeManifestProjection({
+        ...manifestBase,
+        manifestDigest: current.manifest.manifestDigest,
+      }),
+    ),
+  });
+  return Object.freeze({ package: packageValue, manifest });
+}
+
 function fixtureAdapter(t: TestContext, scenario: string) {
   const root = mkdtempSync(join(tmpdir(), 'codeclosure-intake-adapter-v2-'));
   t.after(() => rmSync(root, { force: true, recursive: true }));
@@ -150,17 +186,20 @@ function fixtureAdapter(t: TestContext, scenario: string) {
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome,
     protocolIdentity: {
-      version: `codex-cli ${m251IntakeAssistantProfile.codexVersion}`,
-      snapshotDigest: m251IntakeAssistantProfile.protocolSnapshotDigest,
+      version: `codex-cli ${m251LiveIntakeAssistantProfile.codexVersion}`,
+      snapshotDigest: m251LiveIntakeAssistantProfile.protocolSnapshotDigest,
     },
     scenario,
     scriptPath: fixtureScript,
     temporaryDirectory,
   });
-  assert.equal(launch.summary.codexVersion, `codex-cli ${m251IntakeAssistantProfile.codexVersion}`);
+  assert.equal(
+    launch.summary.codexVersion,
+    `codex-cli ${m251LiveIntakeAssistantProfile.codexVersion}`,
+  );
   assert.equal(
     launch.summary.protocolSnapshotDigest,
-    m251IntakeAssistantProfile.protocolSnapshotDigest,
+    m251LiveIntakeAssistantProfile.protocolSnapshotDigest,
   );
   const diagnostics: string[] = [];
   const assistant = createCodexIntakeAssistantAdapter({
@@ -220,22 +259,199 @@ function rawResponseItemNotification(sequence: number, item: JsonObject): AppSer
   };
 }
 
-void test('v2 closed configuration removes only the deprecated Web Search feature keys', () => {
-  assert.equal(m251IntakeClosedConfig.web_search, 'disabled');
-  assert.equal(M251_INTAKE_DISABLED_FEATURES.includes('web_search_cached'), false);
-  assert.equal(M251_INTAKE_DISABLED_FEATURES.includes('web_search_request'), false);
-  assert.equal('web_search_cached' in m251IntakeClosedConfig.features, false);
-  assert.equal('web_search_request' in m251IntakeClosedConfig.features, false);
-  assert.equal(m251IntakeClosedConfig.features['shell_tool'], false);
+void test('v2 closed configuration removes deprecated Web Search keys and disables 0.146.1 features', () => {
+  assert.equal(m251LiveIntakeClosedConfig.web_search, 'disabled');
+  assert.equal(M251_LIVE_INTAKE_DISABLED_FEATURES.includes('web_search_cached'), false);
+  assert.equal(M251_LIVE_INTAKE_DISABLED_FEATURES.includes('web_search_request'), false);
+  assert.equal('web_search_cached' in m251LiveIntakeClosedConfig.features, false);
+  assert.equal('web_search_request' in m251LiveIntakeClosedConfig.features, false);
+  assert.equal(m251LiveIntakeClosedConfig.features['shell_tool'], false);
+  assert.equal(m251LiveIntakeClosedConfig.features['enable_request_compression'], false);
+  assert.equal(m251LiveIntakeClosedConfig.features['fast_mode'], false);
+  assert.equal(m251LiveIntakeClosedConfig.features['guardian_approval'], false);
+  assert.equal(m251LiveIntakeClosedConfig.features['mentions_v2'], false);
+  assert.equal('remote_control' in m251LiveIntakeClosedConfig.features, false);
+  assert.equal(m251LiveIntakeEffectiveConfigProjection.features.remote_control, false);
+  assert.equal('search_tool' in m251LiveIntakeClosedConfig.features, false);
+  assert.equal('use_legacy_landlock' in m251LiveIntakeClosedConfig.features, false);
 });
 
-void test('the formerly failing decoded sequence completes through the v2 Adapter', async (t) => {
+void test('M2.5.1 versions only the Intent response contract into the strict supported subset', () => {
+  const input = intentInput();
+  const schema = input.package.responseContract.schema;
+  assert.equal(
+    input.package.responseContract.version,
+    M251_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION,
+  );
+  assert.deepEqual(schema, m251IntentAnalysisResponseSchema);
+  assert.equal(JSON.stringify(schema).includes('uniqueItems'), false);
+  assert.equal(
+    m251IntentAnalysisResponseSchema.properties.candidateSourceSpanSuggestions.maxItems,
+    0,
+  );
+  assert.deepEqual(
+    [...m251IntentAnalysisResponseSchema.required].sort(),
+    Object.keys(m251IntentAnalysisResponseSchema.properties).sort(),
+  );
+
+  const v1Compiler = new M25IntakePackageCompiler({
+    canonicalizer: new Rfc8785Canonicalizer(),
+    digests,
+  });
+  const v1 = v1Compiler.compileIntentAnalysis({
+    manifestId: intakeManifestId('intake-manifest_adapter-v1-contract'),
+    createdAt: now,
+    intakeRunId: input.package.intakeRunId,
+    rawRequestRevisions: input.package.rawRequestRevisions,
+    admissionPolicy: policy,
+  });
+  assert.equal(v1.package.responseContract.version, M25_INTENT_ANALYSIS_RESPONSE_CONTRACT_VERSION);
+  assert.deepEqual(v1.package.responseContract.schema, m25IntentAnalysisResponseSchema);
+});
+
+void test('the v2 decoder normalizes nullable wire fields and retains local uniqueness checks', () => {
+  const input = intentInput();
+  const validWireResponse = {
+    proposedObjective: null,
+    proposedCriteria: [],
+    proposedScope: null,
+    proposedNonGoals: [],
+    proposedAssumptions: [],
+    proposedQuestions: [],
+    candidateSourceSpanSuggestions: [],
+    proposedClassification: null,
+  };
+  assert.deepEqual(decodeIntentAnalysisResponse(JSON.stringify(validWireResponse), input.package), {
+    proposedCriteria: [],
+    proposedNonGoals: [],
+    proposedAssumptions: [],
+    proposedQuestions: [],
+    candidateSourceSpanSuggestions: [],
+  });
+  const { proposedScope: omitted, ...missingNullableField } = validWireResponse;
+  void omitted;
+  assert.throws(
+    () => decodeIntentAnalysisResponse(JSON.stringify(missingNullableField), input.package),
+    /unknown or missing fields/,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({
+          ...validWireResponse,
+          proposedCriteria: ['same', 'same'],
+        }),
+        input.package,
+      ),
+    /duplicate byte-identical items/,
+  );
+  assert.throws(
+    () =>
+      decodeIntentAnalysisResponse(
+        JSON.stringify({
+          ...validWireResponse,
+          candidateSourceSpanSuggestions: [
+            {
+              projectionFieldRef: 'OBJECTIVE',
+              itemIndex: null,
+              rawRequestRevision: 1,
+              startByte: 0,
+              endByte: 1,
+            },
+          ],
+        }),
+        input.package,
+      ),
+    /must be empty/,
+  );
+});
+
+void test('configuration mismatch diagnostics expose only the first safe field path', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-config-mismatch');
+  const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+  assert.deepEqual(fixture.diagnostics, [
+    'PROCESS_UNAVAILABLE/CONFIGURATION/CONFIG/config/features/apps',
+  ]);
+  assert.equal(JSON.stringify(fixture.diagnostics).includes('true'), false);
+});
+
+void test('configuration diagnostics identify only a normalized feature key without its value', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-config-extra-feature');
+  const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+  assert.deepEqual(fixture.diagnostics, [
+    'PROCESS_UNAVAILABLE/CONFIGURATION/CONFIG/config/features/future_feature',
+  ]);
+  assert.equal(JSON.stringify(fixture.diagnostics).includes('false'), false);
+});
+
+void test('configuration diagnostics reject instruction overrides without exposing content', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-config-instruction-override');
+  const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+  assert.deepEqual(fixture.diagnostics, [
+    'PROCESS_UNAVAILABLE/CONFIGURATION/CONFIG/config/developer_instructions',
+  ]);
+  assert.equal(JSON.stringify(fixture.diagnostics).includes('sensitive-instruction'), false);
+});
+
+void test('configuration projection rejects a selected nested capability mismatch', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-config-agents-enabled');
+  const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+  assert.deepEqual(fixture.diagnostics, [
+    'PROCESS_UNAVAILABLE/CONFIGURATION/CONFIG/config/agents/enabled',
+  ]);
+});
+
+for (const [scenario, expectedDiagnostic] of [
+  [
+    'v2-managed-requirements-mismatch',
+    'PROCESS_UNAVAILABLE/CONFIGURATION/MANAGED_REQUIREMENTS/requirements',
+  ],
+  [
+    'v2-permission-profile-mismatch',
+    'PROCESS_UNAVAILABLE/CONFIGURATION/PERMISSION_PROFILE/selected/allowed',
+  ],
+] as const) {
+  void test(`${scenario} exposes only its safe closed-profile path`, async (t) => {
+    const fixture = fixtureAdapter(t, scenario);
+    const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+    assert.equal(result.kind, 'FAILED');
+    assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+    assert.deepEqual(fixture.diagnostics, [expectedDiagnostic]);
+    assert.equal(JSON.stringify(fixture.diagnostics).includes('fixture-mismatch'), false);
+  });
+}
+
+void test('retained Slice 1 v2 input closes before process launch instead of receiving v3 semantics', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-observed-sequence');
+  const result = await fixture.assistant.answer(
+    retainedV2AnswerInput(),
+    new AbortController().signal,
+  );
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_UNAVAILABLE');
+  assert.equal(result.observation.processLaunchCount, 0);
+  assert.equal(result.observation.threadStartCount, 0);
+  assert.equal(result.observation.turnStartCount, 0);
+  assert.deepEqual(fixture.diagnostics, [
+    'PROCESS_UNAVAILABLE/INPUT_VALIDATION/ASSISTANT_UNAVAILABLE',
+  ]);
+});
+
+void test('the formerly failing decoded sequence completes through the current v3 Adapter', async (t) => {
   const fixture = fixtureAdapter(t, 'v2-observed-sequence');
   const input = answerInput();
   assert.equal(input.package.assistantProfile.codexVersion, '0.146.1');
   assert.equal(
     input.package.assistantProfile.protocolSnapshotDigest,
-    m251IntakeAssistantProfile.protocolSnapshotDigest,
+    m251LiveIntakeAssistantProfile.protocolSnapshotDigest,
   );
   const result = await fixture.assistant.answer(input, new AbortController().signal);
   assert.equal(
@@ -259,7 +475,25 @@ void test('the formerly failing decoded sequence completes through the v2 Adapte
   assert.deepEqual(fixture.diagnostics, []);
 });
 
-void test('the current governed assumption scenario uses the version-2 Intake Adapter', async (t) => {
+void test('the Adapter-local Thread projection rejects non-legacy history mode', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-thread-history-paginated');
+  const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+  assert.deepEqual(fixture.diagnostics, [
+    'PROJECTED_MALFORMED_PARAMS/OBSERVATION/thread/started/thread/historyMode',
+  ]);
+});
+
+void test('the v2 Thread projection accepts only the null-normalized default service tier', async (t) => {
+  const fixture = fixtureAdapter(t, 'v2-thread-service-tier-drift');
+  const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
+  assert.equal(result.kind, 'FAILED');
+  assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
+  assert.deepEqual(fixture.diagnostics, ['PROCESS_UNAVAILABLE/THREAD_START/THREAD/serviceTier']);
+});
+
+void test('the current governed assumption scenario uses the version-3 Intake Adapter', async (t) => {
   const fixture = fixtureAdapter(t, 'v2-cli-unsupported-assumption');
   const input = intentInput();
   const result = await fixture.assistant.analyze(input, new AbortController().signal);
@@ -360,6 +594,31 @@ void test('rate-limit projection validates then discards all account values', ()
     sequence: 1,
   });
   assert.equal(JSON.stringify(harness.events).includes('secret'), false);
+});
+
+void test('Turn error projection retains only the fixed error class and retry disposition', () => {
+  const harness = projectionHarness();
+  harness.projection.record({
+    method: 'error',
+    params: {
+      error: {
+        additionalDetails: 'sensitive-additional-details',
+        codexErrorInfo: 'badRequest',
+        message: 'sensitive-error-message',
+      },
+      threadId: refs.threadId,
+      turnId: refs.turnId,
+      willRetry: false,
+    },
+    sequence: 1,
+  });
+  assert.deepEqual(harness.events[0], {
+    diagnostic: 'PROJECTED_UNMAPPED_LIFECYCLE',
+    kind: 'PROTOCOL_VIOLATION',
+    sequence: 1,
+    token: 'error/badRequest/NO_RETRY',
+  });
+  assert.equal(JSON.stringify(harness.events).includes('sensitive'), false);
 });
 
 void test('raw Response Items have one exhaustive content-free effect disposition', () => {

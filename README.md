@@ -33,8 +33,10 @@ regression evidence. Its decision contract and candidate-free project-read ADR
 are accepted. The current contract selects the exact reviewed Codex `0.146.1`
 binary and protocol snapshot while preserving historical `0.146.0` authority;
 contract validation and the versioned Intake Adapter correction have passed
-offline closure review. Mandatory real Intake calls and the real phase
-composition remain later work, and milestone assessment has not started.
+offline closure review. The separate bounded real Intake compatibility slice
+now also passes its lower-client prerequisite plus real Answer-only, clear
+Intent, and ambiguous Intent paths with metadata-only evidence. The real phase
+composition remains later work, and milestone assessment has not started.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and
@@ -104,6 +106,9 @@ Current repository commands are:
 - `pnpm check:m2.5.1:slice0` — validate the frozen M2.5.1 identities, protocol
   dispositions, proof ownership, unchanged-schema causality, and protected
   demonstration checker without claiming production implementation.
+- `pnpm probe:m2.5.1:intake:live` — after explicit environment authorization,
+  run the pinned lower-client prerequisite and the three isolated real Intake
+  compatibility paths, emitting only validated metadata receipts.
 
 The exact implemented proof coverage is recorded in the M1 implementation plan
 and completion review. The test runner fails when any invoked test is failed,

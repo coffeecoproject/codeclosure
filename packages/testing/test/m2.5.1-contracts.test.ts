@@ -25,6 +25,7 @@ import {
   createM25LocalAdmissionPolicyDefinition,
   m25IntakeAssistantProfile,
   m251IntakeAssistantProfile,
+  m251LiveIntakeAssistantProfile,
 } from '@codeclosure/runtime';
 
 const digests = new CanonicalJsonSha256DigestProvider();
@@ -94,25 +95,31 @@ function compilerInput() {
   };
 }
 
-void test('new M2.5.1 packages use only additive v2 Intake identities', () => {
+void test('new M2.5.1 packages use only the additive v3 Intake identity set', () => {
   const compilation = new M251IntakePackageCompiler({ canonicalizer, digests }).compileAnswerOnly(
     compilerInput(),
   );
-  assert.deepEqual(compilation.package.assistantProfile, m251IntakeAssistantProfile);
-  assert.equal(compilation.package.assistantProfile.schemaVersion, 2);
+  assert.deepEqual(compilation.package.assistantProfile, m251LiveIntakeAssistantProfile);
+  assert.equal(compilation.package.assistantProfile.schemaVersion, 3);
   assert.equal(
     compilation.package.assistantAdapter.version,
-    'codeclosure-m2-5-1-intake-adapter-v2',
+    'codeclosure-m2-5-1-intake-adapter-v3',
   );
   assert.deepEqual(compilation.manifest.assistantAdapter, compilation.package.assistantAdapter);
   assert.equal(
     compilation.package.assistantProfile.closedConfiguration.version,
-    'codeclosure-m2-5-1-local-config-v1',
+    'codeclosure-m2-5-1-local-config-v2',
   );
   assert.equal(
     compilation.package.assistantProfile.protocolProjectionPolicy.version,
-    'codeclosure-m2-5-1-projection-v1',
+    'codeclosure-m2-5-1-projection-v2',
   );
+  assert.equal(
+    compilation.package.assistantProfile.instructionPolicy.version,
+    'codeclosure-m2-5-1-exact-source-instructions-v1',
+  );
+  assert.equal(m251IntakeAssistantProfile.schemaVersion, 2);
+  assert.equal('instructionPolicy' in m251IntakeAssistantProfile, false);
 });
 
 void test('historical v1 package compilation retains its exact original identity', () => {

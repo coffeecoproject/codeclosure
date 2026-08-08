@@ -25,6 +25,7 @@ import {
   sourceBindingProjection,
   type ClarificationQuestionSpec,
   type ClarificationQuestionSpecProjectionInput,
+  type CandidateSourceSpanSuggestion,
   type IntakeExternalOperationBinding,
   type IntakeDigestVerifier,
   type IntentAdmissionPolicy,
@@ -49,6 +50,7 @@ import {
   M25_INTAKE_ASSISTANT_ADAPTER_ID,
   M25_INTAKE_ASSISTANT_ADAPTER_VERSION,
   M251_INTAKE_ASSISTANT_ADAPTER_VERSION,
+  M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION,
   m25IntakeBudgetDefinition,
   type IntentAnalysisAssistantResponseV1,
 } from './intake-assistant.js';
@@ -56,6 +58,8 @@ import type { Canonicalizer, DigestProvider } from './ports.js';
 
 export const M25_INTENT_PROJECTION_PROFILE_VERSION =
   IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2;
+export const M251_INTENT_PROJECTION_PROFILE_VERSION =
+  IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3;
 export const M25_DERIVATION_RULE_VERSION = 'codeclosure-m2-5-v1';
 
 export class IntakeAnalysisResponseRejectedError extends TypeError {
@@ -160,7 +164,7 @@ export interface ProjectedIntentAnalysis {
 }
 
 interface FieldItem {
-  readonly field: IntentProjectionField;
+  readonly field: CandidateSourceSpanSuggestion['projectionFieldRef'];
   readonly itemIndex?: number;
   readonly value: string;
 }
@@ -334,6 +338,75 @@ function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function fieldItemsFor(response: IntentAnalysisAssistantResponseV1): readonly FieldItem[] {
+  return Object.freeze([
+    ...(response.proposedObjective === undefined
+      ? []
+      : [{ field: IntentProjectionField.OBJECTIVE, value: response.proposedObjective }]),
+    ...response.proposedCriteria.map((value, itemIndex) => ({
+      field: IntentProjectionField.REQUIRED_CRITERION,
+      itemIndex,
+      value,
+    })),
+    ...(response.proposedScope === undefined
+      ? []
+      : [{ field: IntentProjectionField.SCOPE, value: response.proposedScope }]),
+    ...response.proposedNonGoals.map((value, itemIndex) => ({
+      field: IntentProjectionField.NON_GOAL,
+      itemIndex,
+      value,
+    })),
+    ...response.proposedAssumptions.map((value, itemIndex) => ({
+      field: IntentProjectionField.ASSUMPTION,
+      itemIndex,
+      value,
+    })),
+  ]);
+}
+
+function exactValueMatchSuggestions(
+  response: IntentAnalysisAssistantResponseV1,
+  revisions: readonly RawRequestRevisionRecord[],
+): readonly CandidateSourceSpanSuggestion[] {
+  if (response.candidateSourceSpanSuggestions.length !== 0) {
+    throw new IntakeAnalysisResponseRejectedError(
+      'M2.5.1 exact-value projection rejects assistant-authored source coordinates',
+    );
+  }
+  const suggestions: CandidateSourceSpanSuggestion[] = [];
+  for (const item of fieldItemsFor(response)) {
+    const needle = Buffer.from(item.value, 'utf8');
+    for (const revision of revisions) {
+      const source = Buffer.from(revision.admittedUserContent, 'utf8');
+      const boundaries = utf8Boundaries(revision.admittedUserContent);
+      let offset = source.indexOf(needle);
+      while (offset !== -1) {
+        const endByte = offset + needle.length;
+        if (boundaries.has(offset) && boundaries.has(endByte)) {
+          suggestions.push(
+            Object.freeze({
+              projectionFieldRef: item.field,
+              ...(item.itemIndex === undefined ? {} : { itemIndex: item.itemIndex }),
+              rawRequestRevision: revision.revision,
+              startByte: offset,
+              endByte,
+            }),
+          );
+          if (
+            suggestions.length > m25IntakeBudgetDefinition.maximumCandidateSourceSpanSuggestions
+          ) {
+            throw new IntakeAnalysisResponseRejectedError(
+              'M2.5.1 exact-value projection exceeds the fixed source-binding budget',
+            );
+          }
+        }
+        offset = source.indexOf(needle, offset + 1);
+      }
+    }
+  }
+  return Object.freeze(suggestions);
+}
+
 /** Deterministically converts one validated assistant Proposal into non-authoritative Projection authority. */
 export class M25IntentProjectionCompiler {
   readonly #canonicalizer: Canonicalizer;
@@ -379,13 +452,14 @@ export class M25IntentProjectionCompiler {
         throw new TypeError('Projection Raw Request revisions must form one exact ordered chain');
       }
     });
-    const proposedObjective = response.proposedObjective;
     if (
       input.intentAnalysisIdentity.assistantAdapterId !== M25_INTAKE_ASSISTANT_ADAPTER_ID ||
       (input.intentAnalysisIdentity.assistantAdapterVersion !==
         M25_INTAKE_ASSISTANT_ADAPTER_VERSION &&
         input.intentAnalysisIdentity.assistantAdapterVersion !==
-          M251_INTAKE_ASSISTANT_ADAPTER_VERSION)
+          M251_INTAKE_ASSISTANT_ADAPTER_VERSION &&
+        input.intentAnalysisIdentity.assistantAdapterVersion !==
+          M251_LIVE_INTAKE_ASSISTANT_ADAPTER_VERSION)
     ) {
       throw new TypeError('Projection selects an unsupported Intake Assistant identity');
     }
@@ -426,7 +500,7 @@ export class M25IntentProjectionCompiler {
     const itemKey = (field: IntentProjectionField, index: number | undefined): string =>
       `${field}\u0000${index === undefined ? '' : String(index)}`;
 
-    for (const suggestion of proposal.candidateSourceSpanSuggestions) {
+    for (const suggestion of this.sourceSpanSuggestions(response, revisions)) {
       const value = valueForSuggestion(
         response,
         suggestion.projectionFieldRef,
@@ -473,29 +547,7 @@ export class M25IntentProjectionCompiler {
       userBindingsByItem.set(key, [...(userBindingsByItem.get(key) ?? []), binding]);
     }
 
-    const fieldItems: FieldItem[] = [
-      ...(proposedObjective === undefined
-        ? []
-        : [{ field: IntentProjectionField.OBJECTIVE, value: proposedObjective }]),
-      ...proposal.proposedCriteria.map((value, itemIndex) => ({
-        field: IntentProjectionField.REQUIRED_CRITERION,
-        itemIndex,
-        value,
-      })),
-      ...(proposal.proposedScope === undefined
-        ? []
-        : [{ field: IntentProjectionField.SCOPE, value: proposal.proposedScope }]),
-      ...proposal.proposedNonGoals.map((value, itemIndex) => ({
-        field: IntentProjectionField.NON_GOAL,
-        itemIndex,
-        value,
-      })),
-      ...proposal.proposedAssumptions.map((value, itemIndex) => ({
-        field: IntentProjectionField.ASSUMPTION,
-        itemIndex,
-        value,
-      })),
-    ];
+    const fieldItems = fieldItemsFor(response);
     const boundItems: BoundFieldItem[] = fieldItems.map((item) => {
       const userBindings = userBindingsByItem.get(itemKey(item.field, item.itemIndex)) ?? [];
       if (userBindings.length > 0) {
@@ -746,7 +798,7 @@ export class M25IntentProjectionCompiler {
           : IntentExecutionDisposition.LEAVE_READY,
       sourceBindings: allBindings,
       materialAmbiguityRefs: ambiguities.map(({ id }) => id),
-      canonicalProfileVersion: M25_INTENT_PROJECTION_PROFILE_VERSION,
+      canonicalProfileVersion: this.canonicalProfileVersion(),
       createdAt: input.observedAt,
     } satisfies IntentProjectionRevisionProjectionInput;
     const projection = decodeIntentProjectionRevision(
@@ -823,5 +875,32 @@ export class M25IntentProjectionCompiler {
       ambiguitySet,
       ...(clarificationQuestionSpec === undefined ? {} : { clarificationQuestionSpec }),
     });
+  }
+
+  protected sourceSpanSuggestions(
+    response: IntentAnalysisAssistantResponseV1,
+    revisions: readonly RawRequestRevisionRecord[],
+  ): readonly CandidateSourceSpanSuggestion[] {
+    void revisions;
+    return response.candidateSourceSpanSuggestions;
+  }
+
+  protected canonicalProfileVersion():
+    | typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2
+    | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3 {
+    return M25_INTENT_PROJECTION_PROFILE_VERSION;
+  }
+}
+
+export class M251IntentProjectionCompiler extends M25IntentProjectionCompiler {
+  protected override sourceSpanSuggestions(
+    response: IntentAnalysisAssistantResponseV1,
+    revisions: readonly RawRequestRevisionRecord[],
+  ): readonly CandidateSourceSpanSuggestion[] {
+    return exactValueMatchSuggestions(response, revisions);
+  }
+
+  protected override canonicalProfileVersion(): typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3 {
+    return M251_INTENT_PROJECTION_PROFILE_VERSION;
   }
 }

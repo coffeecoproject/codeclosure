@@ -469,11 +469,15 @@ Status: Active post-completion compatibility and composition closure. Slice 0
 has revised its frozen contract to the exact reviewed Codex CLI `0.146.1`
 binary and protocol snapshot while preserving retained M2/M2.5 `0.146.0`
 authority without cross-version substitution. The Slice 0 closure review
-passed. Slice 1 implements the versioned Intake Profile and Adapter correction,
-offline protocol Projection/Observer closure, safe diagnostics, and strict
-retained-v1 reopen/replay/recovery compatibility. Its slice review passed and
-permits Slice 2; no mandatory real Intake call, real phase composition, or
-milestone assessment has started. The
+passed. Slice 1 implements the retained v2 Intake Profile and Adapter,
+configuration v1, offline protocol Projection/Observer closure, safe
+diagnostics, and strict retained-v1 reopen/replay/recovery compatibility. Its
+slice review passed and permitted Slice 2. Slice 2 adds Profile/Adapter v3,
+configuration/protocol projection v2, the strict Intent response, exact-source
+instruction, and Runtime projection policies; it passes the lower-client
+prerequisite and isolated real Answer-only, clear Intent, and ambiguous Intent
+paths with metadata-only receipts. It permits Slice 3; no real phase
+composition or milestone assessment has started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and
@@ -605,7 +609,8 @@ The mandatory assessment must show, on one exact source identity:
   every unsupported method or malformed envelope closes in the lower Client;
   all such paths fail closed;
 - new operations use new exact profile/Adapter identities while retained
-  version-1 authority reopens and replays without reinterpretation;
+  version-1 authority and Slice 1 v2 authority reopen and reconcile without
+  reinterpretation or silent recall;
 - model output cannot select Route, Admission, Goal, Policy, Execution Profile,
   Start, Candidate, Verification, Evidence, Acceptance, or closeout authority;
 - Materialization and Start remain separate transactions, and only ordinary

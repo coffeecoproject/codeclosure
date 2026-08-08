@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 
-import { rawRequestRevision } from '@codeclosure/domain';
 import type {
   AnswerOnlyAssistantResponseV1,
   IntakeAssistantOperationResult,
@@ -116,21 +115,7 @@ class ExactMaterializationAssistant implements IntakeAssistantPort {
           proposedNonGoals: Object.freeze([]),
           proposedAssumptions: Object.freeze([]),
           proposedQuestions: Object.freeze([]),
-          candidateSourceSpanSuggestions: Object.freeze([
-            Object.freeze({
-              projectionFieldRef: 'OBJECTIVE',
-              rawRequestRevision: rawRequestRevision(1),
-              startByte: 0,
-              endByte: 12,
-            }),
-            Object.freeze({
-              projectionFieldRef: 'REQUIRED_CRITERION',
-              itemIndex: 0,
-              rawRequestRevision: rawRequestRevision(1),
-              startByte: 0,
-              endByte: 12,
-            }),
-          ]),
+          candidateSourceSpanSuggestions: Object.freeze([]),
         }),
         observation: Object.freeze({
           schemaVersion: 1,

@@ -54,7 +54,7 @@ function sha256(relativePath) {
 
 test('M251-S0-01 identity and schema freeze is exact and excludes Fake composition', () => {
   assert.equal(contract.schemaVersion, 1);
-  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v3');
+  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v4');
   const protocolManifest = JSON.parse(
     source('packages/codex-app-server-client/protocol/codex-schema-snapshot-v1.json'),
   );
@@ -103,7 +103,7 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
     source('packages/codex-app-server-client/src/protocol/v2/Model.ts'),
     /modelSpecialty: string \| null/u,
   );
-  assert.equal(contract.intake.assistantProfile.schemaVersion, 2);
+  assert.equal(contract.intake.assistantProfile.schemaVersion, 3);
   assert.equal(contract.execution.executionProfile.schemaVersion, 2);
   assert.equal(contract.execution.externalExecutionProfileDefinitionSchemaVersion, 3);
   assert.equal(contract.execution.externalExecutionIntentSchemaVersion, 2);
@@ -200,6 +200,19 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
   });
 
   const intakeContracts = source('packages/runtime/src/intake-assistant.ts');
+  for (const identity of Object.values(contract.intake.retainedSlice1Identities)) {
+    assert.ok(intakeContracts.includes(identity.id));
+    assert.ok(intakeContracts.includes(identity.version));
+  }
+  assert.ok(intakeContracts.includes(contract.intake.instructionPolicy.id));
+  assert.ok(intakeContracts.includes(contract.intake.instructionPolicy.version));
+  assert.ok(intakeContracts.includes(contract.intake.intentAnalysisResponseContract.id));
+  assert.ok(intakeContracts.includes(contract.intake.intentAnalysisResponseContract.version));
+  assert.ok(
+    source('packages/domain/src/intake.ts').includes(
+      contract.intake.intentProjectionProfileVersion,
+    ),
+  );
   for (const identity of Object.values(contract.intake.unchangedIdentities)) {
     if (typeof identity === 'object') {
       assert.ok(intakeContracts.includes(identity.id));
