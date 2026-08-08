@@ -18,6 +18,8 @@ export * from './model.js';
 export * from './policy-binding-codecs.js';
 export * from './policy.js';
 export * from './project-read-codecs.js';
+export * from './project-read-cleanup-codecs.js';
+export * from './project-read-cleanup.js';
 export * from './project-read.js';
 export * from './protected-verification.js';
 export * from './recovery-codecs.js';

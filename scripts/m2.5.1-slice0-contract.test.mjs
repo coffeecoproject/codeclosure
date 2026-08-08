@@ -124,6 +124,19 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
     JSON.stringify(contract.execution),
     /FakeWorker|FakeCandidate|FakeVerification/u,
   );
+  const projectReadContractSources = [
+    source('packages/domain/src/project-read.ts'),
+    source('packages/domain/src/project-read-cleanup.ts'),
+    source('packages/runtime/src/project-read-workspace-contracts.ts'),
+    source('packages/runtime/src/project-read-snapshot-cleanup-contracts.ts'),
+  ].join('\n');
+  for (const schemaName of Object.values(contract.execution.projectReadSchemas)) {
+    assert.match(
+      projectReadContractSources,
+      new RegExp(`export (?:interface|type) ${schemaName}\\b`, 'u'),
+      `${schemaName} must remain an exact exported contract identity`,
+    );
+  }
 
   const discovery = contract.execution.phaseDispatch.DISCOVERY;
   const plan = contract.execution.phaseDispatch.PLAN;

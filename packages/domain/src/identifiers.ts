@@ -53,6 +53,15 @@ export type ProjectReadWorkspaceAuthoritySnapshotId = Brand<
   'ProjectReadWorkspaceAuthoritySnapshotId'
 >;
 export type ProjectReadWorkspaceObservationId = Brand<string, 'ProjectReadWorkspaceObservationId'>;
+export type ProjectReadSnapshotCleanupGrantId = Brand<string, 'ProjectReadSnapshotCleanupGrantId'>;
+export type ProjectReadSnapshotCleanupObservationId = Brand<
+  string,
+  'ProjectReadSnapshotCleanupObservationId'
+>;
+export type ProjectReadSnapshotCleanupOutcomeId = Brand<
+  string,
+  'ProjectReadSnapshotCleanupOutcomeId'
+>;
 
 export type GoalRevision = Brand<number, 'GoalRevision'>;
 export type WorkflowVersion = Brand<number, 'WorkflowVersion'>;
@@ -188,6 +197,22 @@ export const projectReadWorkspaceObservationId = (
   value: string,
 ): ProjectReadWorkspaceObservationId =>
   parseIdentifier('project-read-observation', value, 'ProjectReadWorkspaceObservationId');
+export const projectReadSnapshotCleanupGrantId = (
+  value: string,
+): ProjectReadSnapshotCleanupGrantId =>
+  parseIdentifier('project-read-cleanup-grant', value, 'ProjectReadSnapshotCleanupGrantId');
+export const projectReadSnapshotCleanupObservationId = (
+  value: string,
+): ProjectReadSnapshotCleanupObservationId =>
+  parseIdentifier(
+    'project-read-cleanup-observation',
+    value,
+    'ProjectReadSnapshotCleanupObservationId',
+  );
+export const projectReadSnapshotCleanupOutcomeId = (
+  value: string,
+): ProjectReadSnapshotCleanupOutcomeId =>
+  parseIdentifier('project-read-cleanup-outcome', value, 'ProjectReadSnapshotCleanupOutcomeId');
 
 export const goalRevision = (value: number): GoalRevision =>
   parsePositiveInteger(value, 'GoalRevision');
