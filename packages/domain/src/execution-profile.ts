@@ -14,6 +14,7 @@ import {
 } from './identifiers.js';
 import {
   assertExternalExecutionProfileDefinitionInvariant,
+  externalExecutionProfileDefinitionProjection,
   type ExternalExecutionProfileDefinition,
 } from './external-execution.js';
 
@@ -105,7 +106,13 @@ export function executionProfileProjection(profile: ExecutionProfileDefinition):
     verificationRunner: profile.verificationRunner,
     verificationRunnerVersion: profile.verificationRunnerVersion,
     driverVersion: profile.driverVersion,
-    ...(profile.schemaVersion === 1 ? {} : { externalExecution: profile.externalExecution }),
+    ...(profile.schemaVersion === 1
+      ? {}
+      : {
+          externalExecution: externalExecutionProfileDefinitionProjection(
+            profile.externalExecution,
+          ),
+        }),
   };
 }
 

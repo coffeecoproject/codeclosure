@@ -88,11 +88,9 @@ checkout. Slice 3 now implements the project-source record and codecs, exact
 read-only workspace contracts and local adapter, cleanup contracts, Context
 Package/Manifest v5 compilation, and additive SQLite record/Context persistence
 with atomic Attempt/Workflow/command/audit binding, exact replay, and strict
-reopen. The additive external-execution v3 phase-dispatch, `ExternalExecutionIntentV2`/
-`ExternalExecutionRecordV2`, `CodexWorkerDirectiveV3`,
-`CodexAdapterObservationV2`, monotonic project-read workspace-authority
-snapshot, and consume-once terminal/orphan snapshot cleanup grant/observation/
-Outcome Store authority are now implemented as an additive foundation. The
+reopen. The monotonic project-read workspace-authority snapshot and consume-
+once terminal/orphan snapshot cleanup grant/observation/Outcome Store
+authority are also implemented as an additive foundation. The
 Store derives each snapshot from retained authority, rejects replacement
 Grants and orphan Grants whose claimed authority identity is still retained,
 and commits the exact cleanup observation,
@@ -102,12 +100,19 @@ the exact unresolved retained Grant, invokes the narrow Workspace port,
 strictly validates its observation, and returns the Store winner after a
 resolution race. The local Adapter implements deterministic same-Grant process
 coordination and exact-leaf effect/reconciliation without gaining Store
-authority. Source-currency enforcement, additive external execution, and
-Profile composition remain planned M2.5.1 work. Real external
-dispatch has not started. The proposed v3
-Profile has no duplicated global/phase field authority, binds one opaque
-Adapter-local Worker activity-policy identity per phase, and uses the existing
-canonical string-sorted phase set with `ALL_SELECTED_ATTEMPTS`.
+authority. The additive nested `ExternalExecutionProfileDefinitionV3` contract,
+strict codecs, canonical projection, SQLite install/reopen validation, and
+configuration/capability/response-contract/schema/instruction/order/source-
+kind substitution checks are now implemented. It has no duplicated global/
+phase field authority, binds one exact phase-derived response-schema policy and
+one opaque Adapter-local Worker activity-policy identity per phase, and uses
+the existing canonical string-sorted phase set with
+`ALL_SELECTED_ATTEMPTS`. The existing Driver rejects v3 during installed-
+Profile preflight before Start mutation, Adapter, or FakeWorker dispatch
+because v2 Intent/Record, v3 directive, v2 Adapter
+observation, activity-policy enforcement, source-currency enforcement, and
+trusted real phase composition remain planned. Real external dispatch has not
+started.
 The proposed Plan-source mismatch path uses the existing Workflow integrity
 event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
@@ -1068,6 +1073,26 @@ permission and instruction manifests, environment, managed requirements,
 disabled integrations, continuity, compaction, interruption, and retention.
 M1 version-1 profiles are not upgraded or rehashed. See
 [ADR 0028](adr/0028-runtime-owned-external-execution-and-codex-profile.md).
+
+M2.5.1 Slice 3 additively permits nested external-execution schema version 3
+without changing the outer Execution Profile schema version. Its shared fields
+own backend, capability, binary/protocol, controlled-state, environment,
+managed-requirement, model, default-thread, retention, and interruption
+identity. Its exact string-sorted `DISCOVERY`, `IMPLEMENT`, `PLAN`
+`phaseDispatch` entries separately own adapter, cwd/source kind,
+permission/isolation, disabled project configuration, execution/configuration/
+integration/instruction digests, capability/response contracts, exact phase-
+derived response-schema policy, opaque Worker activity-policy identity,
+network/approval/continuity/compaction/fallback, and allowed/forbidden roots.
+`DISCOVERY` and `PLAN` require project-read snapshots;
+`IMPLEMENT` requires a Candidate workspace. The dispatch policy is exactly
+`ALL_SELECTED_ATTEMPTS`. Missing, reordered, duplicated-global, invalid phase-
+shape, or substituted configuration/capability/response-contract/schema/
+instruction authority fails decode, install, or strict reopen. This contract
+does not itself authorize dispatch: the legacy Driver rejects it during
+installed-Profile preflight before Start mutation until the separately
+versioned Intent/Record, directive, Adapter observation, activity-policy
+enforcement, and trusted composition are implemented.
 
 ## External Execution — implemented M2 Slice 6
 

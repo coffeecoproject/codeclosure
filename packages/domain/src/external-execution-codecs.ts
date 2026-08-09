@@ -1,8 +1,10 @@
 import { z } from 'zod';
 
 import {
+  ExternalApprovalPolicy,
   ExternalBackendCapability,
   ExternalBackendCapabilityClassification,
+  ExternalCommandNetworkPolicy,
   ExternalCompactionPolicy,
   ExternalContinuityPolicy,
   ExternalExecutionState,
@@ -10,7 +12,11 @@ import {
   ExternalInterruptionPolicy,
   ExternalMaintenanceKind,
   ExternalMaintenanceState,
+  ExternalPhaseCwdKind,
+  ExternalPhaseResponseSchemaPolicy,
+  ExternalPhaseSourceAuthorityKind,
   ExternalProcessGroupKind,
+  ExternalProjectConfigurationPolicy,
   ExternalRetentionPolicy,
   ExternalThreadPolicy,
   ExternalWorkerDispatchPolicy,
@@ -143,6 +149,67 @@ const externalExecutionProfileFields = {
   interruptionPolicy: interruptionPolicySchema,
 } as const;
 
+const externalInstructionSourceBindingSchema = z
+  .object({
+    path: boundedNonBlankStringSchema,
+    digest: digestSchema,
+  })
+  .strict();
+
+const externalExecutionPhaseDispatchEntrySchema = z
+  .object({
+    phase: workerPhaseSchema,
+    workerAdapter: boundedNonBlankStringSchema,
+    workerAdapterVersion: boundedNonBlankStringSchema,
+    cwdKind: z.enum(ExternalPhaseCwdKind),
+    sourceAuthorityKind: z.enum(ExternalPhaseSourceAuthorityKind),
+    permissionProfileId: boundedNonBlankStringSchema,
+    permissionProfileDigest: digestSchema,
+    isolationProfileId: boundedNonBlankStringSchema,
+    isolationProfileDigest: digestSchema,
+    projectConfigurationPolicy: z.literal(ExternalProjectConfigurationPolicy.DISABLED),
+    configurationProfileDigest: digestSchema,
+    executionConfigDigest: digestSchema,
+    disabledIntegrationsDigest: digestSchema,
+    instructionSourceManifestId: boundedNonBlankStringSchema,
+    instructionSourceManifestDigest: digestSchema,
+    instructionSources: z.array(externalInstructionSourceBindingSchema),
+    capabilityGrantDigest: digestSchema,
+    responseContractDigest: digestSchema,
+    responseSchemaPolicy: z.enum(ExternalPhaseResponseSchemaPolicy),
+    workerActivityPolicyId: boundedNonBlankStringSchema,
+    workerActivityPolicyDigest: digestSchema,
+    commandNetworkPolicy: z.literal(ExternalCommandNetworkPolicy.DENIED),
+    approvalPolicy: z.literal(ExternalApprovalPolicy.NEVER),
+    continuityPolicy: continuityPolicySchema,
+    compactionPolicy: compactionPolicySchema,
+    fallbackPolicy: z.literal(ExternalFallbackPolicy.FAIL_CLOSED),
+    allowedRoots: z.array(boundedNonBlankStringSchema),
+    forbiddenRoots: z.array(boundedNonBlankStringSchema),
+  })
+  .strict();
+
+const externalExecutionProfileV3Fields = {
+  backendKind: boundedNonBlankStringSchema,
+  capabilityRecordDigest: digestSchema,
+  selectedCapabilities: z.array(backendCapabilitySchema),
+  workerPhases: z.array(workerPhaseSchema),
+  binaryIdentityDigest: digestSchema,
+  protocolSchemaDigest: digestSchema,
+  managedRequirementsDigest: digestSchema,
+  controlledStateRootIdentity: boundedNonBlankStringSchema,
+  environmentProjectionDigest: digestSchema,
+  model: boundedNonBlankStringSchema,
+  modelProvider: boundedNonBlankStringSchema,
+  serviceTier: boundedNonBlankStringSchema.nullable(),
+  reasoningEffort: boundedNonBlankStringSchema,
+  defaultThreadPolicy: z.literal(ExternalThreadPolicy.FRESH),
+  retentionPolicy: z.literal(ExternalRetentionPolicy.CONTROLLED),
+  interruptionPolicy: z.literal(ExternalInterruptionPolicy.INTERRUPT_OPERATION),
+  workerDispatchPolicy: z.literal(ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS),
+  phaseDispatch: z.array(externalExecutionPhaseDispatchEntrySchema),
+} as const;
+
 const externalExecutionProfileSchema = z.discriminatedUnion('schemaVersion', [
   z.object({ schemaVersion: z.literal(1), ...externalExecutionProfileFields }).strict(),
   z
@@ -152,6 +219,7 @@ const externalExecutionProfileSchema = z.discriminatedUnion('schemaVersion', [
       workerDispatchPolicy: z.enum(ExternalWorkerDispatchPolicy),
     })
     .strict(),
+  z.object({ schemaVersion: z.literal(3), ...externalExecutionProfileV3Fields }).strict(),
 ]);
 
 const externalExecutionIntentSchema = z
@@ -380,21 +448,86 @@ export function decodeExternalExecutionProfileDefinition(
   value: unknown,
 ): ExternalExecutionProfileDefinition {
   const parsed = externalExecutionProfileSchema.parse(value);
-  const profile: ExternalExecutionProfileDefinition = Object.freeze({
-    ...parsed,
+  const shared = {
+    backendKind: parsed.backendKind,
     capabilityRecordDigest: sha256Digest(parsed.capabilityRecordDigest),
     selectedCapabilities: Object.freeze([...parsed.selectedCapabilities]),
     workerPhases: Object.freeze([...parsed.workerPhases]),
     binaryIdentityDigest: sha256Digest(parsed.binaryIdentityDigest),
     protocolSchemaDigest: sha256Digest(parsed.protocolSchemaDigest),
-    configurationProfileDigest: sha256Digest(parsed.configurationProfileDigest),
-    executionConfigDigest: sha256Digest(parsed.executionConfigDigest),
     managedRequirementsDigest: sha256Digest(parsed.managedRequirementsDigest),
-    instructionSourceManifestDigest: sha256Digest(parsed.instructionSourceManifestDigest),
+    controlledStateRootIdentity: parsed.controlledStateRootIdentity,
     environmentProjectionDigest: sha256Digest(parsed.environmentProjectionDigest),
-    permissionProfileDigest: sha256Digest(parsed.permissionProfileDigest),
-    disabledIntegrationsDigest: sha256Digest(parsed.disabledIntegrationsDigest),
-  });
+    model: parsed.model,
+    modelProvider: parsed.modelProvider,
+    serviceTier: parsed.serviceTier,
+    reasoningEffort: parsed.reasoningEffort,
+    defaultThreadPolicy: parsed.defaultThreadPolicy,
+    retentionPolicy: parsed.retentionPolicy,
+    interruptionPolicy: parsed.interruptionPolicy,
+  } as const;
+  const profile: ExternalExecutionProfileDefinition =
+    parsed.schemaVersion === 3
+      ? Object.freeze({
+          ...shared,
+          schemaVersion: parsed.schemaVersion,
+          workerDispatchPolicy: parsed.workerDispatchPolicy,
+          phaseDispatch: Object.freeze(
+            parsed.phaseDispatch.map((entry) =>
+              Object.freeze({
+                ...entry,
+                permissionProfileDigest: sha256Digest(entry.permissionProfileDigest),
+                isolationProfileDigest: sha256Digest(entry.isolationProfileDigest),
+                configurationProfileDigest: sha256Digest(entry.configurationProfileDigest),
+                executionConfigDigest: sha256Digest(entry.executionConfigDigest),
+                disabledIntegrationsDigest: sha256Digest(entry.disabledIntegrationsDigest),
+                instructionSourceManifestDigest: sha256Digest(
+                  entry.instructionSourceManifestDigest,
+                ),
+                instructionSources: Object.freeze(
+                  entry.instructionSources.map((source) =>
+                    Object.freeze({ path: source.path, digest: sha256Digest(source.digest) }),
+                  ),
+                ),
+                capabilityGrantDigest: sha256Digest(entry.capabilityGrantDigest),
+                responseContractDigest: sha256Digest(entry.responseContractDigest),
+                workerActivityPolicyDigest: sha256Digest(entry.workerActivityPolicyDigest),
+                allowedRoots: Object.freeze([...entry.allowedRoots]),
+                forbiddenRoots: Object.freeze([...entry.forbiddenRoots]),
+              }),
+            ),
+          ),
+        })
+      : parsed.schemaVersion === 1
+        ? Object.freeze({
+            ...shared,
+            schemaVersion: parsed.schemaVersion,
+            configurationProfileDigest: sha256Digest(parsed.configurationProfileDigest),
+            executionConfigDigest: sha256Digest(parsed.executionConfigDigest),
+            instructionSourceManifestDigest: sha256Digest(parsed.instructionSourceManifestDigest),
+            permissionProfileId: parsed.permissionProfileId,
+            permissionProfileDigest: sha256Digest(parsed.permissionProfileDigest),
+            responseSchemaPolicy: parsed.responseSchemaPolicy,
+            disabledIntegrationsDigest: sha256Digest(parsed.disabledIntegrationsDigest),
+            continuityPolicy: parsed.continuityPolicy,
+            compactionPolicy: parsed.compactionPolicy,
+            fallbackPolicy: parsed.fallbackPolicy,
+          })
+        : Object.freeze({
+            ...shared,
+            schemaVersion: parsed.schemaVersion,
+            configurationProfileDigest: sha256Digest(parsed.configurationProfileDigest),
+            executionConfigDigest: sha256Digest(parsed.executionConfigDigest),
+            instructionSourceManifestDigest: sha256Digest(parsed.instructionSourceManifestDigest),
+            permissionProfileId: parsed.permissionProfileId,
+            permissionProfileDigest: sha256Digest(parsed.permissionProfileDigest),
+            responseSchemaPolicy: parsed.responseSchemaPolicy,
+            disabledIntegrationsDigest: sha256Digest(parsed.disabledIntegrationsDigest),
+            continuityPolicy: parsed.continuityPolicy,
+            compactionPolicy: parsed.compactionPolicy,
+            fallbackPolicy: parsed.fallbackPolicy,
+            workerDispatchPolicy: parsed.workerDispatchPolicy,
+          });
   assertExternalExecutionProfileDefinitionInvariant(profile);
   return profile;
 }

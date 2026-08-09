@@ -125,8 +125,12 @@ model proposals and cannot satisfy Admission. Its explicit live command passes
 the lower-client prerequisite plus isolated Answer-only, clear Intent, and
 ambiguous Intent paths with metadata-only receipts. Slice 3 incrementally
 implements the project-read authority, read-only local Workspace,
-Context/Attempt binding, Store cleanup authority, and Runtime cleanup
-coordination foundation. Real phase composition remains unimplemented.
+Context/Attempt binding, Store cleanup authority, Runtime cleanup coordination,
+and the nested external-execution v3 phase-dispatch contract with strict
+SQLite install/reopen. The legacy Driver rejects v3 during installed-Profile
+preflight before Start mutation, Adapter, or FakeWorker dispatch; versioned
+external Intent/directive/observation,
+activity-policy enforcement, and real phase composition remain unimplemented.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -777,7 +781,15 @@ Store Grant, strictly validates the Adapter observation, and returns the Store
 winner after an Outcome race. The local Adapter uses deterministic Grant-bound
 coordination and atomic exact-leaf effects across processes; incomplete or
 unclassifiable work leaves the same Grant unresolved. Real phase composition
-remains pending. The source checkout, `.git`,
+remains pending. The nested external-execution v3 definition now records the
+exact canonical phase set, `ALL_SELECTED_ATTEMPTS`, and shared-versus-phase
+authority without duplication; strict installation/reopen rejects
+configuration, capability, response-contract/schema, instruction, order, and
+source-kind substitution. The current Driver fails closed during installed-
+Profile preflight before Start mutation until the versioned phase-intent,
+directive/observation, and Adapter-local activity-policy path is implemented.
+The source
+checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,
 protected assets, and sibling snapshots would remain unreadable to model tools.
 The snapshot would have no Candidate, Evidence, Acceptance, or Workflow-writing

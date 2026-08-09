@@ -72,7 +72,7 @@ import {
   workflowPolicyBindingProjection,
   type ExecutionProfileDefinition,
   type ExternalBackendCapabilityRecord,
-  type ExternalExecutionProfileDefinition,
+  type ExternalExecutionProfileDefinitionV1,
   type PolicyBundleDefinition,
   type ProjectSourceReadAuthorityRecord,
 } from '@codeclosure/domain';
@@ -159,7 +159,7 @@ function externalProfileAuthority(namespace: string): Readonly<{
       externalBackendCapabilityRecordProjection(capabilityWithoutDigest),
     ),
   });
-  const externalExecution: ExternalExecutionProfileDefinition = Object.freeze({
+  const externalExecution: ExternalExecutionProfileDefinitionV1 = Object.freeze({
     schemaVersion: 1,
     backendKind: capability.backendKind,
     capabilityRecordDigest: capability.recordDigest,
@@ -589,7 +589,8 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     workflow === undefined ||
     manifest === undefined ||
     attempt.workerSessionRef === undefined ||
-    fixture.profile.schemaVersion !== 2
+    fixture.profile.schemaVersion !== 2 ||
+    fixture.profile.externalExecution.schemaVersion === 3
   ) {
     assert.fail('Terminal cleanup fixture lacks exact external dispatch authority');
   }

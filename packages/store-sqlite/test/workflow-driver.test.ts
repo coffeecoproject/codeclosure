@@ -9,14 +9,20 @@ import {
   AttemptFailureClass,
   AttemptStatus,
   EvidenceEligibilityState,
+  ExternalApprovalPolicy,
   ExternalBackendCapability,
   ExternalBackendCapabilityClassification,
+  ExternalCommandNetworkPolicy,
   ExternalCompactionPolicy,
   ExternalContinuityPolicy,
   ExternalExecutionState,
   ExternalFallbackPolicy,
   ExternalInterruptionPolicy,
   ExternalMaintenanceState,
+  ExternalPhaseCwdKind,
+  ExternalPhaseResponseSchemaPolicy,
+  ExternalPhaseSourceAuthorityKind,
+  ExternalProjectConfigurationPolicy,
   ExternalRetentionPolicy,
   ExternalThreadPolicy,
   ExternalWorkerDispatchPolicy,
@@ -50,6 +56,7 @@ import {
   type ExecutionProfile,
   type ExecutionProfileDefinition,
   type ExternalBackendCapabilityRecord,
+  type ExternalExecutionPhaseDispatchEntry,
   type ExternalExecutionProfileDefinition,
   type ExternalExecutionIntent,
   type Goal,
@@ -85,6 +92,7 @@ import {
   candidateWorkspaceLeaseProjection,
   deriveContextManifestEntries,
   goalAndWorkflowCreationPayloadProjection,
+  m1WorkerResponseContract,
   validateCandidateWorkspaceLeaseRequest,
   type CandidateWorkspaceLease,
   type CandidateWorkspaceLeaseAuthorityPort,
@@ -162,7 +170,7 @@ interface DriverHarness {
 }
 
 type ExternalFixtureMode =
-  'NONE' | 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION' | 'REPAIR_ONLY';
+  'NONE' | 'FAIL_ON_OBSERVATION' | 'MANUAL_BEFORE_OPERATION' | 'REPAIR_ONLY' | 'V3_UNAVAILABLE';
 
 class CountingWorker implements WorkerPort {
   readonly #delegate: FakeWorker;
@@ -703,13 +711,102 @@ function externalProfileAuthority(
     interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
   };
   const externalExecution: ExternalExecutionProfileDefinition =
-    mode === 'REPAIR_ONLY'
-      ? Object.freeze({
-          schemaVersion: 2,
-          ...externalExecutionBase,
-          workerDispatchPolicy: ExternalWorkerDispatchPolicy.ACCEPTANCE_REPAIR_ONLY,
-        })
-      : Object.freeze({ schemaVersion: 1, ...externalExecutionBase });
+    mode === 'V3_UNAVAILABLE'
+      ? (() => {
+          const phases = Object.freeze([
+            WorkflowPhase.DISCOVERY,
+            WorkflowPhase.IMPLEMENT,
+            WorkflowPhase.PLAN,
+          ]);
+          const activityPolicyDigest = digests.digest({
+            namespace,
+            kind: 'worker-activity-policy',
+          });
+          const phaseDispatch = Object.freeze(
+            phases.map((phase): ExternalExecutionPhaseDispatchEntry => {
+              const candidateFree = phase !== WorkflowPhase.IMPLEMENT;
+              const instructionSources = Object.freeze([]);
+              return Object.freeze({
+                phase,
+                workerAdapter: 'slice6-external-worker',
+                workerAdapterVersion: 'm2-5-1-v1',
+                cwdKind: candidateFree
+                  ? ExternalPhaseCwdKind.PROJECT_READ_SNAPSHOT
+                  : ExternalPhaseCwdKind.CANDIDATE_WORKSPACE,
+                sourceAuthorityKind: candidateFree
+                  ? ExternalPhaseSourceAuthorityKind.PROJECT_READ
+                  : ExternalPhaseSourceAuthorityKind.CANDIDATE,
+                permissionProfileId: `permission-${phase.toLowerCase()}-v1`,
+                permissionProfileDigest: digests.digest({ namespace, phase, kind: 'permission' }),
+                isolationProfileId: `isolation-${phase.toLowerCase()}-v1`,
+                isolationProfileDigest: digests.digest({ namespace, phase, kind: 'isolation' }),
+                projectConfigurationPolicy: ExternalProjectConfigurationPolicy.DISABLED,
+                configurationProfileDigest,
+                executionConfigDigest: digests.digest({
+                  namespace,
+                  phase,
+                  kind: 'execution-config-v3',
+                }),
+                disabledIntegrationsDigest: digests.digest({
+                  namespace,
+                  phase,
+                  kind: 'disabled-integrations-v3',
+                }),
+                instructionSourceManifestId: `instructions-${phase.toLowerCase()}-v1`,
+                instructionSourceManifestDigest: digests.digest({ instructionSources }),
+                instructionSources,
+                capabilityGrantDigest: digests.digest({
+                  schemaVersion: 1,
+                  capabilityGrant: deriveCapabilityGrant(phase),
+                }),
+                responseContractDigest: digests.digest({
+                  schemaVersion: 1,
+                  responseContract: m1WorkerResponseContract(phase),
+                }),
+                responseSchemaPolicy: candidateFree
+                  ? ExternalPhaseResponseSchemaPolicy.PROPOSALS_V1
+                  : ExternalPhaseResponseSchemaPolicy.COMPLETION_REQUEST_V1,
+                workerActivityPolicyId: 'codex-worker-activity-policy_codeclosure-m2-5-1-real',
+                workerActivityPolicyDigest: activityPolicyDigest,
+                commandNetworkPolicy: ExternalCommandNetworkPolicy.DENIED,
+                approvalPolicy: ExternalApprovalPolicy.NEVER,
+                continuityPolicy: ExternalContinuityPolicy.SAME_SESSION_BOUNDED_OPERATION,
+                compactionPolicy: ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
+                fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
+                allowedRoots: Object.freeze([`/fixture/${namespace}/${phase.toLowerCase()}`]),
+                forbiddenRoots: Object.freeze(['/fixture/authority', '/source/project']),
+              });
+            }),
+          );
+          return Object.freeze({
+            schemaVersion: 3,
+            backendKind: capability.backendKind,
+            capabilityRecordDigest: capability.recordDigest,
+            selectedCapabilities: Object.freeze(selectedCapabilities),
+            workerPhases: phases,
+            binaryIdentityDigest,
+            protocolSchemaDigest,
+            managedRequirementsDigest: externalExecutionBase.managedRequirementsDigest,
+            controlledStateRootIdentity: externalExecutionBase.controlledStateRootIdentity,
+            environmentProjectionDigest: externalExecutionBase.environmentProjectionDigest,
+            model: externalExecutionBase.model,
+            modelProvider: externalExecutionBase.modelProvider,
+            serviceTier: externalExecutionBase.serviceTier,
+            reasoningEffort: externalExecutionBase.reasoningEffort,
+            defaultThreadPolicy: ExternalThreadPolicy.FRESH,
+            retentionPolicy: ExternalRetentionPolicy.CONTROLLED,
+            interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
+            workerDispatchPolicy: ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS,
+            phaseDispatch,
+          });
+        })()
+      : mode === 'REPAIR_ONLY'
+        ? Object.freeze({
+            schemaVersion: 2,
+            ...externalExecutionBase,
+            workerDispatchPolicy: ExternalWorkerDispatchPolicy.ACCEPTANCE_REPAIR_ONLY,
+          })
+        : Object.freeze({ schemaVersion: 1, ...externalExecutionBase });
   const base = testExecutionProfileDefinition(namespace);
   return Object.freeze({
     capability,
@@ -1046,6 +1143,47 @@ void test('[I-001][I-003][I-008] public StartGoal drives one deterministic path 
   const auditAfterReplay = application.getGoalAudit(harness.goal.id);
   assert.equal(auditAfterReplay.status, 'FOUND');
   assert.equal(auditAfterReplay.view.throughSequence, auditBeforeReplay.view.throughSequence);
+});
+
+void test('[I-004][I-023][I-027] legacy Driver rejects external Profile v3 without fake or Adapter fallback', async (t) => {
+  const harness = createHarness(t, 'driver-external-v3-unavailable', 'V3_UNAVAILABLE');
+  const localWorker = new CountingWorker();
+  const externalWorker = new ExternalWorkerFixture(harness.store, 'V3_UNAVAILABLE');
+  const profile = Object.freeze({
+    ...externalRuntimeProfile(harness, externalWorker),
+    worker: localWorker,
+  });
+  const execution = m2Driver(
+    harness,
+    profile,
+    Object.freeze({
+      resumeGoal: () => {
+        throw new Error('Unavailable v3 composition must not enter recovery');
+      },
+    }),
+  );
+
+  const result = await execution.startGoal(startRequest(harness));
+  assert.equal(result.command.status, 'REJECTED');
+  assert.equal(result.command.output.ok, false);
+  assert.equal(
+    result.command.output.error.detailCode,
+    'DRIVER_EXTERNAL_PROFILE_V3_COMPOSITION_UNAVAILABLE',
+  );
+  assert.equal(result.drive, undefined);
+  assert.equal(harness.store.getWorkflow(harness.workflow.id)?.runStatus, RunStatus.READY);
+  assert.equal(harness.store.getWorkflow(harness.workflow.id)?.activeAttemptId, undefined);
+  assert.equal(localWorker.runCount, 0);
+  assert.equal(externalWorker.prepareCount, 0);
+  assert.equal(externalWorker.createCount, 0);
+  assert.equal(externalWorker.runCount, 0);
+  assert.equal(externalWorker.intents.length, 0);
+  assert.equal(
+    harness.store
+      .getGoalAuditAuthority(harness.goal.id)
+      ?.events.some(({ eventType }) => eventType.startsWith('EXTERNAL_')),
+    false,
+  );
 });
 
 void test('[I-006][I-008][M2-G12] external dispatch claim and authorization roll back before adapter creation at every new write boundary', async (t) => {

@@ -56,6 +56,11 @@ import {
 } from '@codeclosure/runtime';
 import type { CandidateLeasedWorkerAuthorityReader } from '@codeclosure/runtime/composition';
 
+type TrustedCodexExternalExecutionProfile = Extract<
+  ExternalExecutionProfileDefinition,
+  { readonly schemaVersion: 1 | 2 }
+>;
+
 const disabledIntegrations = Object.freeze([
   'APPS',
   'DYNAMIC_TOOLS',
@@ -122,7 +127,7 @@ export interface TrustedCodexProfileAuthority {
   readonly adapterProfile: CodexExecutionProfileDirective;
   readonly capabilityRecord: ExternalBackendCapabilityRecord;
   readonly configurationProfileDigest: ReturnType<typeof sha256Digest>;
-  readonly externalExecution: ExternalExecutionProfileDefinition;
+  readonly externalExecution: TrustedCodexExternalExecutionProfile;
   readonly installation: VerifiedCodexInstallation;
   readonly roots: TrustedCodexRoots;
 }
@@ -466,7 +471,7 @@ export async function prepareTrustedCodexProfile(
     fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
     interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
   };
-  const externalExecution: ExternalExecutionProfileDefinition =
+  const externalExecution: TrustedCodexExternalExecutionProfile =
     input.workerDispatchPolicy === undefined
       ? Object.freeze({ schemaVersion: 1, ...externalExecutionBase })
       : Object.freeze({

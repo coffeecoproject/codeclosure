@@ -118,6 +118,8 @@ import {
   decideEvidenceInvalidation,
   assertWorkflowInvariant,
   deriveGoalStatus,
+  deriveCapabilityGrant,
+  deriveExternalPhaseResponseSchemaPolicy,
   goalId,
   goalRevision,
   intakeCommandOutcomeProjection,
@@ -9026,7 +9028,10 @@ export class SqliteControlStore
           ? undefined
           : this.getPolicyBundle(policyBinding.policyBundleId);
       const profile = installedProfile?.profile;
-      const external = profile?.schemaVersion === 2 ? profile.externalExecution : undefined;
+      const external =
+        profile?.schemaVersion === 2 && profile.externalExecution.schemaVersion !== 3
+          ? profile.externalExecution
+          : undefined;
       if (
         manifest === undefined ||
         profile === undefined ||
@@ -14786,11 +14791,42 @@ export class SqliteControlStore
     }
     const external = profile.externalExecution;
     const capability = this.getExternalBackendCapabilityRecord(external.capabilityRecordDigest);
+    const configurationMatches =
+      external.schemaVersion === 3
+        ? external.phaseDispatch.every(
+            (entry) => entry.configurationProfileDigest === capability?.configurationProfileDigest,
+          )
+        : external.configurationProfileDigest === capability?.configurationProfileDigest;
+    const phaseContractsMatch =
+      external.schemaVersion !== 3 ||
+      external.phaseDispatch.every(
+        (entry) =>
+          entry.capabilityGrantDigest ===
+            sha256Digest(
+              canonicalAuthorityDigests.digest({
+                schemaVersion: 1,
+                capabilityGrant: deriveCapabilityGrant(entry.phase),
+              }),
+            ) &&
+          entry.responseContractDigest ===
+            sha256Digest(
+              canonicalAuthorityDigests.digest({
+                schemaVersion: 1,
+                responseContract: m1WorkerResponseContract(entry.phase),
+              }),
+            ) &&
+          entry.responseSchemaPolicy === deriveExternalPhaseResponseSchemaPolicy(entry.phase) &&
+          entry.instructionSourceManifestDigest ===
+            sha256Digest(
+              canonicalAuthorityDigests.digest({ instructionSources: entry.instructionSources }),
+            ),
+      );
     if (
       capability?.backendKind !== external.backendKind ||
       capability.binaryIdentityDigest !== external.binaryIdentityDigest ||
       capability.protocolSchemaDigest !== external.protocolSchemaDigest ||
-      capability.configurationProfileDigest !== external.configurationProfileDigest
+      !configurationMatches ||
+      !phaseContractsMatch
     ) {
       return false;
     }
@@ -16168,7 +16204,10 @@ export class SqliteControlStore
       claim === undefined
         ? undefined
         : sha256Digest(canonicalAuthorityDigests.digest(workerDispatchClaimProjection(claim)));
-    const external = profile?.schemaVersion === 2 ? profile.externalExecution : undefined;
+    const external =
+      profile?.schemaVersion === 2 && profile.externalExecution.schemaVersion !== 3
+        ? profile.externalExecution
+        : undefined;
     const latestAudit = this.listAuditEvents('EXTERNAL_EXECUTION', record.id).find(
       (audit) => audit.sequence === record.auditSequence,
     );

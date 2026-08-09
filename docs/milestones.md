@@ -478,11 +478,15 @@ instruction, and Runtime projection policies; it passes the lower-client
 prerequisite and isolated real Answer-only, clear Intent, and ambiguous Intent
 paths with metadata-only receipts. Slice 3 is now in progress through its
 project-read contracts, local adapter, Context v5 compiler, atomic SQLite
-project-read binding, and Store-owned authority-snapshot/consume-once Cleanup
-persistence foundation plus the trusted Runtime Cleanup coordinator,
-process-safe same-Grant exact-leaf effect handling, atomic Outcome closure, and
-reopen replay suppression; phase-specific external execution, real phase
-composition, and milestone assessment have not started. The
+project-read binding, Store-owned authority-snapshot/consume-once Cleanup
+persistence, trusted Runtime Cleanup coordinator, process-safe same-Grant
+exact-leaf effect handling, and the additive nested external-execution v3
+phase-dispatch contract with canonical projection and strict SQLite
+install/reopen. The legacy Driver rejects v3 during installed-Profile preflight
+before Start mutation, Adapter, or FakeWorker fallback; v2 Intent/Record, v3
+directive, v2 Adapter observation,
+activity-policy enforcement, real phase composition, and milestone assessment
+have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

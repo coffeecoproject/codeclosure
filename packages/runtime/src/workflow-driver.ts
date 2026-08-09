@@ -51,7 +51,8 @@ import {
   type ExecutionProfileId,
   type ExternalExecutionIntent,
   type ExternalExecutionObservation,
-  type ExternalExecutionProfileDefinition,
+  type ExternalExecutionProfileDefinitionV1,
+  type ExternalExecutionProfileDefinitionV2,
   type ExternalExecutionRecord,
   type ExternalMaintenanceIntent,
   type ExternalProcessIdentity,
@@ -428,6 +429,15 @@ class DriverFailure extends Error {
     this.name = 'DriverFailure';
     this.stopReason = stopReason;
     this.detailCode = detailCode;
+  }
+}
+
+function assertLegacyDriverExternalProfileSupported(profile: ExecutionProfile): void {
+  if (profile.schemaVersion === 2 && profile.externalExecution.schemaVersion === 3) {
+    throw new DriverFailure(
+      WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
+      'DRIVER_EXTERNAL_PROFILE_V3_COMPOSITION_UNAVAILABLE',
+    );
   }
 }
 
@@ -1730,6 +1740,12 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       binding.profile.schemaVersion === 2 && installedProfile?.schemaVersion === 2
         ? installedProfile.externalExecution
         : undefined;
+    if (externalProfile?.schemaVersion === 3) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
+        'DRIVER_EXTERNAL_PROFILE_V3_COMPOSITION_UNAVAILABLE',
+      );
+    }
     const externallyDispatched =
       externalProfile?.workerPhases.includes(request.contextPackage.phase) === true &&
       (externalProfile.schemaVersion === 1 ||
@@ -1817,7 +1833,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
     authority: DecodedDriverAuthority,
     binding: DriverKernelBinding,
     request: WorkerRequest,
-    externalProfile: ExternalExecutionProfileDefinition,
+    externalProfile: ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2,
   ): Promise<void> {
     if (binding.profile.schemaVersion !== 2) {
       throw new DriverFailure(
@@ -2285,7 +2301,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
   private createExternalDispatchAuthorization(
     authority: DecodedDriverAuthority,
     request: WorkerRequest,
-    profile: ExternalExecutionProfileDefinition,
+    profile: ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2,
     prepared: PreparedExternalWorkerInvocation,
   ): Readonly<{
     claim: WorkerDispatchClaim;
@@ -2440,7 +2456,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
   private assertExternalWorkerObservation(
     observation: ExternalWorkerObservation,
     intent: ExternalExecutionIntent,
-    profile: ExternalExecutionProfileDefinition,
+    profile: ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2,
   ): void {
     const terminal =
       observation.state === 'COMPLETED' ||
@@ -2765,6 +2781,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
     }
     let profile: RuntimeExecutionProfile;
     try {
+      assertLegacyDriverExternalProfileSupported(installed.profile);
       const raw = this.#profiles.resolve(installed.profile);
       profile = decodeRuntimeExecutionProfile(
         raw,
@@ -2772,6 +2789,9 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         this.#requireLocalCommandVerification,
       );
     } catch (error) {
+      if (error instanceof DriverFailure) {
+        throw error;
+      }
       throw new DriverFailure(
         WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
         'DRIVER_EXECUTION_PROFILE_INCOMPATIBLE',
@@ -2798,12 +2818,16 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       ) {
         throw new TypeError('Installed Start Execution Profile has invalid authority identity');
       }
+      assertLegacyDriverExternalProfileSupported(installed);
       return decodeRuntimeExecutionProfile(
         this.#startProfile,
         installed,
         this.#requireLocalCommandVerification,
       );
     } catch (error) {
+      if (error instanceof DriverFailure) {
+        throw error;
+      }
       throw new DriverFailure(
         WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
         'DRIVER_START_EXECUTION_PROFILE_INCOMPATIBLE',

@@ -127,7 +127,7 @@ export type ExternalWorkerDispatchPolicy =
  * Values are backend-neutral identities and policies; no process handle,
  * credential, Codex DTO, or function belongs in this record.
  */
-interface ExternalExecutionProfileDefinitionBase {
+interface LegacyExternalExecutionProfileDefinitionBase {
   readonly backendKind: string;
   readonly capabilityRecordDigest: Sha256Digest;
   readonly selectedCapabilities: readonly ExternalBackendCapability[];
@@ -157,18 +157,138 @@ interface ExternalExecutionProfileDefinitionBase {
 }
 
 /** Original Slice 6 meaning: every selected phase Attempt uses the external Worker. */
-export interface ExternalExecutionProfileDefinitionV1 extends ExternalExecutionProfileDefinitionBase {
+export interface ExternalExecutionProfileDefinitionV1 extends LegacyExternalExecutionProfileDefinitionBase {
   readonly schemaVersion: 1;
 }
 
 /** Slice 7 adds a profile-bound repair-only handoff without adapter discretion. */
-export interface ExternalExecutionProfileDefinitionV2 extends ExternalExecutionProfileDefinitionBase {
+export interface ExternalExecutionProfileDefinitionV2 extends LegacyExternalExecutionProfileDefinitionBase {
   readonly schemaVersion: 2;
   readonly workerDispatchPolicy: ExternalWorkerDispatchPolicy;
 }
 
+export const ExternalPhaseCwdKind = {
+  PROJECT_READ_SNAPSHOT: 'PROJECT_READ_SNAPSHOT',
+  CANDIDATE_WORKSPACE: 'CANDIDATE_WORKSPACE',
+} as const;
+export type ExternalPhaseCwdKind = (typeof ExternalPhaseCwdKind)[keyof typeof ExternalPhaseCwdKind];
+
+export const ExternalPhaseSourceAuthorityKind = {
+  PROJECT_READ: 'PROJECT_READ',
+  CANDIDATE: 'CANDIDATE',
+} as const;
+export type ExternalPhaseSourceAuthorityKind =
+  (typeof ExternalPhaseSourceAuthorityKind)[keyof typeof ExternalPhaseSourceAuthorityKind];
+
+export const ExternalPhaseResponseSchemaPolicy = {
+  PROPOSALS_V1: 'PROPOSALS_V1',
+  COMPLETION_REQUEST_V1: 'COMPLETION_REQUEST_V1',
+} as const;
+export type ExternalPhaseResponseSchemaPolicy =
+  (typeof ExternalPhaseResponseSchemaPolicy)[keyof typeof ExternalPhaseResponseSchemaPolicy];
+
+export function deriveExternalPhaseResponseSchemaPolicy(
+  phase: WorkflowPhaseType,
+): ExternalPhaseResponseSchemaPolicy {
+  if (phase === WorkflowPhase.DISCOVERY || phase === WorkflowPhase.PLAN) {
+    return ExternalPhaseResponseSchemaPolicy.PROPOSALS_V1;
+  }
+  if (phase === WorkflowPhase.IMPLEMENT) {
+    return ExternalPhaseResponseSchemaPolicy.COMPLETION_REQUEST_V1;
+  }
+  throw new TypeError(`Phase ${phase} has no external Worker response-schema policy`);
+}
+
+export const ExternalProjectConfigurationPolicy = {
+  DISABLED: 'DISABLED',
+} as const;
+export type ExternalProjectConfigurationPolicy =
+  (typeof ExternalProjectConfigurationPolicy)[keyof typeof ExternalProjectConfigurationPolicy];
+
+export const ExternalCommandNetworkPolicy = {
+  DENIED: 'DENIED',
+} as const;
+export type ExternalCommandNetworkPolicy =
+  (typeof ExternalCommandNetworkPolicy)[keyof typeof ExternalCommandNetworkPolicy];
+
+export const ExternalApprovalPolicy = {
+  NEVER: 'NEVER',
+} as const;
+export type ExternalApprovalPolicy =
+  (typeof ExternalApprovalPolicy)[keyof typeof ExternalApprovalPolicy];
+
+export interface ExternalInstructionSourceBinding {
+  readonly path: string;
+  readonly digest: Sha256Digest;
+}
+
+/**
+ * One phase-owned entry in the M2.5.1 external execution definition.
+ *
+ * These values are protocol-neutral authority. Concrete Codex activity DTOs
+ * and their classifier remain Adapter-local.
+ */
+export interface ExternalExecutionPhaseDispatchEntry {
+  readonly phase: WorkflowPhaseType;
+  readonly workerAdapter: string;
+  readonly workerAdapterVersion: string;
+  readonly cwdKind: ExternalPhaseCwdKind;
+  readonly sourceAuthorityKind: ExternalPhaseSourceAuthorityKind;
+  readonly permissionProfileId: string;
+  readonly permissionProfileDigest: Sha256Digest;
+  readonly isolationProfileId: string;
+  readonly isolationProfileDigest: Sha256Digest;
+  readonly projectConfigurationPolicy: typeof ExternalProjectConfigurationPolicy.DISABLED;
+  readonly configurationProfileDigest: Sha256Digest;
+  readonly executionConfigDigest: Sha256Digest;
+  readonly disabledIntegrationsDigest: Sha256Digest;
+  readonly instructionSourceManifestId: string;
+  readonly instructionSourceManifestDigest: Sha256Digest;
+  readonly instructionSources: readonly ExternalInstructionSourceBinding[];
+  readonly capabilityGrantDigest: Sha256Digest;
+  readonly responseContractDigest: Sha256Digest;
+  readonly responseSchemaPolicy: ExternalPhaseResponseSchemaPolicy;
+  readonly workerActivityPolicyId: string;
+  readonly workerActivityPolicyDigest: Sha256Digest;
+  readonly commandNetworkPolicy: typeof ExternalCommandNetworkPolicy.DENIED;
+  readonly approvalPolicy: typeof ExternalApprovalPolicy.NEVER;
+  readonly continuityPolicy: ExternalContinuityPolicy;
+  readonly compactionPolicy: ExternalCompactionPolicy;
+  readonly fallbackPolicy: typeof ExternalFallbackPolicy.FAIL_CLOSED;
+  readonly allowedRoots: readonly string[];
+  readonly forbiddenRoots: readonly string[];
+}
+
+/**
+ * M2.5.1 phase-discriminated external execution authority. Fields moved into
+ * phaseDispatch have no global v3 representation or precedence rule.
+ */
+export interface ExternalExecutionProfileDefinitionV3 {
+  readonly schemaVersion: 3;
+  readonly backendKind: string;
+  readonly capabilityRecordDigest: Sha256Digest;
+  readonly selectedCapabilities: readonly ExternalBackendCapability[];
+  readonly workerPhases: readonly WorkflowPhaseType[];
+  readonly binaryIdentityDigest: Sha256Digest;
+  readonly protocolSchemaDigest: Sha256Digest;
+  readonly managedRequirementsDigest: Sha256Digest;
+  readonly controlledStateRootIdentity: string;
+  readonly environmentProjectionDigest: Sha256Digest;
+  readonly model: string;
+  readonly modelProvider: string;
+  readonly serviceTier: string | null;
+  readonly reasoningEffort: string;
+  readonly defaultThreadPolicy: typeof ExternalThreadPolicy.FRESH;
+  readonly retentionPolicy: typeof ExternalRetentionPolicy.CONTROLLED;
+  readonly interruptionPolicy: typeof ExternalInterruptionPolicy.INTERRUPT_OPERATION;
+  readonly workerDispatchPolicy: typeof ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS;
+  readonly phaseDispatch: readonly ExternalExecutionPhaseDispatchEntry[];
+}
+
 export type ExternalExecutionProfileDefinition =
-  ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2;
+  | ExternalExecutionProfileDefinitionV1
+  | ExternalExecutionProfileDefinitionV2
+  | ExternalExecutionProfileDefinitionV3;
 
 export const ExternalExecutionState = {
   AUTHORIZED: 'AUTHORIZED',
@@ -401,10 +521,161 @@ export function assertExternalBackendCapabilityRecordInvariant(
   sha256Digest(record.recordDigest);
 }
 
+const m251ExternalWorkerPhases: readonly WorkflowPhaseType[] = Object.freeze([
+  WorkflowPhase.DISCOVERY,
+  WorkflowPhase.IMPLEMENT,
+  WorkflowPhase.PLAN,
+]);
+
+function assertSortedUniqueNonBlank(values: readonly string[], name: string): void {
+  let previous: string | undefined;
+  for (const value of values) {
+    nonBlank(value, name, 16_384);
+    if (previous !== undefined && value <= previous) {
+      throw new TypeError(`${name} values must be uniquely sorted`);
+    }
+    previous = value;
+  }
+}
+
+function assertV3PhaseDispatchEntry(entry: ExternalExecutionPhaseDispatchEntry): void {
+  if (!m251ExternalWorkerPhases.includes(entry.phase)) {
+    throw new TypeError('External phase dispatch selected a non-Worker phase');
+  }
+  nonBlank(entry.workerAdapter, 'External phase Worker adapter');
+  nonBlank(entry.workerAdapterVersion, 'External phase Worker adapter version');
+  const candidateFree =
+    entry.phase === WorkflowPhase.DISCOVERY || entry.phase === WorkflowPhase.PLAN;
+  if (
+    (candidateFree &&
+      (entry.cwdKind !== ExternalPhaseCwdKind.PROJECT_READ_SNAPSHOT ||
+        entry.sourceAuthorityKind !== ExternalPhaseSourceAuthorityKind.PROJECT_READ)) ||
+    (!candidateFree &&
+      (entry.cwdKind !== ExternalPhaseCwdKind.CANDIDATE_WORKSPACE ||
+        entry.sourceAuthorityKind !== ExternalPhaseSourceAuthorityKind.CANDIDATE)) ||
+    rawField(entry, 'responseSchemaPolicy') !== deriveExternalPhaseResponseSchemaPolicy(entry.phase)
+  ) {
+    throw new TypeError(
+      'External phase dispatch has an incompatible cwd, source authority, or response-schema policy',
+    );
+  }
+  for (const [value, name] of [
+    [entry.permissionProfileId, 'permission profile ID'],
+    [entry.isolationProfileId, 'isolation profile ID'],
+    [entry.instructionSourceManifestId, 'instruction-source manifest ID'],
+    [entry.workerActivityPolicyId, 'Worker activity-policy ID'],
+  ] as const) {
+    nonBlank(value, `External phase ${name}`);
+  }
+  for (const digest of [
+    entry.permissionProfileDigest,
+    entry.isolationProfileDigest,
+    entry.configurationProfileDigest,
+    entry.executionConfigDigest,
+    entry.disabledIntegrationsDigest,
+    entry.instructionSourceManifestDigest,
+    entry.capabilityGrantDigest,
+    entry.responseContractDigest,
+    entry.workerActivityPolicyDigest,
+  ]) {
+    sha256Digest(digest);
+  }
+  if (
+    rawField(entry, 'projectConfigurationPolicy') !== ExternalProjectConfigurationPolicy.DISABLED ||
+    rawField(entry, 'commandNetworkPolicy') !== ExternalCommandNetworkPolicy.DENIED ||
+    rawField(entry, 'approvalPolicy') !== ExternalApprovalPolicy.NEVER ||
+    !known(ExternalContinuityPolicy, entry.continuityPolicy) ||
+    !known(ExternalCompactionPolicy, entry.compactionPolicy) ||
+    rawField(entry, 'fallbackPolicy') !== ExternalFallbackPolicy.FAIL_CLOSED
+  ) {
+    throw new TypeError('External phase dispatch policy is unsupported');
+  }
+  let previousInstructionPath: string | undefined;
+  for (const source of entry.instructionSources) {
+    nonBlank(source.path, 'External instruction-source path', 16_384);
+    sha256Digest(source.digest);
+    if (previousInstructionPath !== undefined && source.path <= previousInstructionPath) {
+      throw new TypeError('External instruction sources must be uniquely sorted by path');
+    }
+    previousInstructionPath = source.path;
+  }
+  if (entry.allowedRoots.length === 0 || entry.forbiddenRoots.length === 0) {
+    throw new TypeError('External phase dispatch requires allowed and forbidden roots');
+  }
+  assertSortedUniqueNonBlank(entry.allowedRoots, 'External allowed root');
+  assertSortedUniqueNonBlank(entry.forbiddenRoots, 'External forbidden root');
+  const forbiddenRoots = new Set(entry.forbiddenRoots);
+  if (entry.allowedRoots.some((root) => forbiddenRoots.has(root))) {
+    throw new TypeError('External phase root cannot be both allowed and forbidden');
+  }
+}
+
+export function externalExecutionProfileDefinitionProjection(
+  profile: ExternalExecutionProfileDefinition,
+): unknown {
+  if (profile.schemaVersion === 3) {
+    return {
+      schemaVersion: profile.schemaVersion,
+      backendKind: profile.backendKind,
+      capabilityRecordDigest: profile.capabilityRecordDigest,
+      selectedCapabilities: profile.selectedCapabilities,
+      workerPhases: profile.workerPhases,
+      binaryIdentityDigest: profile.binaryIdentityDigest,
+      protocolSchemaDigest: profile.protocolSchemaDigest,
+      managedRequirementsDigest: profile.managedRequirementsDigest,
+      controlledStateRootIdentity: profile.controlledStateRootIdentity,
+      environmentProjectionDigest: profile.environmentProjectionDigest,
+      model: profile.model,
+      modelProvider: profile.modelProvider,
+      serviceTier: profile.serviceTier,
+      reasoningEffort: profile.reasoningEffort,
+      defaultThreadPolicy: profile.defaultThreadPolicy,
+      retentionPolicy: profile.retentionPolicy,
+      interruptionPolicy: profile.interruptionPolicy,
+      workerDispatchPolicy: profile.workerDispatchPolicy,
+      phaseDispatch: profile.phaseDispatch,
+    };
+  }
+  return {
+    schemaVersion: profile.schemaVersion,
+    backendKind: profile.backendKind,
+    capabilityRecordDigest: profile.capabilityRecordDigest,
+    selectedCapabilities: profile.selectedCapabilities,
+    workerPhases: profile.workerPhases,
+    binaryIdentityDigest: profile.binaryIdentityDigest,
+    protocolSchemaDigest: profile.protocolSchemaDigest,
+    configurationProfileDigest: profile.configurationProfileDigest,
+    executionConfigDigest: profile.executionConfigDigest,
+    managedRequirementsDigest: profile.managedRequirementsDigest,
+    instructionSourceManifestDigest: profile.instructionSourceManifestDigest,
+    controlledStateRootIdentity: profile.controlledStateRootIdentity,
+    environmentProjectionDigest: profile.environmentProjectionDigest,
+    permissionProfileId: profile.permissionProfileId,
+    permissionProfileDigest: profile.permissionProfileDigest,
+    model: profile.model,
+    modelProvider: profile.modelProvider,
+    serviceTier: profile.serviceTier,
+    reasoningEffort: profile.reasoningEffort,
+    responseSchemaPolicy: profile.responseSchemaPolicy,
+    disabledIntegrationsDigest: profile.disabledIntegrationsDigest,
+    defaultThreadPolicy: profile.defaultThreadPolicy,
+    continuityPolicy: profile.continuityPolicy,
+    compactionPolicy: profile.compactionPolicy,
+    retentionPolicy: profile.retentionPolicy,
+    fallbackPolicy: profile.fallbackPolicy,
+    interruptionPolicy: profile.interruptionPolicy,
+    ...(profile.schemaVersion === 1 ? {} : { workerDispatchPolicy: profile.workerDispatchPolicy }),
+  };
+}
+
 export function assertExternalExecutionProfileDefinitionInvariant(
   profile: ExternalExecutionProfileDefinition,
 ): void {
-  if (rawField(profile, 'schemaVersion') !== 1 && rawField(profile, 'schemaVersion') !== 2) {
+  if (
+    rawField(profile, 'schemaVersion') !== 1 &&
+    rawField(profile, 'schemaVersion') !== 2 &&
+    rawField(profile, 'schemaVersion') !== 3
+  ) {
     throw new TypeError('External Execution Profile definition schema is unsupported');
   }
   nonBlank(profile.backendKind, 'External backend kind');
@@ -412,13 +683,17 @@ export function assertExternalExecutionProfileDefinitionInvariant(
     profile.capabilityRecordDigest,
     profile.binaryIdentityDigest,
     profile.protocolSchemaDigest,
-    profile.configurationProfileDigest,
-    profile.executionConfigDigest,
     profile.managedRequirementsDigest,
-    profile.instructionSourceManifestDigest,
     profile.environmentProjectionDigest,
-    profile.permissionProfileDigest,
-    profile.disabledIntegrationsDigest,
+    ...(profile.schemaVersion === 3
+      ? []
+      : [
+          profile.configurationProfileDigest,
+          profile.executionConfigDigest,
+          profile.instructionSourceManifestDigest,
+          profile.permissionProfileDigest,
+          profile.disabledIntegrationsDigest,
+        ]),
   ]) {
     sha256Digest(digest);
   }
@@ -450,6 +725,47 @@ export function assertExternalExecutionProfileDefinitionInvariant(
     }
     previousPhase = phase;
   }
+  if (profile.schemaVersion === 3) {
+    if (
+      rawField(profile, 'workerDispatchPolicy') !==
+        ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS ||
+      profile.workerPhases.length !== m251ExternalWorkerPhases.length ||
+      profile.workerPhases.some((phase, index) => phase !== m251ExternalWorkerPhases[index]) ||
+      profile.phaseDispatch.length !== m251ExternalWorkerPhases.length ||
+      profile.phaseDispatch.some((entry, index) => entry.phase !== m251ExternalWorkerPhases[index])
+    ) {
+      throw new TypeError('External v3 phase dispatch must bind the exact canonical phase set');
+    }
+    for (const movedGlobalField of [
+      'configurationProfileDigest',
+      'executionConfigDigest',
+      'instructionSourceManifestDigest',
+      'permissionProfileId',
+      'permissionProfileDigest',
+      'responseSchemaPolicy',
+      'disabledIntegrationsDigest',
+      'continuityPolicy',
+      'compactionPolicy',
+      'fallbackPolicy',
+    ]) {
+      if (rawField(profile, movedGlobalField) !== undefined) {
+        throw new TypeError('External v3 profile duplicates phase-owned authority');
+      }
+    }
+    let selectedActivityPolicy: string | undefined;
+    let selectedActivityPolicyDigest: Sha256Digest | undefined;
+    for (const entry of profile.phaseDispatch) {
+      assertV3PhaseDispatchEntry(entry);
+      selectedActivityPolicy ??= entry.workerActivityPolicyId;
+      selectedActivityPolicyDigest ??= entry.workerActivityPolicyDigest;
+      if (
+        entry.workerActivityPolicyId !== selectedActivityPolicy ||
+        entry.workerActivityPolicyDigest !== selectedActivityPolicyDigest
+      ) {
+        throw new TypeError('External v3 phases must bind one Worker activity policy');
+      }
+    }
+  }
   let previous: string | undefined;
   for (const capability of profile.selectedCapabilities) {
     if (!known(ExternalBackendCapability, capability)) {
@@ -465,7 +781,13 @@ export function assertExternalExecutionProfileDefinitionInvariant(
     ExternalBackendCapability.SAME_SESSION_BOUNDED_OPERATION,
     ExternalBackendCapability.OPERATION_INTERRUPT,
     ExternalBackendCapability.CONTROLLED_STATE_REOPEN,
-    ...(profile.compactionPolicy === ExternalCompactionPolicy.MANUAL_BEFORE_OPERATION
+    ...((
+      profile.schemaVersion === 3
+        ? profile.phaseDispatch.some(
+            (entry) => entry.compactionPolicy === ExternalCompactionPolicy.MANUAL_BEFORE_OPERATION,
+          )
+        : profile.compactionPolicy === ExternalCompactionPolicy.MANUAL_BEFORE_OPERATION
+    )
       ? [
           ExternalBackendCapability.MANUAL_COMPACTION,
           ExternalBackendCapability.POST_COMPACTION_CONTINUATION,
@@ -479,11 +801,15 @@ export function assertExternalExecutionProfileDefinitionInvariant(
   }
   for (const [value, name] of [
     [profile.controlledStateRootIdentity, 'controlled state root'],
-    [profile.permissionProfileId, 'permission profile ID'],
     [profile.model, 'model'],
     [profile.modelProvider, 'model provider'],
     [profile.reasoningEffort, 'reasoning effort'],
-    [profile.responseSchemaPolicy, 'response schema policy'],
+    ...(profile.schemaVersion === 3
+      ? []
+      : ([
+          [profile.permissionProfileId, 'permission profile ID'],
+          [profile.responseSchemaPolicy, 'response schema policy'],
+        ] as const)),
   ] as const) {
     nonBlank(value, `External ${name}`);
   }
@@ -492,11 +818,12 @@ export function assertExternalExecutionProfileDefinitionInvariant(
   }
   if (
     rawField(profile, 'defaultThreadPolicy') !== ExternalThreadPolicy.FRESH ||
-    !known(ExternalContinuityPolicy, profile.continuityPolicy) ||
-    !known(ExternalCompactionPolicy, profile.compactionPolicy) ||
     !known(ExternalRetentionPolicy, profile.retentionPolicy) ||
-    !known(ExternalFallbackPolicy, profile.fallbackPolicy) ||
-    !known(ExternalInterruptionPolicy, profile.interruptionPolicy)
+    !known(ExternalInterruptionPolicy, profile.interruptionPolicy) ||
+    (profile.schemaVersion !== 3 &&
+      (!known(ExternalContinuityPolicy, profile.continuityPolicy) ||
+        !known(ExternalCompactionPolicy, profile.compactionPolicy) ||
+        !known(ExternalFallbackPolicy, profile.fallbackPolicy)))
   ) {
     throw new TypeError('External Execution Profile policy is unknown');
   }
