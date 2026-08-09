@@ -27,3 +27,8 @@ export type {
   CandidateLeasedWorkerDependencies,
   CandidateLeasedWorkerFactory,
 } from './candidate-leased-worker.js';
+export { createProjectReadSnapshotCleanupCoordinator } from './project-read-cleanup-coordinator.js';
+export type {
+  ProjectReadCleanupIdentityGenerator,
+  ProjectReadSnapshotCleanupCoordinatorDependencies,
+} from './project-read-cleanup-coordinator.js';

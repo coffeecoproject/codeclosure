@@ -103,8 +103,10 @@ chain versions external Intent/Record plus Codex directive/Adapter observation,
 and its nested Profile v3 gives each shared or phase-specific field one owner,
 uses the existing canonical phase-set order, selects all declared Attempts, and
 binds one Adapter-local activity-policy identity per phase. Snapshot cleanup
-uses one grant identity across unknown-result reconciliation and atomically
-retains its terminal Outcome before later replay can suppress filesystem work.
+uses one grant identity across unknown-result reconciliation; the trusted
+Runtime coordinator now admits only the exact Store-retained unresolved Grant,
+invokes the narrow Workspace effect port, atomically retains its terminal
+Outcome, and suppresses later filesystem work through exact Outcome replay.
 [ADR 0043](docs/adr/0043-candidate-free-codex-project-read-authority.md) is
 accepted and binds the project-read snapshot, Context, isolation, source-
 currency, configuration/instruction, cleanup, and execution-record boundary
@@ -121,8 +123,10 @@ new wire contract, and lets a versioned Runtime projection policy derive only
 byte-identical retained-value matches as `USER_STATED`; non-matches remain
 model proposals and cannot satisfy Admission. Its explicit live command passes
 the lower-client prerequisite plus isolated Answer-only, clear Intent, and
-ambiguous Intent paths with metadata-only receipts. The real phase composition
-remains unimplemented.
+ambiguous Intent paths with metadata-only receipts. Slice 3 incrementally
+implements the project-read authority, read-only local Workspace,
+Context/Attempt binding, Store cleanup authority, and Runtime cleanup
+coordination foundation. Real phase composition remains unimplemented.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -141,8 +145,9 @@ The proposed [M2.7 Local Runtime Host contract](docs/runtime-host.md),
 and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
 post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
-Only M2.5.1 Slices 1 and 2 production behavior is implemented; real phase
-composition and M2.5.1 assessment have not started.
+M2.5.1 Slices 1 and 2 are complete, and Slice 3 has implemented its bounded
+project-read and cleanup foundation; real phase composition and M2.5.1
+assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -761,21 +766,27 @@ M2.5.1 Slice 3 now keeps Candidate Manager as the source-observation owner and
 implements a separate narrow `ProjectReadWorkspacePort` for candidate-free
 `DISCOVERY`/`PLAN`, its local read-only materialization/revalidation adapter,
 the protocol-neutral project-read/Context authority, and the Store-owned
-cleanup persistence foundation. The Store derives a monotonically sequenced
+cleanup authority. The Store derives a monotonically sequenced
 authority snapshot, admits only an exact terminal Grant or an owned-orphan
 consume-once Grant whose claimed authority identity is absent, and atomically persists the terminal cleanup
 Observation, Outcome, audit, and Grant consumption. Exact resolved-Grant replay
-returns the retained Outcome before any future coordinator may invoke the
-filesystem port. Process-safe same-grant physical-effect coordination and real
-phase composition remain pending. The source checkout, `.git`,
+returns the retained Outcome before the Runtime coordinator may invoke the
+filesystem port. The Runtime coordinator rejects invalid, missing, or
+identity-conflicting requests before the port, invokes only the exact unresolved
+Store Grant, strictly validates the Adapter observation, and returns the Store
+winner after an Outcome race. The local Adapter uses deterministic Grant-bound
+coordination and atomic exact-leaf effects across processes; incomplete or
+unclassifiable work leaves the same Grant unresolved. Real phase composition
+remains pending. The source checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,
 protected assets, and sibling snapshots would remain unreadable to model tools.
 The snapshot would have no Candidate, Evidence, Acceptance, or Workflow-writing
 authority. A Plan-source mismatch would persist the exact Workflow integrity
 code, project the Workflow to `FAILED` and Goal to non-resumable
 `BLOCKED / INSPECT_BLOCKER`, and create no Candidate. This port and record are
-accepted under ADR 0043; the remaining effect coordination and composition are
-not yet implemented.
+accepted under ADR 0043; the remaining phase-specific external execution,
+source-currency enforcement, and production composition are not yet
+implemented.
 
 ### Evidence Store
 

@@ -15,6 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { Worker } from 'node:worker_threads';
 
 import {
   PROJECT_READ_CLEANUP_POLICY,
@@ -321,6 +322,126 @@ function cleanupGrant(
   );
 }
 
+interface ConcurrentCleanupWorkerResult {
+  readonly disposition: string | null;
+  readonly observationDigest: string | null;
+}
+
+interface ConcurrentCleanupWorkerHandle {
+  readonly ready: Promise<void>;
+  readonly result: Promise<ConcurrentCleanupWorkerResult>;
+}
+
+function concurrentWorkerMessageField(message: object, key: string): unknown {
+  return Reflect.get(message, key) as unknown;
+}
+
+function startConcurrentCleanupWorker(
+  options: Readonly<{
+    authorityRoots: readonly string[];
+    ownerId: string;
+    workspaceRoot: string;
+  }>,
+  grant: ProjectReadSnapshotCleanupGrant,
+  gate: SharedArrayBuffer,
+): ConcurrentCleanupWorkerHandle {
+  const worker = new Worker(
+    `
+      const { parentPort, workerData } = require('node:worker_threads');
+      void (async () => {
+        try {
+          const { createLocalProjectReadWorkspace } = await import('@codeclosure/workspace-local');
+          const workspace = createLocalProjectReadWorkspace(workerData.options);
+          const gate = new Int32Array(workerData.gate);
+          parentPort.postMessage({ kind: 'READY' });
+          Atomics.wait(gate, 0, 0);
+          const observation = workspace.cleanupSnapshot(workerData.grant);
+          parentPort.postMessage({
+            kind: 'RESULT',
+            disposition: observation?.disposition ?? null,
+            observationDigest: observation?.observationDigest ?? null,
+          });
+        } catch (error) {
+          parentPort.postMessage({
+            kind: 'ERROR',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+    `,
+    { eval: true, workerData: { options, grant, gate } },
+  );
+  let readySettled = false;
+  let resultSettled = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let resolveResult!: (result: ConcurrentCleanupWorkerResult) => void;
+  let rejectResult!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const result = new Promise<ConcurrentCleanupWorkerResult>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  const fail = (error: Error): void => {
+    if (!readySettled) {
+      readySettled = true;
+      rejectReady(error);
+    }
+    if (!resultSettled) {
+      resultSettled = true;
+      rejectResult(error);
+    }
+  };
+  worker.on('message', (message: unknown) => {
+    if (typeof message !== 'object' || message === null) {
+      fail(new Error('Concurrent cleanup worker returned a malformed message'));
+      return;
+    }
+    const kind = concurrentWorkerMessageField(message, 'kind');
+    if (kind === 'READY') {
+      if (!readySettled) {
+        readySettled = true;
+        resolveReady();
+      }
+      return;
+    }
+    if (kind === 'ERROR') {
+      const rawMessage = concurrentWorkerMessageField(message, 'message');
+      fail(new Error(typeof rawMessage === 'string' ? rawMessage : 'Cleanup worker failed'));
+      return;
+    }
+    if (kind === 'RESULT') {
+      const disposition = concurrentWorkerMessageField(message, 'disposition');
+      const observationDigest = concurrentWorkerMessageField(message, 'observationDigest');
+      if (
+        (typeof disposition !== 'string' && disposition !== null) ||
+        (typeof observationDigest !== 'string' && observationDigest !== null)
+      ) {
+        fail(new Error('Concurrent cleanup worker returned an invalid result'));
+        return;
+      }
+      if (!resultSettled) {
+        resultSettled = true;
+        resolveResult(Object.freeze({ disposition, observationDigest }));
+      }
+      return;
+    }
+    fail(new Error('Concurrent cleanup worker returned an unknown message'));
+  });
+  worker.on('error', fail);
+  worker.on('exit', (code) => {
+    if (code !== 0) {
+      fail(new Error(`Concurrent cleanup worker exited with ${String(code)}`));
+    } else if (!resultSettled) {
+      fail(new Error('Concurrent cleanup worker exited without a result'));
+    }
+  });
+  return Object.freeze({ ready, result });
+}
+
 void test('project-read materialization copies exact selected bytes into a marker-external read-only snapshot', (t) => {
   const value = fixture(t, { now: () => observedAt });
   const record = authorityRecord(value, 'materialize');
@@ -430,6 +551,43 @@ void test('an exact Cleanup Grant deletes once and a later same-grant invocation
   assert.equal(existsSync(record.snapshotLeafRealpath), false);
   const replay = value.workspace.cleanupSnapshot(grant);
   assert.equal(replay?.disposition, 'ALREADY_ABSENT');
+});
+
+void test('separate worker isolates join one same-Grant cleanup effect without selecting another target', async (t) => {
+  const value = fixture(t, { now: () => observedAt });
+  const record = authorityRecord(value, 'concurrent-cleanup');
+  value.workspace.materializeSnapshot(record);
+  const grant = cleanupGrant(
+    record,
+    authoritySnapshot(record, 'RETAINED', 1),
+    'concurrent-cleanup',
+  );
+  const gate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const options = Object.freeze({
+    authorityRoots: Object.freeze([value.authorityRoot]),
+    ownerId: 'project-read-owner_test',
+    workspaceRoot: value.workspaceRoot,
+  });
+  const first = startConcurrentCleanupWorker(options, grant, gate);
+  const second = startConcurrentCleanupWorker(options, grant, gate);
+  await Promise.all([first.ready, second.ready]);
+  Atomics.store(new Int32Array(gate), 0, 1);
+  Atomics.notify(new Int32Array(gate), 0, 2);
+  const results = await Promise.all([first.result, second.result]);
+
+  assert.equal(existsSync(record.snapshotLeafRealpath), false);
+  assert.equal(results.filter((result) => result.disposition === 'DELETED').length, 1);
+  for (const result of results) {
+    assert.equal(
+      result.disposition === null ||
+        result.disposition === 'DELETED' ||
+        result.disposition === 'ALREADY_ABSENT',
+      true,
+    );
+    assert.equal(result.disposition === null, result.observationDigest === null);
+  }
+  const reconciled = value.workspace.cleanupSnapshot(grant);
+  assert.equal(reconciled?.disposition, 'ALREADY_ABSENT');
 });
 
 void test('cleanup retains a writable or byte-drifted target instead of deleting by path', (t) => {

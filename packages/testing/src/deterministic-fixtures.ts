@@ -27,6 +27,7 @@ import {
   intentProjectionId,
   isoTimestamp,
   materialAmbiguityId,
+  projectReadSnapshotCleanupOutcomeId,
   rawRequestId,
   recoveryReconciliationId,
   successCriterionId,
@@ -62,6 +63,7 @@ import {
   type IntentProjectionId,
   type IsoTimestamp,
   type MaterialAmbiguityId,
+  type ProjectReadSnapshotCleanupOutcomeId,
   type RawRequestId,
   type RecoveryReconciliationId,
   type SuccessCriterionId,
@@ -129,6 +131,10 @@ export class DeterministicIds {
 
   public nextRecoveryReconciliationId(): RecoveryReconciliationId {
     return recoveryReconciliationId(`recovery_${this.nextSuffix()}`);
+  }
+
+  public nextProjectReadSnapshotCleanupOutcomeId(): ProjectReadSnapshotCleanupOutcomeId {
+    return projectReadSnapshotCleanupOutcomeId(`project-read-cleanup-outcome_${this.nextSuffix()}`);
   }
 
   public nextAttemptId(): AttemptId {

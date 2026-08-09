@@ -29,6 +29,7 @@ import {
   intentProjectionId,
   isoTimestamp,
   materialAmbiguityId,
+  projectReadSnapshotCleanupOutcomeId,
   rawRequestId,
   recoveryReconciliationId,
   successCriterionId,
@@ -63,6 +64,7 @@ import {
   type IntentProjectionId,
   type IsoTimestamp,
   type MaterialAmbiguityId,
+  type ProjectReadSnapshotCleanupOutcomeId,
   type RawRequestId,
   type RecoveryReconciliationId,
   type SuccessCriterionId,
@@ -72,6 +74,7 @@ import {
 } from '@codeclosure/domain';
 
 import type { CandidateEvidenceIdentityGenerator } from './candidate-evidence-contracts.js';
+import type { ProjectReadCleanupIdentityGenerator } from './project-read-cleanup-coordinator.js';
 import type {
   AcceptanceIdentityGenerator,
   Clock,
@@ -102,6 +105,7 @@ export class CryptographicIdentityGenerator
     CandidateEvidenceIdentityGenerator,
     AcceptanceIdentityGenerator,
     ExternalExecutionIdentityGenerator,
+    ProjectReadCleanupIdentityGenerator,
     RecoveryIdentityGenerator
 {
   public nextGoalId(): GoalId {
@@ -234,6 +238,10 @@ export class CryptographicIdentityGenerator
 
   public nextRecoveryReconciliationId(): RecoveryReconciliationId {
     return recoveryReconciliationId(`recovery_${this.nextSuffix()}`);
+  }
+
+  public nextProjectReadSnapshotCleanupOutcomeId(): ProjectReadSnapshotCleanupOutcomeId {
+    return projectReadSnapshotCleanupOutcomeId(`project-read-cleanup-outcome_${this.nextSuffix()}`);
   }
 
   private nextSuffix(): string {

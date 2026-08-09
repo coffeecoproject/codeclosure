@@ -97,9 +97,13 @@ Store derives each snapshot from retained authority, rejects replacement
 Grants and orphan Grants whose claimed authority identity is still retained,
 and commits the exact cleanup observation,
 Outcome, audit, and Grant consumption atomically; exact resolved-Grant replay
-returns the retained Outcome. Filesystem cleanup invocation, same-grant
-physical-effect coordination, source-currency enforcement, additive external
-execution, and Profile composition remain planned M2.5.1 work. Real external
+returns the retained Outcome. The trusted Runtime coordinator now admits only
+the exact unresolved retained Grant, invokes the narrow Workspace port,
+strictly validates its observation, and returns the Store winner after a
+resolution race. The local Adapter implements deterministic same-Grant process
+coordination and exact-leaf effect/reconciliation without gaining Store
+authority. Source-currency enforcement, additive external execution, and
+Profile composition remain planned M2.5.1 work. Real external
 dispatch has not started. The proposed v3
 Profile has no duplicated global/phase field authority, binds one opaque
 Adapter-local Worker activity-policy identity per phase, and uses the existing
@@ -1653,7 +1657,7 @@ describes.
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
-| Project-source read and Cleanup Store authority — implemented M2.5.1 Slice 3 foundation; effect coordination/composition pending | Goal scope, Candidate Manager observation, strict persisted project-read authority, Store-derived authority snapshot, and exact cleanup records | Workflow Runtime, Candidate Manager, and Store canonical/relationship backstops | project-read record plus Context/Attempt/Workflow/command/audits persist atomically; Store persists the monotonic snapshot and consume-once Grant, then atomically closes Observation/Outcome/audit/consumption; strict reopen reconstructs the retained chain and the workspace adapter cannot issue authority |
+| Project-source read and Cleanup authority — implemented M2.5.1 Slice 3 foundation; phase composition pending | Goal scope, Candidate Manager observation, strict persisted project-read authority, Store-derived authority snapshot, exact cleanup records, and exact unresolved-Grant request | Workflow Runtime for the pending production project-read/Context/Attempt composition; trusted Runtime Cleanup coordinator for exact cleanup-request admission; Candidate Manager, Store canonical/relationship backstops, and Adapter-local physical classification | Store already supports atomic persistence of the Runtime-authored project-read record plus Context/Attempt/Workflow/command/audits; production Workflow Runtime composition remains pending; the Store persists the monotonic snapshot and consume-once Grant; the trusted Runtime Cleanup coordinator alone invokes the exact admitted port request; Store atomically closes Observation/Outcome/audit/consumption, and strict reopen/replay suppresses later filesystem work |
 | Acceptance-critical Verification Plan and protected-asset manifest — implemented M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |

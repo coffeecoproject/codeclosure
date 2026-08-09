@@ -428,6 +428,81 @@ void test('[I-006][I-008][I-009] cleanup authority persists exact snapshot, obse
   }
 });
 
+void test('[I-008][I-027] cleanup resolution conflicts retain no partial authority', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codeclosure-cleanup-conflict-'));
+  const filename = join(directory, 'authority.sqlite');
+  try {
+    const grant = seedGrant(filename);
+    const observation = cleanupObservation(
+      grant,
+      ProjectReadSnapshotCleanupDisposition.ALREADY_ABSENT,
+    );
+    const differentObservation = cleanupObservation(
+      grant,
+      ProjectReadSnapshotCleanupDisposition.DELETED,
+      'resolution-conflict',
+    );
+    const mismatchedOutcome = cleanupOutcome(grant, differentObservation, 'resolution-conflict');
+    const store = openSqliteControlStore({ filename });
+    try {
+      const grantConflict = store.resolveProjectReadSnapshotCleanupGrant({
+        grantId: grant.id,
+        grantDigest: sha256Digest(`sha256:${'f'.repeat(64)}`),
+        observation,
+        outcome: cleanupOutcome(grant, observation),
+        observationAuditEventId: auditEventId('audit_cleanup-observation-grant-conflict'),
+        outcomeAuditEventId: auditEventId('audit_cleanup-outcome-grant-conflict'),
+      });
+      assert.equal(grantConflict.status, 'GRANT_CONFLICT');
+
+      const resolutionConflict = store.resolveProjectReadSnapshotCleanupGrant({
+        grantId: grant.id,
+        grantDigest: grant.grantDigest,
+        observation,
+        outcome: mismatchedOutcome,
+        observationAuditEventId: auditEventId('audit_cleanup-observation-resolution-conflict'),
+        outcomeAuditEventId: auditEventId('audit_cleanup-outcome-resolution-conflict'),
+      });
+      assert.equal(resolutionConflict.status, 'RESOLUTION_CONFLICT');
+      assert.equal(store.getProjectReadSnapshotCleanupOutcome(grant.id), undefined);
+    } finally {
+      store.close();
+    }
+
+    const database = new Database(filename, { readonly: true, fileMustExist: true });
+    try {
+      for (const table of [
+        'project_read_snapshot_cleanup_observations',
+        'project_read_snapshot_cleanup_outcomes',
+        'project_read_snapshot_cleanup_consumptions',
+      ]) {
+        assert.equal(
+          database.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get(),
+          0,
+          `${table} must remain empty after conflict`,
+        );
+      }
+      assert.equal(
+        database
+          .prepare(
+            `SELECT COUNT(*) FROM audit_events
+              WHERE aggregate_type IN (
+                'PROJECT_READ_SNAPSHOT_CLEANUP_OBSERVATION',
+                'PROJECT_READ_SNAPSHOT_CLEANUP_OUTCOME'
+              )`,
+          )
+          .pluck()
+          .get(),
+        0,
+      );
+    } finally {
+      database.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 void test('[I-008][I-009] cleanup resolution rolls back every write and concurrent connections return one retained winner', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'codeclosure-cleanup-rollback-'));
   const filename = join(directory, 'authority.sqlite');

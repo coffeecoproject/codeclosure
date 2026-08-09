@@ -1859,10 +1859,12 @@ void test('[I-003][I-023] package root hides legacy and internal mutation coordi
   assert.equal('createGoalApplication' in publicRuntimeApi, false);
   assert.equal('createWorkerExecutionApplication' in publicRuntimeApi, false);
   assert.equal('createRecoveryCoordinator' in publicRuntimeApi, false);
+  assert.equal('createProjectReadSnapshotCleanupCoordinator' in publicRuntimeApi, false);
   assert.equal('createWorkflowDriver' in publicRuntimeApi, false);
   assert.equal('createCodeClosureApplication' in publicRuntimeApi, true);
   const trustedCompositionApi = await import('@codeclosure/runtime/composition');
   assert.equal('createRecoveryCoordinator' in trustedCompositionApi, true);
+  assert.equal('createProjectReadSnapshotCleanupCoordinator' in trustedCompositionApi, true);
   assert.equal('createWorkflowDriver' in trustedCompositionApi, true);
   const internalPackageSubpath = '@codeclosure/runtime/workflow-runtime';
   await assert.rejects(import(internalPackageSubpath), /Package subpath/);

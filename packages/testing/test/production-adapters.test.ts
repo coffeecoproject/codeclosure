@@ -26,6 +26,7 @@ void test('[I-006][I-008] production time and identifiers pass owning domain cod
     ids.nextVerificationObligationId(),
     ids.nextAcceptanceDecisionId(),
     ids.nextRecoveryReconciliationId(),
+    ids.nextProjectReadSnapshotCleanupOutcomeId(),
   ];
   assert.equal(new Set(generated).size, generated.length);
   for (const identifier of generated) {

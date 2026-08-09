@@ -29,6 +29,17 @@ export * from './project-read-workspace-contracts.js';
 export * from './project-read-workspace-port.js';
 export * from './project-read-snapshot-cleanup-contracts.js';
 export * from './project-read-cleanup-store.js';
+export type {
+  ProjectReadSnapshotCleanupCoordinator,
+  ProjectReadSnapshotCleanupCoordinatorRequest,
+  ProjectReadSnapshotCleanupCoordinatorResult,
+} from './project-read-cleanup-coordinator.js';
+export {
+  ProjectReadSnapshotCleanupCoordinatorStatus,
+  ProjectReadSnapshotCleanupRejectionReasonCode,
+  ProjectReadSnapshotCleanupResolutionKind,
+  ProjectReadSnapshotCleanupUnresolvedReasonCode,
+} from './project-read-cleanup-coordinator.js';
 export * from './recovery-contracts.js';
 export * from './repair-context.js';
 export * from './worker-contracts.js';
