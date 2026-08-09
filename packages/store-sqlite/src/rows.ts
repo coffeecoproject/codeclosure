@@ -324,7 +324,7 @@ const externalBackendCapabilityRowSchema = z.object({
 
 const externalExecutionRowSchema = z.object({
   id: z.string(),
-  schema_version: z.literal(1),
+  schema_version: z.union([z.literal(1), z.literal(2)]),
   version: z.number().int().positive(),
   state: z.string(),
   goal_id: z.string(),
@@ -360,6 +360,8 @@ const externalExecutionRowSchema = z.object({
   candidate_workspace_lease_id: z.string().nullable(),
   candidate_workspace_lease_digest: z.string().nullable(),
   candidate_workspace_cwd_identity: z.string().nullable(),
+  phase_dispatch_entry_digest: z.string().nullable(),
+  source_authority_json: z.string().nullable(),
   authorized_at: z.string(),
   intent_digest: z.string(),
   process_identity_json: z.string().nullable(),
@@ -1177,15 +1179,25 @@ export function decodeExternalExecutionRow(row: unknown): ExternalExecutionRecor
       retentionPolicy: parsed.retention_policy,
       fallbackPolicy: parsed.fallback_policy,
       interruptionPolicy: parsed.interruption_policy,
-      ...(parsed.candidate_workspace_lease_id === null
-        ? {}
-        : { candidateWorkspaceLeaseId: parsed.candidate_workspace_lease_id }),
-      ...(parsed.candidate_workspace_lease_digest === null
-        ? {}
-        : { candidateWorkspaceLeaseDigest: parsed.candidate_workspace_lease_digest }),
-      ...(parsed.candidate_workspace_cwd_identity === null
-        ? {}
-        : { candidateWorkspaceCwdIdentity: parsed.candidate_workspace_cwd_identity }),
+      ...(parsed.schema_version === 1
+        ? {
+            ...(parsed.candidate_workspace_lease_id === null
+              ? {}
+              : { candidateWorkspaceLeaseId: parsed.candidate_workspace_lease_id }),
+            ...(parsed.candidate_workspace_lease_digest === null
+              ? {}
+              : { candidateWorkspaceLeaseDigest: parsed.candidate_workspace_lease_digest }),
+            ...(parsed.candidate_workspace_cwd_identity === null
+              ? {}
+              : { candidateWorkspaceCwdIdentity: parsed.candidate_workspace_cwd_identity }),
+          }
+        : {
+            phaseDispatchEntryDigest: parsed.phase_dispatch_entry_digest,
+            sourceAuthority: parseJson(
+              parsed.source_authority_json ?? 'null',
+              'ExternalExecution.sourceAuthority',
+            ),
+          }),
       authorizedAt: parsed.authorized_at,
       intentDigest: parsed.intent_digest,
       version: parsed.version,

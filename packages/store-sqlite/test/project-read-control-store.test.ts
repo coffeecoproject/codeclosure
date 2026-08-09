@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -11,13 +11,20 @@ import {
   AttemptStatus,
   ExternalBackendCapability,
   ExternalBackendCapabilityClassification,
+  ExternalApprovalPolicy,
+  ExternalCommandNetworkPolicy,
   ExternalCompactionPolicy,
   ExternalContinuityPolicy,
   ExternalExecutionState,
   ExternalFallbackPolicy,
   ExternalInterruptionPolicy,
+  ExternalPhaseCwdKind,
+  ExternalPhaseResponseSchemaPolicy,
+  ExternalPhaseSourceAuthorityKind,
+  ExternalProjectConfigurationPolicy,
   ExternalRetentionPolicy,
   ExternalThreadPolicy,
+  ExternalWorkerDispatchPolicy,
   PROJECT_READ_CLEANUP_POLICY,
   PROJECT_READ_GIT_STATE_PROFILE,
   PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
@@ -41,7 +48,9 @@ import {
   createGoal,
   createWorkflow,
   decideAttempt,
+  deriveCapabilityGrant,
   decodeExternalExecutionIntent,
+  decodeExternalExecutionRecord,
   decodeExternalExecutionObservation,
   decodeExecutionProfileBinding,
   decodeProjectReadSnapshotCleanupGrant,
@@ -49,8 +58,10 @@ import {
   decodeWorkflowPolicyBinding,
   externalBackendCapabilityRecordProjection,
   externalExecutionIntentProjection,
+  externalExecutionPhaseDispatchEntryProjection,
   externalExecutionObservationId,
   externalExecutionObservationProjection,
+  externalExecutionRecordProjection,
   executionProfileBindingProjection,
   executionProfileId,
   goalId,
@@ -73,6 +84,8 @@ import {
   type ExecutionProfileDefinition,
   type ExternalBackendCapabilityRecord,
   type ExternalExecutionProfileDefinitionV1,
+  type ExternalExecutionProfileDefinitionV3,
+  type ExternalExecutionPhaseDispatchEntry,
   type PolicyBundleDefinition,
   type ProjectSourceReadAuthorityRecord,
 } from '@codeclosure/domain';
@@ -92,7 +105,11 @@ import {
   m1WorkerResponseContract,
   workerDispatchClaimProjection,
 } from '@codeclosure/runtime';
-import { WorkerTransactionStep, openSqliteControlStore } from '@codeclosure/store-sqlite';
+import {
+  WorkerTransactionStep,
+  defaultMigrationsDirectory,
+  openSqliteControlStore,
+} from '@codeclosure/store-sqlite';
 import { DeterministicIds, testExecutionProfileDefinition } from '@codeclosure/testing';
 
 const digests = new CanonicalJsonSha256DigestProvider();
@@ -103,6 +120,21 @@ function temporaryDatabase(t: TestContext, namespace: string): string {
   const root = mkdtempSync(join(tmpdir(), `codeclosure-project-read-store-${namespace}-`));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return join(root, 'state.sqlite');
+}
+
+function migrationsThrough(t: TestContext, lastMigration: string): string {
+  const source = defaultMigrationsDirectory();
+  const target = mkdtempSync(join(tmpdir(), 'codeclosure-project-read-migrations-'));
+  t.after(() => rmSync(target, { recursive: true, force: true }));
+  for (const name of readdirSync(source)
+    .filter((entry) => entry.endsWith('.sql'))
+    .sort()) {
+    if (name > lastMigration) {
+      break;
+    }
+    copyFileSync(join(source, name), join(target, name));
+  }
+  return target;
 }
 
 function policyDefinition(namespace: string): PolicyBundleDefinition {
@@ -120,7 +152,10 @@ function policyDefinition(namespace: string): PolicyBundleDefinition {
   });
 }
 
-function externalProfileAuthority(namespace: string): Readonly<{
+function externalProfileAuthority(
+  namespace: string,
+  schemaVersion: 1 | 3,
+): Readonly<{
   capability: ExternalBackendCapabilityRecord;
   profile: ExecutionProfileDefinition;
 }> {
@@ -159,7 +194,7 @@ function externalProfileAuthority(namespace: string): Readonly<{
       externalBackendCapabilityRecordProjection(capabilityWithoutDigest),
     ),
   });
-  const externalExecution: ExternalExecutionProfileDefinitionV1 = Object.freeze({
+  const legacyExternalExecution: ExternalExecutionProfileDefinitionV1 = Object.freeze({
     schemaVersion: 1,
     backendKind: capability.backendKind,
     capabilityRecordDigest: capability.recordDigest,
@@ -188,6 +223,89 @@ function externalProfileAuthority(namespace: string): Readonly<{
     fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
     interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
   });
+  const activityPolicyDigest = digests.digest({ namespace, kind: 'activity-policy' });
+  const phaseDispatch = Object.freeze(
+    [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT, WorkflowPhase.PLAN].map(
+      (phase): ExternalExecutionPhaseDispatchEntry => {
+        const candidateFree = phase !== WorkflowPhase.IMPLEMENT;
+        const instructionSources = Object.freeze([]);
+        return Object.freeze({
+          phase,
+          workerAdapter: 'codex-app-server-worker',
+          workerAdapterVersion: 'codeclosure-m2-5-1-worker-v1',
+          cwdKind: candidateFree
+            ? ExternalPhaseCwdKind.PROJECT_READ_SNAPSHOT
+            : ExternalPhaseCwdKind.CANDIDATE_WORKSPACE,
+          sourceAuthorityKind: candidateFree
+            ? ExternalPhaseSourceAuthorityKind.PROJECT_READ
+            : ExternalPhaseSourceAuthorityKind.CANDIDATE,
+          permissionProfileId: `permission-${phase.toLowerCase()}-v1`,
+          permissionProfileDigest: digests.digest({ namespace, phase, kind: 'permission' }),
+          isolationProfileId: 'project-read-test-isolation-v1',
+          isolationProfileDigest: digests.digest({ isolation: namespace }),
+          projectConfigurationPolicy: ExternalProjectConfigurationPolicy.DISABLED,
+          configurationProfileDigest,
+          executionConfigDigest: digests.digest({ namespace, phase, kind: 'execution-config' }),
+          disabledIntegrationsDigest: digests.digest({
+            namespace,
+            phase,
+            kind: 'disabled-integrations',
+          }),
+          instructionSourceManifestId: `instructions-${phase.toLowerCase()}-v1`,
+          instructionSourceManifestDigest: digests.digest({ instructionSources }),
+          instructionSources,
+          capabilityGrantDigest: digests.digest({
+            schemaVersion: 1,
+            capabilityGrant: deriveCapabilityGrant(phase),
+          }),
+          responseContractDigest: digests.digest({
+            schemaVersion: 1,
+            responseContract: m1WorkerResponseContract(phase),
+          }),
+          responseSchemaPolicy: candidateFree
+            ? ExternalPhaseResponseSchemaPolicy.PROPOSALS_V1
+            : ExternalPhaseResponseSchemaPolicy.COMPLETION_REQUEST_V1,
+          workerActivityPolicyId: 'codex-worker-activity-policy_codeclosure-m2-5-1-real',
+          workerActivityPolicyDigest: activityPolicyDigest,
+          commandNetworkPolicy: ExternalCommandNetworkPolicy.DENIED,
+          approvalPolicy: ExternalApprovalPolicy.NEVER,
+          continuityPolicy: ExternalContinuityPolicy.SAME_SESSION_BOUNDED_OPERATION,
+          compactionPolicy: ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
+          fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
+          allowedRoots: Object.freeze([`/project-read-workspaces/${namespace}/snapshot`]),
+          forbiddenRoots: Object.freeze([
+            `/authority/${namespace}`,
+            `/fixture/project-read-${namespace}`,
+          ]),
+        });
+      },
+    ),
+  );
+  const v3ExternalExecution: ExternalExecutionProfileDefinitionV3 = Object.freeze({
+    schemaVersion: 3,
+    backendKind: capability.backendKind,
+    capabilityRecordDigest: capability.recordDigest,
+    selectedCapabilities,
+    workerPhases: Object.freeze([
+      WorkflowPhase.DISCOVERY,
+      WorkflowPhase.IMPLEMENT,
+      WorkflowPhase.PLAN,
+    ]),
+    binaryIdentityDigest,
+    protocolSchemaDigest,
+    managedRequirementsDigest: legacyExternalExecution.managedRequirementsDigest,
+    controlledStateRootIdentity: legacyExternalExecution.controlledStateRootIdentity,
+    environmentProjectionDigest: legacyExternalExecution.environmentProjectionDigest,
+    model: legacyExternalExecution.model,
+    modelProvider: legacyExternalExecution.modelProvider,
+    serviceTier: legacyExternalExecution.serviceTier,
+    reasoningEffort: legacyExternalExecution.reasoningEffort,
+    defaultThreadPolicy: ExternalThreadPolicy.FRESH,
+    retentionPolicy: ExternalRetentionPolicy.CONTROLLED,
+    interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
+    workerDispatchPolicy: ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS,
+    phaseDispatch,
+  });
   const base = testExecutionProfileDefinition(namespace);
   return Object.freeze({
     capability,
@@ -199,7 +317,7 @@ function externalProfileAuthority(namespace: string): Readonly<{
       workerAdapter: 'project-read-store-external-worker',
       workerAdapterVersion: '1',
       driverVersion: 'project-read-store-driver-v2',
-      externalExecution,
+      externalExecution: schemaVersion === 1 ? legacyExternalExecution : v3ExternalExecution,
     }),
   });
 }
@@ -223,13 +341,15 @@ function createStartFixture(
   t: TestContext,
   namespace: string,
   transactionProbe?: (step: string) => void,
-  useExternalProfile = false,
+  externalProfileSchemaVersion?: 1 | 3,
+  migrationsDirectory?: string,
 ) {
   const filename = temporaryDatabase(t, namespace);
   const store = openSqliteControlStore({
     filename,
     now: () => createdAt,
     ...(transactionProbe === undefined ? {} : { transactionProbe }),
+    ...(migrationsDirectory === undefined ? {} : { migrationsDirectory }),
   });
   const ids = new DeterministicIds(`project-read-store-${namespace}`);
   const goal = createGoal({
@@ -265,7 +385,10 @@ function createStartFixture(
   if (policyInstall.status === 'POLICY_CONFLICT') {
     assert.fail(policyInstall.message);
   }
-  const external = useExternalProfile ? externalProfileAuthority(namespace) : undefined;
+  const external =
+    externalProfileSchemaVersion === undefined
+      ? undefined
+      : externalProfileAuthority(namespace, externalProfileSchemaVersion);
   if (external !== undefined) {
     const capabilityInstall = store.installExternalBackendCapabilityRecord({
       record: external.capability,
@@ -446,6 +569,16 @@ function createStartFixture(
     schemaVersion: 1,
     responseContract: m1WorkerResponseContract(WorkflowPhase.DISCOVERY),
   });
+  const selectedPhaseEntry =
+    profile.schemaVersion === 2 && profile.externalExecution.schemaVersion === 3
+      ? profile.externalExecution.phaseDispatch.find(
+          (entry) => entry.phase === WorkflowPhase.DISCOVERY,
+        )
+      : undefined;
+  const phaseDispatchEntryDigest =
+    selectedPhaseEntry === undefined
+      ? digests.digest({ phase: WorkflowPhase.DISCOVERY })
+      : digests.digest(externalExecutionPhaseDispatchEntryProjection(selectedPhaseEntry));
   const authorityFields = Object.freeze({
     schemaVersion: 1 as const,
     id: projectSourceReadAuthorityId(`project-read_project-read-${namespace}`),
@@ -472,7 +605,7 @@ function createStartFixture(
     executionProfileId: profile.id,
     executionProfileVersion: profile.version,
     executionProfileDigest: profile.digest,
-    phaseDispatchEntryDigest: digests.digest({ phase: WorkflowPhase.DISCOVERY }),
+    phaseDispatchEntryDigest,
     capabilityGrantDigest,
     responseContractDigest,
     accessMode: ProjectReadSnapshotAccessMode.READ_ONLY,
@@ -578,8 +711,239 @@ void test('project-read authority, protected Plan, Context v5, and Attempt Start
   reopened.close();
 });
 
+void test('[I-006][I-008][I-009][I-023] external execution Intent/Record v2 binds, persists, and reopens exact project-read authority', (t) => {
+  const fixture = createStartFixture(t, 'external-v2', undefined, 3);
+  assert.equal(fixture.store.commitContextBoundAttemptStart(fixture.input).status, 'APPLIED');
+  const attempt = fixture.store.getAttempt(fixture.input.event.attempt.id);
+  const workflow = fixture.store.getWorkflow(fixture.workflow.id);
+  const manifest = fixture.store.getContextManifest(fixture.input.contextManifest.id);
+  if (
+    attempt === undefined ||
+    workflow === undefined ||
+    manifest === undefined ||
+    attempt.workerSessionRef === undefined ||
+    fixture.profile.schemaVersion !== 2 ||
+    fixture.profile.externalExecution.schemaVersion !== 3
+  ) {
+    assert.fail('Intent v2 fixture lacks exact Profile, Workflow, Attempt, or Context authority');
+  }
+  const external = fixture.profile.externalExecution;
+  const phaseEntry = external.phaseDispatch.find(
+    (entry) => entry.phase === WorkflowPhase.DISCOVERY,
+  );
+  assert.ok(phaseEntry !== undefined);
+  const ids = new DeterministicIds('project-read-external-v2');
+  const claimedAt = isoTimestamp('2026-08-08T00:00:02.000Z');
+  const claim = decodeWorkerDispatchClaim({
+    schemaVersion: 2,
+    workflowId: workflow.id,
+    workflowVersion: workflow.version,
+    attemptId: attempt.id,
+    workerSessionId: attempt.workerSessionRef,
+    contextManifestId: manifest.id,
+    contextManifestDigest: manifest.manifestDigest,
+    packageDigest: manifest.packageDigest,
+    executionProfileId: fixture.profile.id,
+    executionProfileDigest: fixture.profile.digest,
+    claimedAt,
+  });
+  const claimDigest = digests.digest(workerDispatchClaimProjection(claim));
+  const intentFields = Object.freeze({
+    schemaVersion: 2 as const,
+    id: ids.nextExternalExecutionId(),
+    goalId: fixture.goal.id,
+    goalRevision: fixture.goal.revision,
+    workflowId: workflow.id,
+    workflowVersionAtAuthorization: workflow.version,
+    phase: WorkflowPhase.DISCOVERY,
+    phaseVersion: workflow.version,
+    attemptId: attempt.id,
+    workerSessionId: attempt.workerSessionRef,
+    dispatchClaimDigest: claimDigest,
+    contextManifestId: manifest.id,
+    contextManifestDigest: manifest.manifestDigest,
+    contextPackageDigest: manifest.packageDigest,
+    executionProfileId: fixture.profile.id,
+    executionProfileDigest: fixture.profile.digest,
+    policyBundleId: fixture.policy.id,
+    policyBundleDigest: fixture.policy.digest,
+    backendKind: external.backendKind,
+    binaryIdentityDigest: external.binaryIdentityDigest,
+    binaryProtocolSchemaDigest: external.protocolSchemaDigest,
+    executionConfigDigest: phaseEntry.executionConfigDigest,
+    managedRequirementsDigest: external.managedRequirementsDigest,
+    instructionSourceManifestDigest: phaseEntry.instructionSourceManifestDigest,
+    controlledStateRootIdentity: external.controlledStateRootIdentity,
+    processLaunchNonce: digests.digest({ kind: 'external-v2-launch' }),
+    thread: Object.freeze({ kind: ExternalThreadPolicy.FRESH }),
+    continuityPolicy: phaseEntry.continuityPolicy,
+    compactionPolicy: phaseEntry.compactionPolicy,
+    retentionPolicy: external.retentionPolicy,
+    fallbackPolicy: phaseEntry.fallbackPolicy,
+    interruptionPolicy: external.interruptionPolicy,
+    phaseDispatchEntryDigest: fixture.projectReadAuthority.phaseDispatchEntryDigest,
+    sourceAuthority: Object.freeze({
+      kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+      projectReadAuthorityId: fixture.projectReadAuthority.id,
+      projectReadAuthorityRecordDigest: fixture.projectReadAuthority.recordDigest,
+      snapshotCwdIdentity: fixture.projectReadAuthority.snapshotLeafRealpath,
+    }),
+    authorizedAt: claimedAt,
+  });
+  const intent = decodeExternalExecutionIntent({
+    ...intentFields,
+    intentDigest: digests.digest(externalExecutionIntentProjection(intentFields)),
+  });
+  if (intent.schemaVersion !== 2) {
+    assert.fail('Intent v2 fixture decoded as historical authority');
+  }
+
+  const {
+    phaseDispatchEntryDigest: ignoredPhaseEntryDigest,
+    sourceAuthority: ignoredSourceAuthority,
+    ...commonIntentFields
+  } = intentFields;
+  void ignoredPhaseEntryDigest;
+  void ignoredSourceAuthority;
+  const legacyFields = Object.freeze({ ...commonIntentFields, schemaVersion: 1 as const });
+  const legacyIntent = decodeExternalExecutionIntent({
+    ...legacyFields,
+    intentDigest: digests.digest(externalExecutionIntentProjection(legacyFields)),
+  });
+  assert.equal(
+    fixture.store.claimExternalWorkerDispatch({
+      claim,
+      intent: legacyIntent,
+      auditEventId: ids.nextAuditEventId(),
+      externalAuditEventId: ids.nextAuditEventId(),
+      payloadDigest: claimDigest,
+    }).status,
+    'NOT_ELIGIBLE',
+  );
+
+  const substitutedFields = Object.freeze({
+    ...intentFields,
+    phaseDispatchEntryDigest: digests.digest({ kind: 'substituted-phase-entry' }),
+  });
+  const substituted = decodeExternalExecutionIntent({
+    ...substitutedFields,
+    intentDigest: digests.digest(externalExecutionIntentProjection(substitutedFields)),
+  });
+  assert.equal(
+    fixture.store.claimExternalWorkerDispatch({
+      claim,
+      intent: substituted,
+      auditEventId: ids.nextAuditEventId(),
+      externalAuditEventId: ids.nextAuditEventId(),
+      payloadDigest: claimDigest,
+    }).status,
+    'NOT_ELIGIBLE',
+  );
+  assert.equal(fixture.store.getWorkerDispatchClaim(attempt.id), undefined);
+
+  const claimed = fixture.store.claimExternalWorkerDispatch({
+    claim,
+    intent,
+    auditEventId: ids.nextAuditEventId(),
+    externalAuditEventId: ids.nextAuditEventId(),
+    payloadDigest: claimDigest,
+  });
+  if (claimed.status !== 'CLAIMED') {
+    assert.fail(`Intent v2 dispatch was not retained: ${claimed.status}`);
+  }
+  if (claimed.execution.schemaVersion !== 2) {
+    assert.fail('Store substituted the authorized Intent/Record version');
+  }
+  assert.deepEqual(claimed.execution.sourceAuthority, intent.sourceAuthority);
+  const failedObservationFields = Object.freeze({
+    schemaVersion: 1 as const,
+    id: externalExecutionObservationId('external-observation_external-v2-failed'),
+    externalExecutionId: intent.id,
+    intentDigest: intent.intentDigest,
+    expectedRecordVersion: claimed.execution.version,
+    state: ExternalExecutionState.FAILED,
+    compactionCount: 0,
+    turnInterruptCount: 0,
+    failureCode: ExternalWorkerFailureCode.CLIENT_FAILURE,
+    observedAt: isoTimestamp('2026-08-08T00:00:03.000Z'),
+  });
+  const failedObservation = decodeExternalExecutionObservation({
+    ...failedObservationFields,
+    observationDigest: digests.digest(
+      externalExecutionObservationProjection(failedObservationFields),
+    ),
+  });
+  const failed = fixture.store.admitExternalExecutionObservation({
+    observation: failedObservation,
+    observationAuditEventId: ids.nextAuditEventId(),
+    recordAuditEventId: ids.nextAuditEventId(),
+  });
+  if (failed.status !== 'APPLIED') {
+    assert.fail(`Intent v2 failure was not retained: ${failed.status}`);
+  }
+  assert.equal(failed.value.schemaVersion, 2);
+  assert.equal(failed.value.state, ExternalExecutionState.FAILED);
+
+  const database = new Database(fixture.filename, { readonly: true, fileMustExist: true });
+  try {
+    const row = database
+      .prepare(
+        `SELECT schema_version, candidate_workspace_lease_id,
+                phase_dispatch_entry_digest, source_authority_json
+           FROM external_execution_records WHERE id = ?`,
+      )
+      .get(intent.id) as
+      | {
+          schema_version: number;
+          candidate_workspace_lease_id: string | null;
+          phase_dispatch_entry_digest: string | null;
+          source_authority_json: string | null;
+        }
+      | undefined;
+    assert.ok(row !== undefined);
+    assert.equal(row.schema_version, 2);
+    assert.equal(row.candidate_workspace_lease_id, null);
+    assert.equal(row.phase_dispatch_entry_digest, intent.phaseDispatchEntryDigest);
+    assert.deepEqual(JSON.parse(row.source_authority_json ?? 'null'), intent.sourceAuthority);
+  } finally {
+    database.close();
+  }
+
+  fixture.store.close();
+  const reopened = openSqliteControlStore({ filename: fixture.filename, now: () => createdAt });
+  assert.deepEqual(reopened.getExternalExecution(intent.id), failed.value);
+  reopened.close();
+
+  const tamper = new Database(fixture.filename, { fileMustExist: true });
+  try {
+    tamper.exec('DROP TRIGGER external_execution_records_update_guard');
+    assert.throws(() =>
+      tamper
+        .prepare(
+          `UPDATE external_execution_records
+              SET source_authority_json = NULL
+            WHERE id = ?`,
+        )
+        .run(intent.id),
+    );
+    tamper
+      .prepare(
+        `UPDATE external_execution_records
+            SET source_authority_json = json_set(
+              source_authority_json, '$.snapshotCwdIdentity', '/substituted/snapshot'
+            )
+          WHERE id = ?`,
+      )
+      .run(intent.id);
+  } finally {
+    tamper.close();
+  }
+  assert.throws(() => openSqliteControlStore({ filename: fixture.filename, now: () => createdAt }));
+});
+
 void test('[I-006][I-008][I-009] active consumer history reopens and terminal authority issues one cleanup Grant', (t) => {
-  const fixture = createStartFixture(t, 'terminal-cleanup', undefined, true);
+  const migrationsDirectory = migrationsThrough(t, '0032_external_execution_profile_v3.sql');
+  const fixture = createStartFixture(t, 'terminal-cleanup', undefined, 1, migrationsDirectory);
   assert.equal(fixture.store.commitContextBoundAttemptStart(fixture.input).status, 'APPLIED');
   const attempt = fixture.store.getAttempt(fixture.input.event.attempt.id);
   const workflow = fixture.store.getWorkflow(fixture.workflow.id);
@@ -651,19 +1015,109 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     ...intentWithoutDigest,
     intentDigest: digests.digest(externalExecutionIntentProjection(intentWithoutDigest)),
   });
-  const claimed = fixture.store.claimExternalWorkerDispatch({
+  const dispatch = fixture.store.claimWorkerDispatch({
     claim,
-    intent,
     auditEventId: ids.nextAuditEventId(),
-    externalAuditEventId: ids.nextAuditEventId(),
     payloadDigest: claimDigest,
   });
-  if (claimed.status !== 'CLAIMED') {
-    assert.fail('External dispatch was not claimed');
+  if (dispatch.status !== 'CLAIMED') {
+    assert.fail('Historical Worker dispatch was not claimed');
   }
-  assert.equal(claimed.execution.state, ExternalExecutionState.AUTHORIZED);
+  const legacyDatabase = new Database(fixture.filename, { fileMustExist: true });
+  const auditSequence = legacyDatabase
+    .prepare('SELECT coalesce(max(sequence), 0) + 1 FROM audit_events')
+    .pluck()
+    .get() as number;
+  const recordWithoutDigest = Object.freeze({
+    ...intent,
+    version: 1,
+    state: ExternalExecutionState.AUTHORIZED,
+    compactionCount: 0,
+    turnInterruptCount: 0,
+    updatedAt: intent.authorizedAt,
+    auditSequence,
+  });
+  const legacyRecord = decodeExternalExecutionRecord({
+    ...recordWithoutDigest,
+    recordDigest: digests.digest(externalExecutionRecordProjection(recordWithoutDigest)),
+  });
+  legacyDatabase.exec('BEGIN IMMEDIATE');
+  try {
+    legacyDatabase
+      .prepare(
+        `INSERT INTO audit_events(
+           sequence, id, aggregate_type, aggregate_id, event_type, actor_type,
+           command_id, before_version, after_version, correlation_id, causation_id,
+           payload_digest, occurred_at
+         ) VALUES (?, ?, 'EXTERNAL_EXECUTION', ?, 'EXTERNAL_EXECUTION_AUTHORIZED',
+           'RUNTIME', NULL, NULL, 1, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        auditSequence,
+        ids.nextAuditEventId(),
+        legacyRecord.id,
+        legacyRecord.recordDigest,
+        legacyRecord.authorizedAt,
+      );
+    legacyDatabase
+      .prepare(
+        `INSERT INTO external_execution_records(
+           id, schema_version, version, state, goal_id, goal_revision, workflow_id,
+           workflow_version_at_authorization, phase, phase_version, attempt_id,
+           worker_session_id, dispatch_claim_digest, context_manifest_id,
+           context_manifest_digest, context_package_digest, execution_profile_id,
+           execution_profile_digest, policy_bundle_id, policy_bundle_digest, backend_kind,
+           binary_identity_digest, binary_protocol_schema_digest, execution_config_digest,
+           managed_requirements_digest, instruction_source_manifest_digest,
+           controlled_state_root_identity, process_launch_nonce, thread_json,
+           continuity_policy, compaction_policy, retention_policy, fallback_policy,
+           interruption_policy, candidate_workspace_lease_id, candidate_workspace_lease_digest,
+           candidate_workspace_cwd_identity, authorized_at, intent_digest, process_identity_json,
+           backend_session_ref, backend_operation_ref, compaction_count, turn_interrupt_count,
+           failure_code, result_event_id, updated_at, terminal_at, last_observation_id,
+           audit_sequence, record_digest
+         ) VALUES (
+           @id, 1, 1, @state, @goalId, @goalRevision, @workflowId,
+           @workflowVersionAtAuthorization, @phase, @phaseVersion, @attemptId,
+           @workerSessionId, @dispatchClaimDigest, @contextManifestId,
+           @contextManifestDigest, @contextPackageDigest, @executionProfileId,
+           @executionProfileDigest, @policyBundleId, @policyBundleDigest, @backendKind,
+           @binaryIdentityDigest, @binaryProtocolSchemaDigest, @executionConfigDigest,
+           @managedRequirementsDigest, @instructionSourceManifestDigest,
+           @controlledStateRootIdentity, @processLaunchNonce, @threadJson,
+           @continuityPolicy, @compactionPolicy, @retentionPolicy, @fallbackPolicy,
+           @interruptionPolicy, NULL, NULL, NULL, @authorizedAt, @intentDigest, NULL,
+           NULL, NULL, 0, 0, NULL, NULL, @updatedAt, NULL, NULL,
+           @auditSequence, @recordDigest
+         )`,
+      )
+      .run({
+        ...legacyRecord,
+        threadJson: JSON.stringify(legacyRecord.thread),
+      });
+    legacyDatabase.exec('COMMIT');
+  } catch (error) {
+    if (legacyDatabase.inTransaction) {
+      legacyDatabase.exec('ROLLBACK');
+    }
+    throw error;
+  } finally {
+    legacyDatabase.close();
+  }
 
-  const activeSnapshot = fixture.store.captureProjectReadWorkspaceAuthoritySnapshot({
+  fixture.store.close();
+  copyFileSync(
+    join(defaultMigrationsDirectory(), '0033_external_execution_intent_v2.sql'),
+    join(migrationsDirectory, '0033_external_execution_intent_v2.sql'),
+  );
+  const store = openSqliteControlStore({
+    filename: fixture.filename,
+    migrationsDirectory,
+    now: () => createdAt,
+  });
+  assert.deepEqual(store.getExternalExecution(intent.id), legacyRecord);
+
+  const activeSnapshot = store.captureProjectReadWorkspaceAuthoritySnapshot({
     id: projectReadWorkspaceAuthoritySnapshotId(
       'project-read-authority-snapshot_terminal-cleanup-active',
     ),
@@ -686,7 +1140,7 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     id: externalExecutionObservationId('external-observation_terminal-cleanup-failed'),
     externalExecutionId: intent.id,
     intentDigest: intent.intentDigest,
-    expectedRecordVersion: claimed.execution.version,
+    expectedRecordVersion: legacyRecord.version,
     state: ExternalExecutionState.FAILED,
     compactionCount: 0,
     turnInterruptCount: 0,
@@ -699,7 +1153,7 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
       externalExecutionObservationProjection(terminalObservationFields),
     ),
   });
-  const observed = fixture.store.admitExternalExecutionObservation({
+  const observed = store.admitExternalExecutionObservation({
     observation: terminalObservation,
     observationAuditEventId: ids.nextAuditEventId(),
     recordAuditEventId: ids.nextAuditEventId(),
@@ -708,8 +1162,8 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     assert.fail('External terminal observation was not admitted');
   }
 
-  const runningWorkflow = fixture.store.getWorkflow(workflow.id);
-  const runningAttempt = fixture.store.getAttempt(attempt.id);
+  const runningWorkflow = store.getWorkflow(workflow.id);
+  const runningAttempt = store.getAttempt(attempt.id);
   if (runningWorkflow === undefined || runningAttempt === undefined) {
     assert.fail('Terminal cleanup fixture lost its running authority');
   }
@@ -729,7 +1183,7 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
   }
   const finishEvent = finishDecision.events[0];
   assert.equal(
-    fixture.store.commitAttemptEvent({
+    store.commitAttemptEvent({
       inputDigest: digests.digest({ schemaVersion: 1, operation: 'TERMINAL_CLEANUP_FINISH' }),
       target: Object.freeze({ aggregateType: 'WORKFLOW', aggregateId: workflow.id }),
       event: finishEvent,
@@ -739,8 +1193,8 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     }).status,
     'APPLIED',
   );
-  const terminalAttempt = fixture.store.getAttempt(attempt.id);
-  const terminalExecution = fixture.store.getExternalExecution(intent.id);
+  const terminalAttempt = store.getAttempt(attempt.id);
+  const terminalExecution = store.getExternalExecution(intent.id);
   if (
     terminalAttempt === undefined ||
     terminalAttempt.status === AttemptStatus.RUNNING ||
@@ -753,7 +1207,7 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     assert.fail('Terminal cleanup fixture did not retain exact terminal authority');
   }
 
-  const terminalSnapshot = fixture.store.captureProjectReadWorkspaceAuthoritySnapshot({
+  const terminalSnapshot = store.captureProjectReadWorkspaceAuthoritySnapshot({
     id: projectReadWorkspaceAuthoritySnapshotId(
       'project-read-authority-snapshot_terminal-cleanup-terminal',
     ),
@@ -764,7 +1218,7 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
   assert.equal(terminalSnapshot.value.expectedSnapshots[0]?.retention, 'RETAINED');
   assert.deepEqual(terminalSnapshot.value.activeConsumers, []);
   assert.deepEqual(
-    fixture.store.getProjectReadWorkspaceAuthoritySnapshot(activeSnapshot.value.id),
+    store.getProjectReadWorkspaceAuthoritySnapshot(activeSnapshot.value.id),
     activeSnapshot.value,
   );
 
@@ -803,14 +1257,14 @@ void test('[I-006][I-008][I-009] active consumer history reopens and terminal au
     { digest: digestProjectReadSnapshotCleanupValue },
   );
   assert.equal(
-    fixture.store.issueProjectReadSnapshotCleanupGrant({
+    store.issueProjectReadSnapshotCleanupGrant({
       grant,
       auditEventId: ids.nextAuditEventId(),
     }).status,
     'ISSUED',
   );
 
-  fixture.store.close();
+  store.close();
   const reopened = openSqliteControlStore({ filename: fixture.filename, now: () => createdAt });
   assert.deepEqual(
     reopened.getProjectReadWorkspaceAuthoritySnapshot(activeSnapshot.value.id),

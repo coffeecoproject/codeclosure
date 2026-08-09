@@ -482,9 +482,11 @@ project-read binding, Store-owned authority-snapshot/consume-once Cleanup
 persistence, trusted Runtime Cleanup coordinator, process-safe same-Grant
 exact-leaf effect handling, and the additive nested external-execution v3
 phase-dispatch contract with canonical projection and strict SQLite
-install/reopen. The legacy Driver rejects v3 during installed-Profile preflight
-before Start mutation, Adapter, or FakeWorker fallback; v2 Intent/Record, v3
-directive, v2 Adapter observation,
+install/reopen plus additive v2 Intent/Record authority with strict SQLite
+authorization, persistence, and reopen. The v2 source union binds one exact
+project-read snapshot or Candidate lease without widening historical v1. The
+legacy Driver rejects v3 during installed-Profile preflight before Start
+mutation, Adapter, or FakeWorker fallback; v3 directive, v2 Adapter observation,
 activity-policy enforcement, real phase composition, and milestone assessment
 have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),

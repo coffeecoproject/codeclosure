@@ -71,7 +71,12 @@ without silent recall, and passes the explicitly authorized real Answer-only,
 clear Intent, and ambiguous Intent compatibility paths with metadata-only
 receipts, versioned strict structured-output and exact-source instruction
 contracts, and Runtime-owned exact retained-value matching. Slice 3 may begin,
-but real phase composition and milestone assessment have not started. A real pinned-version
+and is now in progress through its project-read/Cleanup foundation, nested
+external-execution Profile v3, and additive Intent/Record v2 authority with
+strict SQLite authorization, persistence, and reopen. The legacy Driver still
+rejects Profile v3; directive v3, Adapter observation v2, activity-policy
+enforcement, source currency, real phase composition, and milestone assessment
+have not started. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

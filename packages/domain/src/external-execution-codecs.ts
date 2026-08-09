@@ -27,10 +27,12 @@ import {
   assertExternalExecutionRecordInvariant,
   assertExternalMaintenanceIntentInvariant,
   type ExternalBackendCapabilityRecord,
+  type ExternalCandidateSourceAuthority,
   type ExternalExecutionIntent,
   type ExternalExecutionObservation,
   type ExternalExecutionProfileDefinition,
   type ExternalExecutionRecord,
+  type ExternalProjectReadSourceAuthority,
   type ExternalMaintenanceIntent,
   type ExternalProcessIdentity,
   type ExternalThreadDirective,
@@ -46,6 +48,7 @@ import {
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   workerEventId,
   workerSessionId,
@@ -222,47 +225,88 @@ const externalExecutionProfileSchema = z.discriminatedUnion('schemaVersion', [
   z.object({ schemaVersion: z.literal(3), ...externalExecutionProfileV3Fields }).strict(),
 ]);
 
-const externalExecutionIntentSchema = z
+const externalExecutionIntentFields = {
+  id: z.string(),
+  goalId: z.string(),
+  goalRevision: positiveSafeIntegerSchema,
+  workflowId: z.string(),
+  workflowVersionAtAuthorization: positiveSafeIntegerSchema,
+  phase: workerPhaseSchema,
+  phaseVersion: positiveSafeIntegerSchema,
+  attemptId: z.string(),
+  workerSessionId: z.string(),
+  dispatchClaimDigest: digestSchema,
+  contextManifestId: z.string(),
+  contextManifestDigest: digestSchema,
+  contextPackageDigest: digestSchema,
+  executionProfileId: z.string(),
+  executionProfileDigest: digestSchema,
+  policyBundleId: z.string(),
+  policyBundleDigest: digestSchema,
+  backendKind: boundedNonBlankStringSchema,
+  binaryIdentityDigest: digestSchema,
+  binaryProtocolSchemaDigest: digestSchema,
+  executionConfigDigest: digestSchema,
+  managedRequirementsDigest: digestSchema,
+  instructionSourceManifestDigest: digestSchema,
+  controlledStateRootIdentity: boundedNonBlankStringSchema,
+  processLaunchNonce: digestSchema,
+  thread: threadDirectiveSchema,
+  continuityPolicy: continuityPolicySchema,
+  compactionPolicy: compactionPolicySchema,
+  retentionPolicy: retentionPolicySchema,
+  fallbackPolicy: fallbackPolicySchema,
+  interruptionPolicy: interruptionPolicySchema,
+  authorizedAt: z.string(),
+  intentDigest: digestSchema,
+} as const;
+
+const externalExecutionIntentV1Schema = z
   .object({
     schemaVersion: z.literal(1),
-    id: z.string(),
-    goalId: z.string(),
-    goalRevision: positiveSafeIntegerSchema,
-    workflowId: z.string(),
-    workflowVersionAtAuthorization: positiveSafeIntegerSchema,
-    phase: workerPhaseSchema,
-    phaseVersion: positiveSafeIntegerSchema,
-    attemptId: z.string(),
-    workerSessionId: z.string(),
-    dispatchClaimDigest: digestSchema,
-    contextManifestId: z.string(),
-    contextManifestDigest: digestSchema,
-    contextPackageDigest: digestSchema,
-    executionProfileId: z.string(),
-    executionProfileDigest: digestSchema,
-    policyBundleId: z.string(),
-    policyBundleDigest: digestSchema,
-    backendKind: boundedNonBlankStringSchema,
-    binaryIdentityDigest: digestSchema,
-    binaryProtocolSchemaDigest: digestSchema,
-    executionConfigDigest: digestSchema,
-    managedRequirementsDigest: digestSchema,
-    instructionSourceManifestDigest: digestSchema,
-    controlledStateRootIdentity: boundedNonBlankStringSchema,
-    processLaunchNonce: digestSchema,
-    thread: threadDirectiveSchema,
-    continuityPolicy: continuityPolicySchema,
-    compactionPolicy: compactionPolicySchema,
-    retentionPolicy: retentionPolicySchema,
-    fallbackPolicy: fallbackPolicySchema,
-    interruptionPolicy: interruptionPolicySchema,
+    ...externalExecutionIntentFields,
     candidateWorkspaceLeaseId: boundedNonBlankStringSchema.optional(),
     candidateWorkspaceLeaseDigest: digestSchema.optional(),
     candidateWorkspaceCwdIdentity: boundedNonBlankStringSchema.optional(),
-    authorizedAt: z.string(),
-    intentDigest: digestSchema,
   })
   .strict();
+
+const projectReadSourceAuthoritySchema = z
+  .object({
+    kind: z.literal(ExternalPhaseSourceAuthorityKind.PROJECT_READ),
+    projectReadAuthorityId: z.string(),
+    projectReadAuthorityRecordDigest: digestSchema,
+    snapshotCwdIdentity: boundedNonBlankStringSchema,
+  })
+  .strict();
+
+const candidateSourceAuthoritySchema = z
+  .object({
+    kind: z.literal(ExternalPhaseSourceAuthorityKind.CANDIDATE),
+    candidateWorkspaceLeaseId: boundedNonBlankStringSchema,
+    candidateWorkspaceLeaseDigest: digestSchema,
+    candidateWorkspaceCwdIdentity: boundedNonBlankStringSchema,
+  })
+  .strict();
+
+const externalExecutionSourceAuthoritySchema = z.discriminatedUnion('kind', [
+  projectReadSourceAuthoritySchema,
+  candidateSourceAuthoritySchema,
+]);
+
+const externalExecutionIntentV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    ...externalExecutionIntentFields,
+    phaseDispatchEntryDigest: digestSchema,
+    sourceAuthority: externalExecutionSourceAuthoritySchema,
+  })
+  .strict();
+
+const externalExecutionIntentSchema = z.discriminatedUnion('schemaVersion', [
+  externalExecutionIntentV1Schema,
+  externalExecutionIntentV2Schema,
+]);
 
 const externalProcessIdentitySchema = z
   .object({
@@ -278,24 +322,27 @@ const externalProcessIdentitySchema = z
   })
   .strict();
 
-const externalExecutionRecordSchema = externalExecutionIntentSchema
-  .extend({
-    version: positiveSafeIntegerSchema,
-    state: externalExecutionStateSchema,
-    processIdentity: externalProcessIdentitySchema.optional(),
-    backendSessionRef: boundedNonBlankStringSchema.optional(),
-    backendOperationRef: boundedNonBlankStringSchema.optional(),
-    compactionCount: nonNegativeSafeIntegerSchema,
-    turnInterruptCount: nonNegativeSafeIntegerSchema,
-    failureCode: boundedNonBlankStringSchema.optional(),
-    resultEventId: z.string().optional(),
-    updatedAt: z.string(),
-    terminalAt: z.string().optional(),
-    lastObservationId: z.string().optional(),
-    auditSequence: positiveSafeIntegerSchema,
-    recordDigest: digestSchema,
-  })
-  .strict();
+const externalExecutionRecordFields = {
+  version: positiveSafeIntegerSchema,
+  state: externalExecutionStateSchema,
+  processIdentity: externalProcessIdentitySchema.optional(),
+  backendSessionRef: boundedNonBlankStringSchema.optional(),
+  backendOperationRef: boundedNonBlankStringSchema.optional(),
+  compactionCount: nonNegativeSafeIntegerSchema,
+  turnInterruptCount: nonNegativeSafeIntegerSchema,
+  failureCode: boundedNonBlankStringSchema.optional(),
+  resultEventId: z.string().optional(),
+  updatedAt: z.string(),
+  terminalAt: z.string().optional(),
+  lastObservationId: z.string().optional(),
+  auditSequence: positiveSafeIntegerSchema,
+  recordDigest: digestSchema,
+} as const;
+
+const externalExecutionRecordSchema = z.discriminatedUnion('schemaVersion', [
+  externalExecutionIntentV1Schema.extend(externalExecutionRecordFields).strict(),
+  externalExecutionIntentV2Schema.extend(externalExecutionRecordFields).strict(),
+]);
 
 const externalExecutionObservationSchema = z
   .object({
@@ -343,11 +390,28 @@ function threadDirective(parsed: z.infer<typeof threadDirectiveSchema>): Externa
       });
 }
 
+function executionSourceAuthority(
+  parsed: z.infer<typeof externalExecutionSourceAuthoritySchema>,
+): ExternalProjectReadSourceAuthority | ExternalCandidateSourceAuthority {
+  return parsed.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ
+    ? Object.freeze({
+        kind: parsed.kind,
+        projectReadAuthorityId: projectSourceReadAuthorityId(parsed.projectReadAuthorityId),
+        projectReadAuthorityRecordDigest: sha256Digest(parsed.projectReadAuthorityRecordDigest),
+        snapshotCwdIdentity: parsed.snapshotCwdIdentity,
+      })
+    : Object.freeze({
+        kind: parsed.kind,
+        candidateWorkspaceLeaseId: parsed.candidateWorkspaceLeaseId,
+        candidateWorkspaceLeaseDigest: sha256Digest(parsed.candidateWorkspaceLeaseDigest),
+        candidateWorkspaceCwdIdentity: parsed.candidateWorkspaceCwdIdentity,
+      });
+}
+
 function intentFromParsed(
   parsed: z.infer<typeof externalExecutionIntentSchema>,
 ): ExternalExecutionIntent {
-  const intent: ExternalExecutionIntent = Object.freeze({
-    schemaVersion: parsed.schemaVersion,
+  const common = {
     id: externalExecutionId(parsed.id),
     goalId: goalId(parsed.goalId),
     goalRevision: goalRevision(parsed.goalRevision),
@@ -379,18 +443,32 @@ function intentFromParsed(
     retentionPolicy: parsed.retentionPolicy,
     fallbackPolicy: parsed.fallbackPolicy,
     interruptionPolicy: parsed.interruptionPolicy,
-    ...(parsed.candidateWorkspaceLeaseId === undefined
-      ? {}
-      : { candidateWorkspaceLeaseId: parsed.candidateWorkspaceLeaseId }),
-    ...(parsed.candidateWorkspaceLeaseDigest === undefined
-      ? {}
-      : { candidateWorkspaceLeaseDigest: sha256Digest(parsed.candidateWorkspaceLeaseDigest) }),
-    ...(parsed.candidateWorkspaceCwdIdentity === undefined
-      ? {}
-      : { candidateWorkspaceCwdIdentity: parsed.candidateWorkspaceCwdIdentity }),
     authorizedAt: isoTimestamp(parsed.authorizedAt),
     intentDigest: sha256Digest(parsed.intentDigest),
-  });
+  } as const;
+  const intent: ExternalExecutionIntent =
+    parsed.schemaVersion === 1
+      ? Object.freeze({
+          ...common,
+          schemaVersion: parsed.schemaVersion,
+          ...(parsed.candidateWorkspaceLeaseId === undefined
+            ? {}
+            : { candidateWorkspaceLeaseId: parsed.candidateWorkspaceLeaseId }),
+          ...(parsed.candidateWorkspaceLeaseDigest === undefined
+            ? {}
+            : {
+                candidateWorkspaceLeaseDigest: sha256Digest(parsed.candidateWorkspaceLeaseDigest),
+              }),
+          ...(parsed.candidateWorkspaceCwdIdentity === undefined
+            ? {}
+            : { candidateWorkspaceCwdIdentity: parsed.candidateWorkspaceCwdIdentity }),
+        })
+      : Object.freeze({
+          ...common,
+          schemaVersion: parsed.schemaVersion,
+          phaseDispatchEntryDigest: sha256Digest(parsed.phaseDispatchEntryDigest),
+          sourceAuthority: executionSourceAuthority(parsed.sourceAuthority),
+        });
   assertExternalExecutionIntentInvariant(intent);
   return intent;
 }

@@ -18,6 +18,7 @@ import {
   EvidenceKind,
   ExternalBackendCapabilityClassification,
   ExternalExecutionState,
+  ExternalPhaseSourceAuthorityKind,
   ExternalMaintenanceState,
   GoalStatus,
   GuardOutcome,
@@ -135,6 +136,7 @@ import {
   externalBackendCapabilityRecordProjection,
   externalExecutionId,
   externalExecutionIntentProjection,
+  externalExecutionPhaseDispatchEntryProjection,
   externalExecutionObservationId,
   externalExecutionObservationProjection,
   externalExecutionRecordProjection,
@@ -189,6 +191,7 @@ import {
   type ExecutionProfileId,
   type ExternalBackendCapabilityRecord,
   type ExternalExecutionId,
+  type ExternalExecutionIntent,
   type ExternalExecutionObservation,
   type ExternalExecutionObservationId,
   type ExternalExecutionRecord,
@@ -9028,15 +9031,11 @@ export class SqliteControlStore
           ? undefined
           : this.getPolicyBundle(policyBinding.policyBundleId);
       const profile = installedProfile?.profile;
-      const external =
-        profile?.schemaVersion === 2 && profile.externalExecution.schemaVersion !== 3
-          ? profile.externalExecution
-          : undefined;
       if (
         manifest === undefined ||
         profile === undefined ||
-        external === undefined ||
         installedPolicy === undefined ||
+        !this.hasExactExternalExecutionIntentAuthority(intent, manifest, profile) ||
         intent.id !== externalExecutionId(intent.id) ||
         intent.goalId !== manifest.goalId ||
         intent.goalRevision !== manifest.goalRevision ||
@@ -9055,19 +9054,6 @@ export class SqliteControlStore
         intent.policyBundleDigest !== installedPolicy.bundle.digest ||
         intent.policyBundleId !== manifest.policyBundleId ||
         intent.policyBundleDigest !== manifest.policyBundleDigest ||
-        intent.backendKind !== external.backendKind ||
-        intent.binaryIdentityDigest !== external.binaryIdentityDigest ||
-        intent.binaryProtocolSchemaDigest !== external.protocolSchemaDigest ||
-        intent.executionConfigDigest !== external.executionConfigDigest ||
-        intent.managedRequirementsDigest !== external.managedRequirementsDigest ||
-        intent.instructionSourceManifestDigest !== external.instructionSourceManifestDigest ||
-        intent.controlledStateRootIdentity !== external.controlledStateRootIdentity ||
-        intent.thread.kind !== external.defaultThreadPolicy ||
-        rawField(intent, 'continuityPolicy') !== rawField(external, 'continuityPolicy') ||
-        intent.compactionPolicy !== external.compactionPolicy ||
-        rawField(intent, 'retentionPolicy') !== rawField(external, 'retentionPolicy') ||
-        rawField(intent, 'fallbackPolicy') !== rawField(external, 'fallbackPolicy') ||
-        rawField(intent, 'interruptionPolicy') !== rawField(external, 'interruptionPolicy') ||
         intent.authorizedAt !== claim.claimedAt
       ) {
         return {
@@ -13909,7 +13895,8 @@ export class SqliteControlStore
            instruction_source_manifest_digest, controlled_state_root_identity, thread_json,
            continuity_policy, compaction_policy, retention_policy, fallback_policy,
            interruption_policy, candidate_workspace_lease_id, candidate_workspace_lease_digest,
-           candidate_workspace_cwd_identity, authorized_at, intent_digest, process_launch_nonce,
+           candidate_workspace_cwd_identity, phase_dispatch_entry_digest, source_authority_json,
+           authorized_at, intent_digest, process_launch_nonce,
            process_identity_json, backend_session_ref, backend_operation_ref, compaction_count,
            turn_interrupt_count, failure_code,
            result_event_id, updated_at, terminal_at, last_observation_id, audit_sequence,
@@ -13925,7 +13912,8 @@ export class SqliteControlStore
            @instructionSourceManifestDigest, @controlledStateRootIdentity, @threadJson,
            @continuityPolicy, @compactionPolicy, @retentionPolicy, @fallbackPolicy,
            @interruptionPolicy, @candidateWorkspaceLeaseId, @candidateWorkspaceLeaseDigest,
-           @candidateWorkspaceCwdIdentity, @authorizedAt, @intentDigest, @processLaunchNonce,
+           @candidateWorkspaceCwdIdentity, @phaseDispatchEntryDigest, @sourceAuthorityJson,
+           @authorizedAt, @intentDigest, @processLaunchNonce,
            @processIdentityJson, @backendSessionRef, @backendOperationRef, @compactionCount,
            @turnInterruptCount, @failureCode,
            @resultEventId, @updatedAt, @terminalAt, @lastObservationId, @auditSequence,
@@ -13967,9 +13955,18 @@ export class SqliteControlStore
         retentionPolicy: record.retentionPolicy,
         fallbackPolicy: record.fallbackPolicy,
         interruptionPolicy: record.interruptionPolicy,
-        candidateWorkspaceLeaseId: record.candidateWorkspaceLeaseId ?? null,
-        candidateWorkspaceLeaseDigest: record.candidateWorkspaceLeaseDigest ?? null,
-        candidateWorkspaceCwdIdentity: record.candidateWorkspaceCwdIdentity ?? null,
+        candidateWorkspaceLeaseId:
+          record.schemaVersion === 1 ? (record.candidateWorkspaceLeaseId ?? null) : null,
+        candidateWorkspaceLeaseDigest:
+          record.schemaVersion === 1 ? (record.candidateWorkspaceLeaseDigest ?? null) : null,
+        candidateWorkspaceCwdIdentity:
+          record.schemaVersion === 1 ? (record.candidateWorkspaceCwdIdentity ?? null) : null,
+        phaseDispatchEntryDigest:
+          record.schemaVersion === 2 ? record.phaseDispatchEntryDigest : null,
+        sourceAuthorityJson:
+          record.schemaVersion === 2
+            ? serializeJson(decodeJsonValue(record.sourceAuthority))
+            : null,
         authorizedAt: record.authorizedAt,
         intentDigest: record.intentDigest,
         processIdentityJson:
@@ -14624,6 +14621,81 @@ export class SqliteControlStore
 
   private executionProfileDigest(profile: ExecutionProfile): Sha256Digest {
     return sha256Digest(canonicalAuthorityDigests.digest(executionProfileProjection(profile)));
+  }
+
+  private hasExactExternalExecutionIntentAuthority(
+    intent: ExternalExecutionIntent,
+    manifest: ContextManifest,
+    profile: ExecutionProfile,
+  ): boolean {
+    if (profile.schemaVersion !== 2) {
+      return false;
+    }
+    const external = profile.externalExecution;
+    const commonProfileAuthorityExact =
+      intent.backendKind === external.backendKind &&
+      intent.binaryIdentityDigest === external.binaryIdentityDigest &&
+      intent.binaryProtocolSchemaDigest === external.protocolSchemaDigest &&
+      intent.managedRequirementsDigest === external.managedRequirementsDigest &&
+      intent.controlledStateRootIdentity === external.controlledStateRootIdentity &&
+      intent.thread.kind === external.defaultThreadPolicy;
+    if (!commonProfileAuthorityExact) {
+      return false;
+    }
+    if (intent.schemaVersion === 1) {
+      return (
+        external.schemaVersion !== 3 &&
+        intent.executionConfigDigest === external.executionConfigDigest &&
+        intent.instructionSourceManifestDigest === external.instructionSourceManifestDigest &&
+        intent.compactionPolicy === external.compactionPolicy
+      );
+    }
+    if (external.schemaVersion !== 3) {
+      return false;
+    }
+    const phaseEntry = external.phaseDispatch.find((entry) => entry.phase === intent.phase);
+    if (phaseEntry === undefined) {
+      return false;
+    }
+    const phaseEntryDigest = sha256Digest(
+      canonicalAuthorityDigests.digest(externalExecutionPhaseDispatchEntryProjection(phaseEntry)),
+    );
+    if (
+      phaseEntryDigest !== intent.phaseDispatchEntryDigest ||
+      phaseEntry.sourceAuthorityKind !== intent.sourceAuthority.kind ||
+      intent.executionConfigDigest !== phaseEntry.executionConfigDigest ||
+      intent.instructionSourceManifestDigest !== phaseEntry.instructionSourceManifestDigest ||
+      intent.compactionPolicy !== phaseEntry.compactionPolicy
+    ) {
+      return false;
+    }
+    if (intent.sourceAuthority.kind === ExternalPhaseSourceAuthorityKind.CANDIDATE) {
+      return (
+        manifest.phase === WorkflowPhase.IMPLEMENT &&
+        manifest.candidateGenerationId !== undefined &&
+        manifest.candidateDigest !== undefined
+      );
+    }
+    const projectRead = this.getProjectSourceReadAuthority(
+      intent.sourceAuthority.projectReadAuthorityId,
+    );
+    return (
+      manifest.schemaVersion === 5 &&
+      manifest.projectReadAuthorityId === intent.sourceAuthority.projectReadAuthorityId &&
+      manifest.projectReadAuthorityRecordDigest ===
+        intent.sourceAuthority.projectReadAuthorityRecordDigest &&
+      projectRead?.recordDigest === intent.sourceAuthority.projectReadAuthorityRecordDigest &&
+      projectRead.snapshotLeafRealpath === intent.sourceAuthority.snapshotCwdIdentity &&
+      projectRead.goalId === intent.goalId &&
+      projectRead.goalRevision === intent.goalRevision &&
+      projectRead.workflowId === intent.workflowId &&
+      projectRead.workflowVersion === intent.workflowVersionAtAuthorization &&
+      projectRead.phase === intent.phase &&
+      projectRead.attemptId === intent.attemptId &&
+      projectRead.executionProfileId === intent.executionProfileId &&
+      projectRead.executionProfileDigest === intent.executionProfileDigest &&
+      projectRead.phaseDispatchEntryDigest === intent.phaseDispatchEntryDigest
+    );
   }
 
   private externalBackendCapabilityDigest(record: ExternalBackendCapabilityRecord): Sha256Digest {
@@ -16204,10 +16276,6 @@ export class SqliteControlStore
       claim === undefined
         ? undefined
         : sha256Digest(canonicalAuthorityDigests.digest(workerDispatchClaimProjection(claim)));
-    const external =
-      profile?.schemaVersion === 2 && profile.externalExecution.schemaVersion !== 3
-        ? profile.externalExecution
-        : undefined;
     const latestAudit = this.listAuditEvents('EXTERNAL_EXECUTION', record.id).find(
       (audit) => audit.sequence === record.auditSequence,
     );
@@ -16215,8 +16283,8 @@ export class SqliteControlStore
       claim === undefined ||
       manifest === undefined ||
       profile === undefined ||
-      external === undefined ||
       policy === undefined ||
+      !this.hasExactExternalExecutionIntentAuthority(record, manifest, profile) ||
       record.dispatchClaimDigest !== expectedClaimDigest ||
       record.workflowId !== claim.workflowId ||
       record.workflowVersionAtAuthorization !== claim.workflowVersion ||
@@ -16235,18 +16303,6 @@ export class SqliteControlStore
       record.policyBundleId !== manifest.policyBundleId ||
       record.policyBundleDigest !== manifest.policyBundleDigest ||
       record.policyBundleDigest !== policy.digest ||
-      record.backendKind !== external.backendKind ||
-      record.binaryProtocolSchemaDigest !== external.protocolSchemaDigest ||
-      record.executionConfigDigest !== external.executionConfigDigest ||
-      record.managedRequirementsDigest !== external.managedRequirementsDigest ||
-      record.instructionSourceManifestDigest !== external.instructionSourceManifestDigest ||
-      record.controlledStateRootIdentity !== external.controlledStateRootIdentity ||
-      record.thread.kind !== external.defaultThreadPolicy ||
-      rawField(record, 'continuityPolicy') !== rawField(external, 'continuityPolicy') ||
-      record.compactionPolicy !== external.compactionPolicy ||
-      rawField(record, 'retentionPolicy') !== rawField(external, 'retentionPolicy') ||
-      rawField(record, 'fallbackPolicy') !== rawField(external, 'fallbackPolicy') ||
-      rawField(record, 'interruptionPolicy') !== rawField(external, 'interruptionPolicy') ||
       record.authorizedAt !== claim.claimedAt ||
       latestAudit?.actorType !== 'RUNTIME' ||
       latestAudit.commandId !== undefined ||

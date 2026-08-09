@@ -428,8 +428,9 @@ void test('[I-006][I-027] strict reopen rejects retained v3 response-schema subs
     assert.ok(Array.isArray(phaseDispatch));
     const dispatchEntries = phaseDispatch as readonly unknown[];
     const discovery = dispatchEntries[0];
-    assert.equal(typeof discovery, 'object');
-    assert.ok(discovery !== null);
+    if (typeof discovery !== 'object' || discovery === null) {
+      assert.fail('DISCOVERY phase dispatch entry was not retained as an object');
+    }
     Reflect.set(
       discovery,
       'responseSchemaPolicy',

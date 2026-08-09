@@ -526,6 +526,7 @@ function assertIntentBinding(
 ): void {
   const profile = authority.externalExecution;
   if (
+    intent.schemaVersion !== 1 ||
     intent.attemptId !== request.attemptId ||
     intent.workerSessionId !== request.workerSessionId ||
     intent.contextManifestId !== request.contextManifestId ||

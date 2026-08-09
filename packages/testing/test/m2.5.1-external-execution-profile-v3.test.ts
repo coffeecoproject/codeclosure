@@ -17,11 +17,25 @@ import {
   ExternalThreadPolicy,
   ExternalWorkerDispatchPolicy,
   WorkflowPhase,
+  attemptId,
+  contextManifestId,
+  decodeExternalExecutionIntent,
   decodeExecutionProfileDefinition,
   decodeExternalExecutionProfileDefinition,
   executionProfileId,
+  externalExecutionId,
+  externalExecutionIntentProjection,
   externalExecutionProfileDefinitionProjection,
+  goalId,
+  goalRevision,
+  isoTimestamp,
+  policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
+  workerSessionId,
+  workflowId,
+  workflowVersion,
+  type ExternalExecutionIntentV2,
   type ExternalExecutionPhaseDispatchEntry,
   type ExternalExecutionProfileDefinitionV3,
 } from '@codeclosure/domain';
@@ -219,4 +233,110 @@ void test('[I-023][I-027] external Profile v3 rejects non-canonical instructions
       }),
     );
   }
+});
+
+function intentV2Fields(
+  phase: typeof WorkflowPhase.DISCOVERY | typeof WorkflowPhase.IMPLEMENT,
+): Omit<ExternalExecutionIntentV2, 'intentDigest'> {
+  const entry = phaseEntry(phase);
+  return Object.freeze({
+    schemaVersion: 2,
+    id: externalExecutionId(`external_intent-v2-${phase.toLowerCase()}`),
+    goalId: goalId(`goal_intent-v2-${phase.toLowerCase()}`),
+    goalRevision: goalRevision(1),
+    workflowId: workflowId(`workflow_intent-v2-${phase.toLowerCase()}`),
+    workflowVersionAtAuthorization: workflowVersion(2),
+    phase,
+    phaseVersion: workflowVersion(2),
+    attemptId: attemptId(`attempt_intent-v2-${phase.toLowerCase()}`),
+    workerSessionId: workerSessionId(`worker_intent-v2-${phase.toLowerCase()}`),
+    dispatchClaimDigest: digest('1'),
+    contextManifestId: contextManifestId(`context_intent-v2-${phase.toLowerCase()}`),
+    contextManifestDigest: digest('2'),
+    contextPackageDigest: digest('3'),
+    executionProfileId: executionProfileId('profile_m2-5-1-real-codex'),
+    executionProfileDigest: digest('4'),
+    policyBundleId: policyBundleId('policy_codeclosure-m2-5-1-real-intake'),
+    policyBundleDigest: digest('5'),
+    backendKind: 'CODEX_APP_SERVER',
+    binaryIdentityDigest: digest('6'),
+    binaryProtocolSchemaDigest: digest('7'),
+    executionConfigDigest: entry.executionConfigDigest,
+    managedRequirementsDigest: digest('8'),
+    instructionSourceManifestDigest: entry.instructionSourceManifestDigest,
+    controlledStateRootIdentity: '/authority/codex-state',
+    processLaunchNonce: digest('9'),
+    thread: Object.freeze({ kind: ExternalThreadPolicy.FRESH }),
+    continuityPolicy: entry.continuityPolicy,
+    compactionPolicy: entry.compactionPolicy,
+    retentionPolicy: ExternalRetentionPolicy.CONTROLLED,
+    fallbackPolicy: entry.fallbackPolicy,
+    interruptionPolicy: ExternalInterruptionPolicy.INTERRUPT_OPERATION,
+    phaseDispatchEntryDigest: digest('a'),
+    sourceAuthority:
+      phase === WorkflowPhase.IMPLEMENT
+        ? Object.freeze({
+            kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+            candidateWorkspaceLeaseId: 'candidate-lease_intent-v2',
+            candidateWorkspaceLeaseDigest: digest('b'),
+            candidateWorkspaceCwdIdentity: '/candidate/workspace',
+          })
+        : Object.freeze({
+            kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+            projectReadAuthorityId: projectSourceReadAuthorityId(
+              'project-read_intent-v2-discovery',
+            ),
+            projectReadAuthorityRecordDigest: digest('c'),
+            snapshotCwdIdentity: '/project-read/snapshot',
+          }),
+    authorizedAt: isoTimestamp('2026-08-09T00:00:00.000Z'),
+  });
+}
+
+void test('[I-006][I-023] external execution Intent v2 decodes one phase-discriminated source authority', () => {
+  for (const phase of [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT] as const) {
+    const fields = intentV2Fields(phase);
+    const intent = decodeExternalExecutionIntent({
+      ...fields,
+      intentDigest: digest('d'),
+    });
+    assert.equal(intent.schemaVersion, 2);
+    assert.equal(intent.sourceAuthority.kind, fields.sourceAuthority.kind);
+    const projection = externalExecutionIntentProjection(fields);
+    assert.equal(Reflect.has(projection, 'candidateWorkspaceLeaseId'), false);
+    assert.deepEqual(Reflect.get(projection, 'sourceAuthority'), fields.sourceAuthority);
+  }
+});
+
+void test('[I-023][I-027] external execution Intent versions reject cross-version or phase-substituted source authority', () => {
+  const projectRead = intentV2Fields(WorkflowPhase.DISCOVERY);
+  const candidate = intentV2Fields(WorkflowPhase.IMPLEMENT);
+  assert.throws(() =>
+    decodeExternalExecutionIntent({
+      ...projectRead,
+      sourceAuthority: candidate.sourceAuthority,
+      intentDigest: digest('d'),
+    }),
+  );
+  assert.throws(() =>
+    decodeExternalExecutionIntent({
+      ...projectRead,
+      candidateWorkspaceLeaseId: 'candidate-lease_forbidden',
+      intentDigest: digest('d'),
+    }),
+  );
+  assert.throws(() =>
+    decodeExternalExecutionIntent({
+      ...projectRead,
+      schemaVersion: 1,
+      intentDigest: digest('d'),
+    }),
+  );
+  assert.throws(() =>
+    decodeExternalExecutionIntent({
+      ...projectRead,
+      sourceAuthority: { ...projectRead.sourceAuthority, unexpectedAuthority: true },
+      intentDigest: digest('d'),
+    }),
+  );
 });

@@ -9,6 +9,7 @@ import {
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   workerEventId,
   workerSessionId,
@@ -24,6 +25,7 @@ import {
   type GoalRevision,
   type IsoTimestamp,
   type PolicyBundleId,
+  type ProjectSourceReadAuthorityId,
   type Sha256Digest,
   type WorkerEventId,
   type WorkerSessionId,
@@ -342,8 +344,7 @@ export const ExternalMaintenanceState = {
 export type ExternalMaintenanceState =
   (typeof ExternalMaintenanceState)[keyof typeof ExternalMaintenanceState];
 
-export interface ExternalExecutionIntent {
-  readonly schemaVersion: 1;
+interface ExternalExecutionIntentBase {
   readonly id: ExternalExecutionId;
   readonly goalId: GoalId;
   readonly goalRevision: GoalRevision;
@@ -375,14 +376,45 @@ export interface ExternalExecutionIntent {
   readonly retentionPolicy: ExternalRetentionPolicy;
   readonly fallbackPolicy: ExternalFallbackPolicy;
   readonly interruptionPolicy: ExternalInterruptionPolicy;
-  readonly candidateWorkspaceLeaseId?: string;
-  readonly candidateWorkspaceLeaseDigest?: Sha256Digest;
-  readonly candidateWorkspaceCwdIdentity?: string;
   readonly authorizedAt: IsoTimestamp;
   readonly intentDigest: Sha256Digest;
 }
 
-export interface ExternalExecutionRecord extends ExternalExecutionIntent {
+/** Historical M2/M2.5 external execution authority. Its flat Candidate fields stay v1-only. */
+export interface ExternalExecutionIntentV1 extends ExternalExecutionIntentBase {
+  readonly schemaVersion: 1;
+  readonly candidateWorkspaceLeaseId?: string;
+  readonly candidateWorkspaceLeaseDigest?: Sha256Digest;
+  readonly candidateWorkspaceCwdIdentity?: string;
+}
+
+export interface ExternalProjectReadSourceAuthority {
+  readonly kind: typeof ExternalPhaseSourceAuthorityKind.PROJECT_READ;
+  readonly projectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly projectReadAuthorityRecordDigest: Sha256Digest;
+  readonly snapshotCwdIdentity: string;
+}
+
+export interface ExternalCandidateSourceAuthority {
+  readonly kind: typeof ExternalPhaseSourceAuthorityKind.CANDIDATE;
+  readonly candidateWorkspaceLeaseId: string;
+  readonly candidateWorkspaceLeaseDigest: Sha256Digest;
+  readonly candidateWorkspaceCwdIdentity: string;
+}
+
+export type ExternalExecutionSourceAuthority =
+  ExternalProjectReadSourceAuthority | ExternalCandidateSourceAuthority;
+
+/** M2.5.1 binds one exact v3 phase entry and one phase-compatible source authority. */
+export interface ExternalExecutionIntentV2 extends ExternalExecutionIntentBase {
+  readonly schemaVersion: 2;
+  readonly phaseDispatchEntryDigest: Sha256Digest;
+  readonly sourceAuthority: ExternalExecutionSourceAuthority;
+}
+
+export type ExternalExecutionIntent = ExternalExecutionIntentV1 | ExternalExecutionIntentV2;
+
+interface ExternalExecutionRecordLifecycle {
   readonly version: number;
   readonly state: ExternalExecutionState;
   readonly processIdentity?: ExternalProcessIdentity;
@@ -398,6 +430,12 @@ export interface ExternalExecutionRecord extends ExternalExecutionIntent {
   readonly auditSequence: number;
   readonly recordDigest: Sha256Digest;
 }
+
+export type ExternalExecutionRecordV1 = ExternalExecutionIntentV1 &
+  ExternalExecutionRecordLifecycle;
+export type ExternalExecutionRecordV2 = ExternalExecutionIntentV2 &
+  ExternalExecutionRecordLifecycle;
+export type ExternalExecutionRecord = ExternalExecutionRecordV1 | ExternalExecutionRecordV2;
 
 export interface ExternalExecutionObservation {
   readonly schemaVersion: 1;
@@ -610,6 +648,41 @@ function assertV3PhaseDispatchEntry(entry: ExternalExecutionPhaseDispatchEntry):
   }
 }
 
+export function externalExecutionPhaseDispatchEntryProjection(
+  entry: ExternalExecutionPhaseDispatchEntry,
+): Readonly<Record<string, unknown>> {
+  return {
+    phase: entry.phase,
+    workerAdapter: entry.workerAdapter,
+    workerAdapterVersion: entry.workerAdapterVersion,
+    cwdKind: entry.cwdKind,
+    sourceAuthorityKind: entry.sourceAuthorityKind,
+    permissionProfileId: entry.permissionProfileId,
+    permissionProfileDigest: entry.permissionProfileDigest,
+    isolationProfileId: entry.isolationProfileId,
+    isolationProfileDigest: entry.isolationProfileDigest,
+    projectConfigurationPolicy: entry.projectConfigurationPolicy,
+    configurationProfileDigest: entry.configurationProfileDigest,
+    executionConfigDigest: entry.executionConfigDigest,
+    disabledIntegrationsDigest: entry.disabledIntegrationsDigest,
+    instructionSourceManifestId: entry.instructionSourceManifestId,
+    instructionSourceManifestDigest: entry.instructionSourceManifestDigest,
+    instructionSources: entry.instructionSources,
+    capabilityGrantDigest: entry.capabilityGrantDigest,
+    responseContractDigest: entry.responseContractDigest,
+    responseSchemaPolicy: entry.responseSchemaPolicy,
+    workerActivityPolicyId: entry.workerActivityPolicyId,
+    workerActivityPolicyDigest: entry.workerActivityPolicyDigest,
+    commandNetworkPolicy: entry.commandNetworkPolicy,
+    approvalPolicy: entry.approvalPolicy,
+    continuityPolicy: entry.continuityPolicy,
+    compactionPolicy: entry.compactionPolicy,
+    fallbackPolicy: entry.fallbackPolicy,
+    allowedRoots: entry.allowedRoots,
+    forbiddenRoots: entry.forbiddenRoots,
+  };
+}
+
 export function externalExecutionProfileDefinitionProjection(
   profile: ExternalExecutionProfileDefinition,
 ): unknown {
@@ -633,7 +706,7 @@ export function externalExecutionProfileDefinitionProjection(
       retentionPolicy: profile.retentionPolicy,
       interruptionPolicy: profile.interruptionPolicy,
       workerDispatchPolicy: profile.workerDispatchPolicy,
-      phaseDispatch: profile.phaseDispatch,
+      phaseDispatch: profile.phaseDispatch.map(externalExecutionPhaseDispatchEntryProjection),
     };
   }
   return {
@@ -830,9 +903,11 @@ export function assertExternalExecutionProfileDefinitionInvariant(
 }
 
 export function externalExecutionIntentProjection(
-  intent: Omit<ExternalExecutionIntent, 'intentDigest'>,
+  intent:
+    | Omit<ExternalExecutionIntentV1, 'intentDigest'>
+    | Omit<ExternalExecutionIntentV2, 'intentDigest'>,
 ): Readonly<Record<string, unknown>> {
-  return {
+  const common = {
     schemaVersion: intent.schemaVersion,
     id: intent.id,
     goalId: intent.goalId,
@@ -865,6 +940,17 @@ export function externalExecutionIntentProjection(
     retentionPolicy: intent.retentionPolicy,
     fallbackPolicy: intent.fallbackPolicy,
     interruptionPolicy: intent.interruptionPolicy,
+  } as const;
+  if (intent.schemaVersion === 2) {
+    return {
+      ...common,
+      phaseDispatchEntryDigest: intent.phaseDispatchEntryDigest,
+      sourceAuthority: externalExecutionSourceAuthorityProjection(intent.sourceAuthority),
+      authorizedAt: intent.authorizedAt,
+    };
+  }
+  return {
+    ...common,
     ...(intent.candidateWorkspaceLeaseId === undefined
       ? {}
       : { candidateWorkspaceLeaseId: intent.candidateWorkspaceLeaseId }),
@@ -875,6 +961,25 @@ export function externalExecutionIntentProjection(
       ? {}
       : { candidateWorkspaceCwdIdentity: intent.candidateWorkspaceCwdIdentity }),
     authorizedAt: intent.authorizedAt,
+  };
+}
+
+export function externalExecutionSourceAuthorityProjection(
+  authority: ExternalExecutionSourceAuthority,
+): Readonly<Record<string, unknown>> {
+  if (authority.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ) {
+    return {
+      kind: authority.kind,
+      projectReadAuthorityId: authority.projectReadAuthorityId,
+      projectReadAuthorityRecordDigest: authority.projectReadAuthorityRecordDigest,
+      snapshotCwdIdentity: authority.snapshotCwdIdentity,
+    };
+  }
+  return {
+    kind: authority.kind,
+    candidateWorkspaceLeaseId: authority.candidateWorkspaceLeaseId,
+    candidateWorkspaceLeaseDigest: authority.candidateWorkspaceLeaseDigest,
+    candidateWorkspaceCwdIdentity: authority.candidateWorkspaceCwdIdentity,
   };
 }
 
@@ -921,7 +1026,7 @@ function assertThreadDirective(thread: ExternalThreadDirective): void {
 }
 
 export function assertExternalExecutionIntentInvariant(intent: ExternalExecutionIntent): void {
-  if (rawField(intent, 'schemaVersion') !== 1) {
+  if (rawField(intent, 'schemaVersion') !== 1 && rawField(intent, 'schemaVersion') !== 2) {
     throw new TypeError('External execution intent schema is unsupported');
   }
   externalExecutionId(intent.id);
@@ -973,6 +1078,48 @@ export function assertExternalExecutionIntentInvariant(intent: ExternalExecution
   ) {
     throw new TypeError('External execution policy is unknown');
   }
+  if (intent.schemaVersion === 2) {
+    for (const forbiddenField of [
+      'candidateWorkspaceLeaseId',
+      'candidateWorkspaceLeaseDigest',
+      'candidateWorkspaceCwdIdentity',
+    ]) {
+      if (rawField(intent, forbiddenField) !== undefined) {
+        throw new TypeError('External execution intent v2 duplicates source authority');
+      }
+    }
+    sha256Digest(intent.phaseDispatchEntryDigest);
+    const source = intent.sourceAuthority;
+    if (
+      (intent.phase === WorkflowPhase.IMPLEMENT &&
+        source.kind !== ExternalPhaseSourceAuthorityKind.CANDIDATE) ||
+      (intent.phase !== WorkflowPhase.IMPLEMENT &&
+        source.kind !== ExternalPhaseSourceAuthorityKind.PROJECT_READ)
+    ) {
+      throw new TypeError('External execution source authority is incompatible with its phase');
+    }
+    if (source.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ) {
+      projectSourceReadAuthorityId(source.projectReadAuthorityId);
+      sha256Digest(source.projectReadAuthorityRecordDigest);
+      nonBlank(source.snapshotCwdIdentity, 'External project-read snapshot cwd identity', 16_384);
+    } else {
+      nonBlank(source.candidateWorkspaceLeaseId, 'External Candidate workspace lease ID');
+      sha256Digest(source.candidateWorkspaceLeaseDigest);
+      nonBlank(
+        source.candidateWorkspaceCwdIdentity,
+        'External Candidate workspace cwd identity',
+        16_384,
+      );
+    }
+    isoTimestamp(intent.authorizedAt);
+    return;
+  }
+  if (
+    rawField(intent, 'phaseDispatchEntryDigest') !== undefined ||
+    rawField(intent, 'sourceAuthority') !== undefined
+  ) {
+    throw new TypeError('Historical external execution intent cannot contain v2 authority');
+  }
   const leaseId = intent.candidateWorkspaceLeaseId;
   const leaseDigest = intent.candidateWorkspaceLeaseDigest;
   const leaseCwdIdentity = intent.candidateWorkspaceCwdIdentity;
@@ -998,7 +1145,9 @@ export function assertExternalExecutionIntentInvariant(intent: ExternalExecution
 }
 
 export function externalExecutionRecordProjection(
-  record: Omit<ExternalExecutionRecord, 'recordDigest'>,
+  record:
+    | Omit<ExternalExecutionRecordV1, 'recordDigest'>
+    | Omit<ExternalExecutionRecordV2, 'recordDigest'>,
 ): unknown {
   return {
     ...externalExecutionIntentProjection(record),

@@ -685,6 +685,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0030_project_read_authority.sql',
       '0031_project_read_cleanup_authority.sql',
       '0032_external_execution_profile_v3.sql',
+      '0033_external_execution_intent_v2.sql',
     ],
   );
   store.close();

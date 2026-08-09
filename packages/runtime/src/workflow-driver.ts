@@ -50,6 +50,7 @@ import {
   type ExecutionProfile,
   type ExecutionProfileId,
   type ExternalExecutionIntent,
+  type ExternalExecutionIntentV1,
   type ExternalExecutionObservation,
   type ExternalExecutionProfileDefinitionV1,
   type ExternalExecutionProfileDefinitionV2,
@@ -2400,7 +2401,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         workerSessionId: request.workerSessionId,
       }),
     );
-    const intentWithoutDigest: Omit<ExternalExecutionIntent, 'intentDigest'> = Object.freeze({
+    const intentWithoutDigest: Omit<ExternalExecutionIntentV1, 'intentDigest'> = Object.freeze({
       schemaVersion: 1,
       id: executionIdentifier,
       goalId: authority.goal.id,

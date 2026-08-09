@@ -126,11 +126,14 @@ the lower-client prerequisite plus isolated Answer-only, clear Intent, and
 ambiguous Intent paths with metadata-only receipts. Slice 3 incrementally
 implements the project-read authority, read-only local Workspace,
 Context/Attempt binding, Store cleanup authority, Runtime cleanup coordination,
-and the nested external-execution v3 phase-dispatch contract with strict
-SQLite install/reopen. The legacy Driver rejects v3 during installed-Profile
-preflight before Start mutation, Adapter, or FakeWorker dispatch; versioned
-external Intent/directive/observation,
-activity-policy enforcement, and real phase composition remain unimplemented.
+the nested external-execution v3 phase-dispatch contract, and additive external
+Intent/Record v2 authority with strict SQLite authorization, persistence, and
+reopen. Intent/Record v2 binds the exact selected phase entry and exactly one
+project-read or Candidate source member while v1 retains its historical flat
+Candidate meaning. The legacy Driver rejects v3 during installed-Profile
+preflight before Start mutation, Adapter, or FakeWorker dispatch; directive v3,
+Adapter observation v2, activity-policy enforcement, and real phase composition
+remain unimplemented.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation

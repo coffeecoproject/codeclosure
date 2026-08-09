@@ -109,10 +109,9 @@ one opaque Adapter-local Worker activity-policy identity per phase, and uses
 the existing canonical string-sorted phase set with
 `ALL_SELECTED_ATTEMPTS`. The existing Driver rejects v3 during installed-
 Profile preflight before Start mutation, Adapter, or FakeWorker dispatch
-because v2 Intent/Record, v3 directive, v2 Adapter
-observation, activity-policy enforcement, source-currency enforcement, and
-trusted real phase composition remain planned. Real external dispatch has not
-started.
+because v3 directive, v2 Adapter observation, activity-policy enforcement,
+source-currency enforcement, and trusted real phase composition remain
+planned. Real external dispatch has not started.
 The proposed Plan-source mismatch path uses the existing Workflow integrity
 event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
@@ -1088,11 +1087,20 @@ network/approval/continuity/compaction/fallback, and allowed/forbidden roots.
 `IMPLEMENT` requires a Candidate workspace. The dispatch policy is exactly
 `ALL_SELECTED_ATTEMPTS`. Missing, reordered, duplicated-global, invalid phase-
 shape, or substituted configuration/capability/response-contract/schema/
-instruction authority fails decode, install, or strict reopen. This contract
-does not itself authorize dispatch: the legacy Driver rejects it during
-installed-Profile preflight before Start mutation until the separately
-versioned Intent/Record, directive, Adapter observation, activity-policy
-enforcement, and trusted composition are implemented.
+instruction authority fails decode, install, or strict reopen.
+
+The additive `ExternalExecutionIntentV2` and `ExternalExecutionRecordV2` bind
+that exact selected phase-entry digest plus one explicit source-authority union.
+`DISCOVERY` and `PLAN` require the exact retained project-read record digest and
+snapshot cwd and forbid flat Candidate fields. `IMPLEMENT` requires the exact
+Candidate lease/cwd member and forbids project-read fields. SQLite retains v1
+and v2 in the same authoritative record table with mutually exclusive shapes;
+Store authorization and strict reopen use the same Profile, phase, Context, and
+source-authority check. Historical v1 rows keep their existing Candidate-only
+meaning and cannot authorize the v3 Profile. These contracts do not themselves
+authorize real dispatch: the legacy Driver still rejects v3 during installed-
+Profile preflight before Start mutation until directive v3, Adapter observation
+v2, activity-policy enforcement, and trusted composition are implemented.
 
 ## External Execution — implemented M2 Slice 6
 
