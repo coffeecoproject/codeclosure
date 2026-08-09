@@ -477,9 +477,10 @@ configuration/protocol projection v2, the strict Intent response, exact-source
 instruction, and Runtime projection policies; it passes the lower-client
 prerequisite and isolated real Answer-only, clear Intent, and ambiguous Intent
 paths with metadata-only receipts. Slice 3 is now in progress through its
-project-read contracts, local adapter, Context v5 compiler, and atomic SQLite
-authority foundation; no real phase composition or milestone assessment has
-started. The
+project-read contracts, local adapter, Context v5 compiler, atomic SQLite
+project-read binding, and Store-owned authority-snapshot/consume-once Cleanup
+persistence foundation; filesystem cleanup coordination, real phase
+composition, and milestone assessment have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

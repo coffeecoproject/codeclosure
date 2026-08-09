@@ -757,23 +757,25 @@ or Acceptance authority. Slice 5 composes it through trusted in-process Runtime
 capabilities for the deterministic proof path; production CLI and live Codex
 composition remain later M2 work.
 
-Proposed M2.5.1 keeps Candidate Manager as the source-observation owner but adds
-a separate narrow `ProjectReadWorkspacePort` for candidate-free
-`DISCOVERY`/`PLAN`. Its local adapter would materialize only the admitted source
-projection into a Runtime-allocated read-only leaf, revalidate source/snapshot
-identity, reconcile exact externally owned leaves against a monotonically
-sequenced Store-authority snapshot, and consume only a persisted exact terminal
-or owned-orphan cleanup grant. One unresolved grant may be reinvoked only as
-the same idempotent operation after an unknown result; its immutable Outcome,
-audit, and consumption commit atomically, and retained Outcome replay performs
-no filesystem call. The source checkout, `.git`,
+M2.5.1 Slice 3 now keeps Candidate Manager as the source-observation owner and
+implements a separate narrow `ProjectReadWorkspacePort` for candidate-free
+`DISCOVERY`/`PLAN`, its local read-only materialization/revalidation adapter,
+the protocol-neutral project-read/Context authority, and the Store-owned
+cleanup persistence foundation. The Store derives a monotonically sequenced
+authority snapshot, admits only an exact terminal Grant or an owned-orphan
+consume-once Grant whose claimed authority identity is absent, and atomically persists the terminal cleanup
+Observation, Outcome, audit, and Grant consumption. Exact resolved-Grant replay
+returns the retained Outcome before any future coordinator may invoke the
+filesystem port. Process-safe same-grant physical-effect coordination and real
+phase composition remain pending. The source checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,
 protected assets, and sibling snapshots would remain unreadable to model tools.
 The snapshot would have no Candidate, Evidence, Acceptance, or Workflow-writing
 authority. A Plan-source mismatch would persist the exact Workflow integrity
 code, project the Workflow to `FAILED` and Goal to non-resumable
 `BLOCKED / INSPECT_BLOCKER`, and create no Candidate. This port and record are
-accepted under ADR 0043 and are not yet implemented.
+accepted under ADR 0043; the remaining effect coordination and composition are
+not yet implemented.
 
 ### Evidence Store
 

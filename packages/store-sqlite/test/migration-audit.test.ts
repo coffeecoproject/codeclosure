@@ -47,6 +47,7 @@ const migrationNames = Object.freeze([
   '0028_rejected_clarification_reservation.sql',
   '0029_intent_projection_schema_v2.sql',
   '0030_project_read_authority.sql',
+  '0031_project_read_cleanup_authority.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -160,12 +161,12 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
     })),
   );
   assert.deepEqual(firstInspection, {
-    counts: { table: 62, index: 25, trigger: 215, view: 0 },
+    counts: { table: 68, index: 25, trigger: 234, view: 0 },
     foreignKeyViolationCount: 0,
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:f15bfebcdae2eec3f9e6f07a43927198cac4e7e086fb92a72dd83793219fc74b',
+    schemaDigest: 'sha256:f4323052697c760c833f252f468ed519d10378bd57a1cd8f466c0fc746b222c9',
   });
 
   const reopened = new Database(filename);

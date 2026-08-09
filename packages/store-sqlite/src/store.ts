@@ -81,6 +81,8 @@ import {
   decodeRecoveryWorkflowEvent,
   decodeCloseoutRecord,
   decodePendingIssueSet,
+  decodeProjectReadSnapshotCleanupGrant,
+  decodeProjectReadSnapshotCleanupOutcome,
   decodeProjectSourceReadAuthorityRecord,
   decodeContextManifest,
   decodeAttemptEvent,
@@ -143,6 +145,9 @@ import {
   policyBundleId,
   policyBundleProjection,
   projectReadGitStateProjection,
+  projectReadSnapshotCleanupGrantId,
+  projectReadWorkspaceAuthoritySnapshotId,
+  projectReadWorkspaceObservationId,
   projectReadSourceTreeProjection,
   projectSourceReadAuthorityId,
   projectSourceReadAuthorityProjection,
@@ -221,6 +226,11 @@ import {
   type PolicyBundleId,
   type ProjectSourceReadAuthorityId,
   type ProjectSourceReadAuthorityRecord,
+  type ProjectReadSnapshotCleanupGrant,
+  type ProjectReadSnapshotCleanupGrantId,
+  type ProjectReadSnapshotCleanupOutcome,
+  type ProjectReadWorkspaceAuthoritySnapshotId,
+  type ProjectReadWorkspaceObservationId,
   type Sha256Digest,
   type WorkflowEvent,
   type WorkflowId,
@@ -249,6 +259,17 @@ import {
   decodeStoredCommandOutcome,
   decodeWorkerDispatchClaim,
   decodeWorkerEventReceipt,
+  decodeProjectReadSnapshotCleanupObservation,
+  decodeProjectReadWorkspaceAuthoritySnapshot,
+  decodeProjectReadWorkspaceObservation,
+  digestProjectReadSnapshotCleanupValue,
+  digestProjectReadWorkspaceValue,
+  projectReadWorkspaceAuthoritySnapshotProjection,
+  assertProjectReadWorkspaceObservationMatchesAuthoritySnapshot,
+  assertTerminalProjectReadSnapshotCleanupGrantEligibility,
+  assertOrphanedProjectReadSnapshotCleanupGrantEligibility,
+  assertProjectReadSnapshotCleanupOutcomeClosure,
+  ProjectReadWorkspaceRetention,
   deriveContextManifestEntries,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
@@ -344,6 +365,18 @@ import {
   type ExternalMaintenanceStoreResult,
   type ExternalWorkerDispatchClaimResult,
   type PolicyInstallResult,
+  type CaptureProjectReadWorkspaceAuthoritySnapshot,
+  type IssueProjectReadSnapshotCleanupGrant,
+  type ProjectReadCleanupControlStore,
+  type ProjectReadSnapshotCleanupGrantStoreResult,
+  type ProjectReadSnapshotCleanupObservation,
+  type ProjectReadSnapshotCleanupResolutionStoreResult,
+  type ProjectReadWorkspaceAuthoritySnapshot,
+  type ProjectReadWorkspaceAuthoritySnapshotStoreResult,
+  type ProjectReadWorkspaceObservation,
+  type ProjectReadWorkspaceObservationStoreResult,
+  type RecordProjectReadWorkspaceObservation,
+  type ResolveProjectReadSnapshotCleanupGrant,
   type RecordIgnoredWorkerEvent,
   RecoverableBlockerKind,
   RecoveryContinuityBarrier,
@@ -505,6 +538,23 @@ export const IntakeTransactionStep = {
 export type IntakeTransactionStep =
   (typeof IntakeTransactionStep)[keyof typeof IntakeTransactionStep];
 
+export const ProjectReadCleanupTransactionStep = {
+  AFTER_AUTHORITY_SNAPSHOT_AUDIT_WRITE: 'AFTER_PROJECT_READ_AUTHORITY_SNAPSHOT_AUDIT_WRITE',
+  AFTER_AUTHORITY_SNAPSHOT_WRITE: 'AFTER_PROJECT_READ_AUTHORITY_SNAPSHOT_WRITE',
+  AFTER_WORKSPACE_OBSERVATION_AUDIT_WRITE: 'AFTER_PROJECT_READ_WORKSPACE_OBSERVATION_AUDIT_WRITE',
+  AFTER_WORKSPACE_OBSERVATION_WRITE: 'AFTER_PROJECT_READ_WORKSPACE_OBSERVATION_WRITE',
+  AFTER_CLEANUP_GRANT_AUDIT_WRITE: 'AFTER_PROJECT_READ_CLEANUP_GRANT_AUDIT_WRITE',
+  AFTER_CLEANUP_GRANT_WRITE: 'AFTER_PROJECT_READ_CLEANUP_GRANT_WRITE',
+  AFTER_CLEANUP_OBSERVATION_AUDIT_WRITE: 'AFTER_PROJECT_READ_CLEANUP_OBSERVATION_AUDIT_WRITE',
+  AFTER_CLEANUP_OBSERVATION_WRITE: 'AFTER_PROJECT_READ_CLEANUP_OBSERVATION_WRITE',
+  AFTER_CLEANUP_OUTCOME_AUDIT_WRITE: 'AFTER_PROJECT_READ_CLEANUP_OUTCOME_AUDIT_WRITE',
+  AFTER_CLEANUP_OUTCOME_WRITE: 'AFTER_PROJECT_READ_CLEANUP_OUTCOME_WRITE',
+  AFTER_CLEANUP_CONSUMPTION_WRITE: 'AFTER_PROJECT_READ_CLEANUP_CONSUMPTION_WRITE',
+  BEFORE_COMMIT: 'BEFORE_PROJECT_READ_CLEANUP_COMMIT',
+} as const;
+export type ProjectReadCleanupTransactionStep =
+  (typeof ProjectReadCleanupTransactionStep)[keyof typeof ProjectReadCleanupTransactionStep];
+
 export interface SqliteControlStoreOptions {
   readonly filename: string;
   readonly migrationsDirectory?: string;
@@ -517,7 +567,8 @@ export interface SqliteControlStoreOptions {
       | CandidateEvidenceTransactionStep
       | AcceptanceTransactionStep
       | RecoveryTransactionStep
-      | IntakeTransactionStep,
+      | IntakeTransactionStep
+      | ProjectReadCleanupTransactionStep,
   ) => void;
 }
 
@@ -2380,7 +2431,8 @@ export class SqliteControlStore
     AcceptanceControlStore,
     CodeClosureApplicationStore,
     WorkflowDriverControlStore,
-    IntakeControlStore
+    IntakeControlStore,
+    ProjectReadCleanupControlStore
 {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
@@ -2393,7 +2445,8 @@ export class SqliteControlStore
           | CandidateEvidenceTransactionStep
           | AcceptanceTransactionStep
           | RecoveryTransactionStep
-          | IntakeTransactionStep,
+          | IntakeTransactionStep
+          | ProjectReadCleanupTransactionStep,
       ) => void)
     | undefined;
   #closed = false;
@@ -2409,7 +2462,8 @@ export class SqliteControlStore
             | CandidateEvidenceTransactionStep
             | AcceptanceTransactionStep
             | RecoveryTransactionStep
-            | IntakeTransactionStep,
+            | IntakeTransactionStep
+            | ProjectReadCleanupTransactionStep,
         ) => void)
       | undefined,
     authorityIsolationLease?: SqliteAuthorityIsolationLease,
@@ -2457,6 +2511,7 @@ export class SqliteControlStore
       store.assertRetainedAcceptanceAuthorityClosure();
       store.assertRetainedProtectedVerificationAuthorityClosure();
       store.assertRetainedProjectReadAuthorityClosure();
+      store.assertRetainedProjectReadCleanupAuthorityClosure();
       store.assertRetainedIntakeAuthorityClosure();
       return store;
     } catch (error) {
@@ -2517,6 +2572,7 @@ export class SqliteControlStore
       store.assertRetainedAcceptanceAuthorityClosure();
       store.assertRetainedProtectedVerificationAuthorityClosure();
       store.assertRetainedProjectReadAuthorityClosure();
+      store.assertRetainedProjectReadCleanupAuthorityClosure();
       store.assertRetainedIntakeAuthorityClosure();
       store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
       isolationLease.assertCurrent();
@@ -2572,7 +2628,6 @@ export class SqliteControlStore
               message: `Intent Admission Policy ${input.policy.id} already has different authority`,
             };
       }
-
       this.insertAuditEvent({
         id: input.auditEventId,
         aggregateType: 'INTENT_ADMISSION_POLICY',
@@ -6724,6 +6779,854 @@ export class SqliteControlStore
       );
     }
     return record;
+  }
+
+  public captureProjectReadWorkspaceAuthoritySnapshot(
+    rawInput: CaptureProjectReadWorkspaceAuthoritySnapshot,
+  ): ProjectReadWorkspaceAuthoritySnapshotStoreResult {
+    this.assertOpen();
+    const input = Object.freeze({
+      ...rawInput,
+      id: projectReadWorkspaceAuthoritySnapshotId(rawInput.id),
+      issuedAt: isoTimestamp(rawInput.issuedAt),
+      auditEventId: auditEventId(rawInput.auditEventId),
+    });
+    return this.runImmediate(() => {
+      const existing = this.getProjectReadWorkspaceAuthoritySnapshot(input.id);
+      if (existing !== undefined) {
+        return existing.issuedAt === input.issuedAt
+          ? { status: 'EXISTING', value: existing }
+          : {
+              status: 'SNAPSHOT_CONFLICT',
+              message: `Project-read authority snapshot ${input.id} already has different authority`,
+            };
+      }
+
+      const latestSnapshotRow = this.#database
+        .prepare(
+          `SELECT issued_at FROM project_read_workspace_authority_snapshots
+            ORDER BY authority_sequence DESC LIMIT 1`,
+        )
+        .get();
+      const latestIssuedAt = z
+        .object({ issued_at: z.string() })
+        .optional()
+        .parse(latestSnapshotRow)?.issued_at;
+      if (latestIssuedAt !== undefined && input.issuedAt < latestIssuedAt) {
+        throw new StoreInvariantError(
+          'Project-read authority snapshot time cannot move behind retained authority',
+        );
+      }
+
+      const authoritySequence = auditSequenceWatermarkRowSchema.parse(
+        this.#database
+          .prepare('SELECT coalesce(max(sequence), 0) + 1 AS through_sequence FROM audit_events')
+          .get(),
+      ).through_sequence;
+      const records = this.#database
+        .prepare('SELECT id FROM project_source_read_authorities ORDER BY snapshot_id')
+        .all()
+        .map((row) => projectSourceReadAuthorityId(z.object({ id: z.string() }).parse(row).id))
+        .map((id) => {
+          const record = this.getProjectSourceReadAuthority(id);
+          if (record === undefined) {
+            throw new StoreInvariantError('Project-read authority changed while taking a snapshot');
+          }
+          return record;
+        });
+      const expectedSnapshots = records.map((record) => {
+        const attempt = this.getAttempt(record.attemptId);
+        if (attempt === undefined || input.issuedAt < record.issuedAt) {
+          throw new StoreInvariantError(
+            `Project-read authority ${record.id} has no current Attempt/time basis`,
+          );
+        }
+        return Object.freeze({
+          attemptId: record.attemptId,
+          authorityRecordDigest: record.recordDigest,
+          ownershipMarkerDigest: record.ownershipMarkerDigest,
+          ownershipMarkerProfile: record.ownershipMarkerProfile,
+          projectReadAuthorityId: record.id,
+          retention:
+            attempt.status === AttemptStatus.RUNNING
+              ? ProjectReadWorkspaceRetention.CURRENT
+              : ProjectReadWorkspaceRetention.RETAINED,
+          snapshotId: record.snapshotId,
+          snapshotLeafRealpath: record.snapshotLeafRealpath,
+          workspaceRootIdentity: record.workspaceRootIdentity,
+        });
+      });
+      const activeConsumers = records.flatMap((record) => {
+        const execution = this.getExternalExecutionForAttempt(record.attemptId);
+        if (
+          execution === undefined ||
+          execution.state === ExternalExecutionState.COMPLETED ||
+          execution.state === ExternalExecutionState.INTERRUPTED ||
+          execution.state === ExternalExecutionState.FAILED ||
+          execution.state === ExternalExecutionState.ABANDONED
+        ) {
+          return [];
+        }
+        if (input.issuedAt < execution.updatedAt) {
+          throw new StoreInvariantError(
+            `Project-read consumer ${execution.id} is newer than the requested snapshot`,
+          );
+        }
+        return [
+          Object.freeze({
+            attemptId: record.attemptId,
+            externalExecutionId: execution.id,
+            projectReadAuthorityId: record.id,
+            snapshotId: record.snapshotId,
+          }),
+        ];
+      });
+      const withoutDigest = Object.freeze({
+        activeConsumers: Object.freeze(
+          activeConsumers.sort((left, right) =>
+            left.externalExecutionId.localeCompare(right.externalExecutionId),
+          ),
+        ),
+        authoritySequence,
+        expectedSnapshots: Object.freeze(expectedSnapshots),
+        id: input.id,
+        issuedAt: input.issuedAt,
+        schemaVersion: 1 as const,
+      });
+      const snapshot = decodeProjectReadWorkspaceAuthoritySnapshot({
+        ...withoutDigest,
+        authorityDigest: digestProjectReadWorkspaceValue(
+          projectReadWorkspaceAuthoritySnapshotProjection(withoutDigest),
+        ),
+      });
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'PROJECT_READ_WORKSPACE_AUTHORITY_SNAPSHOT',
+        aggregateId: snapshot.id,
+        eventType: 'PROJECT_READ_WORKSPACE_AUTHORITY_SNAPSHOT_ISSUED',
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: snapshot.authorityDigest,
+        occurredAt: snapshot.issuedAt,
+      });
+      if (this.auditSequence(input.auditEventId) !== authoritySequence) {
+        throw new StoreInvariantError('Project-read authority snapshot sequence changed');
+      }
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_AUTHORITY_SNAPSHOT_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_workspace_authority_snapshots(
+             id, schema_version, authority_sequence, issued_at, canonical_json,
+             authority_digest, audit_sequence
+           ) VALUES (?, 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          snapshot.id,
+          snapshot.authoritySequence,
+          snapshot.issuedAt,
+          serializeJson(decodeJsonValue(snapshot)),
+          snapshot.authorityDigest,
+          authoritySequence,
+        );
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_AUTHORITY_SNAPSHOT_WRITE);
+      const persisted = this.getProjectReadWorkspaceAuthoritySnapshot(snapshot.id);
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, snapshot)) {
+        throw new StoreInvariantError('Project-read authority snapshot was not retained exactly');
+      }
+      this.probe(ProjectReadCleanupTransactionStep.BEFORE_COMMIT);
+      return { status: 'ISSUED', value: persisted };
+    });
+  }
+
+  public getProjectReadWorkspaceAuthoritySnapshot(
+    rawId: ProjectReadWorkspaceAuthoritySnapshotId,
+  ): ProjectReadWorkspaceAuthoritySnapshot | undefined {
+    this.assertOpen();
+    const id = projectReadWorkspaceAuthoritySnapshotId(rawId);
+    if (!this.hasTable('project_read_workspace_authority_snapshots')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare('SELECT * FROM project_read_workspace_authority_snapshots WHERE id = ?')
+      .get(id);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z
+      .object({
+        schema_version: z.literal(1),
+        authority_sequence: z.number().int().positive(),
+        issued_at: z.string(),
+        authority_digest: z.string(),
+        audit_sequence: z.number().int().positive(),
+        canonical_json: z.string(),
+      })
+      .parse(row);
+    const snapshot = decodeProjectReadWorkspaceAuthoritySnapshot(
+      parseJson(parsed.canonical_json, 'project-read workspace authority snapshot'),
+    );
+    if (
+      snapshot.id !== id ||
+      snapshot.authoritySequence !== parsed.authority_sequence ||
+      snapshot.issuedAt !== parsed.issued_at ||
+      snapshot.authorityDigest !== parsed.authority_digest ||
+      parsed.audit_sequence !== parsed.authority_sequence
+    ) {
+      throw new StoreInvariantError(`Project-read authority snapshot ${id} changed columns`);
+    }
+    this.assertProjectReadCleanupAudit(
+      parsed.audit_sequence,
+      'PROJECT_READ_WORKSPACE_AUTHORITY_SNAPSHOT',
+      snapshot.id,
+      'PROJECT_READ_WORKSPACE_AUTHORITY_SNAPSHOT_ISSUED',
+      snapshot.authorityDigest,
+      snapshot.issuedAt,
+    );
+    const retainedAuthorityIds = z
+      .array(z.object({ id: z.string() }))
+      .parse(
+        this.#database
+          .prepare(
+            `SELECT id FROM project_source_read_authorities
+              WHERE audit_sequence < ? ORDER BY snapshot_id`,
+          )
+          .all(snapshot.authoritySequence),
+      )
+      .map((row) => projectSourceReadAuthorityId(row.id));
+    if (
+      !sameCanonicalAuthority(
+        retainedAuthorityIds,
+        snapshot.expectedSnapshots.map((entry) => entry.projectReadAuthorityId),
+      )
+    ) {
+      throw new StoreInvariantError(
+        `Project-read authority snapshot ${id} omitted or added retained authority`,
+      );
+    }
+    const expectedActiveConsumers: ProjectReadWorkspaceAuthoritySnapshot['activeConsumers'][number][] =
+      [];
+    for (const expected of snapshot.expectedSnapshots) {
+      const record = this.getProjectSourceReadAuthority(expected.projectReadAuthorityId);
+      const attempt = this.getAttempt(expected.attemptId);
+      const terminalAttemptAudit = this.listAuditEvents('ATTEMPT', expected.attemptId).find(
+        (audit) =>
+          audit.eventType === 'ATTEMPT_FINISHED' ||
+          audit.eventType === 'ATTEMPT_INTERRUPTED_BY_WORKFLOW_CANCELLATION',
+      );
+      const historicalRetention =
+        terminalAttemptAudit !== undefined &&
+        terminalAttemptAudit.sequence < snapshot.authoritySequence
+          ? ProjectReadWorkspaceRetention.RETAINED
+          : ProjectReadWorkspaceRetention.CURRENT;
+      if (
+        record?.attemptId !== expected.attemptId ||
+        record.recordDigest !== expected.authorityRecordDigest ||
+        record.snapshotId !== expected.snapshotId ||
+        record.workspaceRootIdentity !== expected.workspaceRootIdentity ||
+        record.snapshotLeafRealpath !== expected.snapshotLeafRealpath ||
+        record.ownershipMarkerDigest !== expected.ownershipMarkerDigest ||
+        attempt === undefined ||
+        expected.retention !== historicalRetention
+      ) {
+        throw new StoreInvariantError(
+          `Project-read authority snapshot ${id} substituted retained source authority`,
+        );
+      }
+      const execution = this.getExternalExecutionForAttempt(expected.attemptId);
+      if (execution !== undefined) {
+        const authorizedAudit = this.listAuditEvents('EXTERNAL_EXECUTION', execution.id).find(
+          (audit) => audit.eventType === 'EXTERNAL_EXECUTION_AUTHORIZED',
+        );
+        const terminal =
+          execution.state === ExternalExecutionState.COMPLETED ||
+          execution.state === ExternalExecutionState.INTERRUPTED ||
+          execution.state === ExternalExecutionState.FAILED ||
+          execution.state === ExternalExecutionState.ABANDONED;
+        if (
+          authorizedAudit !== undefined &&
+          authorizedAudit.sequence < snapshot.authoritySequence &&
+          (!terminal || execution.auditSequence > snapshot.authoritySequence)
+        ) {
+          expectedActiveConsumers.push(
+            Object.freeze({
+              attemptId: expected.attemptId,
+              externalExecutionId: execution.id,
+              projectReadAuthorityId: expected.projectReadAuthorityId,
+              snapshotId: expected.snapshotId,
+            }),
+          );
+        }
+      }
+    }
+    expectedActiveConsumers.sort((left, right) =>
+      left.externalExecutionId.localeCompare(right.externalExecutionId),
+    );
+    if (!sameCanonicalAuthority(expectedActiveConsumers, snapshot.activeConsumers)) {
+      throw new StoreInvariantError(
+        `Project-read authority snapshot ${id} substituted active external consumers`,
+      );
+    }
+    return snapshot;
+  }
+
+  public recordProjectReadWorkspaceObservation(
+    rawInput: RecordProjectReadWorkspaceObservation,
+  ): ProjectReadWorkspaceObservationStoreResult {
+    this.assertOpen();
+    const observation = decodeProjectReadWorkspaceObservation(rawInput.observation);
+    const auditIdentifier = auditEventId(rawInput.auditEventId);
+    return this.runImmediate(() => {
+      const duplicateRow = this.#database
+        .prepare(
+          `SELECT id FROM project_read_workspace_observations
+            WHERE id = ? OR observation_digest = ?`,
+        )
+        .get(observation.id, observation.observationDigest);
+      if (duplicateRow !== undefined) {
+        const duplicateId = projectReadWorkspaceObservationId(
+          z.object({ id: z.string() }).parse(duplicateRow).id,
+        );
+        const existing = this.getProjectReadWorkspaceObservation(duplicateId);
+        return existing !== undefined && sameCanonicalAuthority(existing, observation)
+          ? { status: 'EXISTING', value: existing }
+          : {
+              status: 'OBSERVATION_CONFLICT',
+              message: `Project-read workspace observation ${observation.id} conflicts with retained authority`,
+            };
+      }
+      const snapshot = this.getProjectReadWorkspaceAuthoritySnapshot(
+        observation.authoritySnapshotId,
+      );
+      if (snapshot === undefined) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: `Project-read workspace observation ${observation.id} has no authority snapshot`,
+        };
+      }
+      try {
+        assertProjectReadWorkspaceObservationMatchesAuthoritySnapshot(observation, snapshot);
+        if (observation.observedAt < snapshot.issuedAt) {
+          throw new TypeError('Project-read workspace observation predates its authority snapshot');
+        }
+      } catch (error) {
+        return {
+          status: 'OBSERVATION_CONFLICT',
+          message: error instanceof Error ? error.message : 'Workspace observation is not eligible',
+        };
+      }
+      this.insertAuditEvent({
+        id: auditIdentifier,
+        aggregateType: 'PROJECT_READ_WORKSPACE_OBSERVATION',
+        aggregateId: observation.id,
+        eventType: 'PROJECT_READ_WORKSPACE_OBSERVATION_RECORDED',
+        ...(rawInput.correlationId === undefined ? {} : { correlationId: rawInput.correlationId }),
+        ...(rawInput.causationId === undefined ? {} : { causationId: rawInput.causationId }),
+        payloadDigest: observation.observationDigest,
+        occurredAt: observation.observedAt,
+      });
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_WORKSPACE_OBSERVATION_AUDIT_WRITE);
+      const auditSequence = this.auditSequence(auditIdentifier);
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_workspace_observations(
+             id, schema_version, authority_snapshot_id, authority_snapshot_digest,
+             authority_sequence, classification, project_read_authority_id, snapshot_id,
+             workspace_root_identity, snapshot_leaf_realpath, observed_at, canonical_json,
+             observation_digest, audit_sequence
+           ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          observation.id,
+          observation.authoritySnapshotId,
+          observation.authoritySnapshotDigest,
+          observation.authoritySequence,
+          observation.classification,
+          observation.projectReadAuthorityId,
+          observation.snapshotId,
+          observation.workspaceRootIdentity,
+          observation.snapshotLeafRealpath,
+          observation.observedAt,
+          serializeJson(decodeJsonValue(observation)),
+          observation.observationDigest,
+          auditSequence,
+        );
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_WORKSPACE_OBSERVATION_WRITE);
+      const persisted = this.getProjectReadWorkspaceObservation(observation.id);
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, observation)) {
+        throw new StoreInvariantError(
+          'Project-read workspace observation was not retained exactly',
+        );
+      }
+      this.probe(ProjectReadCleanupTransactionStep.BEFORE_COMMIT);
+      return { status: 'RECORDED', value: persisted };
+    });
+  }
+
+  public getProjectReadWorkspaceObservation(
+    rawId: ProjectReadWorkspaceObservationId,
+  ): ProjectReadWorkspaceObservation | undefined {
+    this.assertOpen();
+    const id = projectReadWorkspaceObservationId(rawId);
+    if (!this.hasTable('project_read_workspace_observations')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare('SELECT * FROM project_read_workspace_observations WHERE id = ?')
+      .get(id);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z
+      .object({
+        schema_version: z.literal(1),
+        authority_snapshot_id: z.string(),
+        authority_snapshot_digest: z.string(),
+        authority_sequence: z.number().int().positive(),
+        classification: z.string(),
+        project_read_authority_id: z.string().nullable(),
+        snapshot_id: z.string().nullable(),
+        workspace_root_identity: z.string(),
+        snapshot_leaf_realpath: z.string(),
+        observed_at: z.string(),
+        canonical_json: z.string(),
+        observation_digest: z.string(),
+        audit_sequence: z.number().int().positive(),
+      })
+      .parse(row);
+    const observation = decodeProjectReadWorkspaceObservation(
+      parseJson(parsed.canonical_json, 'project-read workspace observation'),
+    );
+    if (
+      observation.id !== id ||
+      observation.authoritySnapshotId !== parsed.authority_snapshot_id ||
+      observation.authoritySnapshotDigest !== parsed.authority_snapshot_digest ||
+      observation.authoritySequence !== parsed.authority_sequence ||
+      observation.classification !== parsed.classification ||
+      observation.projectReadAuthorityId !== parsed.project_read_authority_id ||
+      observation.snapshotId !== parsed.snapshot_id ||
+      observation.workspaceRootIdentity !== parsed.workspace_root_identity ||
+      observation.snapshotLeafRealpath !== parsed.snapshot_leaf_realpath ||
+      observation.observedAt !== parsed.observed_at ||
+      observation.observationDigest !== parsed.observation_digest
+    ) {
+      throw new StoreInvariantError(`Project-read workspace observation ${id} changed columns`);
+    }
+    const snapshot = this.getProjectReadWorkspaceAuthoritySnapshot(observation.authoritySnapshotId);
+    if (snapshot === undefined) {
+      throw new StoreInvariantError(`Project-read workspace observation ${id} lost its snapshot`);
+    }
+    assertProjectReadWorkspaceObservationMatchesAuthoritySnapshot(observation, snapshot);
+    if (observation.observedAt < snapshot.issuedAt) {
+      throw new StoreInvariantError(
+        `Project-read workspace observation ${id} predates its authority snapshot`,
+      );
+    }
+    this.assertProjectReadCleanupAudit(
+      parsed.audit_sequence,
+      'PROJECT_READ_WORKSPACE_OBSERVATION',
+      observation.id,
+      'PROJECT_READ_WORKSPACE_OBSERVATION_RECORDED',
+      observation.observationDigest,
+      observation.observedAt,
+    );
+    return observation;
+  }
+
+  public issueProjectReadSnapshotCleanupGrant(
+    rawInput: IssueProjectReadSnapshotCleanupGrant,
+  ): ProjectReadSnapshotCleanupGrantStoreResult {
+    this.assertOpen();
+    const grant = decodeProjectReadSnapshotCleanupGrant(rawInput.grant, {
+      digest: digestProjectReadSnapshotCleanupValue,
+    });
+    const auditIdentifier = auditEventId(rawInput.auditEventId);
+    return this.runImmediate(() => {
+      const duplicateRow = this.#database
+        .prepare(
+          `SELECT id FROM project_read_snapshot_cleanup_grants
+            WHERE id = ? OR grant_digest = ? OR project_read_authority_id = ?
+               OR snapshot_id = ? OR snapshot_leaf_realpath = ?`,
+        )
+        .get(
+          grant.id,
+          grant.grantDigest,
+          grant.projectReadAuthorityId,
+          grant.snapshotId,
+          grant.snapshotLeafRealpath,
+        );
+      if (duplicateRow !== undefined) {
+        const duplicateId = projectReadSnapshotCleanupGrantId(
+          z.object({ id: z.string() }).parse(duplicateRow).id,
+        );
+        const existing = this.getProjectReadSnapshotCleanupGrant(duplicateId);
+        return existing !== undefined && sameCanonicalAuthority(existing, grant)
+          ? { status: 'EXISTING', value: existing }
+          : {
+              status: 'GRANT_CONFLICT',
+              message: `Project-read cleanup Grant ${grant.id} conflicts with retained authority`,
+            };
+      }
+      const snapshot = this.getProjectReadWorkspaceAuthoritySnapshot(grant.authoritySnapshotId);
+      if (snapshot === undefined) {
+        return {
+          status: 'NOT_ELIGIBLE',
+          message: `Project-read cleanup Grant ${grant.id} has no authority snapshot`,
+        };
+      }
+      try {
+        this.assertProjectReadCleanupGrantEligibility(grant, snapshot);
+      } catch (error) {
+        return {
+          status: 'NOT_ELIGIBLE',
+          message: error instanceof Error ? error.message : 'Cleanup Grant is not eligible',
+        };
+      }
+      this.insertAuditEvent({
+        id: auditIdentifier,
+        aggregateType: 'PROJECT_READ_SNAPSHOT_CLEANUP_GRANT',
+        aggregateId: grant.id,
+        eventType: 'PROJECT_READ_SNAPSHOT_CLEANUP_GRANT_ISSUED',
+        ...(rawInput.correlationId === undefined ? {} : { correlationId: rawInput.correlationId }),
+        ...(rawInput.causationId === undefined ? {} : { causationId: rawInput.causationId }),
+        payloadDigest: grant.grantDigest,
+        occurredAt: grant.issuedAt,
+      });
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_GRANT_AUDIT_WRITE);
+      const auditSequence = this.auditSequence(auditIdentifier);
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_snapshot_cleanup_grants(
+             id, schema_version, eligibility_kind, authority_snapshot_id,
+             authority_snapshot_digest, authority_sequence, project_read_authority_id,
+             snapshot_id, workspace_root_identity, snapshot_leaf_realpath, issued_at,
+             workspace_observation_id, workspace_observation_digest, attempt_id,
+             external_execution_id, canonical_json, grant_digest, audit_sequence
+           ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          grant.id,
+          grant.eligibilityKind,
+          grant.authoritySnapshotId,
+          grant.authoritySnapshotDigest,
+          grant.authoritySequence,
+          grant.projectReadAuthorityId,
+          grant.snapshotId,
+          grant.workspaceRootIdentity,
+          grant.snapshotLeafRealpath,
+          grant.issuedAt,
+          grant.eligibilityKind === 'ORPHANED' ? grant.workspaceObservationId : null,
+          grant.eligibilityKind === 'ORPHANED' ? grant.workspaceObservationDigest : null,
+          grant.eligibilityKind === 'TERMINAL' ? grant.attemptId : null,
+          grant.eligibilityKind === 'TERMINAL' ? grant.externalExecutionId : null,
+          serializeJson(decodeJsonValue(grant)),
+          grant.grantDigest,
+          auditSequence,
+        );
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_GRANT_WRITE);
+      const persisted = this.getProjectReadSnapshotCleanupGrant(grant.id);
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, grant)) {
+        throw new StoreInvariantError('Project-read cleanup Grant was not retained exactly');
+      }
+      this.probe(ProjectReadCleanupTransactionStep.BEFORE_COMMIT);
+      return { status: 'ISSUED', value: persisted };
+    });
+  }
+
+  public getProjectReadSnapshotCleanupGrant(
+    rawId: ProjectReadSnapshotCleanupGrantId,
+  ): ProjectReadSnapshotCleanupGrant | undefined {
+    this.assertOpen();
+    const id = projectReadSnapshotCleanupGrantId(rawId);
+    if (!this.hasTable('project_read_snapshot_cleanup_grants')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare('SELECT * FROM project_read_snapshot_cleanup_grants WHERE id = ?')
+      .get(id);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z
+      .object({
+        schema_version: z.literal(1),
+        eligibility_kind: z.enum(['TERMINAL', 'ORPHANED']),
+        authority_snapshot_id: z.string(),
+        authority_snapshot_digest: z.string(),
+        authority_sequence: z.number().int().positive(),
+        project_read_authority_id: z.string(),
+        snapshot_id: z.string(),
+        workspace_root_identity: z.string(),
+        snapshot_leaf_realpath: z.string(),
+        issued_at: z.string(),
+        workspace_observation_id: z.string().nullable(),
+        workspace_observation_digest: z.string().nullable(),
+        attempt_id: z.string().nullable(),
+        external_execution_id: z.string().nullable(),
+        grant_digest: z.string(),
+        audit_sequence: z.number().int().positive(),
+        canonical_json: z.string(),
+      })
+      .parse(row);
+    const grant = decodeProjectReadSnapshotCleanupGrant(
+      parseJson(parsed.canonical_json, 'project-read cleanup Grant'),
+      { digest: digestProjectReadSnapshotCleanupValue },
+    );
+    if (
+      grant.id !== id ||
+      grant.eligibilityKind !== parsed.eligibility_kind ||
+      grant.authoritySnapshotId !== parsed.authority_snapshot_id ||
+      grant.authoritySnapshotDigest !== parsed.authority_snapshot_digest ||
+      grant.authoritySequence !== parsed.authority_sequence ||
+      grant.projectReadAuthorityId !== parsed.project_read_authority_id ||
+      grant.snapshotId !== parsed.snapshot_id ||
+      grant.workspaceRootIdentity !== parsed.workspace_root_identity ||
+      grant.snapshotLeafRealpath !== parsed.snapshot_leaf_realpath ||
+      grant.issuedAt !== parsed.issued_at ||
+      (grant.eligibilityKind === 'ORPHANED'
+        ? grant.workspaceObservationId !== parsed.workspace_observation_id ||
+          grant.workspaceObservationDigest !== parsed.workspace_observation_digest ||
+          parsed.attempt_id !== null ||
+          parsed.external_execution_id !== null
+        : grant.attemptId !== parsed.attempt_id ||
+          grant.externalExecutionId !== parsed.external_execution_id ||
+          parsed.workspace_observation_id !== null ||
+          parsed.workspace_observation_digest !== null) ||
+      grant.grantDigest !== parsed.grant_digest
+    ) {
+      throw new StoreInvariantError(`Project-read cleanup Grant ${id} changed columns`);
+    }
+    const snapshot = this.getProjectReadWorkspaceAuthoritySnapshot(grant.authoritySnapshotId);
+    if (snapshot === undefined) {
+      throw new StoreInvariantError(`Project-read cleanup Grant ${id} lost its snapshot`);
+    }
+    this.assertProjectReadCleanupGrantEligibility(grant, snapshot);
+    this.assertProjectReadCleanupAudit(
+      parsed.audit_sequence,
+      'PROJECT_READ_SNAPSHOT_CLEANUP_GRANT',
+      grant.id,
+      'PROJECT_READ_SNAPSHOT_CLEANUP_GRANT_ISSUED',
+      grant.grantDigest,
+      grant.issuedAt,
+    );
+    return grant;
+  }
+
+  public getProjectReadSnapshotCleanupOutcome(
+    rawGrantId: ProjectReadSnapshotCleanupGrantId,
+  ): ProjectReadSnapshotCleanupOutcome | undefined {
+    this.assertOpen();
+    const grantId = projectReadSnapshotCleanupGrantId(rawGrantId);
+    if (!this.hasTable('project_read_snapshot_cleanup_outcomes')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare('SELECT * FROM project_read_snapshot_cleanup_outcomes WHERE grant_id = ?')
+      .get(grantId);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z
+      .object({
+        schema_version: z.literal(1),
+        grant_id: z.string(),
+        grant_digest: z.string(),
+        cleanup_observation_id: z.string(),
+        cleanup_observation_digest: z.string(),
+        disposition: z.string(),
+        resolved_at: z.string(),
+        outcome_digest: z.string(),
+        audit_sequence: z.number().int().positive(),
+        canonical_json: z.string(),
+      })
+      .parse(row);
+    const outcome = decodeProjectReadSnapshotCleanupOutcome(
+      parseJson(parsed.canonical_json, 'project-read cleanup Outcome'),
+      { digest: digestProjectReadSnapshotCleanupValue },
+    );
+    const grant = this.getProjectReadSnapshotCleanupGrant(grantId);
+    const observation = this.getProjectReadSnapshotCleanupObservationInsideTransaction(
+      parsed.cleanup_observation_id,
+    );
+    const consumption = this.#database
+      .prepare(
+        `SELECT grant_digest, outcome_id, outcome_digest, consumed_at, outcome_audit_sequence
+           FROM project_read_snapshot_cleanup_consumptions WHERE grant_id = ?`,
+      )
+      .get(grantId);
+    const retainedConsumption = z
+      .object({
+        grant_digest: z.string(),
+        outcome_id: z.string(),
+        outcome_digest: z.string(),
+        consumed_at: z.string(),
+        outcome_audit_sequence: z.number().int().positive(),
+      })
+      .parse(consumption);
+    if (
+      grant === undefined ||
+      observation === undefined ||
+      outcome.grantId !== grantId ||
+      outcome.grantId !== parsed.grant_id ||
+      outcome.grantDigest !== parsed.grant_digest ||
+      outcome.cleanupObservationId !== parsed.cleanup_observation_id ||
+      outcome.cleanupObservationDigest !== parsed.cleanup_observation_digest ||
+      outcome.disposition !== parsed.disposition ||
+      outcome.resolvedAt !== parsed.resolved_at ||
+      outcome.outcomeDigest !== parsed.outcome_digest ||
+      retainedConsumption.grant_digest !== grant.grantDigest ||
+      retainedConsumption.outcome_id !== outcome.id ||
+      retainedConsumption.outcome_digest !== outcome.outcomeDigest ||
+      retainedConsumption.consumed_at !== outcome.resolvedAt ||
+      retainedConsumption.outcome_audit_sequence !== parsed.audit_sequence
+    ) {
+      throw new StoreInvariantError(`Project-read cleanup Outcome for ${grantId} is incomplete`);
+    }
+    assertProjectReadSnapshotCleanupOutcomeClosure(outcome, observation, grant);
+    this.assertProjectReadCleanupAudit(
+      parsed.audit_sequence,
+      'PROJECT_READ_SNAPSHOT_CLEANUP_OUTCOME',
+      outcome.id,
+      'PROJECT_READ_SNAPSHOT_CLEANUP_RESOLVED',
+      outcome.outcomeDigest,
+      outcome.resolvedAt,
+    );
+    return outcome;
+  }
+
+  public resolveProjectReadSnapshotCleanupGrant(
+    rawInput: ResolveProjectReadSnapshotCleanupGrant,
+  ): ProjectReadSnapshotCleanupResolutionStoreResult {
+    this.assertOpen();
+    const grantId = projectReadSnapshotCleanupGrantId(rawInput.grantId);
+    const grantDigest = sha256Digest(rawInput.grantDigest);
+    const observationAuditEventId = auditEventId(rawInput.observationAuditEventId);
+    const outcomeAuditEventId = auditEventId(rawInput.outcomeAuditEventId);
+    return this.runImmediate(() => {
+      const grant = this.getProjectReadSnapshotCleanupGrant(grantId);
+      if (grant?.grantDigest !== grantDigest) {
+        return {
+          status: 'GRANT_CONFLICT',
+          message: `Project-read cleanup Grant ${grantId} is missing or has different authority`,
+        };
+      }
+      const retained = this.getProjectReadSnapshotCleanupOutcome(grantId);
+      if (retained !== undefined) {
+        return { status: 'REPLAYED', value: retained };
+      }
+      const observation = decodeProjectReadSnapshotCleanupObservation(rawInput.observation);
+      const outcome = decodeProjectReadSnapshotCleanupOutcome(rawInput.outcome, {
+        digest: digestProjectReadSnapshotCleanupValue,
+      });
+      try {
+        assertProjectReadSnapshotCleanupOutcomeClosure(outcome, observation, grant);
+      } catch (error) {
+        return {
+          status: 'RESOLUTION_CONFLICT',
+          message: error instanceof Error ? error.message : 'Cleanup Outcome is not exact',
+        };
+      }
+      const collision = this.#database
+        .prepare(
+          `SELECT 1 FROM project_read_snapshot_cleanup_observations
+            WHERE id = ? OR observation_digest = ?
+           UNION ALL
+           SELECT 1 FROM project_read_snapshot_cleanup_outcomes
+            WHERE id = ? OR outcome_digest = ?
+           LIMIT 1`,
+        )
+        .get(observation.id, observation.observationDigest, outcome.id, outcome.outcomeDigest);
+      if (collision !== undefined) {
+        return {
+          status: 'RESOLUTION_CONFLICT',
+          message: `Project-read cleanup resolution for ${grantId} conflicts with retained identity`,
+        };
+      }
+      this.insertAuditEvent({
+        id: observationAuditEventId,
+        aggregateType: 'PROJECT_READ_SNAPSHOT_CLEANUP_OBSERVATION',
+        aggregateId: observation.id,
+        eventType: 'PROJECT_READ_SNAPSHOT_CLEANUP_OBSERVED',
+        ...(rawInput.correlationId === undefined ? {} : { correlationId: rawInput.correlationId }),
+        ...(rawInput.causationId === undefined ? {} : { causationId: rawInput.causationId }),
+        payloadDigest: observation.observationDigest,
+        occurredAt: observation.observedAt,
+      });
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_OBSERVATION_AUDIT_WRITE);
+      const observationAuditSequence = this.auditSequence(observationAuditEventId);
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_snapshot_cleanup_observations(
+             id, schema_version, grant_id, grant_digest, disposition, observed_at,
+             canonical_json, observation_digest, audit_sequence
+           ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          observation.id,
+          grant.id,
+          grant.grantDigest,
+          observation.disposition,
+          observation.observedAt,
+          serializeJson(decodeJsonValue(observation)),
+          observation.observationDigest,
+          observationAuditSequence,
+        );
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_OBSERVATION_WRITE);
+      this.insertAuditEvent({
+        id: outcomeAuditEventId,
+        aggregateType: 'PROJECT_READ_SNAPSHOT_CLEANUP_OUTCOME',
+        aggregateId: outcome.id,
+        eventType: 'PROJECT_READ_SNAPSHOT_CLEANUP_RESOLVED',
+        ...(rawInput.correlationId === undefined ? {} : { correlationId: rawInput.correlationId }),
+        ...(rawInput.causationId === undefined ? {} : { causationId: rawInput.causationId }),
+        payloadDigest: outcome.outcomeDigest,
+        occurredAt: outcome.resolvedAt,
+      });
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_OUTCOME_AUDIT_WRITE);
+      const outcomeAuditSequence = this.auditSequence(outcomeAuditEventId);
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_snapshot_cleanup_outcomes(
+             id, schema_version, grant_id, grant_digest, cleanup_observation_id,
+             cleanup_observation_digest, disposition, resolved_at, canonical_json,
+             outcome_digest, audit_sequence
+           ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          outcome.id,
+          grant.id,
+          grant.grantDigest,
+          observation.id,
+          observation.observationDigest,
+          outcome.disposition,
+          outcome.resolvedAt,
+          serializeJson(decodeJsonValue(outcome)),
+          outcome.outcomeDigest,
+          outcomeAuditSequence,
+        );
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_OUTCOME_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO project_read_snapshot_cleanup_consumptions(
+             grant_id, grant_digest, outcome_id, outcome_digest, consumed_at,
+             outcome_audit_sequence
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          grant.id,
+          grant.grantDigest,
+          outcome.id,
+          outcome.outcomeDigest,
+          outcome.resolvedAt,
+          outcomeAuditSequence,
+        );
+      this.probe(ProjectReadCleanupTransactionStep.AFTER_CLEANUP_CONSUMPTION_WRITE);
+      const persisted = this.getProjectReadSnapshotCleanupOutcome(grant.id);
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, outcome)) {
+        throw new StoreInvariantError('Project-read cleanup Outcome was not retained exactly');
+      }
+      this.probe(ProjectReadCleanupTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', value: persisted };
+    });
   }
 
   public getAcceptanceCriticalVerificationPlan(
@@ -12820,6 +13723,133 @@ export class SqliteControlStore
     return record;
   }
 
+  private assertProjectReadCleanupGrantEligibility(
+    grant: ProjectReadSnapshotCleanupGrant,
+    snapshot: ProjectReadWorkspaceAuthoritySnapshot,
+  ): void {
+    if (grant.eligibilityKind === 'ORPHANED') {
+      const observation = this.getProjectReadWorkspaceObservation(grant.workspaceObservationId);
+      const collision = this.#database
+        .prepare(
+          `SELECT 1 FROM project_source_read_authorities
+            WHERE id = ? OR snapshot_id = ? OR snapshot_leaf_realpath = ?
+            LIMIT 1`,
+        )
+        .get(grant.projectReadAuthorityId, grant.snapshotId, grant.snapshotLeafRealpath);
+      if (observation === undefined || collision !== undefined) {
+        throw new TypeError(
+          'Project-read orphan cleanup Grant lacks a current absent authority identity',
+        );
+      }
+      assertOrphanedProjectReadSnapshotCleanupGrantEligibility(grant, snapshot, observation);
+      return;
+    }
+    const record = this.getProjectSourceReadAuthority(grant.projectReadAuthorityId);
+    const attempt = this.getAttempt(grant.attemptId);
+    const execution = this.getExternalExecution(grant.externalExecutionId);
+    if (
+      record === undefined ||
+      attempt === undefined ||
+      attempt.status === AttemptStatus.RUNNING ||
+      execution?.terminalAt === undefined ||
+      (execution.state !== ExternalExecutionState.COMPLETED &&
+        execution.state !== ExternalExecutionState.INTERRUPTED &&
+        execution.state !== ExternalExecutionState.FAILED &&
+        execution.state !== ExternalExecutionState.ABANDONED)
+    ) {
+      throw new TypeError('Project-read terminal cleanup Grant lacks retained terminal authority');
+    }
+    assertTerminalProjectReadSnapshotCleanupGrantEligibility(
+      grant,
+      snapshot,
+      record,
+      Object.freeze({ id: attempt.id, status: attempt.status, endedAt: attempt.endedAt }),
+      Object.freeze({
+        id: execution.id,
+        attemptId: execution.attemptId,
+        state: execution.state,
+        terminalAt: execution.terminalAt,
+        recordDigest: execution.recordDigest,
+      }),
+    );
+  }
+
+  private getProjectReadSnapshotCleanupObservationInsideTransaction(
+    rawId: string,
+  ): ProjectReadSnapshotCleanupObservation | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM project_read_snapshot_cleanup_observations WHERE id = ?')
+      .get(rawId);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = z
+      .object({
+        schema_version: z.literal(1),
+        grant_id: z.string(),
+        grant_digest: z.string(),
+        disposition: z.string(),
+        observed_at: z.string(),
+        canonical_json: z.string(),
+        observation_digest: z.string(),
+        audit_sequence: z.number().int().positive(),
+      })
+      .parse(row);
+    const observation = decodeProjectReadSnapshotCleanupObservation(
+      parseJson(parsed.canonical_json, 'project-read cleanup observation'),
+    );
+    if (
+      observation.id !== rawId ||
+      observation.grantId !== parsed.grant_id ||
+      observation.grantDigest !== parsed.grant_digest ||
+      observation.disposition !== parsed.disposition ||
+      observation.observedAt !== parsed.observed_at ||
+      observation.observationDigest !== parsed.observation_digest
+    ) {
+      throw new StoreInvariantError(`Project-read cleanup observation ${rawId} changed columns`);
+    }
+    this.assertProjectReadCleanupAudit(
+      parsed.audit_sequence,
+      'PROJECT_READ_SNAPSHOT_CLEANUP_OBSERVATION',
+      observation.id,
+      'PROJECT_READ_SNAPSHOT_CLEANUP_OBSERVED',
+      observation.observationDigest,
+      observation.observedAt,
+    );
+    return observation;
+  }
+
+  private assertProjectReadCleanupAudit(
+    sequence: number,
+    aggregateType: string,
+    aggregateId: string,
+    eventType: string,
+    payloadDigest: Sha256Digest,
+    occurredAt: IsoTimestamp,
+  ): void {
+    const row = this.#database
+      .prepare(
+        `SELECT id, sequence, aggregate_type, aggregate_id, event_type, actor_type,
+                command_id, before_version, after_version, correlation_id, causation_id,
+                payload_digest, occurred_at
+           FROM audit_events WHERE sequence = ?`,
+      )
+      .get(sequence);
+    const audit = row === undefined ? undefined : decodeAuditEvent(row);
+    if (
+      audit?.aggregateType !== aggregateType ||
+      audit.aggregateId !== aggregateId ||
+      audit.eventType !== eventType ||
+      audit.actorType !== 'RUNTIME' ||
+      audit.payloadDigest !== payloadDigest ||
+      audit.occurredAt !== occurredAt
+    ) {
+      throw new StoreInvariantError(
+        `Project-read cleanup authority ${aggregateType}/${aggregateId} lost its exact audit`,
+      );
+    }
+  }
+
   private assertAuditEventsReadable(eventIdentifiers: readonly AuditEventId[]): void {
     const select = this.#database.prepare(
       `SELECT id, sequence, aggregate_type, aggregate_id, event_type, actor_type,
@@ -15716,6 +16746,97 @@ export class SqliteControlStore
     }
   }
 
+  private assertRetainedProjectReadCleanupAuthorityClosure(): void {
+    if (!this.hasTable('project_read_workspace_authority_snapshots')) {
+      return;
+    }
+    const snapshotIds = z.array(z.object({ id: z.string(), issued_at: z.string() })).parse(
+      this.#database
+        .prepare(
+          `SELECT id, issued_at FROM project_read_workspace_authority_snapshots
+              ORDER BY authority_sequence`,
+        )
+        .all(),
+    );
+    let previousSnapshotTime: string | undefined;
+    for (const row of snapshotIds) {
+      if (previousSnapshotTime !== undefined && row.issued_at < previousSnapshotTime) {
+        throw new StoreInvariantError('Project-read authority snapshot time moved backward');
+      }
+      if (
+        this.getProjectReadWorkspaceAuthoritySnapshot(
+          projectReadWorkspaceAuthoritySnapshotId(row.id),
+        ) === undefined
+      ) {
+        throw new StoreInvariantError(`Project-read authority snapshot ${row.id} disappeared`);
+      }
+      previousSnapshotTime = row.issued_at;
+    }
+    const observationIds = z
+      .array(z.object({ id: z.string() }))
+      .parse(
+        this.#database
+          .prepare('SELECT id FROM project_read_workspace_observations ORDER BY id')
+          .all(),
+      );
+    for (const row of observationIds) {
+      if (
+        this.getProjectReadWorkspaceObservation(projectReadWorkspaceObservationId(row.id)) ===
+        undefined
+      ) {
+        throw new StoreInvariantError(`Project-read workspace observation ${row.id} disappeared`);
+      }
+    }
+    const grantIds = z
+      .array(z.object({ id: z.string() }))
+      .parse(
+        this.#database
+          .prepare('SELECT id FROM project_read_snapshot_cleanup_grants ORDER BY id')
+          .all(),
+      );
+    for (const row of grantIds) {
+      if (
+        this.getProjectReadSnapshotCleanupGrant(projectReadSnapshotCleanupGrantId(row.id)) ===
+        undefined
+      ) {
+        throw new StoreInvariantError(`Project-read cleanup Grant ${row.id} disappeared`);
+      }
+    }
+    const outcomeGrantIds = z
+      .array(z.object({ grant_id: z.string() }))
+      .parse(
+        this.#database
+          .prepare('SELECT grant_id FROM project_read_snapshot_cleanup_outcomes ORDER BY grant_id')
+          .all(),
+      );
+    for (const row of outcomeGrantIds) {
+      if (
+        this.getProjectReadSnapshotCleanupOutcome(
+          projectReadSnapshotCleanupGrantId(row.grant_id),
+        ) === undefined
+      ) {
+        throw new StoreInvariantError(
+          `Project-read cleanup Outcome for ${row.grant_id} disappeared`,
+        );
+      }
+    }
+    const incomplete = this.#database
+      .prepare(
+        `SELECT observation.id
+           FROM project_read_snapshot_cleanup_observations AS observation
+           LEFT JOIN project_read_snapshot_cleanup_outcomes AS outcome
+             ON outcome.cleanup_observation_id = observation.id
+           LEFT JOIN project_read_snapshot_cleanup_consumptions AS consumption
+             ON consumption.grant_id = observation.grant_id
+          WHERE outcome.id IS NULL OR consumption.grant_id IS NULL
+          LIMIT 1`,
+      )
+      .get();
+    if (incomplete !== undefined) {
+      throw new StoreInvariantError('Project-read cleanup retained a partial resolution');
+    }
+  }
+
   private assertRetainedProtectedVerificationAuthorityClosure(): void {
     if (!this.hasTable('acceptance_critical_verification_plans')) {
       return;
@@ -17044,6 +18165,7 @@ export class SqliteControlStore
       this.assertRetainedM1RetryBoundaryClosure();
       this.assertRetainedTerminalAttemptAuthorityClosure();
       this.assertRetainedCurrentWorkflowCommandClosure();
+      this.assertRetainedProjectReadCleanupAuthorityClosure();
       this.assertRetainedIntakeAuthorityClosure();
       const result = operation();
       this.assertRetainedWorkflowAttemptLifecycleClosure();
@@ -17051,6 +18173,7 @@ export class SqliteControlStore
       this.assertRetainedM1RetryBoundaryClosure();
       this.assertRetainedTerminalAttemptAuthorityClosure();
       this.assertRetainedCurrentWorkflowCommandClosure();
+      this.assertRetainedProjectReadCleanupAuthorityClosure();
       this.assertRetainedIntakeAuthorityClosure();
       this.#authorityIsolationLease?.assertCurrent();
       this.#database.exec('COMMIT');
@@ -17156,7 +18279,8 @@ export class SqliteControlStore
       | CandidateEvidenceTransactionStep
       | AcceptanceTransactionStep
       | RecoveryTransactionStep
-      | IntakeTransactionStep,
+      | IntakeTransactionStep
+      | ProjectReadCleanupTransactionStep,
   ): void {
     this.#transactionProbe?.(step);
   }

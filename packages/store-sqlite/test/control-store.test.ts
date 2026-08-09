@@ -683,6 +683,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0028_rejected_clarification_reservation.sql',
       '0029_intent_projection_schema_v2.sql',
       '0030_project_read_authority.sql',
+      '0031_project_read_cleanup_authority.sql',
     ],
   );
   store.close();
@@ -727,6 +728,12 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
     'audit_events',
     'worker_dispatch_claims',
     'worker_event_receipts',
+    'project_read_workspace_authority_snapshots',
+    'project_read_workspace_observations',
+    'project_read_snapshot_cleanup_grants',
+    'project_read_snapshot_cleanup_observations',
+    'project_read_snapshot_cleanup_outcomes',
+    'project_read_snapshot_cleanup_consumptions',
   ]) {
     assert.equal(tableNames.has(requiredTable), true, `${requiredTable} must exist`);
   }
