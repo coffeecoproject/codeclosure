@@ -7,5 +7,9 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../codex-app-server-client" }, { "path": "../runtime" }]
+  "references": [
+    { "path": "../codex-app-server-client" },
+    { "path": "../domain" },
+    { "path": "../runtime" }
+  ]
 }

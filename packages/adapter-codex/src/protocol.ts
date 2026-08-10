@@ -14,6 +14,10 @@ import {
   type CodexItemRejectionCode,
   type CodexWorkerDirective,
 } from './contracts.js';
+import {
+  evaluateCodexWorkerActivityV1,
+  type CodexWorkerActivityPolicyV1,
+} from './m251-activity-policy.js';
 
 export interface EffectiveThread {
   readonly approvalPolicy: string;
@@ -64,6 +68,7 @@ export type CodexThreadItemLocation = 'COMPLETED' | 'STARTED' | 'TERMINAL';
 
 export interface CodexThreadItemPolicy {
   readonly expectedUserMessageDigest: string;
+  readonly workerActivityPolicy?: CodexWorkerActivityPolicyV1;
 }
 
 export interface CompletedAgentMessageObservation {
@@ -413,6 +418,15 @@ export function evaluateCodexThreadItem(
   }
   try {
     validateAllowedThreadItem(item, location, policy);
+    if (policy.workerActivityPolicy !== undefined) {
+      const activity = evaluateCodexWorkerActivityV1(item, policy.workerActivityPolicy);
+      if (activity.disposition === 'REJECTED_DISCARDED') {
+        return Object.freeze({
+          disposition: 'UNSUPPORTED_BACKEND_ACTIVITY',
+          rejectionCode: activity.rejectionCode,
+        });
+      }
+    }
     return Object.freeze({ disposition: 'ALLOWED' });
   } catch (error) {
     const rejectionCode =
@@ -440,6 +454,7 @@ export function decodeEffectiveThread(value: JsonValue): EffectiveThread {
   const result = object(value, 'Thread response');
   const thread = object(result['thread'], 'Thread response.thread');
   const sandbox = object(result['sandbox'], 'Thread response.sandbox');
+  const readOnlySandbox = sandbox['type'] === 'readOnly';
   return Object.freeze({
     approvalPolicy: boundedString(result['approvalPolicy'], 'Thread approval policy'),
     approvalsReviewer: boundedString(result['approvalsReviewer'], 'Thread approvals reviewer'),
@@ -457,17 +472,21 @@ export function decodeEffectiveThread(value: JsonValue): EffectiveThread {
         : boundedString(result['reasoningEffort'], 'Thread reasoning effort'),
     sandbox: Object.freeze({
       excludeSlashTmp:
-        typeof sandbox['excludeSlashTmp'] === 'boolean'
-          ? sandbox['excludeSlashTmp']
-          : (() => {
-              throw new TypeError('Thread slash-tmp exclusion policy is invalid');
-            })(),
+        readOnlySandbox && sandbox['excludeSlashTmp'] === undefined
+          ? false
+          : typeof sandbox['excludeSlashTmp'] === 'boolean'
+            ? sandbox['excludeSlashTmp']
+            : (() => {
+                throw new TypeError('Thread slash-tmp exclusion policy is invalid');
+              })(),
       excludeTmpdirEnvVar:
-        typeof sandbox['excludeTmpdirEnvVar'] === 'boolean'
-          ? sandbox['excludeTmpdirEnvVar']
-          : (() => {
-              throw new TypeError('Thread TMPDIR exclusion policy is invalid');
-            })(),
+        readOnlySandbox && sandbox['excludeTmpdirEnvVar'] === undefined
+          ? false
+          : typeof sandbox['excludeTmpdirEnvVar'] === 'boolean'
+            ? sandbox['excludeTmpdirEnvVar']
+            : (() => {
+                throw new TypeError('Thread TMPDIR exclusion policy is invalid');
+              })(),
       networkAccess:
         typeof sandbox['networkAccess'] === 'boolean'
           ? sandbox['networkAccess']
@@ -476,9 +495,10 @@ export function decodeEffectiveThread(value: JsonValue): EffectiveThread {
             })(),
       type: boundedString(sandbox['type'], 'Thread sandbox type'),
       writableRoots: Object.freeze(
-        array(sandbox['writableRoots'], 'Thread writable roots').map((entry) =>
-          boundedString(entry, 'Thread writable root'),
-        ),
+        (readOnlySandbox && sandbox['writableRoots'] === undefined
+          ? []
+          : array(sandbox['writableRoots'], 'Thread writable roots')
+        ).map((entry) => boundedString(entry, 'Thread writable root')),
       ),
     }),
     serviceTier: stringOrNull(result['serviceTier'], 'Thread service tier'),

@@ -77,13 +77,12 @@ importers:
       '@codeclosure/codex-app-server-client':
         specifier: workspace:*
         version: link:../codex-app-server-client
-      '@codeclosure/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-    devDependencies:
       '@codeclosure/domain':
         specifier: workspace:*
         version: link:../domain
+      '@codeclosure/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/adapter-codex-intake:
     dependencies:

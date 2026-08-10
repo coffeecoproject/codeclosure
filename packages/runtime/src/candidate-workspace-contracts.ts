@@ -220,6 +220,18 @@ function sortedUnique<Value extends string>(
   return Object.freeze(sorted);
 }
 
+export function decodeCandidateWorkspaceAllowedPaths(values: readonly string[]): readonly string[] {
+  const allowedPaths = sortedUnique(values, 'allowedPaths', portableRelativePath);
+  if (allowedPaths.length === 0) {
+    throw new TypeError('allowedPaths must not be empty');
+  }
+  return allowedPaths;
+}
+
+export function decodeCandidateWorkspaceRelativePath(value: unknown, field: string): string {
+  return portableRelativePath(value, field);
+}
+
 function isSameOrWithin(candidate: string, parent: string): boolean {
   const path = relative(parent, candidate);
   return path === '' || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path));

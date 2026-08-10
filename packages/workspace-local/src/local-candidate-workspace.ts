@@ -21,10 +21,14 @@ import {
   CandidateWorkspaceAccessMode,
   CandidateWorkspaceLeaseLifecyclePolicy,
   CandidateWorkspaceRetention,
+  CandidateChangeKind,
   candidateWorkspaceAllowedPathProjection,
   candidateWorkspaceCleanupGrantProjection,
+  createCandidateChangeSetV2,
+  decodeCandidateChangeEntries,
   candidateWorkspaceLeaseProjection,
   decodeCandidateFreezeObservation,
+  decodeCandidateFreezeObservationV2,
   decodeCandidatePreparation,
   decodeCandidateRepairPreparation,
   decodeCandidateWorkspaceAuthoritySnapshot,
@@ -34,6 +38,7 @@ import {
   decodeFrozenCandidateIntegrityObservation,
   digestCandidateWorkspaceValue,
   validateCandidateFreezeRequest,
+  validateCandidateFreezeRequestV2,
   validateCandidatePreparationRequest,
   validateCandidateRepairPreparationRequest,
   validateCandidateWorkspaceLeaseRequest,
@@ -43,7 +48,8 @@ import {
   type CandidateWorkspaceAuthoritySnapshot,
   type CandidateWorkspaceCleanupGrant,
   type CandidateWorkspaceExpectedGeneration,
-  type CandidateFreezeRequest,
+  type CandidateChangeEntry,
+  type CandidateFreezeRequestValue,
   type CandidatePreparationRequest,
   type CandidateRepairPreparationRequest,
   type FrozenCandidateIntegrityRequest,
@@ -92,6 +98,11 @@ export interface CandidateWorkspaceFaultHooks {
   readonly afterFirstFreezeScan?: (input: {
     readonly candidateRoot: string;
     readonly firstDigest: string;
+  }) => void;
+  readonly beforeFreezeV2Observation?: (input: {
+    readonly candidateRoot: string;
+    readonly firstDigest: string;
+    readonly secondDigest: string;
   }) => void;
   readonly beforeRepairParentRecheck?: (input: { readonly parentRoot: string }) => void;
   readonly beforeSourceRecheck?: (input: { readonly sourceRoot: string }) => void;
@@ -231,6 +242,57 @@ function manifestsHaveSameEntries(
     left.totalBytes === right.totalBytes &&
     JSON.stringify(left.entries) === JSON.stringify(right.entries)
   );
+}
+
+function candidateManifestChanges(
+  base: CandidateTreeManifest,
+  current: CandidateTreeManifest,
+): readonly CandidateChangeEntry[] {
+  const baseEntries = new Map(base.entries.map((entry) => [entry.path, entry] as const));
+  const currentEntries = new Map(current.entries.map((entry) => [entry.path, entry] as const));
+  const paths = [...new Set([...baseEntries.keys(), ...currentEntries.keys()])].sort();
+  const changes = paths.flatMap((path): CandidateChangeEntry[] => {
+    const beforeEntry = baseEntries.get(path);
+    const afterEntry = currentEntries.get(path);
+    if (
+      beforeEntry !== undefined &&
+      beforeEntry.contentDigest === afterEntry?.contentDigest &&
+      beforeEntry.mode === afterEntry.mode &&
+      beforeEntry.size === afterEntry.size
+    ) {
+      return [];
+    }
+    const before =
+      beforeEntry === undefined
+        ? null
+        : Object.freeze({
+            byteLength: beforeEntry.size,
+            contentDigest: decodeCandidateWorkspaceDigest(beforeEntry.contentDigest),
+            mode: beforeEntry.mode,
+          });
+    const after =
+      afterEntry === undefined
+        ? null
+        : Object.freeze({
+            byteLength: afterEntry.size,
+            contentDigest: decodeCandidateWorkspaceDigest(afterEntry.contentDigest),
+            mode: afterEntry.mode,
+          });
+    return [
+      Object.freeze({
+        after,
+        before,
+        kind:
+          before === null
+            ? CandidateChangeKind.ADDED
+            : after === null
+              ? CandidateChangeKind.DELETED
+              : CandidateChangeKind.MODIFIED,
+        path,
+      }),
+    ];
+  });
+  return decodeCandidateChangeEntries(changes);
 }
 
 function sourceSnapshotsEqual(
@@ -856,8 +918,11 @@ class LocalCandidateWorkspaceAdapter implements LocalCandidateWorkspace {
     });
   }
 
-  public observeFreeze(rawRequest: CandidateFreezeRequest): unknown {
-    const request = validateCandidateFreezeRequest(rawRequest);
+  public observeFreeze(rawRequest: CandidateFreezeRequestValue): unknown {
+    const request =
+      rawRequest.schemaVersion === 2
+        ? validateCandidateFreezeRequestV2(rawRequest)
+        : validateCandidateFreezeRequest(rawRequest);
     const record = this.#readRecord(request.generation.id);
     if (
       request.generation.state !== 'FREEZING' ||
@@ -894,24 +959,57 @@ class LocalCandidateWorkspaceAdapter implements LocalCandidateWorkspace {
       throw error;
     }
     const stable = first.digest === second.digest;
-    this.#writeRecord(
-      updatedRecord(revoked, {
-        activeLeases: Object.freeze([]),
-        frozenManifest: stable ? second : null,
-        phase: stable ? 'FROZEN' : 'UNSAFE',
-      }),
-    );
-    return decodeCandidateFreezeObservation({
-      changeSetDigest: digestCandidateWorkspaceValue({
-        baseDigest: record.baseDigest,
-        frozenDigest: second.digest,
-        profile: 'candidate-change-set-v1',
-      }),
-      firstSourceDigest: first.digest,
-      generationId: request.generation.id,
-      schemaVersion: 1,
-      secondSourceDigest: second.digest,
+    const finalized = updatedRecord(revoked, {
+      activeLeases: Object.freeze([]),
+      frozenManifest: stable ? second : null,
+      phase: stable ? 'FROZEN' : 'UNSAFE',
     });
+    this.#writeRecord(finalized);
+    if (request.schemaVersion === 1) {
+      return decodeCandidateFreezeObservation({
+        changeSetDigest: digestCandidateWorkspaceValue({
+          baseDigest: record.baseDigest,
+          frozenDigest: second.digest,
+          profile: 'candidate-change-set-v1',
+        }),
+        firstSourceDigest: first.digest,
+        generationId: request.generation.id,
+        schemaVersion: 1,
+        secondSourceDigest: second.digest,
+      });
+    }
+    try {
+      this.#hooks.beforeFreezeV2Observation?.({
+        candidateRoot: record.candidateRootIdentity,
+        firstDigest: first.digest,
+        secondDigest: second.digest,
+      });
+      const changeSet = createCandidateChangeSetV2({
+        baseSourceDigest: decodeCandidateWorkspaceDigest(record.baseManifest.digest),
+        changes: candidateManifestChanges(record.baseManifest, second),
+        frozenSourceDigest: decodeCandidateWorkspaceDigest(second.digest),
+      });
+      return decodeCandidateFreezeObservationV2({
+        allowedPathPolicyDigest: request.allowedPathPolicyDigest,
+        baseSourceDigest: changeSet.baseSourceDigest,
+        changes: changeSet.changes,
+        changeSetDigest: changeSet.changeSetDigest,
+        changeSetProfile: changeSet.profile,
+        firstSourceDigest: first.digest,
+        generationId: request.generation.id,
+        schemaVersion: 2,
+        secondSourceDigest: second.digest,
+      });
+    } catch (error) {
+      this.#writeRecord(
+        updatedRecord(finalized, {
+          activeLeases: Object.freeze([]),
+          frozenManifest: null,
+          phase: 'UNSAFE',
+        }),
+      );
+      throw error;
+    }
   }
 
   public observeFrozen(rawRequest: FrozenCandidateIntegrityRequest): unknown {

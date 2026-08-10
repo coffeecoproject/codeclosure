@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
@@ -78,6 +78,7 @@ void test('the current manifest, lockfile, and actual source dependency graph ar
   assert.deepEqual(audit.violations, []);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/adapter-codex'), [
     '@codeclosure/codex-app-server-client',
+    '@codeclosure/domain',
     '@codeclosure/runtime',
   ]);
   assert.deepEqual(audit.productionGraph.get('@codeclosure/codex-app-server-client'), []);
@@ -138,7 +139,7 @@ void test('the lower App Server client reverse fixture rejects every CodeClosure
   }
 });
 
-void test('the Codex adapter reverse fixture cannot import authority owners or protocol subpaths', () => {
+void test('the historical Codex adapter surfaces cannot import authority owners or protocol subpaths', () => {
   const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex');
   const sourcePaths = [
     resolve(packageRoot, 'src/adapter.ts'),
@@ -170,6 +171,51 @@ void test('the Codex adapter reverse fixture cannot import authority owners or p
       false,
     );
   }
+});
+
+void test('the M2.5.1 Codex contract owns one public Domain authority edge', () => {
+  const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex');
+  const sourceRoot = resolve(packageRoot, 'src');
+  const sourcePath = resolve(sourceRoot, 'm251-contracts.ts');
+  const available = new Set([
+    '@codeclosure/adapter-codex',
+    '@codeclosure/codex-app-server-client',
+    '@codeclosure/domain',
+    '@codeclosure/runtime',
+  ]);
+  assert.equal(
+    importViolation('@codeclosure/domain', sourcePath, packageRoot, available),
+    undefined,
+  );
+  for (const forbidden of [
+    '@codeclosure/store-sqlite',
+    '@codeclosure/testing',
+    '@codeclosure/cli',
+  ]) {
+    assert.notEqual(importViolation(forbidden, sourcePath, packageRoot, available), undefined);
+  }
+  const specifiers = collectModuleSpecifiers(readFileSync(sourcePath, 'utf8'), sourcePath);
+  assert.equal(specifiers.includes('@codeclosure/domain'), true);
+  assert.equal(
+    specifiers.some(
+      (specifier) =>
+        specifier.startsWith('@codeclosure/domain/') ||
+        specifier.startsWith('@codeclosure/runtime/') ||
+        specifier.startsWith('@codeclosure/codex-app-server-client/'),
+    ),
+    false,
+  );
+  const domainImportOwners = readdirSync(sourceRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+    .filter((entry) => {
+      const entryPath = resolve(sourceRoot, entry.name);
+      return collectModuleSpecifiers(readFileSync(entryPath, 'utf8'), entryPath).includes(
+        '@codeclosure/domain',
+      );
+    })
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(domainImportOwners, ['m251-contracts.ts']);
 });
 
 void test('the Codex Intake adapter has one closed package edge and production capability set', () => {

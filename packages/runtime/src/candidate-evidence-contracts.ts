@@ -39,6 +39,18 @@ import {
   type WorkflowVersion,
 } from '@codeclosure/domain';
 
+import {
+  MAXIMUM_CANDIDATE_CHANGE_ENTRIES_V2,
+  decodeCandidateChangeEntries,
+  decodeCandidateChangeSetV2,
+  type CandidateChangeEntry,
+} from './candidate-change-set-contracts.js';
+import {
+  candidateWorkspaceAllowedPathProjection,
+  decodeCandidateWorkspaceAllowedPaths,
+  digestCandidateWorkspaceValue,
+} from './candidate-workspace-contracts.js';
+
 export interface CandidatePreparationRequest {
   readonly schemaVersion: 1;
   readonly goalId: GoalId;
@@ -86,12 +98,32 @@ export interface CandidateFreezeRequest {
   readonly policyBundleDigest: Sha256Digest;
 }
 
+export interface CandidateFreezeRequestV2 extends Omit<CandidateFreezeRequest, 'schemaVersion'> {
+  readonly schemaVersion: 2;
+  readonly allowedPathPolicyDigest: Sha256Digest;
+  readonly allowedPaths: readonly string[];
+}
+
+export type CandidateFreezeRequestValue = CandidateFreezeRequest | CandidateFreezeRequestV2;
+
 export interface CandidateFreezeObservation {
   readonly schemaVersion: 1;
   readonly generationId: CandidateGenerationId;
   readonly firstSourceDigest: Sha256Digest;
   readonly secondSourceDigest: Sha256Digest;
   readonly changeSetDigest: Sha256Digest;
+}
+
+export interface CandidateFreezeObservationV2 {
+  readonly schemaVersion: 2;
+  readonly generationId: CandidateGenerationId;
+  readonly allowedPathPolicyDigest: Sha256Digest;
+  readonly baseSourceDigest: Sha256Digest;
+  readonly changeSetDigest: Sha256Digest;
+  readonly changeSetProfile: 'candidate-change-set-v2';
+  readonly changes: readonly CandidateChangeEntry[];
+  readonly firstSourceDigest: Sha256Digest;
+  readonly secondSourceDigest: Sha256Digest;
 }
 
 export interface FrozenCandidateIntegrityRequest {
@@ -174,7 +206,7 @@ export type CandidateSourceFailureCode =
 export interface CandidateSourcePort {
   prepare(request: CandidatePreparationRequest): unknown;
   prepareRepair(request: CandidateRepairPreparationRequest): unknown;
-  observeFreeze(request: CandidateFreezeRequest): unknown;
+  observeFreeze(request: CandidateFreezeRequestValue): unknown;
   observeFrozen(request: FrozenCandidateIntegrityRequest): unknown;
 }
 
@@ -256,6 +288,47 @@ export function decodeCandidateFreezeObservation(value: unknown): CandidateFreez
     firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
     secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
     changeSetDigest: sha256Digest(parsed.changeSetDigest),
+  });
+}
+
+const freezeObservationV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    generationId: z.string(),
+    allowedPathPolicyDigest: z.string(),
+    baseSourceDigest: z.string(),
+    changeSetDigest: z.string(),
+    changeSetProfile: z.literal('candidate-change-set-v2'),
+    changes: z.array(z.unknown()).max(MAXIMUM_CANDIDATE_CHANGE_ENTRIES_V2),
+    firstSourceDigest: z.string(),
+    secondSourceDigest: z.string(),
+  })
+  .strict();
+
+export function decodeCandidateFreezeObservationV2(value: unknown): CandidateFreezeObservationV2 {
+  const parsed = freezeObservationV2Schema.parse(value);
+  const baseSourceDigest = sha256Digest(parsed.baseSourceDigest);
+  const firstSourceDigest = sha256Digest(parsed.firstSourceDigest);
+  const secondSourceDigest = sha256Digest(parsed.secondSourceDigest);
+  const changes = decodeCandidateChangeEntries(parsed.changes);
+  const changeSet = decodeCandidateChangeSetV2({
+    baseSourceDigest,
+    changes,
+    changeSetDigest: parsed.changeSetDigest,
+    frozenSourceDigest: secondSourceDigest,
+    profile: parsed.changeSetProfile,
+    schemaVersion: parsed.schemaVersion,
+  });
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    generationId: candidateGenerationId(parsed.generationId),
+    allowedPathPolicyDigest: sha256Digest(parsed.allowedPathPolicyDigest),
+    baseSourceDigest,
+    changeSetDigest: changeSet.changeSetDigest,
+    changeSetProfile: changeSet.profile,
+    changes: changeSet.changes,
+    firstSourceDigest,
+    secondSourceDigest,
   });
 }
 
@@ -472,6 +545,33 @@ export function validateCandidateFreezeRequest(
     generation,
     policyBundleId: policyBundleId(request.policyBundleId),
     policyBundleDigest: sha256Digest(request.policyBundleDigest),
+  });
+}
+
+export function validateCandidateFreezeRequestV2(
+  request: CandidateFreezeRequestV2,
+): CandidateFreezeRequestV2 {
+  const generation = decodeCandidateGeneration(request.generation);
+  const allowedPaths = decodeCandidateWorkspaceAllowedPaths(request.allowedPaths);
+  const allowedPathPolicyDigest = sha256Digest(request.allowedPathPolicyDigest);
+  if (
+    allowedPathPolicyDigest !==
+    digestCandidateWorkspaceValue(candidateWorkspaceAllowedPathProjection(allowedPaths))
+  ) {
+    throw new TypeError('Candidate freeze allowed-path policy digest is inconsistent');
+  }
+  return Object.freeze({
+    schemaVersion: z.literal(2).parse(request.schemaVersion),
+    goalId: goalId(request.goalId),
+    goalRevision: goalRevision(request.goalRevision),
+    workflowId: workflowId(request.workflowId),
+    workflowVersion: workflowVersion(request.workflowVersion),
+    attemptId: attemptId(request.attemptId),
+    generation,
+    policyBundleId: policyBundleId(request.policyBundleId),
+    policyBundleDigest: sha256Digest(request.policyBundleDigest),
+    allowedPathPolicyDigest,
+    allowedPaths,
   });
 }
 

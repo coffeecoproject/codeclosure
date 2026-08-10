@@ -774,7 +774,13 @@ function externalProfileAuthority(
                 compactionPolicy: ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
                 fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
                 allowedRoots: Object.freeze([`/fixture/${namespace}/${phase.toLowerCase()}`]),
-                forbiddenRoots: Object.freeze(['/fixture/authority', '/source/project']),
+                forbiddenRoots: Object.freeze(
+                  [
+                    '/fixture/authority',
+                    externalExecutionBase.controlledStateRootIdentity,
+                    '/source/project',
+                  ].toSorted(),
+                ),
               });
             }),
           );

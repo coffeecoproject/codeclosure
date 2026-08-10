@@ -72,11 +72,24 @@ clear Intent, and ambiguous Intent compatibility paths with metadata-only
 receipts, versioned strict structured-output and exact-source instruction
 contracts, and Runtime-owned exact retained-value matching. Slice 3 may begin,
 and is now in progress through its project-read/Cleanup foundation, nested
-external-execution Profile v3, and additive Intent/Record v2 authority with
-strict SQLite authorization, persistence, and reopen. The legacy Driver still
-rejects Profile v3; directive v3, Adapter observation v2, activity-policy
-enforcement, source currency, real phase composition, and milestone assessment
-have not started. A real pinned-version
+external-execution Profile v3, additive Intent/Record v2 authority with strict
+SQLite authorization/persistence/reopen, and the Adapter-boundary
+`CodexWorkerDirectiveV3`, `CodexAdapterObservationV2`, and versioned phase
+activity-policy foundation. Candidate-free and Candidate source members bind
+strictly, the new policy rejects unclassified or out-of-bound activity and
+discards its result, and the historical directive v2/observation v1 path keeps
+its existing meaning. The Adapter foundation also derives one exact supported
+isolation digest from the phase contract, binds the exact `0.146.1` disabled-
+integration and effective-feature projections, treats Profile roots as stable
+envelopes, strictly decodes and digest-validates the complete retained
+ProjectRead authority record, cross-binds exact ProjectRead/Candidate roots,
+and uses the phase/source forbidden-root union. Fixture execution proves both
+candidate-free `readOnly` proposal handling and Candidate-bound
+`workspaceWrite` completion handling, including result discard for forbidden
+file changes.
+Fixture isolation selection is not effective live containment proof. The legacy
+Driver still rejects Profile v3; Runtime source-currency enforcement, real phase
+dispatch/composition, and milestone assessment have not started. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
@@ -110,6 +123,13 @@ Codex only for `IMPLEMENT` and delegates the candidate-free phases to
 `FakeWorker`. Fake Worker/Candidate/Verification components MUST remain
 explicit test infrastructure, MUST NOT be a production fallback, and Candidate
 authority MUST still begin only at the governed `PLAN -> IMPLEMENT` transition.
+A best-effort Codex `unknown` command action is not permanent proof of a
+forbidden IMPLEMENT effect and MUST NOT be admitted merely because its cwd is
+the Candidate. Accepted ADR 0044 requires additive schema-version-2 stable
+source-freeze changed-path proof, owned by Candidate Manager and independently
+checked by Runtime/Store against exact Goal allowed paths, before the formal
+IMPLEMENT path may admit it. Historical freeze schema version 1 keeps its
+M1/M2 meaning.
 A Plan/source mismatch MUST create no Candidate, MUST retain exact
 `PLAN_SOURCE_NOT_CURRENT` through Workflow integrity authority, MUST project the
 Goal to non-resumable `BLOCKED / INSPECT_BLOCKER`, and MUST NOT trigger

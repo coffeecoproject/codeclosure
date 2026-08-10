@@ -485,10 +485,28 @@ phase-dispatch contract with canonical projection and strict SQLite
 install/reopen plus additive v2 Intent/Record authority with strict SQLite
 authorization, persistence, and reopen. The v2 source union binds one exact
 project-read snapshot or Candidate lease without widening historical v1. The
+Adapter-boundary foundation now adds strict directive v3 and observation v2,
+phase-specific result schemas, derived versioned isolation-contract binding,
+stable Profile root envelopes with exact ProjectRead/Candidate cross-binding,
+complete decoded/digest-validated ProjectRead authority input with receipt-only
+ID/digest/cwd reduction, an exact `0.146.1` disabled-integration and effective-
+feature projection, and one versioned
+Adapter-local activity policy that discards unclassified or out-of-bound
+activity without changing historical directive v2/observation v1. Fixture
+execution selects candidate-free `readOnly` and Candidate-bound
+`workspaceWrite`, emits only the phase-appropriate proposal/completion result,
+and discards forbidden file-change results; effective black-box live
+containment is not yet proven. Accepted
+[ADR 0044](adr/0044-source-freeze-owned-candidate-change-containment.md)
+assigns that pending proof to an additive Candidate Manager-owned stable
+source-freeze change set and keeps ordinary IMPLEMENT commands fail-closed
+until the complete version-2 freeze path is installed. Its canonical contract
+and local manifest-difference derivation are implemented; Runtime/Store
+relationship enforcement and freeze-Evidence v2 remain pending. The
 legacy Driver rejects v3 during installed-Profile preflight before Start
-mutation, Adapter, or FakeWorker fallback; v3 directive, v2 Adapter observation,
-activity-policy enforcement, real phase composition, and milestone assessment
-have not started. The
+mutation, Adapter, or FakeWorker fallback; Runtime source-currency enforcement,
+real phase composition, mandatory live proof, and milestone assessment have
+not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

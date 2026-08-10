@@ -3,6 +3,7 @@ export * from './acceptance-policy.js';
 export * from './application.js';
 export * from './canonical-json.js';
 export * from './candidate-evidence-contracts.js';
+export * from './candidate-change-set-contracts.js';
 export * from './candidate-workspace-contracts.js';
 export * from './candidate-evidence-policy.js';
 export * from './contracts.js';

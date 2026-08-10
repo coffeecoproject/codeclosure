@@ -272,11 +272,14 @@ function externalProfileAuthority(
           continuityPolicy: ExternalContinuityPolicy.SAME_SESSION_BOUNDED_OPERATION,
           compactionPolicy: ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
           fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
-          allowedRoots: Object.freeze([`/project-read-workspaces/${namespace}/snapshot`]),
-          forbiddenRoots: Object.freeze([
-            `/authority/${namespace}`,
-            `/fixture/project-read-${namespace}`,
-          ]),
+          allowedRoots: Object.freeze([`/project-read-workspaces/${namespace}`]),
+          forbiddenRoots: Object.freeze(
+            [
+              `/authority/${namespace}`,
+              `/fixture/${namespace}/controlled-state`,
+              `/fixture/project-read-${namespace}`,
+            ].toSorted(),
+          ),
         });
       },
     ),
@@ -343,6 +346,7 @@ function createStartFixture(
   transactionProbe?: (step: string) => void,
   externalProfileSchemaVersion?: 1 | 3,
   migrationsDirectory?: string,
+  projectReadPhaseMismatch?: 'FORBIDDEN_ROOT' | 'ISOLATION' | 'WORKSPACE_ROOT',
 ) {
   const filename = temporaryDatabase(t, namespace);
   const store = openSqliteControlStore({
@@ -579,6 +583,19 @@ function createStartFixture(
     selectedPhaseEntry === undefined
       ? digests.digest({ phase: WorkflowPhase.DISCOVERY })
       : digests.digest(externalExecutionPhaseDispatchEntryProjection(selectedPhaseEntry));
+  const workspaceRootIdentity =
+    projectReadPhaseMismatch === 'WORKSPACE_ROOT'
+      ? `/unselected-project-read-workspaces/${namespace}`
+      : `/project-read-workspaces/${namespace}`;
+  const projectReadForbiddenRoots = [
+    ...new Set([...(selectedPhaseEntry?.forbiddenRoots ?? []), goal.scope.projectPath]),
+  ]
+    .filter(
+      (root) =>
+        projectReadPhaseMismatch !== 'FORBIDDEN_ROOT' ||
+        root !== selectedPhaseEntry?.forbiddenRoots[0],
+    )
+    .toSorted();
   const authorityFields = Object.freeze({
     schemaVersion: 1 as const,
     id: projectSourceReadAuthorityId(`project-read_project-read-${namespace}`),
@@ -593,9 +610,9 @@ function createStartFixture(
     repositoryControlRootIdentity: goal.scope.projectPath,
     sourceTree,
     gitState,
-    workspaceRootIdentity: `/project-read-workspaces/${namespace}`,
+    workspaceRootIdentity,
     snapshotId: projectReadSnapshotId(`project-read-snapshot_project-read-${namespace}`),
-    snapshotLeafRealpath: `/project-read-workspaces/${namespace}/snapshot`,
+    snapshotLeafRealpath: `${workspaceRootIdentity}/snapshot`,
     snapshotTreeDigest: sourceTree.projectionDigest,
     ownershipMarkerProfile: PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
     ownershipMarkerDigest: digests.digest({ marker: namespace }),
@@ -611,9 +628,12 @@ function createStartFixture(
     accessMode: ProjectReadSnapshotAccessMode.READ_ONLY,
     sourceCheckoutAccess: ProjectReadSourceCheckoutAccess.NONE,
     modelUsableNetworkPolicy: ProjectReadModelUsableNetworkPolicy.DENIED,
-    forbiddenRoots: Object.freeze([goal.scope.projectPath]),
+    forbiddenRoots: Object.freeze(projectReadForbiddenRoots),
     isolationProfileId: 'project-read-test-isolation-v1',
-    isolationProfileDigest: digests.digest({ isolation: namespace }),
+    isolationProfileDigest:
+      projectReadPhaseMismatch === 'ISOLATION'
+        ? digests.digest({ isolation: 'substituted' })
+        : digests.digest({ isolation: namespace }),
     issuedAt: startedAt,
     lifecyclePolicy: ProjectReadLifecyclePolicy.SINGLE_WORKER_ATTEMPT,
     retentionPolicy: ProjectReadRetentionPolicy.RUNTIME_OWNED,
@@ -1297,6 +1317,24 @@ void test('project-read record and Context mismatches fail before any Start auth
   assert.equal(rowCount(fixture.filename, 'project_source_read_authorities'), 0);
   fixture.store.close();
 });
+
+for (const mismatch of ['FORBIDDEN_ROOT', 'ISOLATION', 'WORKSPACE_ROOT'] as const) {
+  void test(`[I-007][I-023][I-027] v3 project-read ${mismatch} mismatch rolls back Start authority`, (t) => {
+    const fixture = createStartFixture(
+      t,
+      `phase-${mismatch.toLowerCase().replaceAll('_', '-')}`,
+      undefined,
+      3,
+      undefined,
+      mismatch,
+    );
+    assert.throws(() => fixture.store.commitContextBoundAttemptStart(fixture.input));
+    assert.equal(rowCount(fixture.filename, 'attempts'), 0);
+    assert.equal(rowCount(fixture.filename, 'context_manifests'), 0);
+    assert.equal(rowCount(fixture.filename, 'project_source_read_authorities'), 0);
+    fixture.store.close();
+  });
+}
 
 for (const { step, namespace } of [
   {

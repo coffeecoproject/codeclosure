@@ -53,9 +53,12 @@ ID/digest required from the first Start, and rejects selected/omitted sources,
 Candidate, or repair authority. Atomic Store persistence with the
 Context/Attempt is now implemented through an additive SQLite migration,
 canonical/relationship revalidation, strict reopen, exact replay, and rollback
-at the project-read audit and record boundaries. Phase-specific external
-execution, pre/post-dispatch source/snapshot checks, cleanup persistence, and
-real composition remain pending. The
+at the project-read audit and record boundaries. Adapter-boundary phase-
+specific directive/observation handling now consumes the complete strictly
+decoded retained record, recomputes its canonical digest, cross-binds it to the
+Context, and projects only ID/digest/cwd into its receipt. Cleanup persistence
+is implemented separately; Runtime phase dispatch, pre/post-dispatch source/
+snapshot checks, and real composition remain pending. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.
@@ -694,10 +697,13 @@ selected-source snapshot adapter, and Context Package/Manifest version 5
 binding for real `DISCOVERY`/`PLAN`. Its project-read record, protected Plan,
 Context v5, first or later Attempt start, Workflow effect, command outcome, and
 audits now persist in one SQLite transaction and reconstruct strictly on
-reopen. Configuration/instruction/external-dispatch composition and cleanup
-persistence remain pending. The checkout remains unreadable and the decision
-does not reinterpret the M1 subset above or pull M3 Fact/Decision selection
-forward.
+reopen. Under external Profile v3 the Store also requires that exact record to
+bind the selected phase-entry digest, isolation, capability/response contracts,
+stable workspace-root envelope, and every phase forbidden root. Real
+configuration/instruction/external-dispatch composition and source-currency
+enforcement remain pending; cleanup persistence and its trusted coordinator are
+already implemented. The checkout remains unreadable and the decision does not
+reinterpret the M1 subset above or pull M3 Fact/Decision selection forward.
 
 Code relevance retrieval, full Fact Graph traversal, and token-aware packing
 belong to later milestones. Slice 6 implements the repair Context and Thread

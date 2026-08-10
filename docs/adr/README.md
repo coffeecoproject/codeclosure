@@ -49,6 +49,7 @@ supersedes it.
 | [0041](0041-project-control-lease-and-read-only-secondary-cli.md) | Give one CLI the project control lease and make later CLIs observers | Proposed |
 | [0042](0042-project-scoped-single-active-goal-slot.md) | Allow one started Goal per project without adding a scheduler | Proposed |
 | [0043](0043-candidate-free-codex-project-read-authority.md) | Bind candidate-free Codex phases to exact owned read-only source snapshots | Accepted |
+| [0044](0044-source-freeze-owned-candidate-change-containment.md) | Enforce Candidate allowed paths from a stable source-freeze change set | Accepted |
 
 M2.5 completed within ADRs 0027, 0034, and 0035. ADRs 0036 through 0039 are
 M2.6 proposals under review; they are not implementation authority until their
@@ -59,6 +60,11 @@ through 0042 are separate M2.7 proposals and do not enlarge M2.6.
 M2.5.1 project-read snapshot/Context/configuration, phase Worker-activity, and
 cleanup/crash-reconciliation decision. It is binding only for the bounded
 M2.5.1 path and does not make later M2.6 or M2.7 proposals binding.
+
+[ADR 0044](0044-source-freeze-owned-candidate-change-containment.md) extends
+that bounded path by assigning actual Candidate changed-path proof to the
+existing source-freeze owner. It does not reinterpret historical M1/M2 freeze
+records or authorize M2.6 work.
 
 ## ADR lifecycle
 

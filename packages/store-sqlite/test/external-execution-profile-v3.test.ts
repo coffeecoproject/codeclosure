@@ -98,6 +98,7 @@ function authority(namespace: string): Readonly<{
     id: 'codex-worker-activity-policy_codeclosure-m2-5-1-real',
     version: 'codeclosure-m2-5-1-worker-activity-v1',
   });
+  const controlledStateRootIdentity = `/authority/${namespace}/codex-state`;
   const phaseDispatch = Object.freeze(
     workerPhases.map((phase): ExternalExecutionPhaseDispatchEntry => {
       const candidateFree = phase !== WorkflowPhase.IMPLEMENT;
@@ -146,7 +147,9 @@ function authority(namespace: string): Readonly<{
         compactionPolicy: ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
         fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
         allowedRoots: Object.freeze([`/authority/workspaces/${phase.toLowerCase()}`]),
-        forbiddenRoots: Object.freeze(['/authority/control', '/source/project']),
+        forbiddenRoots: Object.freeze(
+          ['/authority/control', controlledStateRootIdentity, '/source/project'].toSorted(),
+        ),
       });
     }),
   );
@@ -159,7 +162,7 @@ function authority(namespace: string): Readonly<{
     binaryIdentityDigest,
     protocolSchemaDigest,
     managedRequirementsDigest: digests.digest({ namespace, kind: 'managed-requirements' }),
-    controlledStateRootIdentity: `/authority/${namespace}/codex-state`,
+    controlledStateRootIdentity,
     environmentProjectionDigest: digests.digest({ namespace, kind: 'environment' }),
     model: 'gpt-fixture',
     modelProvider: 'openai',
@@ -384,6 +387,65 @@ void test('[I-006][I-027] external Profile v3 install rejects a cross-phase resp
   );
   assert.equal(store.getExecutionProfile(value.profile.id), undefined);
   assert.equal(store.listAuditEvents('EXECUTION_PROFILE', value.profile.id).length, 0);
+});
+
+void test('[I-007][I-023][I-027] external Profile v3 rejects relative or overlapping roots', () => {
+  const value = authority('external-v3-root-boundary');
+  assert.equal(value.profile.schemaVersion, 2);
+  assert.equal(value.profile.externalExecution.schemaVersion, 3);
+  const external = value.profile.externalExecution;
+  const discovery = external.phaseDispatch[0];
+  assert.ok(discovery !== undefined);
+  const withDiscovery = (entry: ExternalExecutionPhaseDispatchEntry) =>
+    Object.freeze({
+      ...external,
+      phaseDispatch: Object.freeze([entry, ...external.phaseDispatch.slice(1)]),
+    });
+  assert.throws(
+    () =>
+      decodeExternalExecutionProfileDefinition(
+        withDiscovery(Object.freeze({ ...discovery, allowedRoots: Object.freeze(['relative']) })),
+      ),
+    /exact normalized absolute path/u,
+  );
+  assert.throws(
+    () =>
+      decodeExternalExecutionProfileDefinition(
+        withDiscovery(
+          Object.freeze({
+            ...discovery,
+            allowedRoots: Object.freeze(['/authority/workspaces']),
+            forbiddenRoots: Object.freeze(
+              ['/authority/workspaces/private', external.controlledStateRootIdentity].toSorted(),
+            ),
+          }),
+        ),
+      ),
+    /cannot overlap/u,
+  );
+});
+
+void test('[I-007][I-023][I-027] external Profile v3 requires every phase to forbid control state', () => {
+  const value = authority('external-v3-control-root');
+  assert.equal(value.profile.schemaVersion, 2);
+  assert.equal(value.profile.externalExecution.schemaVersion, 3);
+  const external = value.profile.externalExecution;
+  const phaseDispatch = Object.freeze(
+    external.phaseDispatch.map((entry, index) =>
+      index === 0
+        ? Object.freeze({
+            ...entry,
+            forbiddenRoots: Object.freeze(
+              entry.forbiddenRoots.filter((root) => root !== external.controlledStateRootIdentity),
+            ),
+          })
+        : entry,
+    ),
+  );
+  assert.throws(
+    () => decodeExternalExecutionProfileDefinition(Object.freeze({ ...external, phaseDispatch })),
+    /must forbid the controlled state root/u,
+  );
 });
 
 void test('[I-006][I-027] strict reopen rejects retained v3 phase-order substitution', (t) => {

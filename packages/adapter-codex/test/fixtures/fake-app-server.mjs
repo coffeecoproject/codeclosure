@@ -1,7 +1,14 @@
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
-const scenario = process.argv[2] ?? 'happy';
+import {
+  CODEX_M251_WORKER_DISABLED_FEATURES,
+  CODEX_M251_WORKER_EFFECTIVE_FEATURES,
+} from '../../dist/m251-contracts.js';
+
+const scenarioArgument = process.argv[2] ?? 'happy';
+const m251WorkerProfile = scenarioArgument.startsWith('m251:');
+const scenario = m251WorkerProfile ? scenarioArgument.slice('m251:'.length) : scenarioArgument;
 let initialized = false;
 let pendingApproval;
 let turnId = 'turn-fixture';
@@ -35,18 +42,31 @@ function bindingFromSchema(schema) {
 }
 
 function validPayload(message) {
+  const resultKind = message.params.outputSchema?.properties?.result?.properties?.kind?.const;
   return {
     schemaVersion: 1,
     ...bindingFromSchema(message.params.outputSchema),
-    result: {
-      claimedScope: 'src',
-      kind: 'COMPLETION_REQUEST',
-      proposedEvidenceRefs: ['worker-observation:edited-src'],
-      summary:
-        scenario === 'alternate-valid'
-          ? 'Implemented the same bounded change with an alternate report.'
-          : 'Implemented the bounded Candidate change.',
-    },
+    result:
+      resultKind === 'PROPOSALS'
+        ? {
+            kind: 'PROPOSALS',
+            proposals: [
+              {
+                kind: 'PROJECT_OBSERVATION',
+                sourceRefs: ['src/payment.js'],
+                summary: 'Observed the bounded payment callback behavior.',
+              },
+            ],
+          }
+        : {
+            claimedScope: 'src',
+            kind: 'COMPLETION_REQUEST',
+            proposedEvidenceRefs: ['worker-observation:edited-src'],
+            summary:
+              scenario === 'alternate-valid'
+                ? 'Implemented the same bounded change with an alternate report.'
+                : 'Implemented the bounded Candidate change.',
+          },
   };
 }
 
@@ -204,6 +224,63 @@ function terminalItems(message) {
       finalItem,
     ];
   }
+  if (scenario === 'plan-command-diff') {
+    return [
+      { id: 'plan-1', text: 'Inspect the bounded source snapshot.', type: 'plan' },
+      {
+        aggregatedOutput: 'fixture source',
+        command: 'sed -n 1,20p src/payment.js',
+        commandActions: [
+          {
+            command: 'sed',
+            name: 'src/payment.js',
+            path: `${message.params.cwd}/src/payment.js`,
+            type: 'read',
+          },
+        ],
+        cwd: message.params.cwd,
+        durationMs: 1,
+        exitCode: 0,
+        id: 'command-read-1',
+        pluginId: null,
+        processId: null,
+        scriptPath: null,
+        source: 'agent',
+        status: 'completed',
+        type: 'commandExecution',
+      },
+      {
+        changes: [
+          {
+            diff: 'forbidden candidate-free fixture diff',
+            kind: { move_path: null, type: 'update' },
+            path: 'src/payment.js',
+          },
+        ],
+        id: 'change-forbidden-1',
+        status: 'completed',
+        type: 'fileChange',
+      },
+      finalItem,
+    ];
+  }
+  if (scenario === 'candidate-change' || scenario === 'candidate-outside-change') {
+    return [
+      {
+        changes: [
+          {
+            diff: 'bounded Candidate fixture diff',
+            kind: { move_path: null, type: 'update' },
+            path: scenario === 'candidate-change' ? 'src/payment.js' : 'test/payment.test.js',
+          },
+        ],
+        id: 'change-candidate-1',
+        status: 'completed',
+        type: 'fileChange',
+      },
+      finalItem,
+    ];
+  }
   if (scenario === 'diagnostics') {
     return [
       {
@@ -356,6 +433,7 @@ function threadResponse(message) {
   const instructionSources =
     scenario === 'instruction-extra' ? [`${process.cwd()}/UNBOUND_INSTRUCTIONS.md`] : [];
   const id = message.method === 'thread/resume' ? message.params.threadId : 'thread-fixture';
+  const readOnly = message.params.sandbox === 'read-only';
   const writableRoots = scenario === 'thread-sandbox-drift' ? [message.params.cwd] : [];
   return {
     approvalPolicy: message.params.approvalPolicy,
@@ -365,13 +443,15 @@ function threadResponse(message) {
     model: message.params.model,
     modelProvider: message.params.modelProvider,
     reasoningEffort: 'low',
-    sandbox: {
-      excludeSlashTmp: false,
-      excludeTmpdirEnvVar: false,
-      networkAccess: false,
-      type: 'workspaceWrite',
-      writableRoots,
-    },
+    sandbox: readOnly
+      ? { networkAccess: false, type: 'readOnly' }
+      : {
+          excludeSlashTmp: false,
+          excludeTmpdirEnvVar: false,
+          networkAccess: false,
+          type: 'workspaceWrite',
+          writableRoots,
+        },
     serviceTier: scenario === 'thread-service-tier-drift' ? 'priority' : message.params.serviceTier,
     thread: { id },
   };
@@ -379,6 +459,13 @@ function threadResponse(message) {
 
 function hasExactCandidateTurnPolicy(message) {
   const policy = message.params.sandboxPolicy;
+  if (message.params.sandboxPolicy?.type === 'readOnly') {
+    return (
+      message.params.serviceTier === 'default' &&
+      policy.networkAccess === false &&
+      JSON.stringify(Object.keys(policy).sort()) === JSON.stringify(['networkAccess', 'type'])
+    );
+  }
   return (
     message.params.serviceTier === 'default' &&
     policy?.type === 'workspaceWrite' &&
@@ -426,20 +513,34 @@ function handleRequest(message) {
   }
   if (message.method === 'config/read') {
     configReadCount += 1;
-    const disabledFeatures = {
-      apps: false,
-      goals: false,
-      hooks: false,
-      memories: false,
-      multi_agent: false,
-      multi_agent_v2: false,
-      personality: false,
-      plugins: scenario === 'profile-bound-plugin-enabled',
-      remote_plugin: false,
-      skill_mcp_dependency_install: false,
-      skill_search: false,
-      tool_suggest: false,
-    };
+    const disabledFeatureNames = m251WorkerProfile
+      ? CODEX_M251_WORKER_DISABLED_FEATURES
+      : [
+          'apps',
+          'goals',
+          'hooks',
+          'memories',
+          'multi_agent',
+          'multi_agent_v2',
+          'personality',
+          'plugins',
+          'remote_plugin',
+          'skill_mcp_dependency_install',
+          'skill_search',
+          'tool_suggest',
+        ];
+    const disabledFeatures = m251WorkerProfile
+      ? {
+          ...CODEX_M251_WORKER_EFFECTIVE_FEATURES,
+          ...(scenario === 'unsafe-effective-feature' ? { remote_control: true } : {}),
+          ...(scenario === 'profile-bound-plugin-enabled' ? { plugins: true } : {}),
+        }
+      : Object.fromEntries(
+          disabledFeatureNames.map((feature) => [
+            feature,
+            feature === 'plugins' && scenario === 'profile-bound-plugin-enabled',
+          ]),
+        );
     send({
       id: message.id,
       result: {
@@ -458,6 +559,14 @@ function handleRequest(message) {
               : 'gpt-fixture',
           model_provider: 'openai',
           model_reasoning_effort: 'low',
+          ...(m251WorkerProfile
+            ? {
+                compact_prompt: null,
+                developer_instructions: null,
+                instructions: null,
+                tools: null,
+              }
+            : {}),
           orchestrator: {
             mcp: { enabled: false },
             skills: { enabled: false },

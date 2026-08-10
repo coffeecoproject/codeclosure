@@ -84,6 +84,9 @@ export class FakeCandidateSource implements CandidateSourcePort {
   }
 
   public observeFreeze(rawRequest: Parameters<CandidateSourcePort['observeFreeze']>[0]): unknown {
+    if (rawRequest.schemaVersion !== 1) {
+      throw new TypeError('Fake Candidate Source supports only historical freeze schema version 1');
+    }
     const request = validateCandidateFreezeRequest(rawRequest);
     if (this.#fixture === FakeCandidateSourceFixture.THROW) {
       throw new Error('Fake Candidate Source freeze observation failed');

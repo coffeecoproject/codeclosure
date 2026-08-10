@@ -54,7 +54,7 @@ function sha256(relativePath) {
 
 test('M251-S0-01 identity and schema freeze is exact and excludes Fake composition', () => {
   assert.equal(contract.schemaVersion, 1);
-  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v4');
+  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v6');
   const protocolManifest = JSON.parse(
     source('packages/codex-app-server-client/protocol/codex-schema-snapshot-v1.json'),
   );
@@ -120,6 +120,20 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
   );
   assert.deepEqual(contract.execution.workflowExecutionOrder, ['DISCOVERY', 'PLAN', 'IMPLEMENT']);
   assert.equal(contract.execution.workerDispatchPolicy, 'ALL_SELECTED_ATTEMPTS');
+  assert.deepEqual(contract.execution.projectReadDirectiveBinding, {
+    authorityInput: 'FULL_RETAINED_PROJECT_SOURCE_READ_AUTHORITY_RECORD_V1',
+    digestValidation: 'RECOMPUTE_CANONICAL_RECORD_DIGEST',
+    resultProjection: 'ID_DIGEST_CWD_ONLY',
+  });
+  assert.deepEqual(contract.execution.effectiveRootPolicy, {
+    allowed: 'PHASE_SOURCE_INTERSECTION',
+    forbidden: 'PHASE_SOURCE_UNION',
+  });
+  assert.deepEqual(contract.execution.workerEffectiveConfigurationPolicy, {
+    featureProjection: 'EXACT_CODEX_0_146_1_CONFIG_READ',
+    implicitDisabledFeatures: ['remote_control'],
+    instructionAndToolOverrides: 'NULL',
+  });
   assert.doesNotMatch(
     JSON.stringify(contract.execution),
     /FakeWorker|FakeCandidate|FakeVerification/u,
@@ -137,6 +151,13 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
       `${schemaName} must remain an exact exported contract identity`,
     );
   }
+  const workerContracts = source('packages/adapter-codex/src/m251-contracts.ts');
+  const workerActivityPolicy = source('packages/adapter-codex/src/m251-activity-policy.ts');
+  assert.match(workerContracts, /authorityRecord: ProjectSourceReadAuthorityRecord/u);
+  assert.match(workerContracts, /decodeProjectSourceReadAuthorityRecord/u);
+  assert.match(workerContracts, /projectSourceReadAuthorityProjection/u);
+  assert.match(workerContracts, /remote_control: false/u);
+  assert.match(workerActivityPolicy, /source\.authorityRecord\.forbiddenRoots/u);
 
   const discovery = contract.execution.phaseDispatch.DISCOVERY;
   const plan = contract.execution.phaseDispatch.PLAN;
@@ -192,6 +213,7 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
     DISCOVERY: {
       lifecycle: 'ADMIT_NON_AUTHORITATIVE',
       commandExecution: 'ADMIT_SNAPSHOT_READ_ONLY',
+      bestEffortUnknownCommandAction: 'REJECT_DISCARD_RESULT',
       fileChange: 'REJECT_DISCARD_RESULT',
       maintenanceCompaction: 'ADMIT_SEPARATE_MAINTENANCE_ONLY',
       forbiddenOrUnknown: 'REJECT_DISCARD_RESULT',
@@ -199,6 +221,7 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
     IMPLEMENT: {
       lifecycle: 'ADMIT_NON_AUTHORITATIVE',
       commandExecution: 'ADMIT_CANDIDATE_BOUND',
+      bestEffortUnknownCommandAction: 'REJECT_UNTIL_FREEZE_V2_COMPOSED_THEN_ADMIT_CANDIDATE_BOUND',
       fileChange: 'ADMIT_CANDIDATE_ALLOWED_PATHS',
       maintenanceCompaction: 'ADMIT_SEPARATE_MAINTENANCE_ONLY',
       forbiddenOrUnknown: 'REJECT_DISCARD_RESULT',
@@ -206,10 +229,22 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
     PLAN: {
       lifecycle: 'ADMIT_NON_AUTHORITATIVE',
       commandExecution: 'ADMIT_SNAPSHOT_READ_ONLY',
+      bestEffortUnknownCommandAction: 'REJECT_DISCARD_RESULT',
       fileChange: 'REJECT_DISCARD_RESULT',
       maintenanceCompaction: 'ADMIT_SEPARATE_MAINTENANCE_ONLY',
       forbiddenOrUnknown: 'REJECT_DISCARD_RESULT',
     },
+  });
+  assert.deepEqual(contract.execution.candidateFreezeChangeContainment, {
+    requestSchemaVersion: 2,
+    observationSchemaVersion: 2,
+    evidenceObservationSchemaVersion: 2,
+    changeSetProfile: 'candidate-change-set-v2',
+    maximumChangeEntries: 8_192,
+    observationOwner: 'CANDIDATE_MANAGER_SOURCE_FREEZE',
+    allowedPathDispositionOwner: 'WORKFLOW_RUNTIME_WITH_STORE_BACKSTOP',
+    historicalSchemaVersion: 1,
+    activation: 'REQUIRED_BEFORE_IMPLEMENT_UNKNOWN_COMMAND_ACTION',
   });
 
   const intakeContracts = source('packages/runtime/src/intake-assistant.ts');
@@ -283,7 +318,7 @@ test('M251-S0-03 every acceptance row has one exact proof owner', () => {
     ([, rowId]) => rowId,
   );
   const uniqueRowIds = [...new Set(rowIds)].sort();
-  assert.equal(uniqueRowIds.length, 67);
+  assert.equal(uniqueRowIds.length, 68);
   assert.equal(
     new Set(writtenProofOwnerIds).size,
     writtenProofOwnerIds.length,

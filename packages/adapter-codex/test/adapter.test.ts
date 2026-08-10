@@ -982,6 +982,16 @@ void test('[I-004][I-027] event identity is request-bound: exact replay matches 
   if (firstEvent === undefined) {
     assert.fail('first fixture emitted no event');
   }
+  const historicalIdentityDigest = digestCanonical({
+    adapterIdentityProfile: 'codex-worker-event-id-v1',
+    externalExecutionIntentDigest: first.directive.externalExecutionIntentDigest,
+    request: first.directive.request,
+    workspaceLeaseDigest: first.directive.workspaceLease.leaseDigest,
+  });
+  assert.equal(
+    firstEvent.id,
+    `worker-event_codex-${historicalIdentityDigest.slice('sha256:'.length)}`,
+  );
   const exactReplay = new CodexWorkerAdapter({
     directive: first.directive,
     launch: first.launch,

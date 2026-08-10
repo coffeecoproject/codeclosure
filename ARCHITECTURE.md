@@ -130,10 +130,19 @@ the nested external-execution v3 phase-dispatch contract, and additive external
 Intent/Record v2 authority with strict SQLite authorization, persistence, and
 reopen. Intent/Record v2 binds the exact selected phase entry and exactly one
 project-read or Candidate source member while v1 retains its historical flat
-Candidate meaning. The legacy Driver rejects v3 during installed-Profile
-preflight before Start mutation, Adapter, or FakeWorker dispatch; directive v3,
-Adapter observation v2, activity-policy enforcement, and real phase composition
-remain unimplemented.
+Candidate meaning. The Goal-bound Adapter now additively implements directive
+v3, observation v2, exact phase/source/profile/request binding, phase-specific
+proposal/completion decoding, candidate-free read-only sandbox selection, and
+the versioned Adapter-local activity policy. Its offline App Server proof covers
+candidate-free proposal success and result discard on file-change activity,
+plus Candidate-bound `workspaceWrite` completion success and result discard on
+an out-of-scope Candidate file change. The ProjectRead directive member carries
+the complete strictly decoded retained authority record, recomputes its digest,
+and reduces it to ID/digest/cwd only for receipts and result binding. The
+retained v2 Candidate Adapter suite remains green. The legacy Driver still rejects v3
+during installed-Profile preflight before Start mutation, Adapter, or
+FakeWorker dispatch; Runtime source-currency enforcement, real phase
+dispatch/composition, and mandatory live proof remain pending.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -153,8 +162,8 @@ and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
 post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
 M2.5.1 Slices 1 and 2 are complete, and Slice 3 has implemented its bounded
-project-read and cleanup foundation; real phase composition and M2.5.1
-assessment have not started.
+project-read/cleanup, versioned external-execution, and Adapter-boundary
+foundation; Runtime phase composition and M2.5.1 assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -789,8 +798,30 @@ exact canonical phase set, `ALL_SELECTED_ATTEMPTS`, and shared-versus-phase
 authority without duplication; strict installation/reopen rejects
 configuration, capability, response-contract/schema, instruction, order, and
 source-kind substitution. The current Driver fails closed during installed-
-Profile preflight before Start mutation until the versioned phase-intent,
-directive/observation, and Adapter-local activity-policy path is implemented.
+Profile preflight before Start mutation. The versioned phase Intent/Record and
+Adapter directive/observation/activity-policy boundary is now implemented but
+does not itself authorize dispatch; Runtime source-currency enforcement and
+Driver phase composition remain pending.
+Profile v3 root sets are normalized, absolute, and non-overlapping stable
+workspace envelopes. Exact snapshot/Candidate leaves remain owned by the
+ProjectRead record or Candidate lease rather than being copied into the
+installed Profile. Store authorization cross-binds the ProjectRead leaf,
+phase-entry digest, isolation, capability/response contracts, and the dynamic
+forbidden-root superset. The Adapter then strictly decodes and recomputes the
+complete ProjectRead record digest, binds the record to the request/Profile/
+Context, and enforces the phase/source forbidden-root union without introducing
+a second persisted authority. Candidate directives bind the exact lease and
+use the same union rule. Adapter fixture proof selects candidate-free
+`readOnly` and Candidate-bound `workspaceWrite`, accepts only their respective
+proposal/completion result forms, and discards forbidden file-change results,
+but the mandatory live black-box containment proof remains pending. Accepted
+[ADR 0044](docs/adr/0044-source-freeze-owned-candidate-change-containment.md)
+keeps the current Adapter fail-closed. Its additive schema-version-2 contract
+and local Candidate workspace derivation now produce canonical base-to-stable-
+current changed paths from owned manifests, while Runtime/Store relationship
+checks and freeze-Evidence v2 remain pending. Runtime and Store, not Codex
+notifications, compare the result with exact Goal `allowedPaths`. Historical
+M1/M2 freeze schema version 1 remains unchanged.
 The source
 checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,
@@ -1088,7 +1119,10 @@ instruction sources. A versioned Adapter-local phase activity policy permits
 only bounded snapshot-read commands for candidate-free phases and exact
 Candidate-bound command/file-change activity for `IMPLEMENT`; unknown,
 forbidden, or cross-phase activity fails closed without exposing Codex Item
-types to Domain or Runtime. The current
+types to Domain or Runtime. The pinned protocol's best-effort `unknown` command
+action is distinct from an unknown Item/effect: candidate-free phases reject it,
+while IMPLEMENT may admit it only after ADR 0044's stable Candidate change-set
+proof is installed. The current
 `IMPLEMENT`-only trusted invocation and protected-demo FakeWorker delegation
 are implementation inputs, not proof of that formal chain. A lower-client
 probe, live Intake operation, live IMPLEMENT operation, or mixed fake/real demo

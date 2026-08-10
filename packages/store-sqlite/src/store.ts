@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import Database from 'better-sqlite3';
 import { z } from 'zod';
@@ -191,6 +191,7 @@ import {
   type ExecutionProfileId,
   type ExternalBackendCapabilityRecord,
   type ExternalExecutionId,
+  type ExternalExecutionPhaseDispatchEntry,
   type ExternalExecutionIntent,
   type ExternalExecutionObservation,
   type ExternalExecutionObservationId,
@@ -1035,6 +1036,31 @@ function systemNow(): IsoTimestamp {
 }
 
 const canonicalAuthorityDigests = new CanonicalJsonSha256DigestProvider();
+
+function isSameOrWithin(path: string, parent: string): boolean {
+  const relation = relative(parent, path);
+  return (
+    relation === '' ||
+    (!relation.startsWith(`..${sep}`) && relation !== '..' && !isAbsolute(relation))
+  );
+}
+
+function projectReadAuthorityBindsPhaseEntry(
+  record: ProjectSourceReadAuthorityRecord,
+  entry: ExternalExecutionPhaseDispatchEntry,
+): boolean {
+  return (
+    record.phase === entry.phase &&
+    entry.sourceAuthorityKind === ExternalPhaseSourceAuthorityKind.PROJECT_READ &&
+    record.isolationProfileId === entry.isolationProfileId &&
+    record.isolationProfileDigest === entry.isolationProfileDigest &&
+    record.capabilityGrantDigest === entry.capabilityGrantDigest &&
+    record.responseContractDigest === entry.responseContractDigest &&
+    entry.allowedRoots.some((root) => isSameOrWithin(record.workspaceRootIdentity, root)) &&
+    entry.allowedRoots.some((root) => isSameOrWithin(record.snapshotLeafRealpath, root)) &&
+    entry.forbiddenRoots.every((root) => record.forbiddenRoots.includes(root))
+  );
+}
 
 function storeAuthoredIntakeOutcome(
   reservation: IntakeCommandReservation,
@@ -14694,7 +14720,8 @@ export class SqliteControlStore
       projectRead.attemptId === intent.attemptId &&
       projectRead.executionProfileId === intent.executionProfileId &&
       projectRead.executionProfileDigest === intent.executionProfileDigest &&
-      projectRead.phaseDispatchEntryDigest === intent.phaseDispatchEntryDigest
+      projectRead.phaseDispatchEntryDigest === intent.phaseDispatchEntryDigest &&
+      projectReadAuthorityBindsPhaseEntry(projectRead, phaseEntry)
     );
   }
 
@@ -15842,6 +15869,17 @@ export class SqliteControlStore
       manifest.schemaVersion === 5 && manifest.projectReadAuthorityId !== undefined
         ? this.getProjectSourceReadAuthority(manifest.projectReadAuthorityId)
         : undefined;
+    const projectReadPhaseEntry =
+      projectReadAuthority !== undefined &&
+      installedProfile.profile.schemaVersion === 2 &&
+      installedProfile.profile.externalExecution.schemaVersion === 3
+        ? installedProfile.profile.externalExecution.phaseDispatch.find(
+            (entry) => entry.phase === projectReadAuthority.phase,
+          )
+        : undefined;
+    const requiresV3ProjectReadBinding =
+      installedProfile.profile.schemaVersion === 2 &&
+      installedProfile.profile.externalExecution.schemaVersion === 3;
     if (
       (manifest.schemaVersion === 5) !== (projectReadAuthority !== undefined) ||
       (projectReadAuthority !== undefined &&
@@ -15863,6 +15901,15 @@ export class SqliteControlStore
           projectReadAuthority.executionProfileDigest !== manifest.executionProfileDigest ||
           projectReadAuthority.capabilityGrantDigest !== manifest.capabilityGrantDigest ||
           projectReadAuthority.responseContractDigest !== manifest.responseContractDigest ||
+          (requiresV3ProjectReadBinding &&
+            (projectReadPhaseEntry === undefined ||
+              projectReadAuthority.phaseDispatchEntryDigest !==
+                sha256Digest(
+                  canonicalAuthorityDigests.digest(
+                    externalExecutionPhaseDispatchEntryProjection(projectReadPhaseEntry),
+                  ),
+                ) ||
+              !projectReadAuthorityBindsPhaseEntry(projectReadAuthority, projectReadPhaseEntry))) ||
           projectReadAuthority.issuedAt > manifest.createdAt))
     ) {
       throw new StoreInvariantError(

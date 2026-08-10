@@ -1,3 +1,5 @@
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+
 import {
   attemptId,
   contextManifestId,
@@ -576,6 +578,25 @@ function assertSortedUniqueNonBlank(values: readonly string[], name: string): vo
   }
 }
 
+function exactAbsolutePath(value: string, name: string): void {
+  nonBlank(value, name, 16_384);
+  if (!isAbsolute(value) || resolve(value) !== value || value !== value.normalize('NFC')) {
+    throw new TypeError(`${name} must be an exact normalized absolute path`);
+  }
+}
+
+function isSameOrWithin(path: string, parent: string): boolean {
+  const relation = relative(parent, path);
+  return (
+    relation === '' ||
+    (!relation.startsWith(`..${sep}`) && relation !== '..' && !isAbsolute(relation))
+  );
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  return isSameOrWithin(left, right) || isSameOrWithin(right, left);
+}
+
 function assertV3PhaseDispatchEntry(entry: ExternalExecutionPhaseDispatchEntry): void {
   if (!m251ExternalWorkerPhases.includes(entry.phase)) {
     throw new TypeError('External phase dispatch selected a non-Worker phase');
@@ -630,7 +651,7 @@ function assertV3PhaseDispatchEntry(entry: ExternalExecutionPhaseDispatchEntry):
   }
   let previousInstructionPath: string | undefined;
   for (const source of entry.instructionSources) {
-    nonBlank(source.path, 'External instruction-source path', 16_384);
+    exactAbsolutePath(source.path, 'External instruction-source path');
     sha256Digest(source.digest);
     if (previousInstructionPath !== undefined && source.path <= previousInstructionPath) {
       throw new TypeError('External instruction sources must be uniquely sorted by path');
@@ -642,9 +663,18 @@ function assertV3PhaseDispatchEntry(entry: ExternalExecutionPhaseDispatchEntry):
   }
   assertSortedUniqueNonBlank(entry.allowedRoots, 'External allowed root');
   assertSortedUniqueNonBlank(entry.forbiddenRoots, 'External forbidden root');
-  const forbiddenRoots = new Set(entry.forbiddenRoots);
-  if (entry.allowedRoots.some((root) => forbiddenRoots.has(root))) {
-    throw new TypeError('External phase root cannot be both allowed and forbidden');
+  for (const root of entry.allowedRoots) {
+    exactAbsolutePath(root, 'External allowed root');
+  }
+  for (const root of entry.forbiddenRoots) {
+    exactAbsolutePath(root, 'External forbidden root');
+  }
+  if (
+    entry.allowedRoots.some((allowed) =>
+      entry.forbiddenRoots.some((forbidden) => pathsOverlap(allowed, forbidden)),
+    )
+  ) {
+    throw new TypeError('External phase allowed and forbidden roots cannot overlap');
   }
 }
 
@@ -687,6 +717,7 @@ export function externalExecutionProfileDefinitionProjection(
   profile: ExternalExecutionProfileDefinition,
 ): unknown {
   if (profile.schemaVersion === 3) {
+    exactAbsolutePath(profile.controlledStateRootIdentity, 'External controlled state root');
     return {
       schemaVersion: profile.schemaVersion,
       backendKind: profile.backendKind,
@@ -829,6 +860,9 @@ export function assertExternalExecutionProfileDefinitionInvariant(
     let selectedActivityPolicyDigest: Sha256Digest | undefined;
     for (const entry of profile.phaseDispatch) {
       assertV3PhaseDispatchEntry(entry);
+      if (!entry.forbiddenRoots.includes(profile.controlledStateRootIdentity)) {
+        throw new TypeError('External v3 phase must forbid the controlled state root');
+      }
       selectedActivityPolicy ??= entry.workerActivityPolicyId;
       selectedActivityPolicyDigest ??= entry.workerActivityPolicyDigest;
       if (

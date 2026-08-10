@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "codeclosure-m2-5-1-slice0-contract",
-  "contractVersion": "codeclosure-m2-5-1-slice0-v4",
+  "contractVersion": "codeclosure-m2-5-1-slice0-v6",
   "toolchain": {
     "selected": {
       "codexVersion": "codex-cli 0.146.1",
@@ -353,6 +353,7 @@
       "DISCOVERY": {
         "lifecycle": "ADMIT_NON_AUTHORITATIVE",
         "commandExecution": "ADMIT_SNAPSHOT_READ_ONLY",
+        "bestEffortUnknownCommandAction": "REJECT_DISCARD_RESULT",
         "fileChange": "REJECT_DISCARD_RESULT",
         "maintenanceCompaction": "ADMIT_SEPARATE_MAINTENANCE_ONLY",
         "forbiddenOrUnknown": "REJECT_DISCARD_RESULT"
@@ -360,6 +361,7 @@
       "IMPLEMENT": {
         "lifecycle": "ADMIT_NON_AUTHORITATIVE",
         "commandExecution": "ADMIT_CANDIDATE_BOUND",
+        "bestEffortUnknownCommandAction": "REJECT_UNTIL_FREEZE_V2_COMPOSED_THEN_ADMIT_CANDIDATE_BOUND",
         "fileChange": "ADMIT_CANDIDATE_ALLOWED_PATHS",
         "maintenanceCompaction": "ADMIT_SEPARATE_MAINTENANCE_ONLY",
         "forbiddenOrUnknown": "REJECT_DISCARD_RESULT"
@@ -367,10 +369,22 @@
       "PLAN": {
         "lifecycle": "ADMIT_NON_AUTHORITATIVE",
         "commandExecution": "ADMIT_SNAPSHOT_READ_ONLY",
+        "bestEffortUnknownCommandAction": "REJECT_DISCARD_RESULT",
         "fileChange": "REJECT_DISCARD_RESULT",
         "maintenanceCompaction": "ADMIT_SEPARATE_MAINTENANCE_ONLY",
         "forbiddenOrUnknown": "REJECT_DISCARD_RESULT"
       }
+    },
+    "candidateFreezeChangeContainment": {
+      "requestSchemaVersion": 2,
+      "observationSchemaVersion": 2,
+      "evidenceObservationSchemaVersion": 2,
+      "changeSetProfile": "candidate-change-set-v2",
+      "maximumChangeEntries": 8192,
+      "observationOwner": "CANDIDATE_MANAGER_SOURCE_FREEZE",
+      "allowedPathDispositionOwner": "WORKFLOW_RUNTIME_WITH_STORE_BACKSTOP",
+      "historicalSchemaVersion": 1,
+      "activation": "REQUIRED_BEFORE_IMPLEMENT_UNKNOWN_COMMAND_ACTION"
     },
     "projectReadSchemas": {
       "authorityRecord": "ProjectSourceReadAuthorityRecordV1",
@@ -379,6 +393,20 @@
       "cleanupGrant": "ProjectReadSnapshotCleanupGrantV1",
       "cleanupObservation": "ProjectReadSnapshotCleanupObservationV1",
       "cleanupOutcome": "ProjectReadSnapshotCleanupOutcomeV1"
+    },
+    "projectReadDirectiveBinding": {
+      "authorityInput": "FULL_RETAINED_PROJECT_SOURCE_READ_AUTHORITY_RECORD_V1",
+      "digestValidation": "RECOMPUTE_CANONICAL_RECORD_DIGEST",
+      "resultProjection": "ID_DIGEST_CWD_ONLY"
+    },
+    "effectiveRootPolicy": {
+      "allowed": "PHASE_SOURCE_INTERSECTION",
+      "forbidden": "PHASE_SOURCE_UNION"
+    },
+    "workerEffectiveConfigurationPolicy": {
+      "featureProjection": "EXACT_CODEX_0_146_1_CONFIG_READ",
+      "implicitDisabledFeatures": ["remote_control"],
+      "instructionAndToolOverrides": "NULL"
     },
     "sourceProjectionVersions": {
       "sourceTree": "codeclosure-project-read-source-tree-v1",
@@ -465,6 +493,7 @@
     "M251-C08": "packages/store-sqlite/test/project-read-authority.test.ts#atomic-attempt-context-read-authority",
     "M251-C09": "packages/testing/test/m2.5.1-contracts.test.ts#phase-dispatch-v3",
     "M251-C10": "packages/adapter-codex/test/candidate-free-adapter.test.ts#worker-activity-policy-refinement",
+    "M251-C11": "packages/store-sqlite/test/m2.5.1-candidate-change-containment.test.ts#freeze-v2-runtime-store-evidence-closure",
     "M251-X01": "scripts/run-m2.5.1-acceptance.mjs#live-phase-complete-worker-chain",
     "M251-X02": "scripts/run-m2.5.1-acceptance.mjs#live-project-candidate-containment",
     "M251-X03": "packages/workspace-local/test/project-read-workspace.test.ts#candidate-identity-and-drift",

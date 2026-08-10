@@ -83,7 +83,11 @@ function phaseEntry(phase: (typeof workerPhases)[number]): ExternalExecutionPhas
     compactionPolicy: ExternalCompactionPolicy.FAIL_ON_OBSERVATION,
     fallbackPolicy: ExternalFallbackPolicy.FAIL_CLOSED,
     allowedRoots: Object.freeze([`/authority/workspaces/${phase.toLowerCase()}`]),
-    forbiddenRoots: Object.freeze(['/authority/control', '/source/project']),
+    forbiddenRoots: Object.freeze([
+      '/authority/codex-state',
+      '/authority/control',
+      '/source/project',
+    ]),
   });
 }
 

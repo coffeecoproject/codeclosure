@@ -54,9 +54,10 @@ const packagePolicies = Object.freeze([
     name: '@codeclosure/adapter-codex',
     dependencies: Object.freeze({
       '@codeclosure/codex-app-server-client': 'workspace:*',
+      '@codeclosure/domain': 'workspace:*',
       '@codeclosure/runtime': 'workspace:*',
     }),
-    devDependencies: Object.freeze({ '@codeclosure/domain': 'workspace:*' }),
+    devDependencies: Object.freeze({}),
   }),
   m25CodexIntakeAdapterDependencyExpectation,
   Object.freeze({

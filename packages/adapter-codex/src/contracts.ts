@@ -381,7 +381,7 @@ function decodeRequestBinding(value: unknown): CodexWorkerRequestBinding {
   });
 }
 
-function decodeWorkspaceLease(value: unknown): CandidateWorkspaceLease {
+export function decodeCodexCandidateWorkspaceLease(value: unknown): CandidateWorkspaceLease {
   const decoded = decodeRuntimeCandidateWorkspaceLease(value);
   if (decoded.accessMode !== 'MUTABLE' || decoded.lifecyclePolicy !== 'REVOKE_ON_FREEZE') {
     throw new TypeError('Codex IMPLEMENT requires one mutable revoke-on-freeze lease');
@@ -681,7 +681,7 @@ export function decodeCodexWorkerDirective(value: unknown): CodexWorkerDirective
     profile: decodeProfile(input['profile']),
     request: decodeRequestBinding(input['request']),
     schemaVersion: exactLiteral(input['schemaVersion'], 2, 'directive.schemaVersion'),
-    workspaceLease: decodeWorkspaceLease(input['workspaceLease']),
+    workspaceLease: decodeCodexCandidateWorkspaceLease(input['workspaceLease']),
   });
   assertDirectiveInternalBinding(directive);
   if (directive.profile.promptTemplateDigest !== CODEX_WORKER_PROMPT_TEMPLATE_DIGEST) {
@@ -721,7 +721,7 @@ export function createCodexWorkerDirective(value: unknown): CodexWorkerDirective
     profile: decodeProfile(input['profile']),
     request: decodeRequestBinding(input['request']),
     schemaVersion: exactLiteral(input['schemaVersion'], 2, 'directive.schemaVersion'),
-    workspaceLease: decodeWorkspaceLease(input['workspaceLease']),
+    workspaceLease: decodeCodexCandidateWorkspaceLease(input['workspaceLease']),
   });
   return decodeCodexWorkerDirective({
     ...withoutDigest,

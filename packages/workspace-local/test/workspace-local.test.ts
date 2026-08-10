@@ -13,6 +13,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,14 +44,18 @@ import {
 import {
   CandidateWorkspaceAccessMode,
   CandidateWorkspaceRetention,
+  candidateChangesStayWithinAllowedPaths,
+  candidateWorkspaceAllowedPathProjection,
   candidateWorkspaceAuthorityProjection,
   decodeCandidateFreezeObservation,
+  decodeCandidateFreezeObservationV2,
   decodeCandidatePreparation,
   decodeCandidateRepairPreparation,
   decodeCandidateWorkspaceAuthoritySnapshot,
   decodeCandidateWorkspaceLease,
   decodeFrozenCandidateIntegrityObservation,
   digestCandidateWorkspaceValue,
+  type CandidateFreezeRequestV2,
   type CandidateWorkspaceAuthoritySnapshot,
   type CandidateWorkspaceExpectedGeneration,
   type CandidateWorkspaceLease,
@@ -315,6 +320,29 @@ function beginFreeze(generation: CandidateGeneration, suffix: string): Candidate
   );
 }
 
+function freezeRequestV2(
+  generation: CandidateGeneration,
+  suffix: string,
+  allowedPaths: readonly string[] = Object.freeze(['src']),
+): CandidateFreezeRequestV2 {
+  const retainedAllowedPaths = Object.freeze([...allowedPaths]);
+  return Object.freeze({
+    allowedPathPolicyDigest: digestCandidateWorkspaceValue(
+      candidateWorkspaceAllowedPathProjection(retainedAllowedPaths),
+    ),
+    allowedPaths: retainedAllowedPaths,
+    attemptId: attemptId(`attempt_${suffix}`),
+    generation,
+    goalId: goalId(`goal_${suffix}`),
+    goalRevision: goalRevision(1),
+    policyBundleDigest: sha256Digest(`sha256:${'d'.repeat(64)}`),
+    policyBundleId: policyBundleId(`policy_${suffix}`),
+    schemaVersion: 2,
+    workflowId: workflowId(`workflow_${suffix}`),
+    workflowVersion: workflowVersion(1),
+  });
+}
+
 function freeze(
   fixtureValue: Fixture,
   mutable: CandidateGeneration,
@@ -368,6 +396,108 @@ void test('[I-007][M2-F04] source identity observes tree bytes separately from G
   const indexChanged = observeLocalCandidateSourceIdentity(value.sourceRoot);
   assert.equal(indexChanged.sourceTreeDigest, contentChanged.sourceTreeDigest);
   assert.notEqual(indexChanged.sourceGitMetadataDigest, contentChanged.sourceGitMetadataDigest);
+});
+
+void test('[I-014][I-023][M251-C11] freeze v2 derives one canonical stable Candidate change set', (t) => {
+  const value = fixture(t);
+  const prepared = prepare(value, 'change-set-v2');
+  const mutableLease = lease(value, prepared.generation, 'change-set-v2');
+  writeFileSync(
+    join(mutableLease.root, 'src', 'order.ts'),
+    'export const charge = "bounded-v2";\n',
+  );
+  writeFileSync(join(mutableLease.root, 'src', 'added.ts'), 'export const added = true;\n');
+  unlinkSync(join(mutableLease.root, 'src', 'note.txt'));
+  const freezing = beginFreeze(prepared.generation, 'change-set-v2');
+  const allowedPaths = Object.freeze(['src']);
+  const freezeRequest = freezeRequestV2(freezing, 'change-set-v2', allowedPaths);
+  assert.throws(
+    () =>
+      value.workspace.observeFreeze({
+        ...freezeRequest,
+        allowedPathPolicyDigest: sha256Digest(`sha256:${'e'.repeat(64)}`),
+      }),
+    /allowed-path policy digest is inconsistent/,
+  );
+  const observation = decodeCandidateFreezeObservationV2(
+    value.workspace.observeFreeze(freezeRequest),
+  );
+  assert.equal(observation.baseSourceDigest, prepared.generation.baseDigest);
+  assert.equal(observation.firstSourceDigest, observation.secondSourceDigest);
+  assert.equal(observation.allowedPathPolicyDigest, freezeRequest.allowedPathPolicyDigest);
+  assert.deepEqual(
+    observation.changes.map(({ kind, path }) => ({ kind, path })),
+    [
+      { kind: 'ADDED', path: 'src/added.ts' },
+      { kind: 'DELETED', path: 'src/note.txt' },
+      { kind: 'MODIFIED', path: 'src/order.ts' },
+    ],
+  );
+  assert.equal(candidateChangesStayWithinAllowedPaths(observation.changes, allowedPaths), true);
+  assert.equal(
+    candidateChangesStayWithinAllowedPaths(observation.changes, ['src/order.ts']),
+    false,
+  );
+  assert.throws(
+    () =>
+      decodeCandidateFreezeObservationV2({
+        ...observation,
+        changes: [...observation.changes].reverse(),
+      }),
+    /uniquely path-sorted/,
+  );
+  assert.throws(
+    () =>
+      decodeCandidateFreezeObservationV2({
+        ...observation,
+        changeSetDigest: sha256Digest(`sha256:${'e'.repeat(64)}`),
+      }),
+    /digest is inconsistent/,
+  );
+});
+
+void test('[I-012][I-014][M251-C11] freeze v2 exposes instability and leaves the Candidate unsafe', (t) => {
+  const value = fixture(t, {
+    afterFirstFreezeScan: ({ candidateRoot }) => {
+      const path = join(candidateRoot, 'src', 'order.ts');
+      chmodSync(path, 0o644);
+      writeFileSync(path, 'export const charge = "changed-during-freeze-v2";\n');
+    },
+  });
+  const prepared = prepare(value, 'freeze-drift-v2');
+  const mutableLease = lease(value, prepared.generation, 'freeze-drift-v2');
+  const freezing = beginFreeze(prepared.generation, 'freeze-drift-v2');
+  const observation = decodeCandidateFreezeObservationV2(
+    value.workspace.observeFreeze(freezeRequestV2(freezing, 'freeze-drift-v2')),
+  );
+  assert.equal(observation.baseSourceDigest, prepared.generation.baseDigest);
+  assert.notEqual(observation.firstSourceDigest, observation.secondSourceDigest);
+  assert.throws(() => value.workspace.assertLeaseCurrent(mutableLease), /active lease|stale/);
+  assert.equal(
+    value.workspace.reconcile(authoritySnapshot('freeze-drift-v2'))[0]?.classification,
+    WorkspaceReconciliationClassification.UNSAFE,
+  );
+});
+
+void test('[I-012][I-014][I-027][M251-C11] freeze v2 observation construction failure leaves the Candidate unsafe', (t) => {
+  const value = fixture(t, {
+    beforeFreezeV2Observation: () => {
+      throw new Error('fixture freeze-v2 observation failure');
+    },
+  });
+  const prepared = prepare(value, 'freeze-observation-failure-v2');
+  const mutableLease = lease(value, prepared.generation, 'freeze-observation-failure-v2');
+  const freezing = beginFreeze(prepared.generation, 'freeze-observation-failure-v2');
+  assert.throws(
+    () => value.workspace.observeFreeze(freezeRequestV2(freezing, 'freeze-observation-failure-v2')),
+    /fixture freeze-v2 observation failure/u,
+  );
+  assert.throws(() => value.workspace.assertLeaseCurrent(mutableLease), /active lease|stale/u);
+  assert.equal(
+    value.workspace.reconcile(authoritySnapshot('freeze-observation-failure-v2'))[0]
+      ?.classification,
+    WorkspaceReconciliationClassification.UNSAFE,
+  );
 });
 
 void test('[I-007][I-011][M2-D01][M2-D02][M2-D09] controlled copy preserves exact dirty bytes and source authority', (t) => {
