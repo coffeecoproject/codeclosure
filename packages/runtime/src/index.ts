@@ -19,6 +19,7 @@ export * from './intake-projection.js';
 export * from './intake-retention.js';
 export * from './intake-store.js';
 export * from './m1-policy.js';
+export * from './m251-policy.js';
 export * from './local-command-verification-contracts.js';
 export * from './local-command-verification.js';
 export * from './m251-execution-profile.js';

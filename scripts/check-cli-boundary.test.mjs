@@ -53,6 +53,10 @@ const m251IntakeInvocationFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/intake-assistant-invocation.ts',
 );
+const m251ExecutionAuthorityFixturePath = resolve(
+  repositoryRoot,
+  'apps/cli/src/composition/m251-execution-authority.ts',
+);
 const m2ProtectedProofFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/m2-protected-demo-proof.ts',
@@ -337,6 +341,35 @@ void test('only named composition owners may import their exact privileged packa
   for (const source of privilegedImports) {
     assert.equal(violations(source, compositionFixturePath).length, 1, source);
   }
+});
+
+void test('M2.5.1 execution authority has one closed owner and no production consumer before B4', () => {
+  const allowedOwnerImports = [
+    "import { CODEX_M251_WORKER_ACTIVITY_POLICY_ID } from '@codeclosure/adapter-codex';",
+    "import { WorkflowPhase } from '@codeclosure/domain';",
+    "import { bindRuntimeExecutionProfileAuthority } from '@codeclosure/runtime/composition';",
+  ];
+  for (const source of allowedOwnerImports) {
+    assert.deepEqual(violations(source, m251ExecutionAuthorityFixturePath), [], source);
+    assert.equal(violations(source, compositionFixturePath).length, 1, source);
+  }
+
+  const forbiddenOwnerImports = [
+    "import { createCodexWorkerAdapter } from '@codeclosure/adapter-codex';",
+    "import { createWorkflowDriver } from '@codeclosure/runtime/composition';",
+    "import { FakeWorker } from '@codeclosure/testing';",
+  ];
+  for (const source of forbiddenOwnerImports) {
+    assert.equal(violations(source, m251ExecutionAuthorityFixturePath).length, 1, source);
+  }
+
+  assert.equal(
+    violations(
+      "import { installM251ExecutionAuthority } from './m251-execution-authority.js';",
+      trustedCompositionFixturePath,
+    ).length,
+    1,
+  );
 });
 
 void test('Slice 7 raw client, workspace, verifier, Store, and Runtime capabilities remain behind exact proof owners', () => {

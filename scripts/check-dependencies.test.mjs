@@ -320,6 +320,24 @@ void test('m2.5.1-normalized-observer-only', () => {
   assert.equal(v2Strategy.includes('onCompactionEvent'), false);
 });
 
+void test('m2.5.1-fake-test-seam-only', () => {
+  const authorityPath = resolve(
+    repositoryRoot,
+    'apps/cli/src/composition/m251-execution-authority.ts',
+  );
+  const authoritySource = readFileSync(authorityPath, 'utf8');
+  const specifiers = collectModuleSpecifiers(authoritySource, authorityPath);
+
+  assert.equal(specifiers.includes('@codeclosure/testing'), false);
+  assert.equal(authoritySource.includes('FakeWorker'), false);
+  assert.equal(authoritySource.includes('FakeCandidateSource'), false);
+  assert.equal(authoritySource.includes('FakeVerificationRunner'), false);
+  assert.equal(authoritySource.includes('m251CandidateFreezeV2ProfileFixture'), false);
+  assert.equal(authoritySource.includes('m2-protected-demo-proof'), false);
+  assert.equal(authoritySource.includes('createCodexWorkerAdapter'), false);
+  assert.equal(authoritySource.includes('startAppServerClient'), false);
+});
+
 void test('the local workspace adapter depends only on public Runtime Candidate contracts', () => {
   const packageRoot = resolve(repositoryRoot, 'packages/workspace-local');
   const sourcePaths = [

@@ -171,6 +171,57 @@ const M2_CODEX_DOMAIN_IMPORTS = new Set([
   'sha256Digest',
 ]);
 
+const M251_EXECUTION_ADAPTER_IMPORTS = new Set([
+  'CODEX_M251_WORKER_ACTIVITY_POLICY_DIGEST',
+  'CODEX_M251_WORKER_ACTIVITY_POLICY_ID',
+  'CODEX_M251_WORKER_ADAPTER_ID',
+  'CODEX_M251_WORKER_ADAPTER_VERSION',
+  'CODEX_M251_WORKER_DISABLED_INTEGRATIONS_DIGEST',
+  'CODEX_M251_WORKER_ISOLATION_PROFILE_ID',
+  'CodexWorkerPhaseIsolationInputV1',
+  'codexM251WorkerIsolationProfileDigest',
+]);
+
+const M251_EXECUTION_DOMAIN_IMPORTS = new Set([
+  'ExecutionProfile',
+  'ExecutionProfileDefinition',
+  'ExternalApprovalPolicy',
+  'ExternalBackendCapability',
+  'ExternalBackendCapabilityClassification',
+  'ExternalBackendCapabilityRecord',
+  'ExternalCommandNetworkPolicy',
+  'ExternalCompactionPolicy',
+  'ExternalContinuityPolicy',
+  'ExternalExecutionPhaseDispatchEntry',
+  'ExternalFallbackPolicy',
+  'ExternalInstructionSourceBinding',
+  'ExternalInterruptionPolicy',
+  'ExternalPhaseCwdKind',
+  'ExternalPhaseResponseSchemaPolicy',
+  'ExternalPhaseSourceAuthorityKind',
+  'ExternalProjectConfigurationPolicy',
+  'ExternalRetentionPolicy',
+  'ExternalThreadPolicy',
+  'ExternalWorkerDispatchPolicy',
+  'Sha256Digest',
+  'WorkflowPhase',
+  'auditEventId',
+  'decodeExecutionProfileDefinition',
+  'decodeExternalBackendCapabilityRecord',
+  'decodeExternalExecutionProfileDefinition',
+  'deriveCapabilityGrant',
+  'executionProfileId',
+  'executionProfileProjection',
+  'externalBackendCapabilityRecordProjection',
+  'sha256Digest',
+]);
+
+const M251_EXECUTION_RUNTIME_COMPOSITION_IMPORTS = new Set([
+  'RuntimeExecutionProfile',
+  'RuntimeExecutionProfileResolver',
+  'bindRuntimeExecutionProfileAuthority',
+]);
+
 const M2_PROOF_CLIENT_IMPORTS = new Set(['AppServerClientError', 'AppServerClientErrorCode']);
 
 const M2_PROOF_DOMAIN_IMPORTS = new Set([
@@ -252,6 +303,14 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
       ['@codeclosure/codex-app-server-client', M2_CODEX_CLIENT_IMPORTS],
       ['@codeclosure/domain', M2_CODEX_DOMAIN_IMPORTS],
       ['@codeclosure/runtime/composition', new Set(['CandidateLeasedWorkerAuthorityReader'])],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m251-execution-authority.ts',
+    new Map([
+      ['@codeclosure/adapter-codex', M251_EXECUTION_ADAPTER_IMPORTS],
+      ['@codeclosure/domain', M251_EXECUTION_DOMAIN_IMPORTS],
+      ['@codeclosure/runtime/composition', M251_EXECUTION_RUNTIME_COMPOSITION_IMPORTS],
     ]),
   ],
   [
@@ -403,6 +462,25 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
         'PrepareTrustedCodexProfileInput',
         'TrustedCodexProfileAuthority',
         'TrustedCodexRoots',
+      ]),
+    }),
+  ],
+  [
+    'apps/cli/src/composition/m251-execution-authority.ts',
+    Object.freeze({
+      values: new Set([
+        'M251_DRIVER_VERSION',
+        'createM251FormalExecutionProfileDefinition',
+        'createM251RuntimeProfileRegistry',
+        'installM251ExecutionAuthority',
+      ]),
+      types: new Set([
+        'InstallM251ExecutionAuthorityInput',
+        'InstalledM251ExecutionAuthority',
+        'M251FormalExecutionProfileInput',
+        'M251PhaseExecutionAuthorityInput',
+        'M251RuntimeProfileCapabilities',
+        'M251RuntimeProfileRegistry',
       ]),
     }),
   ],
@@ -604,6 +682,7 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
       ],
     ]),
   ],
+  ['apps/cli/src/composition/m251-execution-authority.js', new Map()],
   [
     'apps/cli/src/composition/m2-protected-demo-proof.js',
     new Map([

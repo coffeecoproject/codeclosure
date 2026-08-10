@@ -825,6 +825,18 @@ function decodeRuntimeExecutionProfile(
       });
 }
 
+/**
+ * Trusted-composition validator for one in-process capability record bound to
+ * an exact installed Execution Profile. It does not authorize Driver dispatch.
+ */
+export function bindRuntimeExecutionProfileAuthority(
+  value: unknown,
+  expected: ExecutionProfile,
+  requireLocalCommandVerification = false,
+): RuntimeExecutionProfile {
+  return decodeRuntimeExecutionProfile(value, expected, requireLocalCommandVerification);
+}
+
 function statusAuthorityInput(parsed: z.infer<typeof driverAuthoritySchema>): unknown {
   return {
     goal: parsed.goal,

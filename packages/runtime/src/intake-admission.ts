@@ -24,7 +24,10 @@ import {
   decodeIntentProjectionRevision,
   decodeMaterialAmbiguitySet,
   decodeRawRequestRevision,
+  executionProfileId,
   intentAdmissionDecisionProjection,
+  policyBundleId,
+  sha256Digest,
   type AbandonmentBinding,
   type ClarificationQuestionId,
   type ClarificationQuestionSpec,
@@ -50,6 +53,11 @@ import {
 
 import type { DigestProvider } from './ports.js';
 import { m25IntakeBudgetDefinition } from './intake-assistant.js';
+import { M251_POLICY_BUNDLE_ID, M251_POLICY_BUNDLE_VERSION } from './m251-policy.js';
+import {
+  M251_REAL_CODEX_EXECUTION_PROFILE_ID,
+  M251_REAL_CODEX_EXECUTION_PROFILE_VERSION,
+} from './m251-execution-profile.js';
 import {
   M25_CLARIFICATION_QUESTION_PROMPTS,
   M25_DERIVATION_RULE_VERSION,
@@ -98,6 +106,11 @@ export interface GovernedExecutionPreflight {
   readonly executionProfileDigest: Sha256Digest;
 }
 
+export interface M25IntentAdmissionEngineOptions {
+  /** Exact trusted-composition tuple accepted for governed new-Goal admission. */
+  readonly governedExecutionPreflight?: GovernedExecutionPreflight;
+}
+
 export interface IssueIntentAdmissionDecisionRequest {
   readonly decisionId: IntentAdmissionDecisionId;
   readonly decidedAt: IsoTimestamp;
@@ -120,6 +133,16 @@ const M25_GOVERNED_EXECUTION_PROFILE_ID = 'profile_m1-happy-path';
 const M25_GOVERNED_EXECUTION_PROFILE_VERSION = 'codeclosure-m1-fake-profile-v1';
 const M25_GOVERNED_EXECUTION_PROFILE_DIGEST =
   'sha256:e06f2ce15169e0beac7da4998d090718a0c506d30690d2e703cdc946c77577a4';
+
+const m25HistoricalGovernedExecutionPreflight: GovernedExecutionPreflight = Object.freeze({
+  schemaVersion: 1,
+  workflowPolicyId: policyBundleId(M25_GOVERNED_WORKFLOW_POLICY_ID),
+  workflowPolicyVersion: M25_GOVERNED_WORKFLOW_POLICY_VERSION,
+  workflowPolicyDigest: sha256Digest(M25_GOVERNED_WORKFLOW_POLICY_DIGEST),
+  executionProfileId: executionProfileId(M25_GOVERNED_EXECUTION_PROFILE_ID),
+  executionProfileVersion: M25_GOVERNED_EXECUTION_PROFILE_VERSION,
+  executionProfileDigest: sha256Digest(M25_GOVERNED_EXECUTION_PROFILE_DIGEST),
+});
 
 function exactProject(
   left: DeclaredProjectRef | undefined,
@@ -298,25 +321,95 @@ function trace(
   throw new TypeError('Admission Policy does not contain the terminal rule');
 }
 
-function validateGovernedPreflight(preflight: GovernedExecutionPreflight | undefined): void {
+const governedExecutionPreflightKeys = Object.freeze([
+  'schemaVersion',
+  'workflowPolicyId',
+  'workflowPolicyVersion',
+  'workflowPolicyDigest',
+  'executionProfileId',
+  'executionProfileVersion',
+  'executionProfileDigest',
+]);
+
+function rawField(value: object, key: PropertyKey): unknown {
+  return Reflect.get(value, key) as unknown;
+}
+
+function exactGovernedPreflight(
+  left: GovernedExecutionPreflight,
+  right: GovernedExecutionPreflight,
+): boolean {
+  return (
+    left.workflowPolicyId === right.workflowPolicyId &&
+    left.workflowPolicyVersion === right.workflowPolicyVersion &&
+    left.workflowPolicyDigest === right.workflowPolicyDigest &&
+    left.executionProfileId === right.executionProfileId &&
+    left.executionProfileVersion === right.executionProfileVersion &&
+    left.executionProfileDigest === right.executionProfileDigest
+  );
+}
+
+function assertClosedGovernedPreflight(preflight: GovernedExecutionPreflight): void {
+  const keys = Reflect.ownKeys(preflight);
   if (
-    preflight?.workflowPolicyId !== M25_GOVERNED_WORKFLOW_POLICY_ID ||
-    preflight.workflowPolicyVersion !== M25_GOVERNED_WORKFLOW_POLICY_VERSION ||
-    preflight.workflowPolicyDigest !== M25_GOVERNED_WORKFLOW_POLICY_DIGEST ||
-    preflight.executionProfileId !== M25_GOVERNED_EXECUTION_PROFILE_ID ||
-    preflight.executionProfileVersion !== M25_GOVERNED_EXECUTION_PROFILE_VERSION ||
-    preflight.executionProfileDigest !== M25_GOVERNED_EXECUTION_PROFILE_DIGEST
+    keys.length !== governedExecutionPreflightKeys.length ||
+    governedExecutionPreflightKeys.some((key) => !keys.includes(key)) ||
+    rawField(preflight, 'schemaVersion') !== 1
   ) {
+    throw new TypeError('Governed execution preflight must be one closed schema-version-1 tuple');
+  }
+  policyBundleId(preflight.workflowPolicyId);
+  sha256Digest(preflight.workflowPolicyDigest);
+  executionProfileId(preflight.executionProfileId);
+  sha256Digest(preflight.executionProfileDigest);
+  if (
+    preflight.workflowPolicyVersion.trim().length === 0 ||
+    preflight.executionProfileVersion.trim().length === 0
+  ) {
+    throw new TypeError('Governed execution preflight versions must not be blank');
+  }
+}
+
+function assertSupportedGovernedPreflight(preflight: GovernedExecutionPreflight): void {
+  assertClosedGovernedPreflight(preflight);
+  const historical = exactGovernedPreflight(preflight, m25HistoricalGovernedExecutionPreflight);
+  const m251 =
+    preflight.workflowPolicyId === M251_POLICY_BUNDLE_ID &&
+    preflight.workflowPolicyVersion === M251_POLICY_BUNDLE_VERSION &&
+    preflight.executionProfileId === M251_REAL_CODEX_EXECUTION_PROFILE_ID &&
+    preflight.executionProfileVersion === M251_REAL_CODEX_EXECUTION_PROFILE_VERSION;
+  if (!historical && !m251) {
+    throw new TypeError('Governed execution preflight selects an unsupported authority tuple');
+  }
+}
+
+function validateGovernedPreflight(
+  preflight: GovernedExecutionPreflight | undefined,
+  expected: GovernedExecutionPreflight,
+): void {
+  if (preflight === undefined) {
+    throw new TypeError('Governed execution requires the exact fixed Workflow/Profile preflight');
+  }
+  assertClosedGovernedPreflight(preflight);
+  if (!exactGovernedPreflight(preflight, expected)) {
     throw new TypeError('Governed execution requires the exact fixed Workflow/Profile preflight');
   }
 }
 
-/** Deterministic, capability-free implementation of the fixed M2.5 Admission Policy. */
+/** Deterministic, capability-free M2.5 Admission Policy with one trusted exact preflight tuple. */
 export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
   readonly #digests: DigestProvider & IntakeDigestVerifier;
+  readonly #governedExecutionPreflight: GovernedExecutionPreflight;
 
-  public constructor(digests: DigestProvider & IntakeDigestVerifier) {
+  public constructor(
+    digests: DigestProvider & IntakeDigestVerifier,
+    options: M25IntentAdmissionEngineOptions = {},
+  ) {
     this.#digests = digests;
+    const governedExecutionPreflight =
+      options.governedExecutionPreflight ?? m25HistoricalGovernedExecutionPreflight;
+    assertSupportedGovernedPreflight(governedExecutionPreflight);
+    this.#governedExecutionPreflight = Object.freeze({ ...governedExecutionPreflight });
   }
 
   public issueDecision(request: IssueIntentAdmissionDecisionRequest): IntentAdmissionDecision {
@@ -697,7 +790,10 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
     }
     const governed = current.interactionAction === IntakeInteractionAction.GOVERNED_EXECUTION;
     if (governed) {
-      validateGovernedPreflight(request.input.governedExecutionPreflight);
+      validateGovernedPreflight(
+        request.input.governedExecutionPreflight,
+        this.#governedExecutionPreflight,
+      );
     }
     const reasonCode = governed
       ? IntentAdmissionReasonCode.GOVERNED_EXECUTION_ADMITTED

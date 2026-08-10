@@ -242,7 +242,9 @@ function coordinator(
     assistant,
     packageCompiler: new M25IntakePackageCompiler({ canonicalizer, digests }),
     projectionCompiler,
-    admissionEngine: new M25IntentAdmissionEngine(digests),
+    admissionEngine: new M25IntentAdmissionEngine(digests, {
+      ...(governed === undefined ? {} : { governedExecutionPreflight: governed.preflight }),
+    }),
     admissionPolicyId,
     ...(governed === undefined
       ? {}
