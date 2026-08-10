@@ -9,12 +9,15 @@ import {
   decodeCandidateGeneration,
   decodeCheckSpecification,
   decodeEvidenceObservation,
+  decodeProjectReadGitStateProjection,
+  decodeProjectReadSourceTreeProjection,
   decodeVerificationObligation,
   evidenceId,
   fakeVerificationDetailCodeForStatus,
   goalId,
   goalRevision,
   policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   verificationObligationId,
   workflowId,
@@ -32,6 +35,9 @@ import {
   type GoalId,
   type GoalRevision,
   type PolicyBundleId,
+  type ProjectReadGitStateProjection,
+  type ProjectReadSourceTreeProjection,
+  type ProjectSourceReadAuthorityId,
   type Sha256Digest,
   type VerificationObligation,
   type VerificationObligationId,
@@ -61,6 +67,20 @@ export interface CandidatePreparationRequest {
   readonly projectPath: string;
 }
 
+export interface CandidatePreparationRequestV2 extends Omit<
+  CandidatePreparationRequest,
+  'schemaVersion'
+> {
+  readonly schemaVersion: 2;
+  readonly planProjectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly planProjectReadAuthorityRecordDigest: Sha256Digest;
+  readonly expectedSourceTree: ProjectReadSourceTreeProjection;
+  readonly expectedGitState: ProjectReadGitStateProjection;
+}
+
+export type CandidatePreparationRequestValue =
+  CandidatePreparationRequest | CandidatePreparationRequestV2;
+
 export interface CandidatePreparation {
   readonly schemaVersion: 1;
   readonly goalId: GoalId;
@@ -69,6 +89,37 @@ export interface CandidatePreparation {
   readonly generationId: CandidateGenerationId;
   readonly baseDigest: Sha256Digest;
 }
+
+export const CandidatePreparationDisposition = {
+  PREPARED: 'PREPARED',
+  SOURCE_NOT_CURRENT: 'SOURCE_NOT_CURRENT',
+} as const;
+export type CandidatePreparationDisposition =
+  (typeof CandidatePreparationDisposition)[keyof typeof CandidatePreparationDisposition];
+
+interface CandidatePreparationV2Base {
+  readonly schemaVersion: 2;
+  readonly goalId: GoalId;
+  readonly workflowId: WorkflowId;
+  readonly candidateId: CandidateId;
+  readonly generationId: CandidateGenerationId;
+  readonly planProjectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly planProjectReadAuthorityRecordDigest: Sha256Digest;
+  readonly observedSourceTree: ProjectReadSourceTreeProjection;
+  readonly observedGitState: ProjectReadGitStateProjection;
+}
+
+export interface PreparedCandidatePreparationV2 extends CandidatePreparationV2Base {
+  readonly disposition: typeof CandidatePreparationDisposition.PREPARED;
+  readonly baseDigest: Sha256Digest;
+}
+
+export interface SourceNotCurrentCandidatePreparationV2 extends CandidatePreparationV2Base {
+  readonly disposition: typeof CandidatePreparationDisposition.SOURCE_NOT_CURRENT;
+}
+
+export type CandidatePreparationV2 =
+  PreparedCandidatePreparationV2 | SourceNotCurrentCandidatePreparationV2;
 
 export interface CandidateRepairPreparationRequest {
   readonly schemaVersion: 1;
@@ -204,7 +255,7 @@ export type CandidateSourceFailureCode =
   (typeof CandidateSourceFailureCode)[keyof typeof CandidateSourceFailureCode];
 
 export interface CandidateSourcePort {
-  prepare(request: CandidatePreparationRequest): unknown;
+  prepare(request: CandidatePreparationRequestValue): unknown;
   prepareRepair(request: CandidateRepairPreparationRequest): unknown;
   observeFreeze(request: CandidateFreezeRequestValue): unknown;
   observeFrozen(request: FrozenCandidateIntegrityRequest): unknown;
@@ -242,6 +293,60 @@ export function decodeCandidatePreparation(value: unknown): CandidatePreparation
     candidateId: candidateId(parsed.candidateId),
     generationId: candidateGenerationId(parsed.generationId),
     baseDigest: sha256Digest(parsed.baseDigest),
+  });
+}
+
+const candidatePreparationV2BaseSchema = {
+  schemaVersion: z.literal(2),
+  goalId: z.string(),
+  workflowId: z.string(),
+  candidateId: z.string(),
+  generationId: z.string(),
+  planProjectReadAuthorityId: z.string(),
+  planProjectReadAuthorityRecordDigest: z.string(),
+  observedSourceTree: z.unknown(),
+  observedGitState: z.unknown(),
+} as const;
+
+const candidatePreparationV2Schema = z.discriminatedUnion('disposition', [
+  z
+    .object({
+      ...candidatePreparationV2BaseSchema,
+      disposition: z.literal(CandidatePreparationDisposition.PREPARED),
+      baseDigest: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...candidatePreparationV2BaseSchema,
+      disposition: z.literal(CandidatePreparationDisposition.SOURCE_NOT_CURRENT),
+    })
+    .strict(),
+]);
+
+export function decodeCandidatePreparationV2(value: unknown): CandidatePreparationV2 {
+  const parsed = candidatePreparationV2Schema.parse(value);
+  const base = {
+    schemaVersion: parsed.schemaVersion,
+    goalId: goalId(parsed.goalId),
+    workflowId: workflowId(parsed.workflowId),
+    candidateId: candidateId(parsed.candidateId),
+    generationId: candidateGenerationId(parsed.generationId),
+    planProjectReadAuthorityId: projectSourceReadAuthorityId(parsed.planProjectReadAuthorityId),
+    planProjectReadAuthorityRecordDigest: sha256Digest(parsed.planProjectReadAuthorityRecordDigest),
+    observedSourceTree: decodeProjectReadSourceTreeProjection(parsed.observedSourceTree),
+    observedGitState: decodeProjectReadGitStateProjection(parsed.observedGitState),
+  } as const;
+  if (parsed.disposition === CandidatePreparationDisposition.PREPARED) {
+    return Object.freeze({
+      ...base,
+      disposition: CandidatePreparationDisposition.PREPARED,
+      baseDigest: sha256Digest(parsed.baseDigest),
+    });
+  }
+  return Object.freeze({
+    ...base,
+    disposition: CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
   });
 }
 
@@ -506,6 +611,39 @@ export function validateCandidatePreparationRequest(
       .refine((path) => path.trim().length > 0)
       .parse(request.projectPath),
   });
+}
+
+export function validateCandidatePreparationRequestV2(
+  request: CandidatePreparationRequestV2,
+): CandidatePreparationRequestV2 {
+  const expectedSourceTree = decodeProjectReadSourceTreeProjection(request.expectedSourceTree);
+  const expectedGitState = decodeProjectReadGitStateProjection(request.expectedGitState);
+  return Object.freeze({
+    schemaVersion: z.literal(2).parse(request.schemaVersion),
+    goalId: goalId(request.goalId),
+    goalRevision: goalRevision(request.goalRevision),
+    workflowId: workflowId(request.workflowId),
+    candidateId: candidateId(request.candidateId),
+    generationId: candidateGenerationId(request.generationId),
+    projectPath: z
+      .string()
+      .refine((path) => path.trim().length > 0)
+      .parse(request.projectPath),
+    planProjectReadAuthorityId: projectSourceReadAuthorityId(request.planProjectReadAuthorityId),
+    planProjectReadAuthorityRecordDigest: sha256Digest(
+      request.planProjectReadAuthorityRecordDigest,
+    ),
+    expectedSourceTree,
+    expectedGitState,
+  });
+}
+
+export function validateCandidatePreparationRequestValue(
+  request: CandidatePreparationRequestValue,
+): CandidatePreparationRequestValue {
+  return request.schemaVersion === 1
+    ? validateCandidatePreparationRequest(request)
+    : validateCandidatePreparationRequestV2(request);
 }
 
 export function validateCandidateRepairPreparationRequest(

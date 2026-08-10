@@ -117,6 +117,12 @@ export interface FailWorkflowIntegrity extends WorkflowCommandBase {
   readonly type: 'FAIL_WORKFLOW_INTEGRITY';
 }
 
+export const WorkflowIntegrityFailureReasonCode = {
+  PLAN_SOURCE_NOT_CURRENT: 'PLAN_SOURCE_NOT_CURRENT',
+} as const;
+export type WorkflowIntegrityFailureReasonCode =
+  (typeof WorkflowIntegrityFailureReasonCode)[keyof typeof WorkflowIntegrityFailureReasonCode];
+
 export type WorkflowCommand = RequestPhaseTransition | CancelWorkflow | FailWorkflowIntegrity;
 
 export interface WorkflowPhaseTransitioned {

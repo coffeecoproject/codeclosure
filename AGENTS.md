@@ -101,9 +101,12 @@ local policy may admit the pinned best-effort `unknown` command action only for
 v2 result must succeed before Evidence can exist. This foundation has offline
 coverage but no `M251-C11` acceptance verdict.
 Fixture isolation selection is not effective live containment proof. The legacy
-Driver still rejects Profile v3; Runtime source-currency enforcement, real phase
-dispatch/composition, and milestone assessment have not started. A real pinned-version
-integration test found that
+Driver still rejects Profile v3. The Candidate-creation source-currency guard
+now binds exact PLAN ProjectRead authority through preparation v2 and the Store
+commit; mismatch atomically retains `PLAN_SOURCE_NOT_CURRENT` without creating
+a Candidate. Candidate-free pre/post-Turn source and snapshot currency, real
+phase dispatch/composition, and milestone assessment have not started. A real
+pinned-version integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
 configuration itself requests two deprecated Web Search feature keys. The same

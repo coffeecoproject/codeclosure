@@ -288,24 +288,14 @@ export interface LocalProjectReadSourceSnapshot {
   readonly gitState: ProjectReadGitState;
 }
 
-export function captureProjectReadSourceSnapshotFromRoot(
-  sourceRootValue: string,
-  bounds: CandidateWorkspaceBounds,
+export function projectReadSourceSnapshotFromCandidateSnapshot(
+  snapshot: CandidateSourceSnapshot,
 ): LocalProjectReadSourceSnapshot {
-  const sourceRoot = resolveSourceRoot(sourceRootValue);
-  assertSupportedWorkingTreeEntries(sourceRoot, bounds);
-  const selectedPaths = selectedExistingPaths(sourceRoot, bounds);
-  const candidateTree = createTreeManifestFromPaths(
-    sourceRoot,
-    selectedPaths,
-    'candidate-source-tree-v1',
-    bounds,
-  );
   const sourceTreeWithoutDigest = Object.freeze({
     schemaVersion: 1 as const,
     profile: 'codeclosure-project-read-source-tree-v1' as const,
     entries: Object.freeze(
-      candidateTree.entries.map((entry) =>
+      snapshot.tree.entries.map((entry) =>
         Object.freeze({
           schemaVersion: 1 as const,
           path: entry.path,
@@ -315,34 +305,36 @@ export function captureProjectReadSourceSnapshotFromRoot(
         }),
       ),
     ),
-    fileCount: candidateTree.fileCount,
-    totalBytes: candidateTree.totalBytes,
+    fileCount: snapshot.tree.fileCount,
+    totalBytes: snapshot.tree.totalBytes,
   });
   const sourceTree = decodeProjectReadSnapshotSourceTree({
     ...sourceTreeWithoutDigest,
     projectionDigest: digestProjectReadWorkspaceValue(sourceTreeWithoutDigest),
   });
-
-  const candidateGit = gitMetadata(
-    sourceRoot,
-    selectedPaths,
-    Math.max(bounds.maximumTotalBytes, 1024 * 1024),
-  );
   const gitStateWithoutDigest = Object.freeze({
     schemaVersion: 1 as const,
     profile: 'codeclosure-project-read-git-state-v1' as const,
-    sourceProjectRoot: candidateGit.sourceProjectRoot,
-    repositoryControlRootIdentity: candidateGit.gitCommonDirectory,
-    headCommit: candidateGit.headCommit,
-    selectedPathSetDigest: candidateGit.selectedPathSetDigest,
-    stagedIndexManifestDigest: candidateGit.stagedIndexManifestDigest,
-    porcelainV2Digest: candidateGit.porcelainV2Digest,
+    sourceProjectRoot: snapshot.git.sourceProjectRoot,
+    repositoryControlRootIdentity: snapshot.git.gitCommonDirectory,
+    headCommit: snapshot.git.headCommit,
+    selectedPathSetDigest: snapshot.git.selectedPathSetDigest,
+    stagedIndexManifestDigest: snapshot.git.stagedIndexManifestDigest,
+    porcelainV2Digest: snapshot.git.porcelainV2Digest,
   });
   const gitState = decodeProjectReadSnapshotGitState({
     ...gitStateWithoutDigest,
     projectionDigest: digestProjectReadWorkspaceValue(gitStateWithoutDigest),
   });
   return Object.freeze({ sourceTree, gitState });
+}
+
+export function captureProjectReadSourceSnapshotFromRoot(
+  sourceRootValue: string,
+  bounds: CandidateWorkspaceBounds,
+): LocalProjectReadSourceSnapshot {
+  const sourceRoot = resolveSourceRoot(sourceRootValue);
+  return projectReadSourceSnapshotFromCandidateSnapshot(captureSourceSnapshot(sourceRoot, bounds));
 }
 
 export function captureProjectReadSourceSnapshot(

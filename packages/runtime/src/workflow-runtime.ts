@@ -15,6 +15,7 @@ import {
   RunStatus,
   WorkerResultKind,
   WorkflowGuard,
+  WorkflowIntegrityFailureReasonCode,
   WorkflowPhase,
   WorkflowRejectionCode,
   acceptanceRepairRecordProjection,
@@ -50,6 +51,7 @@ import {
   decodeAttemptSnapshot,
   decodeGoalSnapshot,
   decodePolicyBundle,
+  decodeProjectSourceReadAuthorityRecord,
   decodeWorkflowPolicyBinding,
   decodeWorkflowSnapshot,
   decideAttempt,
@@ -69,6 +71,9 @@ import {
   latestIsoTimestamp,
   policyBundleId,
   policyBundleProjection,
+  projectReadGitStateProjection,
+  projectReadSourceTreeProjection,
+  projectSourceReadAuthorityProjection,
   resultingRunStatusForFailure,
   sha256Digest,
   workflowPolicyBindingProjection,
@@ -103,6 +108,7 @@ import {
   type ProtectedAssetReadLease,
   type PolicyBundle,
   type PolicyBundleId,
+  type ProjectSourceReadAuthorityRecord,
   type Sha256Digest,
   type PriorAttemptFeedback,
   type RepairContext,
@@ -155,18 +161,21 @@ import type {
   VerificationPort,
 } from './candidate-evidence-contracts.js';
 import {
+  CandidatePreparationDisposition,
   CandidateSourceFailureCode,
   VerificationResultAdmissionFailureCode as VerificationAdmissionFailure,
   admitVerificationResult,
   decodeCandidateFreezeObservation,
   decodeCandidateFreezeObservationV2,
   decodeCandidatePreparation,
+  decodeCandidatePreparationV2,
   decodeCandidateRepairPreparation,
   decodeFrozenCandidateIntegrityObservation,
   decodeVerificationRequest,
   validateCandidateFreezeRequest,
   validateCandidateFreezeRequestV2,
   validateCandidatePreparationRequest,
+  validateCandidatePreparationRequestV2,
   validateCandidateRepairPreparationRequest,
   validateFrozenCandidateIntegrityRequest,
 } from './candidate-evidence-contracts.js';
@@ -594,6 +603,7 @@ function isCandidateEvidenceControlStore(
       'getCandidateForGoal',
       'getCandidateGeneration',
       'getCandidateAuthorityForWorkflow',
+      'getCurrentPlanProjectSourceReadAuthority',
       'nextCandidateGenerationSequence',
       'getCheckSpecification',
       'listCheckSpecifications',
@@ -606,6 +616,7 @@ function isCandidateEvidenceControlStore(
       'listEvidenceForGeneration',
       'getEvidenceSet',
       'commitCandidatePreparation',
+      'commitPlanSourceMismatch',
       'commitWorkflowCandidateEvent',
       'commitCandidateIntegrityFailure',
       'commitVerificationIntegrityFailure',
@@ -4326,6 +4337,80 @@ export class WorkflowRuntimeKernel {
     };
   }
 
+  private resolveCurrentPlanProjectReadAuthority(
+    commandIdentifier: CommandId,
+    goal: Goal,
+    workflow: WorkflowInstance,
+    policy: ActiveWorkerPolicy,
+    profile: BoundExecutionProfile,
+    store: CandidateEvidenceControlStore,
+  ): ProjectSourceReadAuthorityRecord {
+    const rawAuthority = this.storeOperation(
+      commandIdentifier,
+      'PLAN_PROJECT_READ_AUTHORITY_READ_FAILURE',
+      () => store.getCurrentPlanProjectSourceReadAuthority(workflow.id),
+    );
+    if (rawAuthority === undefined) {
+      throw new TypeError(`Workflow ${workflow.id} has no admitted PLAN project-read authority`);
+    }
+    const authority = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'PLAN_PROJECT_READ_AUTHORITY_INVALID',
+      () => decodeProjectSourceReadAuthorityRecord(rawAuthority),
+    );
+    const rawAttempt = this.storeOperation(
+      commandIdentifier,
+      'PLAN_PROJECT_READ_ATTEMPT_READ_FAILURE',
+      () => store.getAttempt(authority.attemptId),
+    );
+    if (rawAttempt === undefined) {
+      throw new TypeError('PLAN project-read authority has no retained Attempt');
+    }
+    const attempt = this.decodeStoreSnapshot(
+      commandIdentifier,
+      'PLAN_PROJECT_READ_ATTEMPT_INVALID',
+      () => decodeAttemptSnapshot(rawAttempt),
+    );
+    const { projectionDigest: sourceTreeDigest, ...sourceTree } = authority.sourceTree;
+    const { projectionDigest: gitStateDigest, ...gitState } = authority.gitState;
+    const { recordDigest, ...record } = authority;
+    if (
+      sourceTreeDigest !==
+        this.digest(
+          commandIdentifier,
+          projectReadSourceTreeProjection(sourceTree),
+          'PLAN_PROJECT_READ_SOURCE_TREE_DIGEST_FAILURE',
+        ) ||
+      gitStateDigest !==
+        this.digest(
+          commandIdentifier,
+          projectReadGitStateProjection(gitState),
+          'PLAN_PROJECT_READ_GIT_STATE_DIGEST_FAILURE',
+        ) ||
+      recordDigest !==
+        this.digest(
+          commandIdentifier,
+          projectSourceReadAuthorityProjection(record),
+          'PLAN_PROJECT_READ_RECORD_DIGEST_FAILURE',
+        ) ||
+      authority.goalId !== goal.id ||
+      authority.goalRevision !== goal.revision ||
+      authority.workflowId !== workflow.id ||
+      authority.phase !== WorkflowPhase.PLAN ||
+      authority.normalizedProjectRoot !== goal.scope.projectPath ||
+      authority.policyBundleId !== policy.bundle.id ||
+      authority.policyBundleDigest !== policy.bundle.digest ||
+      authority.executionProfileId !== profile.profile.profile.id ||
+      authority.executionProfileDigest !== profile.profile.profile.digest ||
+      attempt.workflowId !== workflow.id ||
+      attempt.phase !== WorkflowPhase.PLAN ||
+      attempt.status !== AttemptStatus.RESULT_RECORDED
+    ) {
+      throw new TypeError('PLAN project-read authority is stale or cross-bound');
+    }
+    return authority;
+  }
+
   private planCandidatePreparation(
     input: RequestPhaseTransitionRequest,
     goal: Goal,
@@ -4346,6 +4431,16 @@ export class WorkflowRuntimeKernel {
         input.commandId,
         boundProfile.profile.profile,
       ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
+    const planProjectReadAuthority = usesContainedFreeze
+      ? this.resolveCurrentPlanProjectReadAuthority(
+          input.commandId,
+          goal,
+          workflow,
+          activePolicy,
+          boundProfile,
+          store,
+        )
+      : undefined;
     const occurredAt = this.causalNow(
       input.commandId,
       workflow.updatedAt,
@@ -4362,6 +4457,9 @@ export class WorkflowRuntimeKernel {
         : this.decodeStoreSnapshot(input.commandId, 'CANDIDATE_ROOT_INVALID', () =>
             decodeCandidate(rawExistingCandidate),
           );
+    if (planProjectReadAuthority !== undefined && existingCandidate !== undefined) {
+      throw new TypeError('Formal M2.5.1 PLAN transition already has Candidate authority');
+    }
     const candidateIdentifier =
       existingCandidate?.id ??
       this.internalOperation(input.commandId, 'CANDIDATE_ID_GENERATION_FAILURE', () =>
@@ -4381,30 +4479,56 @@ export class WorkflowRuntimeKernel {
     if (!Number.isSafeInteger(sequence) || sequence < 1) {
       throw new TypeError('Store returned an invalid Candidate generation sequence');
     }
-    const preparationRequest = validateCandidatePreparationRequest({
-      schemaVersion: 1,
-      goalId: goal.id,
-      goalRevision: goal.revision,
-      workflowId: workflow.id,
-      candidateId: candidateIdentifier,
-      generationId: generationIdentifier,
-      projectPath: goal.scope.projectPath,
-    });
+    const preparationRequest =
+      planProjectReadAuthority === undefined
+        ? validateCandidatePreparationRequest({
+            schemaVersion: 1,
+            goalId: goal.id,
+            goalRevision: goal.revision,
+            workflowId: workflow.id,
+            candidateId: candidateIdentifier,
+            generationId: generationIdentifier,
+            projectPath: goal.scope.projectPath,
+          })
+        : validateCandidatePreparationRequestV2({
+            schemaVersion: 2,
+            goalId: goal.id,
+            goalRevision: goal.revision,
+            workflowId: workflow.id,
+            candidateId: candidateIdentifier,
+            generationId: generationIdentifier,
+            projectPath: goal.scope.projectPath,
+            planProjectReadAuthorityId: planProjectReadAuthority.id,
+            planProjectReadAuthorityRecordDigest: planProjectReadAuthority.recordDigest,
+            expectedSourceTree: planProjectReadAuthority.sourceTree,
+            expectedGitState: planProjectReadAuthority.gitState,
+          });
     const rawPreparation = this.candidateSourceOperation(
       CandidateSourceFailureCode.PREPARATION_INVOCATION_FAILED,
       'Candidate Source preparation failed',
       () => runtime.candidateSource.prepare(preparationRequest),
     );
-    const preparation = this.candidateSourceOperation(
-      CandidateSourceFailureCode.PREPARATION_OUTPUT_MALFORMED,
-      'Candidate Source returned malformed preparation output',
-      () => decodeCandidatePreparation(rawPreparation),
-    );
+    const preparation =
+      preparationRequest.schemaVersion === 1
+        ? this.candidateSourceOperation(
+            CandidateSourceFailureCode.PREPARATION_OUTPUT_MALFORMED,
+            'Candidate Source returned malformed preparation output',
+            () => decodeCandidatePreparation(rawPreparation),
+          )
+        : this.candidateSourceOperation(
+            CandidateSourceFailureCode.PREPARATION_OUTPUT_MALFORMED,
+            'Candidate Source returned malformed preparation output',
+            () => decodeCandidatePreparationV2(rawPreparation),
+          );
     if (
       preparation.goalId !== goal.id ||
       preparation.workflowId !== workflow.id ||
       preparation.candidateId !== candidateIdentifier ||
-      preparation.generationId !== generationIdentifier
+      preparation.generationId !== generationIdentifier ||
+      (preparation.schemaVersion === 2 &&
+        (preparation.planProjectReadAuthorityId !== planProjectReadAuthority?.id ||
+          preparation.planProjectReadAuthorityRecordDigest !==
+            planProjectReadAuthority.recordDigest))
     ) {
       throw new CommandExecutionFailure(
         commandError(
@@ -4413,6 +4537,92 @@ export class WorkflowRuntimeKernel {
           CandidateSourceFailureCode.PREPARATION_BINDING_MISMATCH,
         ),
       );
+    }
+    let preparationBaseDigest: Sha256Digest;
+    if (preparation.schemaVersion === 2) {
+      if (planProjectReadAuthority === undefined) {
+        throw new TypeError('Candidate preparation v2 has no PLAN authority');
+      }
+      const observedSourceTreeDigest = this.digest(
+        input.commandId,
+        projectReadSourceTreeProjection(preparation.observedSourceTree),
+        'CANDIDATE_PREPARATION_SOURCE_TREE_DIGEST_FAILURE',
+      );
+      const observedGitStateDigest = this.digest(
+        input.commandId,
+        projectReadGitStateProjection(preparation.observedGitState),
+        'CANDIDATE_PREPARATION_GIT_STATE_DIGEST_FAILURE',
+      );
+      if (
+        observedSourceTreeDigest !== preparation.observedSourceTree.projectionDigest ||
+        observedGitStateDigest !== preparation.observedGitState.projectionDigest
+      ) {
+        throw new CommandExecutionFailure(
+          commandError(
+            RuntimeErrorCode.INTERNAL_FAILURE,
+            'Candidate Source preparation contains a false source projection digest',
+            CandidateSourceFailureCode.PREPARATION_BINDING_MISMATCH,
+          ),
+        );
+      }
+      const sourceMatchesPlan =
+        observedSourceTreeDigest === planProjectReadAuthority.sourceTree.projectionDigest &&
+        observedGitStateDigest === planProjectReadAuthority.gitState.projectionDigest;
+      if (preparation.disposition === CandidatePreparationDisposition.SOURCE_NOT_CURRENT) {
+        if (sourceMatchesPlan) {
+          throw new CommandExecutionFailure(
+            commandError(
+              RuntimeErrorCode.INTERNAL_FAILURE,
+              'Candidate Source reported a false PLAN source mismatch',
+              CandidateSourceFailureCode.PREPARATION_BINDING_MISMATCH,
+            ),
+          );
+        }
+        const workflowDecision = decideWorkflow(workflow, {
+          type: 'FAIL_WORKFLOW_INTEGRITY',
+          commandId: input.commandId,
+          workflowId: workflow.id,
+          expectedVersion: input.expectedWorkflowVersion,
+          occurredAt,
+          reason: WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT,
+        });
+        if (!workflowDecision.accepted) {
+          return this.domainRejectPlan(workflowDecision.rejection);
+        }
+        const event = workflowDecision.events[0];
+        const payloadDigest = this.digest(
+          input.commandId,
+          { event },
+          'COMMAND_PAYLOAD_DIGEST_FAILURE',
+        );
+        return {
+          kind: 'APPLY',
+          commit: () =>
+            store.commitPlanSourceMismatch({
+              inputDigest,
+              target,
+              event,
+              auditEventId: this.nextAuditEventId(input.commandId),
+              payloadDigest,
+              planProjectReadAuthorityId: planProjectReadAuthority.id,
+              planProjectReadAuthorityRecordDigest: planProjectReadAuthority.recordDigest,
+              observedSourceTree: preparation.observedSourceTree,
+              observedGitState: preparation.observedGitState,
+            }),
+        };
+      }
+      if (!sourceMatchesPlan) {
+        throw new CommandExecutionFailure(
+          commandError(
+            RuntimeErrorCode.INTERNAL_FAILURE,
+            'Candidate Source prepared a Candidate from stale PLAN source',
+            CandidateSourceFailureCode.PREPARATION_BINDING_MISMATCH,
+          ),
+        );
+      }
+      preparationBaseDigest = preparation.baseDigest;
+    } else {
+      preparationBaseDigest = preparation.baseDigest;
     }
     const baseProjectIdentity = this.internalOperation(
       input.commandId,
@@ -4444,7 +4654,7 @@ export class WorkflowRuntimeKernel {
         ? {}
         : { parentGenerationId: workflow.activeCandidateGenerationId }),
       workspaceIdentity,
-      baseDigest: preparation.baseDigest,
+      baseDigest: preparationBaseDigest,
       createdAt: occurredAt,
     });
     const freezeCheckId = this.internalOperation(
@@ -4504,6 +4714,16 @@ export class WorkflowRuntimeKernel {
       return this.domainRejectPlan(decision.rejection);
     }
     const event = decision.events[0];
+    const planSourceBinding =
+      preparation.schemaVersion === 2 && planProjectReadAuthority !== undefined
+        ? Object.freeze({
+            schemaVersion: 2 as const,
+            planProjectReadAuthorityId: planProjectReadAuthority.id,
+            planProjectReadAuthorityRecordDigest: planProjectReadAuthority.recordDigest,
+            observedSourceTree: preparation.observedSourceTree,
+            observedGitState: preparation.observedGitState,
+          })
+        : undefined;
     const payloadDigest = this.digest(
       input.commandId,
       {
@@ -4512,6 +4732,7 @@ export class WorkflowRuntimeKernel {
         generation,
         checkSpecifications,
         obligations,
+        ...(planSourceBinding === undefined ? {} : { planSourceBinding }),
       },
       'COMMAND_PAYLOAD_DIGEST_FAILURE',
     );
@@ -4528,6 +4749,7 @@ export class WorkflowRuntimeKernel {
           generation,
           checkSpecifications,
           obligations,
+          ...(planSourceBinding === undefined ? {} : { planSourceBinding }),
           candidateAuditEventId: this.nextAuditEventId(input.commandId),
           generationAuditEventId: this.nextAuditEventId(input.commandId),
           checkSpecificationAuditEventIds: Object.freeze(

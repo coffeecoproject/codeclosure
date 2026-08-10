@@ -139,10 +139,15 @@ plus Candidate-bound `workspaceWrite` completion success and result discard on
 an out-of-scope Candidate file change. The ProjectRead directive member carries
 the complete strictly decoded retained authority record, recomputes its digest,
 and reduces it to ID/digest/cwd only for receipts and result binding. The
-retained v2 Candidate Adapter suite remains green. The legacy Driver still rejects v3
-during installed-Profile preflight before Start mutation, Adapter, or
-FakeWorker dispatch; Runtime source-currency enforcement, real phase
-dispatch/composition, and mandatory live proof remain pending.
+retained v2 Candidate Adapter suite remains green. Runtime and Store now bind
+the `PLAN -> IMPLEMENT` Candidate preparation to the exact completed PLAN
+ProjectRead authority: a matching preparation-v2 result is required for
+Candidate creation, while mismatch atomically fails the Workflow with
+`PLAN_SOURCE_NOT_CURRENT` and creates no Candidate. The legacy Driver still
+rejects v3 during installed-Profile preflight before Start mutation, Adapter,
+or FakeWorker dispatch; candidate-free pre/post-Turn source and snapshot
+currency, real phase dispatch/composition, and mandatory live proof remain
+pending.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -846,12 +851,14 @@ checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,
 protected assets, and sibling snapshots would remain unreadable to model tools.
 The snapshot would have no Candidate, Evidence, Acceptance, or Workflow-writing
-authority. A Plan-source mismatch would persist the exact Workflow integrity
-code, project the Workflow to `FAILED` and Goal to non-resumable
-`BLOCKED / INSPECT_BLOCKER`, and create no Candidate. This port and record are
-accepted under ADR 0043; the remaining phase-specific external execution,
-source-currency enforcement, and production composition are not yet
-implemented.
+authority. A Plan-source mismatch now persists the exact Workflow integrity
+code, projects the Workflow to `FAILED` and Goal to non-resumable
+`BLOCKED / INSPECT_BLOCKER`, and creates no Candidate. Matching Candidate
+preparation carries the same exact PLAN authority and observed source
+projections into the Store-owned compound commit. This implements only the
+Candidate-creation source-currency boundary accepted under ADR 0043; the
+remaining candidate-free pre/post-Turn checks, phase-specific external
+execution, and production composition are not yet implemented.
 
 ### Evidence Store
 

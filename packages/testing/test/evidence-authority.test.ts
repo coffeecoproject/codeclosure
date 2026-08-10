@@ -7,6 +7,9 @@ import {
   EvidenceKind,
   EvidenceProducerType,
   EvidenceResultStatus,
+  PROJECT_READ_GIT_STATE_PROFILE,
+  PROJECT_READ_SOURCE_TREE_PROFILE,
+  ProjectReadFileMode,
   applyEvidenceEligibilityEvent,
   attemptId,
   candidateGenerationId,
@@ -29,6 +32,9 @@ import {
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectReadGitStateProjection,
+  projectReadSourceTreeProjection,
+  projectSourceReadAuthorityId,
   sha256Digest,
   successCriterionId,
   verificationObligationId,
@@ -37,12 +43,14 @@ import {
   type TestResultEvidenceRecord,
 } from '@codeclosure/domain';
 import {
+  CandidatePreparationDisposition,
   CanonicalJsonSha256DigestProvider,
   admitVerificationResult,
   buildEvidenceSet,
   createTestResultEvidenceRecord,
   createM1CandidateEvidencePolicy,
   decodeCandidatePreparation,
+  decodeCandidatePreparationV2,
   decodeVerificationRequest,
   deriveM1EvidenceEnvironmentIdentity,
   verifyEvidenceSetAuthority,
@@ -82,6 +90,91 @@ void test('[I-005][I-018] Candidate Source output cannot supply authoritative id
     decodeCandidatePreparation({
       ...preparation,
       workspaceIdentity: 'untrusted-workspace-identity',
+    }),
+  );
+});
+
+void test('[I-005][I-008][M251-F08] Candidate preparation v2 is a closed, authority-bound result union', () => {
+  const sourceTreeFields = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_SOURCE_TREE_PROFILE,
+    entries: Object.freeze([
+      Object.freeze({
+        schemaVersion: 1 as const,
+        path: 'src/index.ts',
+        mode: ProjectReadFileMode.REGULAR,
+        size: 1,
+        contentDigest: digests.digest({ source: 'candidate-preparation-v2' }),
+      }),
+    ]),
+    fileCount: 1,
+    totalBytes: 1,
+  });
+  const sourceTree = Object.freeze({
+    ...sourceTreeFields,
+    projectionDigest: digests.digest(projectReadSourceTreeProjection(sourceTreeFields)),
+  });
+  const gitStateFields = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_GIT_STATE_PROFILE,
+    sourceProjectRoot: '/fixture/candidate-preparation-v2',
+    repositoryControlRootIdentity: '/fixture/candidate-preparation-v2/.git',
+    headCommit: 'a'.repeat(40),
+    selectedPathSetDigest: digests.digest({ selected: ['src/index.ts'] }),
+    stagedIndexManifestDigest: digests.digest({ staged: [] }),
+    porcelainV2Digest: digests.digest({ porcelain: [] }),
+  });
+  const gitState = Object.freeze({
+    ...gitStateFields,
+    projectionDigest: digests.digest(projectReadGitStateProjection(gitStateFields)),
+  });
+  const base = Object.freeze({
+    schemaVersion: 2 as const,
+    goalId: goalIdentifier,
+    workflowId: workflowIdentifier,
+    candidateId: candidateId('candidate_preparation-v2'),
+    generationId: candidateGenerationId('generation_preparation-v2'),
+    planProjectReadAuthorityId: projectSourceReadAuthorityId(
+      'project-read_candidate-preparation-v2',
+    ),
+    planProjectReadAuthorityRecordDigest: digests.digest({ record: 'plan' }),
+    observedSourceTree: sourceTree,
+    observedGitState: gitState,
+  });
+  assert.equal(
+    decodeCandidatePreparationV2({
+      ...base,
+      disposition: CandidatePreparationDisposition.PREPARED,
+      baseDigest: candidateDigest,
+    }).disposition,
+    CandidatePreparationDisposition.PREPARED,
+  );
+  assert.equal(
+    decodeCandidatePreparationV2({
+      ...base,
+      disposition: CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
+    }).disposition,
+    CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
+  );
+  assert.throws(() =>
+    decodeCandidatePreparationV2({
+      ...base,
+      disposition: CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
+      baseDigest: candidateDigest,
+    }),
+  );
+  assert.throws(() =>
+    decodeCandidatePreparationV2({
+      ...base,
+      disposition: CandidatePreparationDisposition.PREPARED,
+    }),
+  );
+  assert.throws(() =>
+    decodeCandidatePreparationV2({
+      ...base,
+      disposition: CandidatePreparationDisposition.PREPARED,
+      baseDigest: candidateDigest,
+      routeAuthority: 'MODEL',
     }),
   );
 });

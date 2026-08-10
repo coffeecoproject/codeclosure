@@ -84,7 +84,9 @@ continuation. The
 existing M2 protected demo's FakeWorker delegation for the first two phases
 remains test composition and is not a permitted production fallback. Accepted
 [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) now binds
-the project-source Context authority before that mapping is implemented.
+the project-source Context authority. The Candidate-creation guard and its
+failure closure are implemented; candidate-free pre/post-Turn currency and
+real phase dispatch remain pending.
 
 Proposed M2.6 Frontstage work adds no Workflow phase or
 writer: authorized actions would invoke only existing public Runtime commands,

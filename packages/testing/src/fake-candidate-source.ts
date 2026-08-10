@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 
 import { sha256Digest, type CandidateGenerationId, type Sha256Digest } from '@codeclosure/domain';
 import {
+  CandidatePreparationDisposition,
   decodeCandidatePreparation,
+  decodeCandidatePreparationV2,
   decodeCandidateRepairPreparation,
   validateCandidateFreezeRequest,
-  validateCandidatePreparationRequest,
+  validateCandidatePreparationRequestValue,
   validateCandidateRepairPreparationRequest,
   validateFrozenCandidateIntegrityRequest,
   type CandidateSourcePort,
@@ -45,23 +47,38 @@ export class FakeCandidateSource implements CandidateSourcePort {
   }
 
   public prepare(rawRequest: Parameters<CandidateSourcePort['prepare']>[0]): unknown {
-    const request = validateCandidatePreparationRequest(rawRequest);
+    const request = validateCandidatePreparationRequestValue(rawRequest);
     if (this.#fixture === FakeCandidateSourceFixture.THROW) {
       throw new Error('Fake Candidate Source preparation failed');
     }
     if (this.#fixture === FakeCandidateSourceFixture.MALFORMED) {
       return Object.freeze({ schemaVersion: 1, generationId: request.generationId });
     }
-    return decodeCandidatePreparation({
-      schemaVersion: 1,
-      goalId: request.goalId,
-      workflowId: request.workflowId,
-      candidateId: request.candidateId,
-      generationId: request.generationId,
-      baseDigest: digest(
-        `base\u0000${request.goalId}\u0000${request.goalRevision}\u0000${request.projectPath}`,
-      ),
-    });
+    const baseDigest = digest(
+      `base\u0000${request.goalId}\u0000${request.goalRevision}\u0000${request.projectPath}`,
+    );
+    return request.schemaVersion === 1
+      ? decodeCandidatePreparation({
+          schemaVersion: 1,
+          goalId: request.goalId,
+          workflowId: request.workflowId,
+          candidateId: request.candidateId,
+          generationId: request.generationId,
+          baseDigest,
+        })
+      : decodeCandidatePreparationV2({
+          schemaVersion: 2,
+          disposition: CandidatePreparationDisposition.PREPARED,
+          goalId: request.goalId,
+          workflowId: request.workflowId,
+          candidateId: request.candidateId,
+          generationId: request.generationId,
+          planProjectReadAuthorityId: request.planProjectReadAuthorityId,
+          planProjectReadAuthorityRecordDigest: request.planProjectReadAuthorityRecordDigest,
+          observedSourceTree: request.expectedSourceTree,
+          observedGitState: request.expectedGitState,
+          baseDigest,
+        });
   }
 
   public prepareRepair(rawRequest: Parameters<CandidateSourcePort['prepareRepair']>[0]): unknown {

@@ -510,11 +510,15 @@ the historical Check family. The Adapter-local policy admits the pinned best-
 effort `unknown` command action only for `IMPLEMENT`; the later freeze-v2
 record, not that activity observation, must prove containment, and failure
 invalidates the Candidate without Evidence. This is offline implementation
-foundation and has no `M251-C11` acceptance verdict. The
-legacy Driver rejects v3 during installed-Profile preflight before Start
-mutation, Adapter, or FakeWorker fallback; Runtime source-currency enforcement,
-real phase composition, mandatory live proof, and milestone assessment have
-not started. The
+foundation and has no `M251-C11` acceptance verdict. The Candidate-creation
+source-currency boundary now requires a preparation-v2 result bound to the
+exact completed PLAN ProjectRead authority; mismatch creates no Candidate and
+atomically retains `PLAN_SOURCE_NOT_CURRENT` as `PLAN / FAILED`, including
+processed-command replay, strict reopen, and `BLOCKED / INSPECT_BLOCKER`
+projection. The legacy Driver rejects v3 during installed-Profile preflight
+before Start mutation, Adapter, or FakeWorker fallback; candidate-free
+pre/post-Turn source and snapshot currency, real phase composition, mandatory
+live proof, and milestone assessment have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

@@ -34,6 +34,7 @@ import {
   goalRevision,
   isoTimestamp,
   policyBundleId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   workflowId,
   workflowVersion,
@@ -43,6 +44,7 @@ import {
 } from '@codeclosure/domain';
 import {
   CandidateWorkspaceAccessMode,
+  CandidatePreparationDisposition,
   CandidateWorkspaceRetention,
   candidateChangesStayWithinAllowedPaths,
   candidateWorkspaceAllowedPathProjection,
@@ -50,6 +52,7 @@ import {
   decodeCandidateFreezeObservation,
   decodeCandidateFreezeObservationV2,
   decodeCandidatePreparation,
+  decodeCandidatePreparationV2,
   decodeCandidateRepairPreparation,
   decodeCandidateWorkspaceAuthoritySnapshot,
   decodeCandidateWorkspaceLease,
@@ -70,6 +73,7 @@ import {
 } from '@codeclosure/workspace-local';
 import {
   assertPortableCandidatePathSetForTesting,
+  captureProjectReadSourceSnapshotForTesting,
   createLocalCandidateWorkspaceForTesting,
   type CandidateWorkspaceFaultHooks,
 } from '@codeclosure/workspace-local/testing';
@@ -396,6 +400,65 @@ void test('[I-007][M2-F04] source identity observes tree bytes separately from G
   const indexChanged = observeLocalCandidateSourceIdentity(value.sourceRoot);
   assert.equal(indexChanged.sourceTreeDigest, contentChanged.sourceTreeDigest);
   assert.notEqual(indexChanged.sourceGitMetadataDigest, contentChanged.sourceGitMetadataDigest);
+});
+
+void test('[I-005][I-008][M251-F08][M251-X09] preparation v2 creates a Candidate only for the exact admitted PLAN source', (t) => {
+  const matching = fixture(t);
+  const matchingPlan = captureProjectReadSourceSnapshotForTesting(matching.sourceRoot);
+  const matchingResult = decodeCandidatePreparationV2(
+    matching.workspace.prepare({
+      schemaVersion: 2,
+      candidateId: candidateId('candidate_plan-source-match'),
+      generationId: candidateGenerationId('generation_plan-source-match'),
+      goalId: goalId('goal_plan-source-match'),
+      goalRevision: goalRevision(1),
+      workflowId: workflowId('workflow_plan-source-match'),
+      projectPath: matching.sourceRoot,
+      planProjectReadAuthorityId: projectSourceReadAuthorityId('project-read_plan-source-match'),
+      planProjectReadAuthorityRecordDigest: sha256Digest(`sha256:${'a'.repeat(64)}`),
+      expectedSourceTree: matchingPlan.sourceTree,
+      expectedGitState: matchingPlan.gitState,
+    }),
+  );
+  assert.equal(matchingResult.disposition, CandidatePreparationDisposition.PREPARED);
+  const matchingGeneration = createCandidateGeneration({
+    id: matchingResult.generationId,
+    candidateId: matchingResult.candidateId,
+    sequence: 1,
+    workspaceIdentity: `m2-workspace:${matchingResult.generationId}`,
+    baseDigest: matchingResult.baseDigest,
+    createdAt,
+  });
+  const matchingLease = lease(matching, matchingGeneration, 'plan-source-match');
+  matching.workspace.releaseLease(matchingLease);
+
+  const changed = fixture(t);
+  const admittedPlan = captureProjectReadSourceSnapshotForTesting(changed.sourceRoot);
+  writeFileSync(
+    join(changed.sourceRoot, 'src', 'order.ts'),
+    'export const charge = "changed-after-plan";\n',
+  );
+  const changedResult = decodeCandidatePreparationV2(
+    changed.workspace.prepare({
+      schemaVersion: 2,
+      candidateId: candidateId('candidate_plan-source-changed'),
+      generationId: candidateGenerationId('generation_plan-source-changed'),
+      goalId: goalId('goal_plan-source-changed'),
+      goalRevision: goalRevision(1),
+      workflowId: workflowId('workflow_plan-source-changed'),
+      projectPath: changed.sourceRoot,
+      planProjectReadAuthorityId: projectSourceReadAuthorityId('project-read_plan-source-changed'),
+      planProjectReadAuthorityRecordDigest: sha256Digest(`sha256:${'b'.repeat(64)}`),
+      expectedSourceTree: admittedPlan.sourceTree,
+      expectedGitState: admittedPlan.gitState,
+    }),
+  );
+  assert.equal(changedResult.disposition, CandidatePreparationDisposition.SOURCE_NOT_CURRENT);
+  assert.notEqual(
+    changedResult.observedSourceTree.projectionDigest,
+    admittedPlan.sourceTree.projectionDigest,
+  );
+  assert.deepEqual(changed.workspace.reconcile(authoritySnapshot('plan-source-changed')), []);
 });
 
 void test('[I-014][I-023][M251-C11] freeze v2 derives one canonical stable Candidate change set', (t) => {

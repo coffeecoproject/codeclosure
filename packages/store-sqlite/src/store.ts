@@ -38,6 +38,7 @@ import {
   RecoveryReconciliationPurpose,
   RunStatus,
   WorkflowGuard,
+  WorkflowIntegrityFailureReasonCode,
   WorkflowPhase,
   applyAttemptEvent,
   applyRecoveryWorkflowEvent,
@@ -82,6 +83,8 @@ import {
   decodeRecoveryWorkflowEvent,
   decodeCloseoutRecord,
   decodePendingIssueSet,
+  decodeProjectReadGitStateProjection,
+  decodeProjectReadSourceTreeProjection,
   decodeProjectReadSnapshotCleanupGrant,
   decodeProjectReadSnapshotCleanupOutcome,
   decodeProjectSourceReadAuthorityRecord,
@@ -324,6 +327,7 @@ import {
   type CommitCandidateIntegrityFailure,
   type CommitVerificationIntegrityFailure,
   type CommitCandidatePreparation,
+  type CommitPlanSourceMismatch,
   type CommitEvidenceSetTransition,
   type CommittedCandidateAttemptOutcome,
   type CommittedAcceptanceEvaluation,
@@ -2001,6 +2005,24 @@ function validateCommitCandidatePreparation(
     obligations.length,
     'Verification Obligation',
   );
+  const planSourceBinding =
+    rawInput.planSourceBinding === undefined
+      ? undefined
+      : Object.freeze({
+          schemaVersion: z.literal(2).parse(rawInput.planSourceBinding.schemaVersion),
+          planProjectReadAuthorityId: projectSourceReadAuthorityId(
+            rawInput.planSourceBinding.planProjectReadAuthorityId,
+          ),
+          planProjectReadAuthorityRecordDigest: sha256Digest(
+            rawInput.planSourceBinding.planProjectReadAuthorityRecordDigest,
+          ),
+          observedSourceTree: decodeProjectReadSourceTreeProjection(
+            rawInput.planSourceBinding.observedSourceTree,
+          ),
+          observedGitState: decodeProjectReadGitStateProjection(
+            rawInput.planSourceBinding.observedGitState,
+          ),
+        });
   if (
     base.event.type !== 'WORKFLOW_PHASE_TRANSITIONED' ||
     base.event.toPhase !== WorkflowPhase.IMPLEMENT ||
@@ -2021,6 +2043,35 @@ function validateCommitCandidatePreparation(
     generationAuditEventId,
     checkSpecificationAuditEventIds,
     obligationAuditEventIds,
+    ...(planSourceBinding === undefined ? {} : { planSourceBinding }),
+  });
+}
+
+function validateCommitPlanSourceMismatch(
+  rawInput: CommitPlanSourceMismatch,
+): CommitPlanSourceMismatch {
+  const base = validateCommitWorkflowEventInput(rawInput);
+  const planProjectReadAuthorityId = projectSourceReadAuthorityId(
+    rawInput.planProjectReadAuthorityId,
+  );
+  const planProjectReadAuthorityRecordDigest = sha256Digest(
+    rawInput.planProjectReadAuthorityRecordDigest,
+  );
+  const observedSourceTree = decodeProjectReadSourceTreeProjection(rawInput.observedSourceTree);
+  const observedGitState = decodeProjectReadGitStateProjection(rawInput.observedGitState);
+  if (
+    base.event.type !== 'WORKFLOW_INTEGRITY_FAILED' ||
+    base.event.phase !== WorkflowPhase.PLAN ||
+    base.event.reason !== WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT
+  ) {
+    throw new StoreInvariantError('Plan-source mismatch does not bind its Workflow failure');
+  }
+  return Object.freeze({
+    ...base,
+    planProjectReadAuthorityId,
+    planProjectReadAuthorityRecordDigest,
+    observedSourceTree,
+    observedGitState,
   });
 }
 
@@ -6836,6 +6887,33 @@ export class SqliteControlStore
     return record;
   }
 
+  public getCurrentPlanProjectSourceReadAuthority(
+    rawWorkflowIdentifier: WorkflowId,
+  ): ProjectSourceReadAuthorityRecord | undefined {
+    this.assertOpen();
+    const identifier = workflowId(rawWorkflowIdentifier);
+    if (!this.hasTable('project_source_read_authorities')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT authority.id
+           FROM project_source_read_authorities AS authority
+           JOIN attempts AS attempt ON attempt.id = authority.attempt_id
+          WHERE authority.workflow_id = ?
+            AND authority.phase = 'PLAN'
+            AND attempt.phase = 'PLAN'
+            AND attempt.status = 'RESULT_RECORDED'
+          ORDER BY attempt.sequence DESC
+          LIMIT 1`,
+      )
+      .get(identifier);
+    const authorityIdentifier = z.object({ id: z.string() }).optional().parse(row)?.id;
+    return authorityIdentifier === undefined
+      ? undefined
+      : this.getProjectSourceReadAuthority(projectSourceReadAuthorityId(authorityIdentifier));
+  }
+
   public captureProjectReadWorkspaceAuthoritySnapshot(
     rawInput: CaptureProjectReadWorkspaceAuthoritySnapshot,
   ): ProjectReadWorkspaceAuthoritySnapshotStoreResult {
@@ -10622,6 +10700,134 @@ export class SqliteControlStore
     });
   }
 
+  public commitPlanSourceMismatch(
+    rawInput: CommitPlanSourceMismatch,
+  ): StoreCommandResult<WorkflowInstance> {
+    this.assertOpen();
+    const input = validateCommitPlanSourceMismatch(rawInput);
+    return this.runCommandImmediate(() => {
+      const replay = this.checkCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+      );
+      if (replay !== undefined) {
+        return { status: 'REPLAYED', outcome: replay.outcome };
+      }
+      this.probe(TransactionStep.AFTER_COMMAND_CHECK);
+
+      const current = this.getWorkflowInsideTransaction(input.event.workflowId);
+      this.validateCommandTarget(input.target, current);
+      if (current.version !== input.event.fromVersion) {
+        throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      if (
+        current.phase !== WorkflowPhase.PLAN ||
+        current.runStatus !== RunStatus.READY ||
+        current.activeAttemptId !== undefined ||
+        current.activeCandidateGenerationId !== undefined ||
+        this.getCandidateForGoal(current.goalId) !== undefined
+      ) {
+        throw new StoreInvariantError(
+          'Plan-source mismatch requires Candidate-free PLAN / READY authority',
+        );
+      }
+      if (
+        resolveCandidateFreezeProfileClassification(
+          this.resolveBoundExecutionProfileForWorkflow(current),
+        ) !== M251CandidateFreezeProfileClassification.M251_FREEZE_V2
+      ) {
+        throw new StoreInvariantError(
+          'Historical execution Profiles cannot commit M2.5.1 PLAN-source mismatch authority',
+        );
+      }
+      const planAuthority = this.getCurrentPlanProjectSourceReadAuthority(current.id);
+      if (
+        planAuthority?.id !== input.planProjectReadAuthorityId ||
+        planAuthority.recordDigest !== input.planProjectReadAuthorityRecordDigest ||
+        planAuthority.goalId !== current.goalId ||
+        planAuthority.goalRevision !== current.goalRevision ||
+        planAuthority.workflowId !== current.id ||
+        planAuthority.phase !== WorkflowPhase.PLAN
+      ) {
+        throw new StoreInvariantError(
+          'Plan-source mismatch does not bind the current admitted PLAN authority',
+        );
+      }
+      const observedSourceTreeDigest = sha256Digest(
+        canonicalAuthorityDigests.digest(projectReadSourceTreeProjection(input.observedSourceTree)),
+      );
+      const observedGitStateDigest = sha256Digest(
+        canonicalAuthorityDigests.digest(projectReadGitStateProjection(input.observedGitState)),
+      );
+      if (
+        observedSourceTreeDigest !== input.observedSourceTree.projectionDigest ||
+        observedGitStateDigest !== input.observedGitState.projectionDigest
+      ) {
+        throw new StoreInvariantError('Plan-source observation contains a false projection digest');
+      }
+      if (
+        planAuthority.sourceTree.projectionDigest === observedSourceTreeDigest &&
+        planAuthority.gitState.projectionDigest === observedGitStateDigest
+      ) {
+        throw new StoreInvariantError('Matching PLAN source cannot be committed as stale');
+      }
+      const expectedPayloadDigest = sha256Digest(
+        canonicalAuthorityDigests.digest({ event: input.event }),
+      );
+      if (input.payloadDigest !== expectedPayloadDigest) {
+        throw new StoreInvariantError(
+          'Plan-source mismatch audit digest does not bind its Workflow event',
+        );
+      }
+
+      const next = applyWorkflowEvent(current, input.event);
+      this.updateWorkflow(current, next);
+      this.probe(TransactionStep.AFTER_STATE_WRITE);
+      this.insertAuditEvent({
+        id: input.auditEventId,
+        aggregateType: 'WORKFLOW',
+        aggregateId: input.event.workflowId,
+        eventType: input.event.type,
+        commandId: input.event.commandId,
+        beforeVersion: input.event.fromVersion,
+        afterVersion: input.event.toVersion,
+        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+        payloadDigest: input.payloadDigest,
+        occurredAt: input.event.occurredAt,
+      });
+      this.probe(TransactionStep.AFTER_AUDIT_APPEND);
+
+      const outcome = storedCommandOutcomeToJson(
+        createAppliedStoredCommandOutcome(input.target, next, input.event.commandId),
+      );
+      this.insertProcessedCommand(
+        input.event.commandId,
+        input.inputDigest,
+        input.target.aggregateType,
+        input.target.aggregateId,
+        serializeJson(outcome),
+        input.event.occurredAt,
+      );
+      this.probe(TransactionStep.AFTER_COMMAND_RECORD);
+      this.probe(TransactionStep.BEFORE_COMMIT);
+
+      const persistedWorkflow = this.getWorkflowInsideTransaction(next.id);
+      const persistedCommand = this.assertProcessedCommandReadable(
+        input.event.commandId,
+        input.inputDigest,
+        input.target,
+        next.goalId,
+        next.id,
+        StoredCommandDisposition.APPLIED,
+      );
+      this.assertAuditEventsReadable([input.auditEventId]);
+      return { status: 'APPLIED', outcome: persistedCommand.outcome, value: persistedWorkflow };
+    });
+  }
+
   public commitCandidatePreparation(
     rawInput: CommitCandidatePreparation,
   ): StoreCommandResult<CommittedCandidatePreparation> {
@@ -10672,6 +10878,7 @@ export class SqliteControlStore
         ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
       if (formalM251) {
         if (
+          input.planSourceBinding === undefined ||
           input.checkSpecifications.length !== 1 ||
           verification !== undefined ||
           input.obligations.length !== 0
@@ -10682,7 +10889,37 @@ export class SqliteControlStore
         }
         validateM251CandidateFreezeEvidencePolicy(input.generation, { freeze });
         decodeCandidateWorkspaceAllowedPaths(goal.scope.allowedPaths);
+        const planAuthority = this.getCurrentPlanProjectSourceReadAuthority(current.id);
+        const observedSourceTreeDigest = sha256Digest(
+          canonicalAuthorityDigests.digest(
+            projectReadSourceTreeProjection(input.planSourceBinding.observedSourceTree),
+          ),
+        );
+        const observedGitStateDigest = sha256Digest(
+          canonicalAuthorityDigests.digest(
+            projectReadGitStateProjection(input.planSourceBinding.observedGitState),
+          ),
+        );
+        if (
+          planAuthority?.id !== input.planSourceBinding.planProjectReadAuthorityId ||
+          planAuthority.recordDigest !==
+            input.planSourceBinding.planProjectReadAuthorityRecordDigest ||
+          input.planSourceBinding.observedSourceTree.projectionDigest !==
+            observedSourceTreeDigest ||
+          input.planSourceBinding.observedGitState.projectionDigest !== observedGitStateDigest ||
+          planAuthority.sourceTree.projectionDigest !== observedSourceTreeDigest ||
+          planAuthority.gitState.projectionDigest !== observedGitStateDigest
+        ) {
+          throw new StoreInvariantError(
+            'Formal M2.5.1 Candidate preparation does not bind the current PLAN source',
+          );
+        }
       } else {
+        if (input.planSourceBinding !== undefined) {
+          throw new StoreInvariantError(
+            'Historical Candidate preparation cannot add PLAN-source authority',
+          );
+        }
         if (input.checkSpecifications.length !== 2 || verification === undefined) {
           throw new StoreInvariantError('Historical Candidate preparation requires two M1 Checks');
         }
@@ -10700,6 +10937,9 @@ export class SqliteControlStore
           generation: input.generation,
           checkSpecifications: input.checkSpecifications,
           obligations: input.obligations,
+          ...(input.planSourceBinding === undefined
+            ? {}
+            : { planSourceBinding: input.planSourceBinding }),
         }),
       );
       if (input.payloadDigest !== expectedPayloadDigest) {
@@ -15857,6 +16097,41 @@ export class SqliteControlStore
     );
   }
 
+  private hasExactPlanSourceMismatchClosure(
+    workflow: WorkflowInstance,
+    audit: AuditEventRecord | undefined,
+  ): boolean {
+    if (workflow.suspendedReason !== WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT) {
+      return true;
+    }
+    if (
+      audit?.commandId === undefined ||
+      audit.beforeVersion === undefined ||
+      workflow.phase !== WorkflowPhase.PLAN ||
+      workflow.runStatus !== RunStatus.FAILED ||
+      workflow.activeAttemptId !== undefined ||
+      workflow.activeCandidateGenerationId !== undefined ||
+      this.getCandidateForGoal(workflow.goalId) !== undefined ||
+      this.getCurrentPlanProjectSourceReadAuthority(workflow.id) === undefined
+    ) {
+      return false;
+    }
+    const event = decodeWorkflowEvent({
+      type: 'WORKFLOW_INTEGRITY_FAILED',
+      commandId: audit.commandId,
+      workflowId: workflow.id,
+      phase: WorkflowPhase.PLAN,
+      fromVersion: audit.beforeVersion,
+      toVersion: workflow.version,
+      reason: WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT,
+      occurredAt: workflow.updatedAt,
+    });
+    return (
+      audit.eventType === event.type &&
+      audit.payloadDigest === sha256Digest(canonicalAuthorityDigests.digest({ event }))
+    );
+  }
+
   private assertCurrentWorkflowCommandClosure(workflow: WorkflowInstance): void {
     if (!this.hasM1AttemptAuthorityClosureMigration()) {
       return;
@@ -15871,12 +16146,14 @@ export class SqliteControlStore
     const hasInitialCreationClosure = this.hasExactInitialGoalAndWorkflowCreationClosure(workflow);
     const hasIntakeMaterializationClosure =
       command === undefined && this.hasExactIntakeMaterializationWorkflowClosure(workflow, audit);
+    const hasPlanSourceMismatchClosure = this.hasExactPlanSourceMismatchClosure(workflow, audit);
     if (
       currentAudits.length !== 1 ||
       !hasInitialCreationClosure ||
       audit?.actorType !== 'RUNTIME' ||
       audit.commandId === undefined ||
       audit.occurredAt !== workflow.updatedAt ||
+      !hasPlanSourceMismatchClosure ||
       (workflow.version === 1
         ? audit.beforeVersion !== undefined
         : audit.beforeVersion !== workflow.version - 1) ||

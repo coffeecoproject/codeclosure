@@ -42,6 +42,8 @@ import type {
   PolicyBundleId,
   PendingIssue,
   PendingIssueSet,
+  ProjectReadGitStateProjection,
+  ProjectReadSourceTreeProjection,
   ProjectSourceReadAuthorityId,
   ProjectSourceReadAuthorityRecord,
   RecoveryReconciliationId,
@@ -418,7 +420,7 @@ export interface CandidateAuthorityView {
   readonly workflowId: WorkflowId;
 }
 
-export interface CommitCandidatePreparation extends CommitWorkflowEvent {
+interface CommitCandidatePreparationBase extends CommitWorkflowEvent {
   readonly candidate: Candidate;
   readonly generation: CandidateGeneration;
   readonly checkSpecifications: readonly CheckSpecification[];
@@ -429,11 +431,35 @@ export interface CommitCandidatePreparation extends CommitWorkflowEvent {
   readonly obligationAuditEventIds: readonly AuditEventId[];
 }
 
+export interface CommitCandidatePreparationV1 extends CommitCandidatePreparationBase {
+  readonly planSourceBinding?: never;
+}
+
+export interface CommitCandidatePreparationV2 extends CommitCandidatePreparationBase {
+  readonly planSourceBinding: Readonly<{
+    readonly schemaVersion: 2;
+    readonly planProjectReadAuthorityId: ProjectSourceReadAuthorityId;
+    readonly planProjectReadAuthorityRecordDigest: Sha256Digest;
+    readonly observedSourceTree: ProjectReadSourceTreeProjection;
+    readonly observedGitState: ProjectReadGitStateProjection;
+  }>;
+}
+
+export type CommitCandidatePreparation =
+  CommitCandidatePreparationV1 | CommitCandidatePreparationV2;
+
 export interface CommittedCandidatePreparation {
   readonly workflow: WorkflowInstance;
   readonly authority: CandidateAuthorityView;
   readonly checkSpecifications: readonly CheckSpecification[];
   readonly obligations: readonly VerificationObligation[];
+}
+
+export interface CommitPlanSourceMismatch extends CommitWorkflowEvent {
+  readonly planProjectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly planProjectReadAuthorityRecordDigest: Sha256Digest;
+  readonly observedSourceTree: ProjectReadSourceTreeProjection;
+  readonly observedGitState: ProjectReadGitStateProjection;
 }
 
 export interface CommitWorkflowCandidateEvent extends CommitWorkflowEvent {
@@ -868,6 +894,9 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
     candidateGenerationId: CandidateGeneration['id'],
   ): CandidateGeneration | undefined;
   getCandidateAuthorityForWorkflow(workflowId: WorkflowId): CandidateAuthorityView | undefined;
+  getCurrentPlanProjectSourceReadAuthority(
+    workflowId: WorkflowId,
+  ): ProjectSourceReadAuthorityRecord | undefined;
   nextCandidateGenerationSequence(candidateId: Candidate['id']): number;
   getCheckSpecification(
     checkSpecificationId: CheckSpecification['id'],
@@ -891,6 +920,7 @@ export interface CandidateEvidenceControlStore extends WorkerControlStore {
   commitCandidatePreparation(
     input: CommitCandidatePreparation,
   ): StoreCommandResult<CommittedCandidatePreparation>;
+  commitPlanSourceMismatch(input: CommitPlanSourceMismatch): StoreCommandResult<WorkflowInstance>;
   commitWorkflowCandidateEvent(
     input: CommitWorkflowCandidateEvent,
   ): StoreCommandResult<CommittedWorkflowCandidateEvent>;

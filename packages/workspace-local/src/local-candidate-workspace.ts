@@ -22,6 +22,7 @@ import {
   CandidateWorkspaceLeaseLifecyclePolicy,
   CandidateWorkspaceRetention,
   CandidateChangeKind,
+  CandidatePreparationDisposition,
   candidateWorkspaceAllowedPathProjection,
   candidateWorkspaceCleanupGrantProjection,
   createCandidateChangeSetV2,
@@ -30,6 +31,7 @@ import {
   decodeCandidateFreezeObservation,
   decodeCandidateFreezeObservationV2,
   decodeCandidatePreparation,
+  decodeCandidatePreparationV2,
   decodeCandidateRepairPreparation,
   decodeCandidateWorkspaceAuthoritySnapshot,
   decodeCandidateWorkspaceCleanupGrant,
@@ -39,7 +41,7 @@ import {
   digestCandidateWorkspaceValue,
   validateCandidateFreezeRequest,
   validateCandidateFreezeRequestV2,
-  validateCandidatePreparationRequest,
+  validateCandidatePreparationRequestValue,
   validateCandidateRepairPreparationRequest,
   validateCandidateWorkspaceLeaseRequest,
   validateFrozenCandidateIntegrityRequest,
@@ -50,7 +52,7 @@ import {
   type CandidateWorkspaceExpectedGeneration,
   type CandidateChangeEntry,
   type CandidateFreezeRequestValue,
-  type CandidatePreparationRequest,
+  type CandidatePreparationRequestValue,
   type CandidateRepairPreparationRequest,
   type FrozenCandidateIntegrityRequest,
 } from '@codeclosure/runtime';
@@ -66,7 +68,11 @@ import {
   type LocalCandidateWorkspace,
   type LocalCandidateWorkspaceOptions,
 } from './contracts.js';
-import { captureSourceSnapshot, resolveSourceRoot } from './git-source.js';
+import {
+  captureSourceSnapshot,
+  projectReadSourceSnapshotFromCandidateSnapshot,
+  resolveSourceRoot,
+} from './git-source.js';
 import {
   assertPortableRelativePath,
   assertRealDirectory,
@@ -796,12 +802,36 @@ class LocalCandidateWorkspaceAdapter implements LocalCandidateWorkspace {
     }
   }
 
-  public prepare(rawRequest: CandidatePreparationRequest): unknown {
-    const request = validateCandidatePreparationRequest(rawRequest);
+  public prepare(rawRequest: CandidatePreparationRequestValue): unknown {
+    const request = validateCandidatePreparationRequestValue(rawRequest);
     const sourceRoot = resolveSourceRoot(request.projectPath);
     this.#assertSourceContainment(sourceRoot);
     this.#initializeOwnedRoot();
     const before = captureSourceSnapshot(sourceRoot, this.#bounds);
+    const observedPlanSource =
+      request.schemaVersion === 2
+        ? projectReadSourceSnapshotFromCandidateSnapshot(before)
+        : undefined;
+    if (
+      request.schemaVersion === 2 &&
+      observedPlanSource !== undefined &&
+      (observedPlanSource.sourceTree.projectionDigest !==
+        request.expectedSourceTree.projectionDigest ||
+        observedPlanSource.gitState.projectionDigest !== request.expectedGitState.projectionDigest)
+    ) {
+      return decodeCandidatePreparationV2({
+        schemaVersion: 2,
+        disposition: CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
+        goalId: request.goalId,
+        workflowId: request.workflowId,
+        candidateId: request.candidateId,
+        generationId: request.generationId,
+        planProjectReadAuthorityId: request.planProjectReadAuthorityId,
+        planProjectReadAuthorityRecordDigest: request.planProjectReadAuthorityRecordDigest,
+        observedSourceTree: observedPlanSource.sourceTree,
+        observedGitState: observedPlanSource.gitState,
+      });
+    }
     const record = this.#createGeneration({
       baseManifest: before.tree,
       candidateId: request.candidateId,
@@ -833,13 +863,31 @@ class LocalCandidateWorkspaceAdapter implements LocalCandidateWorkspace {
       fsyncDirectory(this.#recordRoot);
       throw error;
     }
-    return decodeCandidatePreparation({
-      baseDigest: before.tree.digest,
+    if (request.schemaVersion === 1) {
+      return decodeCandidatePreparation({
+        baseDigest: before.tree.digest,
+        candidateId: request.candidateId,
+        generationId: request.generationId,
+        goalId: request.goalId,
+        schemaVersion: 1,
+        workflowId: request.workflowId,
+      });
+    }
+    if (observedPlanSource === undefined) {
+      throw new TypeError('Candidate preparation v2 lost its source observation');
+    }
+    return decodeCandidatePreparationV2({
+      schemaVersion: 2,
+      disposition: CandidatePreparationDisposition.PREPARED,
+      goalId: request.goalId,
+      workflowId: request.workflowId,
       candidateId: request.candidateId,
       generationId: request.generationId,
-      goalId: request.goalId,
-      schemaVersion: 1,
-      workflowId: request.workflowId,
+      planProjectReadAuthorityId: request.planProjectReadAuthorityId,
+      planProjectReadAuthorityRecordDigest: request.planProjectReadAuthorityRecordDigest,
+      observedSourceTree: observedPlanSource.sourceTree,
+      observedGitState: observedPlanSource.gitState,
+      baseDigest: before.tree.digest,
     });
   }
 

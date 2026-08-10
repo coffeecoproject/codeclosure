@@ -13,41 +13,86 @@ import {
   CandidateGenerationState,
   CheckSpecificationKind,
   EvidenceKind,
+  GoalStatus,
   GuardOutcome,
+  PROJECT_READ_CLEANUP_POLICY,
+  PROJECT_READ_GIT_STATE_PROFILE,
+  PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+  PROJECT_READ_SOURCE_TREE_PROFILE,
+  ProjectReadFileMode,
+  ProjectReadLifecyclePolicy,
+  ProjectReadModelUsableNetworkPolicy,
+  ProjectReadRetentionPolicy,
+  ProjectReadSnapshotAccessMode,
+  ProjectReadSourceCheckoutAccess,
+  ProtectedAssetProtectionMode,
+  ProtectedAssetReadLeasePolicy,
   RunStatus,
   WorkflowGuard,
+  WorkflowIntegrityFailureReasonCode,
   WorkflowPhase,
+  acceptanceCriticalVerificationPlanId,
+  applyAttemptEvent,
   commandId,
+  contextManifestId,
   createGoal,
   createWorkflow,
+  decideAttempt,
+  decodeExecutionProfileBinding,
   decodePolicyBundle,
+  decodeProjectSourceReadAuthorityRecord,
+  decodeWorkflowPolicyBinding,
   executionProfileProjection,
+  externalExecutionPhaseDispatchEntryProjection,
   goalId,
   goalRevision,
   isoTimestamp,
   policyBundleId,
   policyBundleProjection,
+  projectReadGitStateProjection,
+  projectReadSnapshotId,
+  projectReadSourceTreeProjection,
+  projectSourceReadAuthorityId,
+  projectSourceReadAuthorityProjection,
+  protectedAssetManifestProjection,
   requiredGuardsForTransition,
   sha256Digest,
   successCriterionId,
+  workerSessionId,
   workflowId,
+  workflowPolicyBindingProjection,
   type PolicyBundleDefinition,
   type AttemptId,
   type CandidateGenerationId,
+  type ExecutionProfile,
+  type Goal,
+  type PolicyBundle,
+  type ProjectSourceReadAuthorityRecord,
   type Sha256Digest,
+  type WorkflowInstance,
 } from '@codeclosure/domain';
 import {
+  CandidatePreparationDisposition,
   CandidateChangeFileMode,
   CandidateChangeKind,
   CandidateSourceFailureCode,
   CanonicalJsonSha256DigestProvider,
+  GoalDominantBlockerCode,
+  GoalNextSafeAction,
   MinimalContextCompiler,
   Rfc8785Canonicalizer,
+  StoredCommandDisposition,
+  createAcceptanceCriticalVerificationPlan,
   createCandidateChangeSetV2,
+  createCodeClosureApplication,
+  decodeStoredCommandOutcome,
   createExecutionProfileInstaller,
   createPolicyInstaller,
+  decodeCandidatePreparationV2,
   goalAndWorkflowCreationPayloadProjection,
+  m1WorkerResponseContract,
   validateCandidateFreezeRequestV2,
+  validateCandidatePreparationRequestV2,
   validateFrozenCandidateIntegrityRequest,
   type CandidateSourcePort,
   type Clock,
@@ -70,6 +115,7 @@ const digests = new CanonicalJsonSha256DigestProvider();
 
 type FreezeFixture =
   | 'IN_SCOPE'
+  | 'PLAN_SOURCE_NOT_CURRENT'
   | 'OUT_OF_SCOPE'
   | 'BASE_NOT_CURRENT'
   | 'UNSTABLE'
@@ -90,6 +136,38 @@ class M251CandidateFreezeSource implements CandidateSourcePort {
   }
 
   public prepare(request: Parameters<CandidateSourcePort['prepare']>[0]): unknown {
+    if (this.#fixture === 'PLAN_SOURCE_NOT_CURRENT' && request.schemaVersion === 2) {
+      const validated = validateCandidatePreparationRequestV2(request);
+      const changedGitStateFields = Object.freeze({
+        schemaVersion: validated.expectedGitState.schemaVersion,
+        profile: validated.expectedGitState.profile,
+        sourceProjectRoot: validated.expectedGitState.sourceProjectRoot,
+        repositoryControlRootIdentity: validated.expectedGitState.repositoryControlRootIdentity,
+        headCommit: validated.expectedGitState.headCommit,
+        selectedPathSetDigest: validated.expectedGitState.selectedPathSetDigest,
+        stagedIndexManifestDigest: validated.expectedGitState.stagedIndexManifestDigest,
+        porcelainV2Digest: digests.digest({
+          kind: 'plan-source-not-current',
+          generationId: validated.generationId,
+        }),
+      });
+      const observedGitState = Object.freeze({
+        ...changedGitStateFields,
+        projectionDigest: digests.digest(projectReadGitStateProjection(changedGitStateFields)),
+      });
+      return decodeCandidatePreparationV2({
+        schemaVersion: 2,
+        disposition: CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
+        goalId: validated.goalId,
+        workflowId: validated.workflowId,
+        candidateId: validated.candidateId,
+        generationId: validated.generationId,
+        planProjectReadAuthorityId: validated.planProjectReadAuthorityId,
+        planProjectReadAuthorityRecordDigest: validated.planProjectReadAuthorityRecordDigest,
+        observedSourceTree: validated.expectedSourceTree,
+        observedGitState,
+      });
+    }
     return this.#historical.prepare(request);
   }
 
@@ -224,18 +302,323 @@ const genericGuards: PhaseGuardEvaluator = Object.freeze({
     ),
 });
 
-function runToFreeze(
-  t: TestContext,
+function commitProjectReadAttempt(
   namespace: string,
-  fixture: FreezeFixture,
-): Readonly<{
+  store: ReturnType<typeof openSqliteControlStore>,
+  ids: DeterministicIds,
+  goal: Goal,
+  workflow: WorkflowInstance,
+  policy: PolicyBundle,
+  profile: ExecutionProfile,
+  phase: typeof WorkflowPhase.DISCOVERY | typeof WorkflowPhase.PLAN,
+  sequence: number,
+): Readonly<{ attemptId: AttemptId; authority: ProjectSourceReadAuthorityRecord }> {
+  assert.equal(workflow.phase, phase);
+  const startCommandId = commandId(`command_${namespace}-${phase.toLowerCase()}-start`);
+  const manifestId = contextManifestId(`context_${namespace}-${phase.toLowerCase()}`);
+  const decision = decideAttempt(workflow, undefined, {
+    type: 'BEGIN_ATTEMPT',
+    commandId: startCommandId,
+    workflowId: workflow.id,
+    expectedWorkflowVersion: workflow.version,
+    attemptId: ids.nextAttemptId(),
+    sequence,
+    contextManifestId: manifestId,
+    workerSessionRef: workerSessionId(`worker_${namespace}-${phase.toLowerCase()}`),
+    occurredAt: workflow.updatedAt,
+  });
+  if (!decision.accepted || decision.events[0].type !== 'ATTEMPT_STARTED') {
+    assert.fail(`Project-read ${phase} fixture could not start its Attempt`);
+  }
+  const event = decision.events[0];
+  const resultingWorkflow = applyAttemptEvent(workflow, undefined, event).workflow;
+  const existingPolicyBinding = store.getWorkflowPolicyBinding(workflow.id);
+  const existingProfileBinding = store.getExecutionProfileBinding(workflow.id);
+  const policyBinding =
+    existingPolicyBinding ??
+    decodeWorkflowPolicyBinding({
+      schemaVersion: 1,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      policyBundleId: policy.id,
+      policyBundleVersion: policy.version,
+      policyBundleDigest: policy.digest,
+      startCommandId,
+      boundAt: event.occurredAt,
+      bindingDigest: digests.digest(
+        workflowPolicyBindingProjection({
+          schemaVersion: 1,
+          goalId: goal.id,
+          workflowId: workflow.id,
+          policyBundleId: policy.id,
+          policyBundleVersion: policy.version,
+          policyBundleDigest: policy.digest,
+          startCommandId,
+          boundAt: event.occurredAt,
+        }),
+      ),
+    });
+  const executionProfileBinding =
+    existingProfileBinding ??
+    decodeExecutionProfileBinding({
+      schemaVersion: 1,
+      goalId: goal.id,
+      workflowId: workflow.id,
+      profileId: profile.id,
+      profileVersion: profile.version,
+      profileDigest: profile.digest,
+      startCommandId,
+      boundAt: event.occurredAt,
+      bindingDigest: digests.digest({
+        schemaVersion: 1,
+        goalId: goal.id,
+        workflowId: workflow.id,
+        profileId: profile.id,
+        profileVersion: profile.version,
+        profileDigest: profile.digest,
+        startCommandId,
+        boundAt: event.occurredAt,
+      }),
+    });
+  const existingProtectedPlan = store.getAcceptanceCriticalVerificationPlan(workflow.id);
+  const requiredCriterion = goal.successCriteria.find(({ required }) => required);
+  assert.ok(requiredCriterion);
+  const protectedAsset = Object.freeze({
+    logicalAssetId: `m251-plan-source.${namespace}`,
+    registeredProtectedRootIdentity: `/protected/${namespace}`,
+    exactRealpath: `/protected/${namespace}/expected.txt`,
+    executionPath: `/protected/${namespace}/expected.txt`,
+    fileMode: 0o400,
+    byteLength: 1,
+    contentDigest: digests.digest({ namespace, kind: 'protected-asset' }),
+    protectionMode: ProtectedAssetProtectionMode.OUTSIDE_WORKER_WRITABLE_CANDIDATE,
+  });
+  const protectedAssets = Object.freeze([protectedAsset]);
+  const protectedPlan =
+    existingProtectedPlan ??
+    createAcceptanceCriticalVerificationPlan(
+      {
+        id: acceptanceCriticalVerificationPlanId(`verification-plan_${namespace}`),
+        goal,
+        resultingWorkflow,
+        policyBundle: policy,
+        executionProfile: profile,
+        proposal: Object.freeze({
+          acceptanceCriticalCriterionIds: Object.freeze([requiredCriterion.id]),
+          acceptanceRuleIds: Object.freeze([...policy.acceptanceRules]),
+          semanticCheckTemplate: Object.freeze({
+            schemaVersion: 1 as const,
+            checkVersion: 'm251-plan-source-check-v1',
+            producerIdentity: 'm251-plan-source-test-runtime',
+            operation: 'local-command.execute',
+            runnerIdentity: 'm251-plan-source-test-runner',
+            runnerVersion: '1',
+            executablePath: '/usr/bin/true',
+            executableDigest: digests.digest({ executable: '/usr/bin/true' }),
+            declaredToolVersion: 'fixture',
+            argv: Object.freeze(['--fixture']),
+            cwd: '.',
+            environmentVariables: Object.freeze([]),
+            isolationProfileId: 'm251-freeze-v2-test-isolation-v1',
+            isolationProfileDigest: digests.digest({ namespace, kind: 'protected-isolation' }),
+            timeoutMilliseconds: 1_000,
+            terminationGraceMilliseconds: 100,
+            stdoutLimitBytes: 1_024,
+            stderrLimitBytes: 1_024,
+            totalOutputLimitBytes: 2_048,
+            payloadRetentionLimitBytes: 2_048,
+            acceptedExitCodes: Object.freeze([0]),
+          }),
+          protectedAssets,
+          protectedAssetManifestDigest: digests.digest(
+            protectedAssetManifestProjection(protectedAssets),
+          ),
+          protectedAssetReadLeasePolicy:
+            ProtectedAssetReadLeasePolicy.EXACT_READ_ONLY_SINGLE_INVOCATION,
+          derivationRule: 'BOUNDED_M2_ONE_PROTECTED_LOCAL_COMMAND_FAMILY_V1' as const,
+          authoritySource: 'TRUSTED_RUNTIME_COMPOSITION' as const,
+        }),
+        createdAt: event.occurredAt,
+      },
+      digests,
+    );
+  if (profile.schemaVersion !== 2 || profile.externalExecution.schemaVersion !== 3) {
+    assert.fail('Project-read fixture requires Profile v3');
+  }
+  const phaseEntry = profile.externalExecution.phaseDispatch.find((entry) => entry.phase === phase);
+  assert.ok(phaseEntry);
+  const allowedRoot = phaseEntry.allowedRoots[0];
+  assert.ok(allowedRoot);
+  const sourceTreeFields = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_SOURCE_TREE_PROFILE,
+    entries: Object.freeze([
+      Object.freeze({
+        schemaVersion: 1 as const,
+        path: 'src/payment.ts',
+        mode: ProjectReadFileMode.REGULAR,
+        size: 1,
+        contentDigest: digests.digest({ namespace, kind: 'plan-source' }),
+      }),
+    ]),
+    fileCount: 1,
+    totalBytes: 1,
+  });
+  const sourceTree = Object.freeze({
+    ...sourceTreeFields,
+    projectionDigest: digests.digest(projectReadSourceTreeProjection(sourceTreeFields)),
+  });
+  const gitStateFields = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_GIT_STATE_PROFILE,
+    sourceProjectRoot: goal.scope.projectPath,
+    repositoryControlRootIdentity: goal.scope.projectPath,
+    headCommit: 'a'.repeat(40),
+    selectedPathSetDigest: digests.digest({ namespace, paths: ['src/payment.ts'] }),
+    stagedIndexManifestDigest: digests.digest({ namespace, staged: [] }),
+    porcelainV2Digest: digests.digest({ namespace, porcelain: [] }),
+  });
+  const gitState = Object.freeze({
+    ...gitStateFields,
+    projectionDigest: digests.digest(projectReadGitStateProjection(gitStateFields)),
+  });
+  const workspaceRootIdentity = `${allowedRoot}/project-read-${phase.toLowerCase()}`;
+  const authorityFields = Object.freeze({
+    schemaVersion: 1 as const,
+    id: projectSourceReadAuthorityId(`project-read_${namespace}-${phase.toLowerCase()}`),
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    workflowId: workflow.id,
+    workflowVersion: resultingWorkflow.version,
+    phase,
+    attemptId: event.attempt.id,
+    normalizedProjectRoot: goal.scope.projectPath,
+    resolvedProjectRoot: goal.scope.projectPath,
+    repositoryControlRootIdentity: goal.scope.projectPath,
+    sourceTree,
+    gitState,
+    workspaceRootIdentity,
+    snapshotId: projectReadSnapshotId(`project-read-snapshot_${namespace}-${phase.toLowerCase()}`),
+    snapshotLeafRealpath: `${workspaceRootIdentity}/snapshot`,
+    snapshotTreeDigest: sourceTree.projectionDigest,
+    ownershipMarkerProfile: PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+    ownershipMarkerDigest: digests.digest({ namespace, phase, kind: 'ownership-marker' }),
+    policyBundleId: policy.id,
+    policyBundleVersion: policy.version,
+    policyBundleDigest: policy.digest,
+    executionProfileId: profile.id,
+    executionProfileVersion: profile.version,
+    executionProfileDigest: profile.digest,
+    phaseDispatchEntryDigest: digests.digest(
+      externalExecutionPhaseDispatchEntryProjection(phaseEntry),
+    ),
+    capabilityGrantDigest: digests.digest({
+      schemaVersion: 1,
+      capabilityGrant: event.attempt.capabilityGrant,
+    }),
+    responseContractDigest: digests.digest({
+      schemaVersion: 1,
+      responseContract: m1WorkerResponseContract(phase),
+    }),
+    accessMode: ProjectReadSnapshotAccessMode.READ_ONLY,
+    sourceCheckoutAccess: ProjectReadSourceCheckoutAccess.NONE,
+    modelUsableNetworkPolicy: ProjectReadModelUsableNetworkPolicy.DENIED,
+    forbiddenRoots: Object.freeze(
+      [...new Set([...phaseEntry.forbiddenRoots, goal.scope.projectPath])].toSorted(),
+    ),
+    isolationProfileId: phaseEntry.isolationProfileId,
+    isolationProfileDigest: phaseEntry.isolationProfileDigest,
+    issuedAt: event.occurredAt,
+    lifecyclePolicy: ProjectReadLifecyclePolicy.SINGLE_WORKER_ATTEMPT,
+    retentionPolicy: ProjectReadRetentionPolicy.RUNTIME_OWNED,
+    cleanupPolicy: PROJECT_READ_CLEANUP_POLICY,
+  });
+  const authority = decodeProjectSourceReadAuthorityRecord({
+    ...authorityFields,
+    recordDigest: digests.digest(projectSourceReadAuthorityProjection(authorityFields)),
+  });
+  const compilation = new MinimalContextCompiler({
+    compilerVersion: 'm2.5.1-plan-source-context-v1',
+    maxPackageBytes: 64 * 1024,
+    canonicalizer: new Rfc8785Canonicalizer(),
+    digests,
+  }).compile({
+    manifestId,
+    createdAt: event.occurredAt,
+    goal,
+    workflow: resultingWorkflow,
+    attempt: event.attempt,
+    executionProfileId: profile.id,
+    executionProfileDigest: profile.digest,
+    policyBundleId: policy.id,
+    policyBundleDigest: policy.digest,
+    protectedPlan: Object.freeze({ id: protectedPlan.id, digest: protectedPlan.planDigest }),
+    projectReadAuthority: authority,
+  });
+  const committed = store.commitContextBoundAttemptStart({
+    inputDigest: digests.digest({
+      schemaVersion: 1,
+      operation: 'PROJECT_READ_START',
+      namespace,
+      phase,
+    }),
+    target:
+      sequence === 1
+        ? Object.freeze({ aggregateType: 'GOAL' as const, aggregateId: goal.id })
+        : Object.freeze({ aggregateType: 'WORKFLOW' as const, aggregateId: workflow.id }),
+    event,
+    auditEventId: ids.nextAuditEventId(),
+    workflowAuditEventId: ids.nextAuditEventId(),
+    payloadDigest: digests.digest(event),
+    contextManifest: compilation.manifest,
+    policyBinding,
+    ...(existingPolicyBinding === undefined
+      ? { policyBindingAuditEventId: ids.nextAuditEventId() }
+      : {}),
+    executionProfileBinding,
+    ...(existingProfileBinding === undefined
+      ? { executionProfileBindingAuditEventId: ids.nextAuditEventId() }
+      : {}),
+    ...(existingProtectedPlan === undefined
+      ? {
+          acceptanceCriticalVerificationPlan: protectedPlan,
+          acceptanceCriticalVerificationPlanAuditEventId: ids.nextAuditEventId(),
+        }
+      : {}),
+    projectReadAuthority: authority,
+    projectReadAuthorityAuditEventId: ids.nextAuditEventId(),
+  });
+  assert.equal(committed.status, 'APPLIED');
+  return Object.freeze({ attemptId: event.attempt.id, authority });
+}
+
+type FrozenHarness = Readonly<{
+  kind: 'FROZEN';
   filename: string;
   store: ReturnType<typeof openSqliteControlStore>;
   goalIdentifier: ReturnType<typeof goalId>;
   workflowIdentifier: ReturnType<typeof workflowId>;
   generationId: CandidateGenerationId;
   freezeAttemptId: AttemptId;
-}> {
+}>;
+
+type PlanSourceMismatchHarness = Readonly<{
+  kind: 'PLAN_SOURCE_MISMATCH';
+  filename: string;
+  store: ReturnType<typeof openSqliteControlStore>;
+  goalIdentifier: ReturnType<typeof goalId>;
+  workflowIdentifier: ReturnType<typeof workflowId>;
+  planAttemptId: AttemptId;
+  transitionCommandId: ReturnType<typeof commandId>;
+  expectedPlanWorkflowVersion: WorkflowInstance['version'];
+  runtime: WorkflowRuntimeKernel;
+}>;
+
+function runToFreeze(
+  t: TestContext,
+  namespace: string,
+  fixture: FreezeFixture,
+): FrozenHarness | PlanSourceMismatchHarness {
   const filename = temporaryDatabase(t, namespace);
   const store = openSqliteControlStore({ filename, now: () => createdAt });
   const ids = new DeterministicIds(namespace);
@@ -336,14 +719,16 @@ function runToFreeze(
 
   let current = store.getWorkflow(workflow.id);
   assert.ok(current);
-  assert.equal(
-    runtime.startGoal({
-      commandId: commandId(`command_${namespace}-start`),
-      goalId: goal.id,
-      expectedGoalRevision: goal.revision,
-      expectedWorkflowVersion: current.version,
-    }).status,
-    'APPLIED',
+  commitProjectReadAttempt(
+    namespace,
+    store,
+    ids,
+    goal,
+    current,
+    policy,
+    profileInstall.value.profile,
+    WorkflowPhase.DISCOVERY,
+    1,
   );
   current = store.getWorkflow(workflow.id);
   assert.ok(current?.activeAttemptId);
@@ -371,16 +756,20 @@ function runToFreeze(
   );
   current = store.getWorkflow(workflow.id);
   assert.ok(current);
-  assert.equal(
-    runtime.beginAttempt({
-      commandId: commandId(`command_${namespace}-plan-start`),
-      workflowId: workflow.id,
-      expectedWorkflowVersion: current.version,
-    }).status,
-    'APPLIED',
+  commitProjectReadAttempt(
+    namespace,
+    store,
+    ids,
+    goal,
+    current,
+    policy,
+    profileInstall.value.profile,
+    WorkflowPhase.PLAN,
+    2,
   );
   current = store.getWorkflow(workflow.id);
   assert.ok(current?.activeAttemptId);
+  const planAttemptId = current.activeAttemptId;
   assert.equal(
     runtime.recordAttemptResult({
       commandId: commandId(`command_${namespace}-plan-result`),
@@ -393,8 +782,10 @@ function runToFreeze(
   );
   current = store.getWorkflow(workflow.id);
   assert.ok(current);
+  const expectedPlanWorkflowVersion = current.version;
+  const transitionCommandId = commandId(`command_${namespace}-to-implement`);
   const preparation = runtime.requestPhaseTransition({
-    commandId: commandId(`command_${namespace}-to-implement`),
+    commandId: transitionCommandId,
     workflowId: workflow.id,
     expectedWorkflowVersion: current.version,
     requestedPhase: WorkflowPhase.IMPLEMENT,
@@ -403,6 +794,19 @@ function runToFreeze(
   assert.equal(preparation.status, 'APPLIED', JSON.stringify(preparation));
   current = store.getWorkflow(workflow.id);
   assert.ok(current);
+  if (fixture === 'PLAN_SOURCE_NOT_CURRENT') {
+    return Object.freeze({
+      kind: 'PLAN_SOURCE_MISMATCH',
+      filename,
+      store,
+      goalIdentifier: goal.id,
+      workflowIdentifier: workflow.id,
+      planAttemptId,
+      transitionCommandId,
+      expectedPlanWorkflowVersion,
+      runtime,
+    });
+  }
   const generationId = current.activeCandidateGenerationId;
   assert.ok(generationId);
   const relatedChecks = store
@@ -473,6 +877,7 @@ function runToFreeze(
   });
   assert.equal(completion.status, 'APPLIED', JSON.stringify(completion));
   return Object.freeze({
+    kind: 'FROZEN',
     filename,
     store,
     goalIdentifier: goal.id,
@@ -484,6 +889,9 @@ function runToFreeze(
 
 void test('[I-005][I-006][I-008][I-009] C11 Profile freeze-v2 authority closes and strictly reopens without Fake evidence', (t) => {
   const harness = runToFreeze(t, 'm251-freeze-v2-success', 'IN_SCOPE');
+  if (harness.kind !== 'FROZEN') {
+    assert.fail('Freeze-v2 success fixture stopped at PLAN source mismatch');
+  }
   const generation = harness.store.getCandidateGeneration(harness.generationId);
   assert.equal(generation?.state, CandidateGenerationState.FROZEN);
   const evidence = harness.store.listEvidenceForGeneration(harness.generationId);
@@ -513,6 +921,88 @@ void test('[I-005][I-006][I-008][I-009] C11 Profile freeze-v2 authority closes a
   const [reopenedFreeze] = reopenedEvidence;
   assert.ok(reopenedFreeze);
   assert.deepEqual(reopenedFreeze.record, freeze);
+});
+
+void test('[I-005][I-006][I-008][I-009][M251-F08][M251-X09] PLAN source mismatch closes atomically without Candidate authority', (t) => {
+  const harness = runToFreeze(t, 'm251-plan-source-not-current', 'PLAN_SOURCE_NOT_CURRENT');
+  if (harness.kind !== 'PLAN_SOURCE_MISMATCH') {
+    assert.fail('PLAN source mismatch fixture created Candidate authority');
+  }
+
+  const assertClosed = (store: typeof harness.store): void => {
+    const owner = store.getGoalWithWorkflow(harness.goalIdentifier);
+    assert.ok(owner);
+    assert.equal(owner.goal.status, GoalStatus.BLOCKED);
+    assert.equal(owner.workflow.phase, WorkflowPhase.PLAN);
+    assert.equal(owner.workflow.runStatus, RunStatus.FAILED);
+    assert.equal(
+      owner.workflow.suspendedReason,
+      WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT,
+    );
+    assert.equal(owner.workflow.activeAttemptId, undefined);
+    assert.equal(owner.workflow.activeCandidateGenerationId, undefined);
+    const planAttempt = store.getAttempt(harness.planAttemptId);
+    assert.equal(planAttempt?.phase, WorkflowPhase.PLAN);
+    assert.equal(planAttempt.status, AttemptStatus.RESULT_RECORDED);
+    assert.equal(planAttempt.terminationReason, 'WORKER_RESULT:PROPOSALS');
+    assert.equal(store.getCandidateForGoal(harness.goalIdentifier), undefined);
+    assert.equal(store.listCheckSpecifications().length, 0);
+    assert.equal(store.listVerificationObligations(harness.goalIdentifier).length, 0);
+    assert.equal(
+      store.getGoalStatusAuthority(harness.goalIdentifier)?.latestRecoveryReconciliation,
+      undefined,
+    );
+    const processed = store.getProcessedCommand(harness.transitionCommandId);
+    assert.ok(processed);
+    const outcome = decodeStoredCommandOutcome(processed.outcome);
+    assert.equal(outcome.disposition, StoredCommandDisposition.APPLIED);
+    assert.equal(outcome.output.ok, true);
+    assert.deepEqual(outcome.workflow, {
+      id: owner.workflow.id,
+      version: owner.workflow.version,
+      phase: WorkflowPhase.PLAN,
+      runStatus: RunStatus.FAILED,
+    });
+
+    const publicApplication = createCodeClosureApplication({
+      store,
+      clock: Object.freeze({ now: () => createdAt }),
+      creationIds: new DeterministicIds('m251-plan-source-status'),
+      digests,
+      projectPaths: Object.freeze({ parseNormalizedAbsolute: (path: string) => path }),
+      execution: Object.freeze({
+        startGoal: () => Promise.reject(new Error('Status-only fixture cannot Start')),
+        resumeGoal: () => Promise.reject(new Error('Status-only fixture cannot Resume')),
+        cancelGoal: () => {
+          throw new Error('Status-only fixture cannot Cancel');
+        },
+      }),
+    });
+    const status = publicApplication.getGoalStatus(harness.goalIdentifier);
+    assert.equal(status.status, 'FOUND');
+    assert.equal(status.view.runStatus, RunStatus.FAILED);
+    const blocker = status.view.dominantBlocker;
+    assert.ok(blocker);
+    assert.equal(blocker.code, GoalDominantBlockerCode.WORKFLOW_FAILED);
+    assert.equal(blocker.detailCode, WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT);
+    assert.equal(status.view.nextSafeAction, GoalNextSafeAction.INSPECT_BLOCKER);
+  };
+
+  assertClosed(harness.store);
+  const replay = harness.runtime.requestPhaseTransition({
+    commandId: harness.transitionCommandId,
+    workflowId: harness.workflowIdentifier,
+    expectedWorkflowVersion: harness.expectedPlanWorkflowVersion,
+    requestedPhase: WorkflowPhase.IMPLEMENT,
+    reason: 'plan completed',
+  });
+  assert.equal(replay.status, 'REPLAYED');
+  assertClosed(harness.store);
+
+  harness.store.close();
+  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+  t.after(() => reopened.close());
+  assertClosed(reopened);
 });
 
 void test('[I-006][I-009][I-027] reserved M2.5.1 Profile identity fails closed instead of selecting historical authority', (t) => {
@@ -620,7 +1110,7 @@ void test('[I-005][I-008][I-009] freeze-v2 failures close atomically and strictl
       reason: CandidateSourceFailureCode.FREEZE_BINDING_MISMATCH,
     },
   ] as const satisfies readonly {
-    readonly fixture: Exclude<FreezeFixture, 'IN_SCOPE'>;
+    readonly fixture: Exclude<FreezeFixture, 'IN_SCOPE' | 'PLAN_SOURCE_NOT_CURRENT'>;
     readonly failureClass: AttemptFailureClass;
     readonly reason: string;
   }[];
@@ -629,6 +1119,9 @@ void test('[I-005][I-008][I-009] freeze-v2 failures close atomically and strictl
     await t.test(entry.fixture, (fixtureTest) => {
       const namespace = `m251-freeze-v2-${entry.fixture.toLowerCase().replaceAll('_', '-')}`;
       const harness = runToFreeze(fixtureTest, namespace, entry.fixture);
+      if (harness.kind !== 'FROZEN') {
+        assert.fail('Freeze failure fixture stopped at PLAN source mismatch');
+      }
       const assertClosed = (store: typeof harness.store): void => {
         const generation = store.getCandidateGeneration(harness.generationId);
         assert.equal(generation?.state, CandidateGenerationState.INVALIDATED);

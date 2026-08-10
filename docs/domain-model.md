@@ -125,14 +125,16 @@ reopen are now implemented. Historical freeze-v1 keeps its exact
 M1/M2 meaning. The Adapter-local policy may admit the pinned best-effort
 `unknown` command action only for `IMPLEMENT`; the later freeze-v2 boundary,
 not the activity observation, decides containment and fails without Evidence
-on mismatch. Source-currency enforcement and trusted Runtime real phase
-composition remain planned. Real external dispatch has not started and
-`M251-C11` has no acceptance verdict.
-The proposed Plan-source mismatch path uses the existing Workflow integrity
-event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
+on mismatch. Candidate-free pre/post-Turn source/snapshot currency and trusted
+Runtime real phase composition remain planned. Real external dispatch has not
+started and `M251-C11` has no acceptance verdict.
+The implemented Candidate-creation source-currency path uses the existing
+Workflow integrity event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
 Goal projection is `BLOCKED / INSPECT_BLOCKER`, and no recovery catalog or
-Resume authority is created.
+Resume authority is created. Exact match is carried through a versioned
+Candidate preparation result and independently rebound by Runtime and Store
+before Candidate/Generation authority may be retained.
 
 Proposed M2.6 Interaction records remain
 planned in [Frontstage Interaction](frontstage-interaction.md); they do not
