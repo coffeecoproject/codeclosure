@@ -163,7 +163,10 @@ post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
 M2.5.1 Slices 1 and 2 are complete, and Slice 3 has implemented its bounded
 project-read/cleanup, versioned external-execution, and Adapter-boundary
-foundation; Runtime phase composition and M2.5.1 assessment have not started.
+foundation plus ADR 0044's additive Candidate freeze-v2 Domain/Runtime/Store/
+SQLite authority path with atomic Evidence and strict reopen. The C11
+implementation has offline coverage but no acceptance verdict; Runtime source-
+currency/phase composition and M2.5.1 assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -801,7 +804,18 @@ source-kind substitution. The current Driver fails closed during installed-
 Profile preflight before Start mutation. The versioned phase Intent/Record and
 Adapter directive/observation/activity-policy boundary is now implemented but
 does not itself authorize dispatch; Runtime source-currency enforcement and
-Driver phase composition remain pending.
+Driver phase composition remain pending. The C11 Profile sub-contract now
+selects a freeze-v2-only Candidate Check family without Fake Verification.
+Candidate Manager derives the stable base-to-current change set, Runtime owns
+the current Goal allowed-path disposition, Store recomputes the canonical
+Profile/Candidate/digest/path/Check/Attempt relationships, and SQLite guards
+their retained shape, cross-record bindings, audit, and atomicity. Strict
+reopen repeats the Store checks. The reserved M2.5.1 Profile ID is a closed
+identity: a mismatched schema, version, Candidate Source, Verification Runner,
+or external-execution schema fails install/read/reopen and cannot select the
+historical M1/M2 Check family. The Adapter-local policy may
+admit best-effort `unknown` command action only in `IMPLEMENT`; it remains an
+untrusted activity observation until that later freeze succeeds.
 Profile v3 root sets are normalized, absolute, and non-overlapping stable
 workspace envelopes. Exact snapshot/Candidate leaves remain owned by the
 ProjectRead record or Candidate lease rather than being copied into the
@@ -816,12 +830,17 @@ use the same union rule. Adapter fixture proof selects candidate-free
 proposal/completion result forms, and discards forbidden file-change results,
 but the mandatory live black-box containment proof remains pending. Accepted
 [ADR 0044](docs/adr/0044-source-freeze-owned-candidate-change-containment.md)
-keeps the current Adapter fail-closed. Its additive schema-version-2 contract
-and local Candidate workspace derivation now produce canonical base-to-stable-
-current changed paths from owned manifests, while Runtime/Store relationship
-checks and freeze-Evidence v2 remain pending. Runtime and Store, not Codex
-notifications, compare the result with exact Goal `allowedPaths`. Historical
-M1/M2 freeze schema version 1 remains unchanged.
+now permits the Adapter-local best-effort `unknown` command disposition only
+for Candidate-bound `IMPLEMENT`. Its additive schema-version-2 contract and
+local Candidate workspace derivation produce canonical base-to-stable-current
+changed paths from owned manifests. Runtime compares those paths with the
+current Goal `allowedPaths`; Store recomputes the exact Profile, Candidate,
+digest, Check, path, and Attempt relationships; SQLite guards the retained
+shape, cross-record bindings, audit, and atomicity; and the source-freeze
+transaction atomically retains Evidence before strict reopen repeats the Store
+checks. The notification is not containment proof, and a later freeze
+failure invalidates the Candidate without Evidence. Historical M1/M2 freeze
+schema version 1 remains unchanged. Full live black-box proof remains pending.
 The source
 checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,
@@ -1121,8 +1140,9 @@ Candidate-bound command/file-change activity for `IMPLEMENT`; unknown,
 forbidden, or cross-phase activity fails closed without exposing Codex Item
 types to Domain or Runtime. The pinned protocol's best-effort `unknown` command
 action is distinct from an unknown Item/effect: candidate-free phases reject it,
-while IMPLEMENT may admit it only after ADR 0044's stable Candidate change-set
-proof is installed. The current
+while IMPLEMENT now admits it only under the installed ADR 0044 policy and
+remains contingent on the later stable Candidate freeze-v2 change-set proof.
+The current
 `IMPLEMENT`-only trusted invocation and protected-demo FakeWorker delegation
 are implementation inputs, not proof of that formal chain. A lower-client
 probe, live Intake operation, live IMPLEMENT operation, or mixed fake/real demo

@@ -23,6 +23,15 @@ export const M1CandidateEvidenceProducerIdentity = {
   VERIFICATION_RUNNER: 'fake-verification-runner:m1',
 } as const;
 
+export const M251CandidateFreezePolicy = {
+  VERSION: 'm2.5.1.1',
+  PRODUCER_IDENTITY: 'candidate-manager:m2.5.1',
+  OPERATION: 'm2.5.1.candidate.freeze-contained',
+  ENVIRONMENT_POLICY: 'M2_5_1_CONTROLLED_COPY_STABLE_CHANGE_SET_V2',
+  OBSERVATION_SCHEMA: 'codeclosure.candidate-freeze-observation.v2',
+  CLEANUP_POLICY: 'M2_5_1_CANDIDATE_WORKSPACE_OWNED',
+} as const;
+
 export function deriveM1BaseProjectIdentity(projectPath: string, digests: DigestProvider): string {
   return `m1-project:${digests.digest({ schemaVersion: 1, projectPath })}`;
 }
@@ -44,6 +53,10 @@ export interface M1CandidateEvidencePolicy {
   readonly freeze: CheckSpecification;
   readonly verification: CheckSpecification;
   readonly obligations: readonly VerificationObligation[];
+}
+
+export interface M251CandidateFreezeEvidencePolicy {
+  readonly freeze: CheckSpecification;
 }
 
 export interface LocalCommandVerificationPolicy {
@@ -103,6 +116,66 @@ export function validateM1CandidateFreezeCheck(
     observationSchema: 'codeclosure.candidate-freeze-observation.v1',
   });
   return specification;
+}
+
+export function validateM251CandidateFreezeCheck(
+  generation: CandidateGeneration,
+  rawSpecification: CheckSpecification,
+): CheckSpecification {
+  const specification = decodeCheckSpecification(rawSpecification);
+  if (
+    specification.schemaVersion !== 1 ||
+    specification.version !== M251CandidateFreezePolicy.VERSION ||
+    specification.kind !== CheckSpecificationKind.CANDIDATE_FREEZE ||
+    specification.producerType !== EvidenceProducerType.CANDIDATE_MANAGER ||
+    specification.producerIdentity !== M251CandidateFreezePolicy.PRODUCER_IDENTITY ||
+    specification.operation !== M251CandidateFreezePolicy.OPERATION ||
+    specification.cwdIdentity !== generation.workspaceIdentity ||
+    !hasExactValues(specification.inputRefs, [generation.id]) ||
+    specification.environmentPolicy !== M251CandidateFreezePolicy.ENVIRONMENT_POLICY ||
+    specification.timeoutMilliseconds !== 10_000 ||
+    specification.outputLimitBytes !== 4_194_304 ||
+    specification.expectedObservationSchema !== M251CandidateFreezePolicy.OBSERVATION_SCHEMA ||
+    specification.cleanupPolicy !== M251CandidateFreezePolicy.CLEANUP_POLICY
+  ) {
+    throw new TypeError(
+      `Check Specification ${specification.id} is not the exact M2.5.1 freeze-v2 policy`,
+    );
+  }
+  return specification;
+}
+
+export function validateM251CandidateFreezeEvidencePolicy(
+  generation: CandidateGeneration,
+  rawPolicy: M251CandidateFreezeEvidencePolicy,
+): M251CandidateFreezeEvidencePolicy {
+  return Object.freeze({
+    freeze: validateM251CandidateFreezeCheck(generation, rawPolicy.freeze),
+  });
+}
+
+export function createM251CandidateFreezeEvidencePolicy(
+  generation: CandidateGeneration,
+  freezeCheckId: CheckSpecificationId,
+): M251CandidateFreezeEvidencePolicy {
+  return validateM251CandidateFreezeEvidencePolicy(generation, {
+    freeze: decodeCheckSpecification({
+      schemaVersion: 1,
+      id: freezeCheckId,
+      version: M251CandidateFreezePolicy.VERSION,
+      kind: CheckSpecificationKind.CANDIDATE_FREEZE,
+      producerType: EvidenceProducerType.CANDIDATE_MANAGER,
+      producerIdentity: M251CandidateFreezePolicy.PRODUCER_IDENTITY,
+      operation: M251CandidateFreezePolicy.OPERATION,
+      cwdIdentity: generation.workspaceIdentity,
+      inputRefs: [generation.id],
+      environmentPolicy: M251CandidateFreezePolicy.ENVIRONMENT_POLICY,
+      timeoutMilliseconds: 10_000,
+      outputLimitBytes: 4_194_304,
+      expectedObservationSchema: M251CandidateFreezePolicy.OBSERVATION_SCHEMA,
+      cleanupPolicy: M251CandidateFreezePolicy.CLEANUP_POLICY,
+    }),
+  });
 }
 
 export function validateM1CandidateEvidencePolicy(

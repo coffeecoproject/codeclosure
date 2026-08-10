@@ -1162,7 +1162,7 @@ void test('[I-023][M251-C10][M251-X11] Candidate policy confines file changes to
   });
   assert.deepEqual(
     evaluateCodexWorkerActivityV1(commandItem(policy.cwd, 'src/payment.js', 'unknown'), policy),
-    { disposition: 'REJECTED_DISCARDED', rejectionCode: 'COMMAND_ACTIONS' },
+    { disposition: 'ADMITTED' },
   );
 });
 

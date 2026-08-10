@@ -21,6 +21,7 @@ import {
   type AttemptId,
   type CandidateGenerationId,
   type CandidateFreezeObservation,
+  type CandidateFreezeObservationV2,
   type CheckSpecification,
   type EvidenceEligibility,
   type EvidenceId,
@@ -60,7 +61,7 @@ interface CreateEvidenceRecordBaseInput {
 }
 
 export interface CreateCandidateFreezeEvidenceRecordInput extends CreateEvidenceRecordBaseInput {
-  readonly observation: CandidateFreezeObservation;
+  readonly observation: CandidateFreezeObservation | CandidateFreezeObservationV2;
 }
 
 export interface CreateTestResultEvidenceRecordInput extends CreateEvidenceRecordBaseInput {
@@ -172,7 +173,7 @@ export function createCandidateFreezeEvidenceRecord(
     digests.digest(evidenceObservationDigestProjection(observation)),
   );
   const withoutEnvelope = {
-    schemaVersion: 1 as const,
+    schemaVersion: observation.schemaVersion,
     kind: EvidenceKind.CANDIDATE_FREEZE,
     producerType: EvidenceProducerType.CANDIDATE_MANAGER,
     producerIdentity: checkSpec.producerIdentity,

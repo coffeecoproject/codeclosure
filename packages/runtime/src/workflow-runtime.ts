@@ -86,6 +86,7 @@ import {
   type AttemptRejection,
   type CandidateGenerationId,
   type CandidateGeneration,
+  type CheckSpecification,
   type CommandId,
   type ContextCompilation,
   type ContextManifestId,
@@ -158,11 +159,13 @@ import {
   VerificationResultAdmissionFailureCode as VerificationAdmissionFailure,
   admitVerificationResult,
   decodeCandidateFreezeObservation,
+  decodeCandidateFreezeObservationV2,
   decodeCandidatePreparation,
   decodeCandidateRepairPreparation,
   decodeFrozenCandidateIntegrityObservation,
   decodeVerificationRequest,
   validateCandidateFreezeRequest,
+  validateCandidateFreezeRequestV2,
   validateCandidatePreparationRequest,
   validateCandidateRepairPreparationRequest,
   validateFrozenCandidateIntegrityRequest,
@@ -171,19 +174,30 @@ import { createM1AcceptanceEngine } from './acceptance-engine.js';
 import { compileM1AcceptanceInput } from './acceptance-policy.js';
 import {
   createM1CandidateEvidencePolicy,
+  createM251CandidateFreezeEvidencePolicy,
   createLocalCommandVerificationPolicy,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
   validateAcceptanceCandidateEvidencePolicy,
   validateM1CandidateEvidencePolicy,
+  validateM251CandidateFreezeEvidencePolicy,
 } from './candidate-evidence-policy.js';
+import { candidateChangesStayWithinAllowedPaths } from './candidate-change-set-contracts.js';
 import {
   CandidateWorkspaceAccessMode,
+  candidateWorkspaceAllowedPathProjection,
   decodeCandidateWorkspaceLease,
+  decodeCandidateWorkspaceAllowedPaths,
+  digestCandidateWorkspaceValue,
   type CandidateWorkspaceLease,
   type CandidateWorkspaceLeaseAuthorityPort,
   type CandidateWorkspaceLeasePort,
 } from './candidate-workspace-contracts.js';
+import {
+  M251CandidateFreezeProfileClassification,
+  classifyM251CandidateFreezeProfile,
+  type M251CandidateFreezeProfileClassification as M251CandidateFreezeProfileClass,
+} from './m251-execution-profile.js';
 import { canonicalizeJson } from './canonical-json.js';
 import {
   buildEvidenceSet,
@@ -2321,26 +2335,66 @@ export class WorkflowRuntimeKernel {
           );
         }
         const policy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
-        const candidateEvidencePolicy = this.resolveM1CandidateEvidencePolicy(
+        const boundProfile = this.resolvePersistedExecutionProfileBinding(
           input.commandId,
-          goal,
-          authority.generation,
+          workflow,
         );
-        const freezeCheck = candidateEvidencePolicy.freeze;
-        const freezeRequest = validateCandidateFreezeRequest({
-          schemaVersion: 1,
-          goalId: goal.id,
-          goalRevision: goal.revision,
-          workflowId: workflow.id,
-          workflowVersion: workflow.version,
-          attemptId: attempt.id,
-          generation: authority.generation,
-          policyBundleId: policy.bundle.id,
-          policyBundleDigest: policy.bundle.digest,
-        });
+        if (boundProfile === undefined) {
+          throw new TypeError(`Workflow ${workflow.id} has no Execution Profile binding`);
+        }
+        const usesContainedFreeze =
+          this.resolveCandidateFreezeProfileClassification(
+            input.commandId,
+            boundProfile.profile.profile,
+          ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
+        const freezeCheck = usesContainedFreeze
+          ? this.resolveM251CandidateFreezeEvidencePolicy(input.commandId, authority.generation)
+              .freeze
+          : this.resolveM1CandidateEvidencePolicy(input.commandId, goal, authority.generation)
+              .freeze;
+        const allowedPaths = usesContainedFreeze
+          ? decodeCandidateWorkspaceAllowedPaths(goal.scope.allowedPaths)
+          : undefined;
+        const allowedPathPolicyDigest =
+          allowedPaths === undefined
+            ? undefined
+            : digestCandidateWorkspaceValue(candidateWorkspaceAllowedPathProjection(allowedPaths));
+        const freezeRequest =
+          allowedPaths === undefined || allowedPathPolicyDigest === undefined
+            ? validateCandidateFreezeRequest({
+                schemaVersion: 1,
+                goalId: goal.id,
+                goalRevision: goal.revision,
+                workflowId: workflow.id,
+                workflowVersion: workflow.version,
+                attemptId: attempt.id,
+                generation: authority.generation,
+                policyBundleId: policy.bundle.id,
+                policyBundleDigest: policy.bundle.digest,
+              })
+            : validateCandidateFreezeRequestV2({
+                schemaVersion: 2,
+                goalId: goal.id,
+                goalRevision: goal.revision,
+                workflowId: workflow.id,
+                workflowVersion: workflow.version,
+                attemptId: attempt.id,
+                generation: authority.generation,
+                policyBundleId: policy.bundle.id,
+                policyBundleDigest: policy.bundle.digest,
+                allowedPathPolicyDigest,
+                allowedPaths,
+              });
 
-        let observation: ReturnType<typeof decodeCandidateFreezeObservation> | undefined;
+        let observationV1: ReturnType<typeof decodeCandidateFreezeObservation> | undefined;
+        let observationV2: ReturnType<typeof decodeCandidateFreezeObservationV2> | undefined;
         let protocolFailure: CandidateSourceFailureCode | undefined;
+        let integrityFailure:
+          | 'SOURCE_CHANGED_DURING_FREEZE'
+          | 'CANDIDATE_FREEZE_BASE_NOT_CURRENT'
+          | 'CANDIDATE_CHANGE_SET_EMPTY'
+          | 'CANDIDATE_CHANGE_OUTSIDE_ALLOWED_PATHS'
+          | undefined;
         let rawObservation: unknown;
         try {
           rawObservation = runtime.candidateSource.observeFreeze(freezeRequest);
@@ -2349,21 +2403,52 @@ export class WorkflowRuntimeKernel {
         }
         if (protocolFailure === undefined) {
           try {
-            observation = decodeCandidateFreezeObservation(rawObservation);
+            if (usesContainedFreeze) {
+              observationV2 = decodeCandidateFreezeObservationV2(rawObservation);
+            } else {
+              observationV1 = decodeCandidateFreezeObservation(rawObservation);
+            }
           } catch {
             protocolFailure = CandidateSourceFailureCode.FREEZE_OUTPUT_MALFORMED;
           }
         }
-        if (observation !== undefined) {
-          if (observation.generationId !== authority.generation.id) {
+        const observation = observationV2 ?? observationV1;
+        if (observation !== undefined && observation.generationId !== authority.generation.id) {
+          protocolFailure = CandidateSourceFailureCode.FREEZE_BINDING_MISMATCH;
+          observationV1 = undefined;
+          observationV2 = undefined;
+        }
+        if (observationV2 !== undefined) {
+          if (observationV2.allowedPathPolicyDigest !== allowedPathPolicyDigest) {
             protocolFailure = CandidateSourceFailureCode.FREEZE_BINDING_MISMATCH;
-            observation = undefined;
+            observationV2 = undefined;
+          } else if (observationV2.baseSourceDigest !== authority.generation.baseDigest) {
+            integrityFailure = 'CANDIDATE_FREEZE_BASE_NOT_CURRENT';
+            observationV2 = undefined;
+          } else if (observationV2.firstSourceDigest !== observationV2.secondSourceDigest) {
+            integrityFailure = 'SOURCE_CHANGED_DURING_FREEZE';
+            observationV2 = undefined;
+          } else if (observationV2.changes.length === 0) {
+            integrityFailure = 'CANDIDATE_CHANGE_SET_EMPTY';
+            observationV2 = undefined;
+          } else if (
+            allowedPaths === undefined ||
+            !candidateChangesStayWithinAllowedPaths(observationV2.changes, allowedPaths)
+          ) {
+            integrityFailure = 'CANDIDATE_CHANGE_OUTSIDE_ALLOWED_PATHS';
+            observationV2 = undefined;
           }
         }
-        const stable =
-          observation !== undefined &&
-          observation.firstSourceDigest === observation.secondSourceDigest;
-        const frozenDigest = stable ? observation?.firstSourceDigest : undefined;
+        if (
+          observationV1 !== undefined &&
+          observationV1.firstSourceDigest !== observationV1.secondSourceDigest
+        ) {
+          integrityFailure = 'SOURCE_CHANGED_DURING_FREEZE';
+          observationV1 = undefined;
+        }
+        const admittedObservation = observationV2 ?? observationV1;
+        const frozenDigest = admittedObservation?.firstSourceDigest;
+        const failureReason = protocolFailure ?? integrityFailure ?? 'SOURCE_CHANGED_DURING_FREEZE';
         const occurredAt = this.causalNow(
           input.commandId,
           workflow.updatedAt,
@@ -2388,7 +2473,7 @@ export class WorkflowRuntimeKernel {
                 candidateGenerationId: authority.generation.id,
                 expectedVersion: authority.generation.version,
                 occurredAt,
-                reason: protocolFailure ?? 'SOURCE_CHANGED_DURING_FREEZE',
+                reason: failureReason,
               },
         );
         if (!candidateDecision.accepted) {
@@ -2424,7 +2509,7 @@ export class WorkflowRuntimeKernel {
                   protocolFailure === undefined
                     ? AttemptFailureClass.INTEGRITY_VIOLATION
                     : AttemptFailureClass.PROTOCOL_ERROR,
-                reason: protocolFailure ?? 'SOURCE_CHANGED_DURING_FREEZE',
+                reason: failureReason,
               },
         );
         if (!attemptDecision.accepted) {
@@ -2437,7 +2522,7 @@ export class WorkflowRuntimeKernel {
         let eligibility: ReturnType<typeof createInitialEvidenceEligibility> | undefined;
         if (
           frozenDigest !== undefined &&
-          observation !== undefined &&
+          admittedObservation !== undefined &&
           nextGeneration.state === CandidateGenerationState.FROZEN
         ) {
           const evidenceIdentifier = this.internalOperation(
@@ -2459,13 +2544,26 @@ export class WorkflowRuntimeKernel {
               checkSpec: freezeCheck,
               startedAt: attempt.startedAt,
               endedAt: occurredAt,
-              observation: Object.freeze({
-                schemaVersion: 1,
-                kind: EvidenceKind.CANDIDATE_FREEZE,
-                firstSourceDigest: observation.firstSourceDigest,
-                secondSourceDigest: observation.secondSourceDigest,
-                changeSetDigest: observation.changeSetDigest,
-              }),
+              observation:
+                admittedObservation.schemaVersion === 1
+                  ? Object.freeze({
+                      schemaVersion: 1 as const,
+                      kind: EvidenceKind.CANDIDATE_FREEZE,
+                      firstSourceDigest: admittedObservation.firstSourceDigest,
+                      secondSourceDigest: admittedObservation.secondSourceDigest,
+                      changeSetDigest: admittedObservation.changeSetDigest,
+                    })
+                  : Object.freeze({
+                      schemaVersion: 2 as const,
+                      kind: EvidenceKind.CANDIDATE_FREEZE,
+                      allowedPathPolicyDigest: admittedObservation.allowedPathPolicyDigest,
+                      baseSourceDigest: admittedObservation.baseSourceDigest,
+                      changeSetDigest: admittedObservation.changeSetDigest,
+                      changeSetProfile: admittedObservation.changeSetProfile,
+                      changes: admittedObservation.changes,
+                      firstSourceDigest: admittedObservation.firstSourceDigest,
+                      secondSourceDigest: admittedObservation.secondSourceDigest,
+                    }),
               recordedAt: occurredAt,
             },
             this.#digests,
@@ -3739,6 +3837,25 @@ export class WorkflowRuntimeKernel {
           workflow,
           acceptanceRuntime.policyBundleId,
         );
+        const boundProfile = this.resolvePersistedExecutionProfileBinding(
+          input.commandId,
+          workflow,
+        );
+        if (
+          boundProfile !== undefined &&
+          this.resolveCandidateFreezeProfileClassification(
+            input.commandId,
+            boundProfile.profile.profile,
+          ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2
+        ) {
+          return rejectPlan(
+            commandError(
+              RuntimeErrorCode.DOMAIN_REJECTED,
+              'M2.5.1 Acceptance repair requires the later versioned repair composition',
+              'M251_ACCEPTANCE_REPAIR_COMPOSITION_UNAVAILABLE',
+            ),
+          );
+        }
         this.assertAcceptanceConsumptionCurrent(input.commandId, consumed, authority);
         if (authority.generation.frozenDigest === undefined) {
           throw new TypeError('Repair authority has no frozen Candidate digest');
@@ -4220,6 +4337,15 @@ export class WorkflowRuntimeKernel {
     const runtime = this.requireCandidateEvidenceRuntime();
     const store = this.requireCandidateEvidenceStore();
     const activePolicy = this.resolveCandidateEvidencePolicy(input.commandId, workflow);
+    const boundProfile = this.resolvePersistedExecutionProfileBinding(input.commandId, workflow);
+    if (boundProfile === undefined) {
+      throw new TypeError(`Workflow ${workflow.id} has no Execution Profile binding`);
+    }
+    const usesContainedFreeze =
+      this.resolveCandidateFreezeProfileClassification(
+        input.commandId,
+        boundProfile.profile.profile,
+      ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
     const occurredAt = this.causalNow(
       input.commandId,
       workflow.updatedAt,
@@ -4321,28 +4447,40 @@ export class WorkflowRuntimeKernel {
       baseDigest: preparation.baseDigest,
       createdAt: occurredAt,
     });
-    const checkIds = Object.freeze({
-      freeze: this.internalOperation(input.commandId, 'FREEZE_CHECK_ID_GENERATION_FAILURE', () =>
-        checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
-      ),
-      verification: this.internalOperation(
-        input.commandId,
-        'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
-        () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
-      ),
-    });
-    const policy = createM1CandidateEvidencePolicy(
-      goal,
-      generation,
-      checkIds,
-      Object.freeze({
-        nextVerificationObligationId: () =>
-          this.internalOperation(input.commandId, 'VERIFICATION_OBLIGATION_ID_FAILURE', () =>
-            verificationObligationId(runtime.identities.nextVerificationObligationId()),
-          ),
-      }),
-      occurredAt,
+    const freezeCheckId = this.internalOperation(
+      input.commandId,
+      'FREEZE_CHECK_ID_GENERATION_FAILURE',
+      () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
     );
+    let checkSpecifications: readonly CheckSpecification[];
+    let obligations: readonly VerificationObligation[];
+    if (usesContainedFreeze) {
+      const candidatePolicy = createM251CandidateFreezeEvidencePolicy(generation, freezeCheckId);
+      checkSpecifications = Object.freeze([candidatePolicy.freeze]);
+      obligations = Object.freeze([]);
+    } else {
+      const candidatePolicy = createM1CandidateEvidencePolicy(
+        goal,
+        generation,
+        Object.freeze({
+          freeze: freezeCheckId,
+          verification: this.internalOperation(
+            input.commandId,
+            'VERIFICATION_CHECK_ID_GENERATION_FAILURE',
+            () => checkSpecificationId(runtime.identities.nextCheckSpecificationId()),
+          ),
+        }),
+        Object.freeze({
+          nextVerificationObligationId: () =>
+            this.internalOperation(input.commandId, 'VERIFICATION_OBLIGATION_ID_FAILURE', () =>
+              verificationObligationId(runtime.identities.nextVerificationObligationId()),
+            ),
+        }),
+        occurredAt,
+      );
+      checkSpecifications = Object.freeze([candidatePolicy.freeze, candidatePolicy.verification]);
+      obligations = candidatePolicy.obligations;
+    }
     const guardResults = Object.freeze([
       ...genericGuardResults,
       this.ownedGuard(WorkflowGuard.CANDIDATE_GENERATION_PREPARED, 'CANDIDATE_AUTHORITY_PREPARED', [
@@ -4372,8 +4510,8 @@ export class WorkflowRuntimeKernel {
         event,
         candidate,
         generation,
-        checkSpecifications: [policy.freeze, policy.verification],
-        obligations: policy.obligations,
+        checkSpecifications,
+        obligations,
       },
       'COMMAND_PAYLOAD_DIGEST_FAILURE',
     );
@@ -4388,16 +4526,15 @@ export class WorkflowRuntimeKernel {
           payloadDigest,
           candidate,
           generation,
-          checkSpecifications: Object.freeze([policy.freeze, policy.verification]),
-          obligations: policy.obligations,
+          checkSpecifications,
+          obligations,
           candidateAuditEventId: this.nextAuditEventId(input.commandId),
           generationAuditEventId: this.nextAuditEventId(input.commandId),
-          checkSpecificationAuditEventIds: Object.freeze([
-            this.nextAuditEventId(input.commandId),
-            this.nextAuditEventId(input.commandId),
-          ]),
+          checkSpecificationAuditEventIds: Object.freeze(
+            checkSpecifications.map(() => this.nextAuditEventId(input.commandId)),
+          ),
           obligationAuditEventIds: Object.freeze(
-            policy.obligations.map(() => this.nextAuditEventId(input.commandId)),
+            obligations.map(() => this.nextAuditEventId(input.commandId)),
           ),
         }),
     };
@@ -4508,12 +4645,20 @@ export class WorkflowRuntimeKernel {
       );
     }
     const evidence = this.resolveGenerationEvidence(input.commandId, authority.generation.id);
-    const candidateEvidencePolicy = this.resolveAcceptanceCandidateEvidencePolicy(
-      input.commandId,
-      goal,
-      authority.generation,
-    );
-    const expectedFreezeCheck = canonicalizeJson(candidateEvidencePolicy.freeze);
+    const boundProfile = this.resolvePersistedExecutionProfileBinding(input.commandId, workflow);
+    if (boundProfile === undefined) {
+      throw new TypeError(`Workflow ${workflow.id} has no Execution Profile binding`);
+    }
+    const freezeCheck =
+      this.resolveCandidateFreezeProfileClassification(
+        input.commandId,
+        boundProfile.profile.profile,
+      ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2
+        ? this.resolveM251CandidateFreezeEvidencePolicy(input.commandId, authority.generation)
+            .freeze
+        : this.resolveAcceptanceCandidateEvidencePolicy(input.commandId, goal, authority.generation)
+            .freeze;
+    const expectedFreezeCheck = canonicalizeJson(freezeCheck);
     const freezeEntry = evidence.find(
       ({ record, eligibility }) =>
         record.kind === EvidenceKind.CANDIDATE_FREEZE &&
@@ -5636,6 +5781,38 @@ export class WorkflowRuntimeKernel {
     );
   }
 
+  private resolveM251CandidateFreezeEvidencePolicy(
+    commandIdentifier: CommandId,
+    generation: CandidateGeneration,
+  ): ReturnType<typeof validateM251CandidateFreezeEvidencePolicy> {
+    const rawSpecifications = this.storeOperation(
+      commandIdentifier,
+      'CANDIDATE_CHECK_SPECIFICATIONS_READ_FAILURE',
+      () => this.requireCandidateEvidenceStore().listCheckSpecifications(),
+    );
+    if (!Array.isArray(rawSpecifications)) {
+      throw new TypeError('Store returned malformed Check Specifications');
+    }
+    const relatedSpecifications = rawSpecifications
+      .map((specification) =>
+        this.decodeStoreSnapshot(commandIdentifier, 'CHECK_SPECIFICATION_INVALID', () =>
+          decodeCheckSpecification(specification),
+        ),
+      )
+      .filter((specification) => specification.inputRefs.includes(generation.id));
+    const freeze = relatedSpecifications.find(
+      (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+    );
+    if (relatedSpecifications.length !== 1 || freeze === undefined) {
+      throw new TypeError(
+        `Candidate generation ${generation.id} does not have exactly one M2.5.1 freeze Check`,
+      );
+    }
+    return this.decodeStoreSnapshot(commandIdentifier, 'CANDIDATE_EVIDENCE_POLICY_INVALID', () =>
+      validateM251CandidateFreezeEvidencePolicy(generation, { freeze }),
+    );
+  }
+
   private resolveAcceptanceCandidateEvidencePolicy(
     commandIdentifier: CommandId,
     goal: Goal,
@@ -6298,7 +6475,28 @@ export class WorkflowRuntimeKernel {
     if (profile.id !== profileIdentifier || profile.digest !== canonicalDigest) {
       throw new TypeError('Installed Execution Profile does not match its canonical identity');
     }
+    this.resolveCandidateFreezeProfileClassification(commandIdentifier, profile);
     return Object.freeze({ profile, installedAt });
+  }
+
+  private resolveCandidateFreezeProfileClassification(
+    commandIdentifier: CommandId,
+    profile: ExecutionProfile,
+  ): Exclude<
+    M251CandidateFreezeProfileClass,
+    typeof M251CandidateFreezeProfileClassification.INCOMPATIBLE_M251
+  > {
+    const classification = classifyM251CandidateFreezeProfile(profile);
+    if (classification === M251CandidateFreezeProfileClassification.INCOMPATIBLE_M251) {
+      throw new CommandExecutionFailure(
+        commandError(
+          RuntimeErrorCode.PERSISTENCE_FAILURE,
+          `Execution Profile ${profile.id} uses the reserved M2.5.1 identity without its exact freeze-v2 contract for command ${commandIdentifier}`,
+          'EXECUTION_PROFILE_INVALID',
+        ),
+      );
+    }
+    return classification;
   }
 
   private createExecutionProfileBinding(
@@ -6361,9 +6559,6 @@ export class WorkflowRuntimeKernel {
     commandIdentifier: CommandId,
     workflow: WorkflowInstance,
   ): BoundExecutionProfile | undefined {
-    if (!isM1WorkerPhase(workflow.phase)) {
-      return undefined;
-    }
     const rawBinding = this.storeOperation(
       commandIdentifier,
       'EXECUTION_PROFILE_BINDING_READ_FAILURE',

@@ -116,8 +116,18 @@ meanings. Its ProjectRead directive input is the complete decoded retained
 Domain record; the Adapter recomputes that record's canonical digest and emits
 only the existing ID/digest/cwd receipt projection. The normalized activity
 union and effective-root calculation remain Adapter-local rather than becoming
-a Domain authority. Source-currency enforcement and trusted Runtime real phase
-composition remain planned. Real external dispatch has not started.
+a Domain authority. Accepted ADR 0044's additive freeze-v2 Domain/Evidence
+union, canonical changed-file identities, local Candidate Manager derivation,
+C11 Profile freeze-v2 sub-contract and freeze-only Check family, Runtime-owned
+current-Goal path disposition, Store-owned canonical recomputation, SQLite
+structural and relational backstops, atomic Evidence persistence, and strict
+reopen are now implemented. Historical freeze-v1 keeps its exact
+M1/M2 meaning. The Adapter-local policy may admit the pinned best-effort
+`unknown` command action only for `IMPLEMENT`; the later freeze-v2 boundary,
+not the activity observation, decides containment and fails without Evidence
+on mismatch. Source-currency enforcement and trusted Runtime real phase
+composition remain planned. Real external dispatch has not started and
+`M251-C11` has no acceptance verdict.
 The proposed Plan-source mismatch path uses the existing Workflow integrity
 event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
@@ -1122,15 +1132,24 @@ during installed-Profile preflight before Start mutation until trusted Runtime
 phase composition is implemented.
 
 Accepted ADR 0044 additively assigns M2.5.1 actual-change containment to
-Candidate Manager's existing `SOURCE_FREEZE` boundary. Schema-version-2 freeze
-authority will bind the exact base digest, two equal stable current digests,
-canonical added/modified/deleted regular-file identities, the Goal-derived
-allowed-path-policy digest, and the change-set digest. Runtime owns the
-allowed-path disposition and Store repeats its relationship checks; the
-workspace observation and Codex Item stream remain non-authoritative facts.
-Historical freeze schema version 1 is not reinterpreted, and the Adapter cannot
-admit best-effort `unknown` IMPLEMENT command actions until the complete
-version-2 path is installed.
+Candidate Manager's existing `SOURCE_FREEZE` boundary. The implemented schema-
+version-2 freeze authority binds the exact base digest, two equal stable current
+digests, canonical added/modified/deleted regular-file identities, the Goal-
+derived allowed-path-policy digest, and the change-set digest. Runtime owns the
+allowed-path disposition; Store recomputes the canonical Profile, Candidate,
+digest, path, Check, and Attempt relationships; SQLite guards retained shape,
+cross-record bindings, audit, and atomicity; the existing compound freeze
+command persists the exact Evidence and eligibility atomically; and strict
+reopen repeats the Store validation. The reserved M2.5.1 Profile ID plus its
+exact schema/version/Candidate Source/Verification Runner/external-execution
+schema is one closed identity; any mixed form fails install/read/reopen instead
+of being reinterpreted as historical authority. Formal Profile candidate
+preparation creates only the freeze-v2 Check and no Fake Verification
+obligation. The workspace observation and Codex Item stream remain non-
+authoritative facts. Historical freeze schema version 1 is not reinterpreted.
+The Adapter admits a best-effort `unknown` command action only in `IMPLEMENT`,
+where later freeze-v2 success remains mandatory; every other phase and every
+unknown Item/effect still fails closed.
 
 ## External Execution — implemented M2 Slice 6
 
@@ -1720,7 +1739,7 @@ describes.
 | Workflow state | runtime command | Transition policy | Workflow Runtime only |
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
-| Candidate stable change set — accepted M2.5.1 ADR 0044; contract/local derivation foundation implemented, composition pending | Candidate Manager comparison of the persisted base manifest with equal stable source-freeze manifests | Workflow Runtime derives exact Goal allowed-path disposition; Store repeats canonical and relationship checks | Additive schema-version-2 freeze observation/Evidence in the existing source-freeze transaction; Runtime/Store/Evidence wiring remains pending and no Adapter or Worker gains completion authority |
+| Candidate stable change set — implemented M2.5.1 Slice 3 foundation; acceptance pending | Candidate Manager comparison of the persisted base manifest with equal stable source-freeze manifests | Workflow Runtime derives exact current Goal allowed-path disposition; Store recomputes canonical Profile/Candidate/digest/path/Check/Attempt relationships; SQLite guards retained shape, cross-record bindings, audit, and atomicity | Additive schema-version-2 freeze observation/Evidence in the existing atomic source-freeze transaction with Store-validated strict reopen; historical v1 remains separate and no Adapter or Worker gains containment, Evidence, or completion authority |
 | Project-source read and Cleanup authority — implemented M2.5.1 Slice 3 foundation; phase composition pending | Goal scope, Candidate Manager observation, strict persisted project-read authority, Store-derived authority snapshot, exact cleanup records, and exact unresolved-Grant request | Workflow Runtime for the pending production project-read/Context/Attempt composition; trusted Runtime Cleanup coordinator for exact cleanup-request admission; Candidate Manager, Store canonical/relationship backstops, and Adapter-local physical classification | Store already supports atomic persistence of the Runtime-authored project-read record plus Context/Attempt/Workflow/command/audits; production Workflow Runtime composition remains pending; the Store persists the monotonic snapshot and consume-once Grant; the trusted Runtime Cleanup coordinator alone invokes the exact admitted port request; Store atomically closes Observation/Outcome/audit/consumption, and strict reopen/replay suppresses later filesystem work |
 | Acceptance-critical Verification Plan and protected-asset manifest — implemented M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |

@@ -48,6 +48,21 @@ function temporaryDatabase(t: TestContext): string {
   return join(directory, 'state.sqlite');
 }
 
+function currentMigrationNames(): readonly string[] {
+  return Object.freeze(
+    readdirSync(defaultMigrationsDirectory())
+      .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+      .toSorted(),
+  );
+}
+
+function nextMigrationName(suffix: string): string {
+  const latestVersion = Math.max(
+    ...currentMigrationNames().map((name) => Number.parseInt(name.slice(0, 4), 10)),
+  );
+  return `${String(latestVersion + 1).padStart(4, '0')}_${suffix}.sql`;
+}
+
 function creationInput(namespace: string, projectPath: string): CreateGoalWithWorkflowInput {
   const goal = createGoal({
     id: goalId(`goal_${namespace}`),
@@ -201,7 +216,7 @@ void test('[I-006][I-007][I-008] verified activation gates new Goal project admi
   assert.ok(snapshot);
   assert.equal(snapshot.databaseState, SqliteAuthorityDatabaseState.EMPTY);
   assert.deepEqual(snapshot.projectReferences, []);
-  assert.equal(store.appliedMigrations().length, 33);
+  assert.equal(store.appliedMigrations().length, currentMigrationNames().length);
   assert.ok(currentAssertions >= 3);
 
   assert.equal(
@@ -417,13 +432,13 @@ void test('[I-006][I-008] migration cannot rewrite an inspected project binding'
   );
   const migrationsDirectory = mkdtempSync(join(tmpdir(), 'codeclosure-activation-migrations-'));
   t.after(() => rmSync(migrationsDirectory, { recursive: true, force: true }));
-  for (const name of readdirSync(defaultMigrationsDirectory()).filter((name) =>
-    name.endsWith('.sql'),
-  )) {
+  for (const name of currentMigrationNames()) {
     copyFileSync(join(defaultMigrationsDirectory(), name), join(migrationsDirectory, name));
   }
+  const rewriteMigrationName = nextMigrationName('rewrite_project_binding');
+  const rewriteMigrationVersion = Number.parseInt(rewriteMigrationName.slice(0, 4), 10);
   writeFileSync(
-    join(migrationsDirectory, '0034_rewrite_project_binding.sql'),
+    join(migrationsDirectory, rewriteMigrationName),
     `DROP TRIGGER audit_events_no_update;
 UPDATE goals SET project_path = '${rewrittenProjectPath}';
 UPDATE audit_events
@@ -461,7 +476,10 @@ END;
       projectPath,
     );
     assert.equal(
-      inspected.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 34').pluck().get(),
+      inspected
+        .prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = ?')
+        .pluck()
+        .get(rewriteMigrationVersion),
       0,
     );
   } finally {

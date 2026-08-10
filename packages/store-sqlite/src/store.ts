@@ -279,6 +279,11 @@ import {
   deriveContextManifestEntries,
   deriveM1BaseProjectIdentity,
   deriveM1WorkspaceIdentity,
+  candidateChangesStayWithinAllowedPaths,
+  candidateWorkspaceAllowedPathProjection,
+  createCandidateChangeSetV2,
+  decodeCandidateWorkspaceAllowedPaths,
+  digestCandidateWorkspaceValue,
   externalExecutionAbandonReasonCode,
   externalMaintenanceFailureCode,
   externalWorkerFailureCode,
@@ -288,7 +293,11 @@ import {
   m1PhaseObjective,
   m1WorkerResponseContract,
   validateM1CandidateEvidencePolicy,
+  validateM251CandidateFreezeEvidencePolicy,
   validateLocalCommandVerificationPolicy,
+  M251CandidateFreezeProfileClassification,
+  classifyM251CandidateFreezeProfile,
+  type M251CandidateFreezeProfileClassification as M251CandidateFreezeProfileClass,
   verifyM1AcceptanceDecision,
   verifyEvidenceSetAuthority,
   assertM1WorkerPhaseAttemptAuthority,
@@ -2455,6 +2464,21 @@ function isM1CodingWorkerPhase(phase: WorkflowPhase): boolean {
     phase === WorkflowPhase.PLAN ||
     phase === WorkflowPhase.IMPLEMENT
   );
+}
+
+function resolveCandidateFreezeProfileClassification(
+  profile: ExecutionProfile,
+): Exclude<
+  M251CandidateFreezeProfileClass,
+  typeof M251CandidateFreezeProfileClassification.INCOMPATIBLE_M251
+> {
+  const classification = classifyM251CandidateFreezeProfile(profile);
+  if (classification === M251CandidateFreezeProfileClassification.INCOMPATIBLE_M251) {
+    throw new StoreInvariantError(
+      `Execution Profile ${profile.id} uses the reserved M2.5.1 identity without its exact freeze-v2 contract`,
+    );
+  }
+  return classification;
 }
 
 export class SqliteControlStore
@@ -8336,6 +8360,13 @@ export class SqliteControlStore
       );
       const freezeCheck = freezeChecks[0];
       const verificationCheck = localVerificationChecks[0] ?? fakeVerificationChecks[0];
+      const boundExecutionProfile = this.getExecutionProfile(
+        startAuthority.executionProfileBinding.profileId,
+      );
+      const formalM251 =
+        boundExecutionProfile !== undefined &&
+        resolveCandidateFreezeProfileClassification(boundExecutionProfile.profile) ===
+          M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
       const protectedPlan = this.getAcceptanceCriticalVerificationPlan(workflow.id);
       const verificationRef =
         verificationCheck === undefined
@@ -8364,9 +8395,13 @@ export class SqliteControlStore
         );
       if (
         freezeChecks.length !== 1 ||
-        fakeVerificationChecks.length !== 1 ||
-        localVerificationChecks.length > 1 ||
-        relatedSpecifications.length !== 2 + localVerificationChecks.length ||
+        (formalM251
+          ? fakeVerificationChecks.length !== 0 ||
+            localVerificationChecks.length !== 1 ||
+            relatedSpecifications.length !== 2
+          : fakeVerificationChecks.length !== 1 ||
+            localVerificationChecks.length > 1 ||
+            relatedSpecifications.length !== 2 + localVerificationChecks.length) ||
         freezeCheck === undefined ||
         verificationCheck === undefined ||
         (protectedPlan === undefined) !==
@@ -8377,6 +8412,15 @@ export class SqliteControlStore
         setRows.length !== 1
       ) {
         return undefined;
+      }
+      if (formalM251) {
+        try {
+          validateM251CandidateFreezeEvidencePolicy(candidateAuthority.generation, {
+            freeze: freezeCheck,
+          });
+        } catch {
+          return undefined;
+        }
       }
       const decodedSet = decodeEvidenceSetRow(setRows[0]);
       const evidenceSet = this.getEvidenceSet(decodedSet.digest);
@@ -8785,6 +8829,15 @@ export class SqliteControlStore
       throw new StoreInvariantError(
         'Execution Profile digest does not match its canonical projection',
       );
+    }
+    if (
+      classifyM251CandidateFreezeProfile(input.profile) ===
+      M251CandidateFreezeProfileClassification.INCOMPATIBLE_M251
+    ) {
+      return {
+        status: 'PROFILE_CONFLICT',
+        message: `Execution Profile ${input.profile.id} uses the reserved M2.5.1 identity without its exact freeze-v2 contract`,
+      };
     }
     const canonicalContent = canonicalizeJson(executionProfileProjection(input.profile));
     const baseCanonicalContent = canonicalizeJson({
@@ -10600,14 +10653,11 @@ export class SqliteControlStore
       ) {
         throw new StoreInvariantError('Prepared Candidate does not bind the resulting Workflow');
       }
-      if (input.checkSpecifications.length !== 2) {
-        throw new StoreInvariantError('Candidate preparation requires exactly two M1 Checks');
-      }
       const goal = this.getGoal(current.goalId);
       const freeze = input.checkSpecifications[0];
       const verification = input.checkSpecifications[1];
-      if (goal === undefined || freeze === undefined || verification === undefined) {
-        throw new StoreInvariantError('Candidate preparation lacks its M1 policy authority');
+      if (goal === undefined || freeze === undefined) {
+        throw new StoreInvariantError('Candidate preparation lacks its policy authority');
       }
       if (
         input.candidate.baseProjectIdentity !==
@@ -10616,12 +10666,33 @@ export class SqliteControlStore
       ) {
         throw new StoreInvariantError('Candidate preparation contains non-canonical M1 identities');
       }
-      validateM1CandidateEvidencePolicy(
-        goal,
-        input.generation,
-        { freeze, verification, obligations: input.obligations },
-        input.event.occurredAt,
-      );
+      const formalM251 =
+        resolveCandidateFreezeProfileClassification(
+          this.resolveBoundExecutionProfileForWorkflow(current),
+        ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
+      if (formalM251) {
+        if (
+          input.checkSpecifications.length !== 1 ||
+          verification !== undefined ||
+          input.obligations.length !== 0
+        ) {
+          throw new StoreInvariantError(
+            'Formal M2.5.1 Candidate preparation requires only one freeze-v2 Check',
+          );
+        }
+        validateM251CandidateFreezeEvidencePolicy(input.generation, { freeze });
+        decodeCandidateWorkspaceAllowedPaths(goal.scope.allowedPaths);
+      } else {
+        if (input.checkSpecifications.length !== 2 || verification === undefined) {
+          throw new StoreInvariantError('Historical Candidate preparation requires two M1 Checks');
+        }
+        validateM1CandidateEvidencePolicy(
+          goal,
+          input.generation,
+          { freeze, verification, obligations: input.obligations },
+          input.event.occurredAt,
+        );
+      }
       const expectedPayloadDigest = sha256Digest(
         canonicalAuthorityDigests.digest({
           event: input.event,
@@ -11541,6 +11612,33 @@ export class SqliteControlStore
         },
         input.occurredAt,
       );
+      const relatedSpecifications = this.listCheckSpecifications().filter(
+        (specification) => specification.inputRefs[0] === authority.generation.id,
+      );
+      const freezeChecks = relatedSpecifications.filter(
+        (specification) => specification.kind === CheckSpecificationKind.CANDIDATE_FREEZE,
+      );
+      const fakeChecks = relatedSpecifications.filter(
+        (specification) => specification.kind === CheckSpecificationKind.FAKE_VERIFICATION,
+      );
+      const formalM251 =
+        resolveCandidateFreezeProfileClassification(
+          this.resolveBoundExecutionProfileForWorkflow(workflow),
+        ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
+      if (formalM251) {
+        const freeze = freezeChecks[0];
+        if (
+          relatedSpecifications.length !== 1 ||
+          freezeChecks.length !== 1 ||
+          fakeChecks.length !== 0 ||
+          freeze === undefined
+        ) {
+          throw new StoreInvariantError(
+            'Formal M2.5.1 local verification requires exactly one retained freeze-v2 Check',
+          );
+        }
+        validateM251CandidateFreezeEvidencePolicy(authority.generation, { freeze });
+      }
       if (
         this.getCheckSpecification(policy.verification.id) !== undefined ||
         this.listVerificationObligations(goal.id).some(
@@ -12262,6 +12360,15 @@ export class SqliteControlStore
       this.validateCommandTarget(input.target, current);
       if (current.version !== input.event.fromVersion) {
         throw new OptimisticConcurrencyError('Workflow', current.id);
+      }
+      if (
+        resolveCandidateFreezeProfileClassification(
+          this.resolveBoundExecutionProfileForWorkflow(current),
+        ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2
+      ) {
+        throw new StoreInvariantError(
+          'Formal M2.5.1 Acceptance repair requires a later versioned repair record',
+        );
       }
       const manifest = this.requireAcceptanceManifest(input.repair.inputManifestDigest);
       const decision = this.requireAcceptanceDecision(input.repair.acceptanceDecisionId);
@@ -13145,6 +13252,86 @@ export class SqliteControlStore
     ) {
       throw new StoreInvariantError('Evidence Policy or Check Specification authority is stale');
     }
+    if (record.kind === EvidenceKind.CANDIDATE_FREEZE) {
+      this.assertCandidateFreezeEvidenceAuthority(record, workflow, generation);
+    }
+  }
+
+  private resolveBoundExecutionProfileForWorkflow(workflow: WorkflowInstance): ExecutionProfile {
+    const binding = this.getExecutionProfileBinding(workflow.id);
+    const installed =
+      binding === undefined ? undefined : this.getExecutionProfile(binding.profileId);
+    if (
+      binding === undefined ||
+      installed === undefined ||
+      binding.goalId !== workflow.goalId ||
+      binding.workflowId !== workflow.id ||
+      binding.profileId !== installed.profile.id ||
+      binding.profileVersion !== installed.profile.version ||
+      binding.profileDigest !== installed.profile.digest ||
+      installed.installedAt > binding.boundAt ||
+      binding.boundAt > workflow.updatedAt
+    ) {
+      throw new StoreInvariantError(
+        `Workflow ${workflow.id} has no exact retained Execution Profile authority`,
+      );
+    }
+    return installed.profile;
+  }
+
+  private assertCandidateFreezeEvidenceAuthority(
+    record: Extract<EvidenceRecord, { readonly kind: typeof EvidenceKind.CANDIDATE_FREEZE }>,
+    workflow: WorkflowInstance,
+    generation: CandidateGeneration,
+  ): void {
+    const profile = this.resolveBoundExecutionProfileForWorkflow(workflow);
+    const formalM251 =
+      resolveCandidateFreezeProfileClassification(profile) ===
+      M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
+    if (record.schemaVersion === 1) {
+      if (formalM251) {
+        throw new StoreInvariantError(
+          'The M2.5.1 freeze-v2 Profile contract cannot admit historical freeze-v1 Evidence',
+        );
+      }
+      return;
+    }
+    if (!formalM251) {
+      throw new StoreInvariantError(
+        'Freeze-v2 Evidence requires the exact M2.5.1 freeze-v2 Profile contract',
+      );
+    }
+    const goal = this.getGoal(record.goalId);
+    if (goal === undefined) {
+      throw new StoreInvariantError('Freeze-v2 Evidence has no retained Goal authority');
+    }
+    const allowedPaths = decodeCandidateWorkspaceAllowedPaths(goal.scope.allowedPaths);
+    const allowedPathPolicyDigest = digestCandidateWorkspaceValue(
+      candidateWorkspaceAllowedPathProjection(allowedPaths),
+    );
+    const observation = record.observation;
+    const changeSet = createCandidateChangeSetV2({
+      baseSourceDigest: observation.baseSourceDigest,
+      changes: observation.changes,
+      frozenSourceDigest: observation.secondSourceDigest,
+    });
+    if (
+      record.goalRevision !== goal.revision ||
+      observation.allowedPathPolicyDigest !== allowedPathPolicyDigest ||
+      observation.baseSourceDigest !== generation.baseDigest ||
+      observation.firstSourceDigest !== observation.secondSourceDigest ||
+      observation.secondSourceDigest !== generation.frozenDigest ||
+      observation.secondSourceDigest !== record.candidateDigest ||
+      observation.changes.length === 0 ||
+      observation.changeSetDigest !== changeSet.changeSetDigest ||
+      record.payloadRefs[0] !== changeSet.changeSetDigest ||
+      !candidateChangesStayWithinAllowedPaths(observation.changes, allowedPaths)
+    ) {
+      throw new StoreInvariantError(
+        'Freeze-v2 Evidence does not bind the exact Candidate and Goal path authority',
+      );
+    }
+    validateM251CandidateFreezeEvidencePolicy(generation, { freeze: record.checkSpec });
   }
 
   private assertFrozenCandidateTransitionAuthority(
@@ -13282,6 +13469,9 @@ export class SqliteControlStore
       canonicalizeJson(specification) !== canonicalizeJson(record.checkSpec)
     ) {
       throw new StoreInvariantError(`Evidence ${record.id} has stale authority bindings`);
+    }
+    if (record.kind === EvidenceKind.CANDIDATE_FREEZE) {
+      this.assertCandidateFreezeEvidenceAuthority(record, workflow, decodedGeneration.generation);
     }
     return record;
   }
@@ -14878,6 +15068,7 @@ export class SqliteControlStore
         `Execution Profile ${installed.profile.id} digest does not match its canonical projection`,
       );
     }
+    resolveCandidateFreezeProfileClassification(installed.profile);
     return installed;
   }
 
@@ -16728,7 +16919,8 @@ export class SqliteControlStore
     }
 
     for (const row of generationRows) {
-      const generation = decodeCandidateGenerationRow(row).generation;
+      const decodedGeneration = decodeCandidateGenerationRow(row);
+      const generation = decodedGeneration.generation;
       const candidateRow = this.#database
         .prepare('SELECT * FROM candidates WHERE id = ?')
         .get(generation.candidateId);
@@ -16747,31 +16939,60 @@ export class SqliteControlStore
       const localVerification = relatedSpecifications.find(
         (specification) => specification.kind === CheckSpecificationKind.LOCAL_COMMAND,
       );
-      if (
-        goal === undefined ||
-        relatedSpecifications.length !== (localVerification === undefined ? 2 : 3) ||
-        freeze === undefined ||
-        verification === undefined
-      ) {
+      if (goal === undefined || freeze === undefined) {
         throw new StoreInvariantError(
-          `Candidate generation ${generation.id} has incomplete M1 Check authority`,
+          `Candidate generation ${generation.id} has incomplete Check authority`,
         );
       }
       const obligations = this.listVerificationObligations(goal.id).filter(
         (obligation) => obligation.candidateGenerationId === generation.id,
       );
-      validateM1CandidateEvidencePolicy(
-        goal,
-        generation,
-        {
-          freeze,
-          verification,
-          obligations: obligations.filter(
+      const workflow = this.getWorkflow(decodedGeneration.workflowId);
+      if (workflow === undefined) {
+        throw new StoreInvariantError(
+          `Candidate generation ${generation.id} has no retained Workflow`,
+        );
+      }
+      const formalM251 =
+        resolveCandidateFreezeProfileClassification(
+          this.resolveBoundExecutionProfileForWorkflow(workflow),
+        ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
+      if (formalM251) {
+        if (
+          verification !== undefined ||
+          relatedSpecifications.length !== (localVerification === undefined ? 1 : 2) ||
+          obligations.some(
             (obligation) => obligation.requiredEvidenceKind === EvidenceKind.TEST_RESULT,
-          ),
-        },
-        generation.createdAt,
-      );
+          )
+        ) {
+          throw new StoreInvariantError(
+            `Candidate generation ${generation.id} mixes formal and Fake Check authority`,
+          );
+        }
+        validateM251CandidateFreezeEvidencePolicy(generation, { freeze });
+        decodeCandidateWorkspaceAllowedPaths(goal.scope.allowedPaths);
+      } else {
+        if (
+          relatedSpecifications.length !== (localVerification === undefined ? 2 : 3) ||
+          verification === undefined
+        ) {
+          throw new StoreInvariantError(
+            `Candidate generation ${generation.id} has incomplete M1 Check authority`,
+          );
+        }
+        validateM1CandidateEvidencePolicy(
+          goal,
+          generation,
+          {
+            freeze,
+            verification,
+            obligations: obligations.filter(
+              (obligation) => obligation.requiredEvidenceKind === EvidenceKind.TEST_RESULT,
+            ),
+          },
+          generation.createdAt,
+        );
+      }
       if (localVerification !== undefined) {
         const localObligations = obligations.filter(
           (obligation) =>
@@ -17544,17 +17765,33 @@ export class SqliteControlStore
     );
     const freezeCheck = freezeChecks[0];
     const verificationCheck = localVerificationChecks[0] ?? fakeVerificationChecks[0];
+    const boundExecutionProfile = this.getExecutionProfileBinding(currentWorkflow.id);
+    const installedExecutionProfile =
+      boundExecutionProfile === undefined
+        ? undefined
+        : this.getExecutionProfile(boundExecutionProfile.profileId);
+    const formalM251 =
+      installedExecutionProfile !== undefined &&
+      resolveCandidateFreezeProfileClassification(installedExecutionProfile.profile) ===
+        M251CandidateFreezeProfileClassification.M251_FREEZE_V2;
     if (
       freezeChecks.length !== 1 ||
-      fakeVerificationChecks.length !== 1 ||
-      localVerificationChecks.length > 1 ||
-      relatedSpecifications.length !== 2 + localVerificationChecks.length ||
+      (formalM251
+        ? fakeVerificationChecks.length !== 0 ||
+          localVerificationChecks.length !== 1 ||
+          relatedSpecifications.length !== 2
+        : fakeVerificationChecks.length !== 1 ||
+          localVerificationChecks.length > 1 ||
+          relatedSpecifications.length !== 2 + localVerificationChecks.length) ||
       freezeCheck === undefined ||
       verificationCheck === undefined
     ) {
       throw new StoreInvariantError(
         `Acceptance Input Manifest ${manifest.manifestDigest} has incomplete Check authority`,
       );
+    }
+    if (formalM251) {
+      validateM251CandidateFreezeEvidencePolicy(historicalGeneration, { freeze: freezeCheck });
     }
     const verificationRef = `${verificationCheck.id}@${verificationCheck.version}`;
     const obligations = Object.freeze(
@@ -17708,6 +17945,13 @@ export class SqliteControlStore
       verificationCheck === undefined ||
       policyBinding === undefined ||
       candidate === undefined
+    ) {
+      return reject();
+    }
+    if (
+      resolveCandidateFreezeProfileClassification(
+        this.resolveBoundExecutionProfileForWorkflow(workflow),
+      ) === M251CandidateFreezeProfileClassification.M251_FREEZE_V2
     ) {
       return reject();
     }

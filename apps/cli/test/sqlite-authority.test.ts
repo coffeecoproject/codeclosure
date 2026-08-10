@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, normalize } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -11,7 +11,7 @@ import {
   type NormalizedProjectPathPort,
 } from '@codeclosure/runtime';
 import { CryptographicIdentityGenerator, SystemUtcClock } from '@codeclosure/runtime/composition';
-import { openSqliteControlStore } from '@codeclosure/store-sqlite';
+import { defaultMigrationsDirectory, openSqliteControlStore } from '@codeclosure/store-sqlite';
 
 import { ProtectedPathKind } from '../src/composition/data-home.ts';
 import { openCliSqliteAuthority } from '../dist/composition/sqlite-authority.js';
@@ -50,7 +50,13 @@ void test('[I-006][I-007] trusted CLI composition uses verified SQLite activatio
   });
   t.after(() => store.close());
 
-  assert.equal(store.appliedMigrations().length, 33);
+  const expectedMigrationNames = readdirSync(defaultMigrationsDirectory())
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(name))
+    .toSorted();
+  assert.deepEqual(
+    store.appliedMigrations().map(({ name }) => name),
+    expectedMigrationNames,
+  );
   assert.deepEqual(store.listStartupRecoveryCatalog(), []);
 });
 

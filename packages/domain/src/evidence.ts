@@ -94,7 +94,7 @@ export const CheckSpecificationKind = {
 export type CheckSpecificationKind =
   (typeof CheckSpecificationKind)[keyof typeof CheckSpecificationKind];
 
-export interface M1CheckSpecification {
+export interface LogicalCheckSpecification {
   readonly schemaVersion: 1;
   readonly id: CheckSpecificationId;
   readonly version: string;
@@ -110,6 +110,9 @@ export interface M1CheckSpecification {
   readonly expectedObservationSchema: string;
   readonly cleanupPolicy?: string;
 }
+
+/** Historical name retained for source compatibility with the M1/M2 API. */
+export type M1CheckSpecification = LogicalCheckSpecification;
 
 export const LocalCommandEnvironmentInheritance = {
   NONE: 'NONE',
@@ -193,7 +196,7 @@ export interface ProtectedLocalCommandCheckSpecification extends LocalCommandChe
 export type LocalCommandCheckSpecification =
   LocalCommandCheckSpecificationV2 | ProtectedLocalCommandCheckSpecification;
 
-export type CheckSpecification = M1CheckSpecification | LocalCommandCheckSpecification;
+export type CheckSpecification = LogicalCheckSpecification | LocalCommandCheckSpecification;
 
 export interface VerificationObligation {
   readonly id: VerificationObligationId;
@@ -214,6 +217,46 @@ export interface CandidateFreezeObservation {
   readonly firstSourceDigest: Sha256Digest;
   readonly secondSourceDigest: Sha256Digest;
   readonly changeSetDigest: Sha256Digest;
+}
+
+export const CandidateFreezeChangeKind = {
+  ADDED: 'ADDED',
+  DELETED: 'DELETED',
+  MODIFIED: 'MODIFIED',
+} as const;
+export type CandidateFreezeChangeKind =
+  (typeof CandidateFreezeChangeKind)[keyof typeof CandidateFreezeChangeKind];
+
+export const CandidateFreezeFileMode = {
+  EXECUTABLE: 'EXECUTABLE',
+  REGULAR: 'REGULAR',
+} as const;
+export type CandidateFreezeFileMode =
+  (typeof CandidateFreezeFileMode)[keyof typeof CandidateFreezeFileMode];
+
+export interface CandidateFreezeFileIdentity {
+  readonly byteLength: number;
+  readonly contentDigest: Sha256Digest;
+  readonly mode: CandidateFreezeFileMode;
+}
+
+export interface CandidateFreezeChangeEntry {
+  readonly after: CandidateFreezeFileIdentity | null;
+  readonly before: CandidateFreezeFileIdentity | null;
+  readonly kind: CandidateFreezeChangeKind;
+  readonly path: string;
+}
+
+export interface CandidateFreezeObservationV2 {
+  readonly schemaVersion: 2;
+  readonly kind: typeof EvidenceKind.CANDIDATE_FREEZE;
+  readonly allowedPathPolicyDigest: Sha256Digest;
+  readonly baseSourceDigest: Sha256Digest;
+  readonly changeSetDigest: Sha256Digest;
+  readonly changeSetProfile: 'candidate-change-set-v2';
+  readonly changes: readonly CandidateFreezeChangeEntry[];
+  readonly firstSourceDigest: Sha256Digest;
+  readonly secondSourceDigest: Sha256Digest;
 }
 
 export interface FakeVerificationObservation {
@@ -240,7 +283,10 @@ export interface LocalCommandObservation {
 }
 
 export type EvidenceObservation =
-  CandidateFreezeObservation | FakeVerificationObservation | LocalCommandObservation;
+  | CandidateFreezeObservation
+  | CandidateFreezeObservationV2
+  | FakeVerificationObservation
+  | LocalCommandObservation;
 
 export interface EvidenceEnvironmentIdentity {
   readonly schemaVersion: 1;
@@ -282,7 +328,7 @@ interface EvidenceRecordBase {
   readonly recordDigest: Sha256Digest;
 }
 
-export interface CandidateFreezeEvidenceRecord extends EvidenceRecordBase {
+export interface CandidateFreezeEvidenceRecordV1 extends EvidenceRecordBase {
   readonly schemaVersion: 1;
   readonly kind: typeof EvidenceKind.CANDIDATE_FREEZE;
   readonly producerType: typeof EvidenceProducerType.CANDIDATE_MANAGER;
@@ -293,6 +339,21 @@ export interface CandidateFreezeEvidenceRecord extends EvidenceRecordBase {
   readonly payloadRefs: readonly [Sha256Digest];
   readonly resultStatus: typeof EvidenceResultStatus.OBSERVED;
 }
+
+export interface CandidateFreezeEvidenceRecordV2 extends EvidenceRecordBase {
+  readonly schemaVersion: 2;
+  readonly kind: typeof EvidenceKind.CANDIDATE_FREEZE;
+  readonly producerType: typeof EvidenceProducerType.CANDIDATE_MANAGER;
+  readonly verificationObligationId?: never;
+  readonly factSnapshotDigest?: never;
+  readonly environmentIdentity?: never;
+  readonly observation: CandidateFreezeObservationV2;
+  readonly payloadRefs: readonly [Sha256Digest];
+  readonly resultStatus: typeof EvidenceResultStatus.OBSERVED;
+}
+
+export type CandidateFreezeEvidenceRecord =
+  CandidateFreezeEvidenceRecordV1 | CandidateFreezeEvidenceRecordV2;
 
 export interface TestResultEvidenceRecord extends EvidenceRecordBase {
   readonly schemaVersion: 1;
@@ -472,6 +533,89 @@ function assertPortableCwd(value: string): void {
   }
 }
 
+function assertCandidateFreezeRelativePath(value: string): void {
+  assertNonBlank(value, 'Candidate freeze change path');
+  assertBoundedString(value, 'Candidate freeze change path', 4_096);
+  if (
+    value !== value.normalize('NFC') ||
+    value.startsWith('/') ||
+    value.includes('\\') ||
+    value
+      .split('/')
+      .some((component) => component.length === 0 || component === '.' || component === '..')
+  ) {
+    throw new DomainInvariantError(
+      'Candidate freeze change path must be a normalized repository-relative path',
+    );
+  }
+}
+
+function sameCandidateFreezeFileIdentity(
+  left: CandidateFreezeFileIdentity,
+  right: CandidateFreezeFileIdentity,
+): boolean {
+  return (
+    left.byteLength === right.byteLength &&
+    left.contentDigest === right.contentDigest &&
+    left.mode === right.mode
+  );
+}
+
+function assertCandidateFreezeFileIdentity(
+  identity: CandidateFreezeFileIdentity,
+  name: string,
+): void {
+  assertNonNegativeSafeInteger(identity.byteLength, `${name} byte length`);
+  sha256Digest(identity.contentDigest);
+  assertKnown(CandidateFreezeFileMode, identity.mode, `${name} mode`);
+}
+
+function assertCandidateFreezeChanges(changes: readonly CandidateFreezeChangeEntry[]): void {
+  if (changes.length === 0 || changes.length > 8_192) {
+    throw new DomainInvariantError(
+      'Candidate freeze requires a non-empty bounded canonical change set',
+    );
+  }
+  let previousPath: string | undefined;
+  const aliases = new Map<string, string>();
+  for (const change of changes) {
+    assertKnown(CandidateFreezeChangeKind, change.kind, 'Candidate freeze change kind');
+    assertCandidateFreezeRelativePath(change.path);
+    if (previousPath !== undefined && change.path <= previousPath) {
+      throw new DomainInvariantError('Candidate freeze changes must be uniquely path-sorted');
+    }
+    previousPath = change.path;
+    if (change.before !== null) {
+      assertCandidateFreezeFileIdentity(change.before, 'Candidate freeze prior file');
+    }
+    if (change.after !== null) {
+      assertCandidateFreezeFileIdentity(change.after, 'Candidate freeze resulting file');
+    }
+    if (
+      (change.kind === CandidateFreezeChangeKind.ADDED &&
+        (change.before !== null || change.after === null)) ||
+      (change.kind === CandidateFreezeChangeKind.DELETED &&
+        (change.before === null || change.after !== null)) ||
+      (change.kind === CandidateFreezeChangeKind.MODIFIED &&
+        (change.before === null ||
+          change.after === null ||
+          sameCandidateFreezeFileIdentity(change.before, change.after)))
+    ) {
+      throw new DomainInvariantError('Candidate freeze change members do not match their kind');
+    }
+    const components = change.path.split('/');
+    for (let length = 1; length <= components.length; length += 1) {
+      const prefix = components.slice(0, length).join('/');
+      const alias = prefix.normalize('NFC').toLocaleLowerCase('en-US');
+      const previous = aliases.get(alias);
+      if (previous !== undefined && previous !== prefix) {
+        throw new DomainInvariantError('Candidate freeze changes contain a path alias');
+      }
+      aliases.set(alias, prefix);
+    }
+  }
+}
+
 function assertCanonicalStrings(values: readonly string[], name: string): void {
   let previous: string | undefined;
   for (const value of values) {
@@ -614,6 +758,11 @@ export function assertEvidenceObservationInvariant(observation: EvidenceObservat
     sha256Digest(observation.changeSetDigest);
     if (observation.firstSourceDigest !== observation.secondSourceDigest) {
       throw new DomainInvariantError('Freeze Evidence requires stable source observations');
+    }
+    if (observation.schemaVersion === 2) {
+      sha256Digest(observation.allowedPathPolicyDigest);
+      sha256Digest(observation.baseSourceDigest);
+      assertCandidateFreezeChanges(observation.changes);
     }
     return;
   }
@@ -803,9 +952,14 @@ export function assertEvidenceRecordInvariant(record: EvidenceRecord): void {
       !hasExactValue(record.observation.kind, EvidenceKind.CANDIDATE_FREEZE) ||
       !hasExactValue(record.resultStatus, EvidenceResultStatus.OBSERVED) ||
       record.checkSpec.kind !== CheckSpecificationKind.CANDIDATE_FREEZE ||
+      record.schemaVersion !== record.observation.schemaVersion ||
       Object.hasOwn(record, 'verificationObligationId') ||
       Object.hasOwn(record, 'environmentIdentity') ||
-      record.payloadRefs[0] !== record.observation.changeSetDigest
+      record.payloadRefs[0] !== record.observation.changeSetDigest ||
+      (record.schemaVersion === 2 &&
+        (record.candidateDigest !== record.observation.secondSourceDigest ||
+          record.checkSpec.expectedObservationSchema !==
+            'codeclosure.candidate-freeze-observation.v2'))
     ) {
       throw new DomainInvariantError('Candidate freeze Evidence has an invalid authority owner');
     }

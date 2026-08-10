@@ -498,11 +498,19 @@ execution selects candidate-free `readOnly` and Candidate-bound
 and discards forbidden file-change results; effective black-box live
 containment is not yet proven. Accepted
 [ADR 0044](adr/0044-source-freeze-owned-candidate-change-containment.md)
-assigns that pending proof to an additive Candidate Manager-owned stable
-source-freeze change set and keeps ordinary IMPLEMENT commands fail-closed
-until the complete version-2 freeze path is installed. Its canonical contract
-and local manifest-difference derivation are implemented; Runtime/Store
-relationship enforcement and freeze-Evidence v2 remain pending. The
+assigns that proof to an additive Candidate Manager-owned stable source-freeze
+change set. Its canonical contract, local manifest-difference derivation, C11
+Profile freeze-v2 sub-contract and freeze-only Check family, Runtime-owned
+current-Goal path disposition, Store-owned canonical recomputation, SQLite
+structural and relational backstops, atomic freeze-Evidence v2, strict reopen,
+and closed failure path are now implemented without a Fake
+Verification obligation. The reserved formal Profile identity fails
+install/read/reopen on any C11 sub-contract mismatch and cannot fall back to
+the historical Check family. The Adapter-local policy admits the pinned best-
+effort `unknown` command action only for `IMPLEMENT`; the later freeze-v2
+record, not that activity observation, must prove containment, and failure
+invalidates the Candidate without Evidence. This is offline implementation
+foundation and has no `M251-C11` acceptance verdict. The
 legacy Driver rejects v3 during installed-Profile preflight before Start
 mutation, Adapter, or FakeWorker fallback; Runtime source-currency enforcement,
 real phase composition, mandatory live proof, and milestone assessment have

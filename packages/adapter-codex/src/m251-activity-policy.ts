@@ -97,6 +97,9 @@ function commandActivity(
     }
     const action = value as JsonObject;
     if (action['type'] === 'unknown') {
+      if (policy.phase === 'IMPLEMENT') {
+        continue;
+      }
       return rejection('COMMAND_ACTIONS');
     }
     if (

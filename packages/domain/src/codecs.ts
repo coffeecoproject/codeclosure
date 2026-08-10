@@ -45,6 +45,8 @@ import {
   type WorkerResponseContract,
 } from './context.js';
 import {
+  CandidateFreezeChangeKind,
+  CandidateFreezeFileMode,
   CheckSpecificationKind,
   EvidenceEligibilityState,
   EvidenceKind,
@@ -57,6 +59,7 @@ import {
   LocalCommandTerminationKind,
   assertCheckSpecificationInvariant,
   assertEvidenceEligibilityInvariant,
+  assertEvidenceObservationInvariant,
   assertEvidenceRecordInvariant,
   assertEvidenceSetInvariant,
   assertVerificationObligationInvariant,
@@ -1424,6 +1427,34 @@ const candidateFreezeObservationSchema = z
     changeSetDigest: z.string(),
   })
   .strict();
+const candidateFreezeFileIdentitySchema = z
+  .object({
+    byteLength: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    contentDigest: z.string(),
+    mode: z.enum(Object.values(CandidateFreezeFileMode)),
+  })
+  .strict();
+const candidateFreezeChangeEntrySchema = z
+  .object({
+    after: candidateFreezeFileIdentitySchema.nullable(),
+    before: candidateFreezeFileIdentitySchema.nullable(),
+    kind: z.enum(Object.values(CandidateFreezeChangeKind)),
+    path: z.string(),
+  })
+  .strict();
+const candidateFreezeObservationV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    kind: z.literal(EvidenceKind.CANDIDATE_FREEZE),
+    allowedPathPolicyDigest: z.string(),
+    baseSourceDigest: z.string(),
+    changeSetDigest: z.string(),
+    changeSetProfile: z.literal('candidate-change-set-v2'),
+    changes: z.array(candidateFreezeChangeEntrySchema).min(1).max(8_192),
+    firstSourceDigest: z.string(),
+    secondSourceDigest: z.string(),
+  })
+  .strict();
 const fakeVerificationObservationSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -1459,8 +1490,9 @@ const localCommandObservationSchema = z
     diagnosticCode: z.enum(Object.values(LocalCommandDiagnosticCode)),
   })
   .strict();
-const evidenceObservationSchema = z.discriminatedUnion('kind', [
+const evidenceObservationSchema = z.union([
   candidateFreezeObservationSchema,
+  candidateFreezeObservationV2Schema,
   fakeVerificationObservationSchema,
   localCommandObservationSchema,
 ]);
@@ -1470,13 +1502,49 @@ export function decodeEvidenceObservation(value: unknown): EvidenceObservation {
   const parsed = evidenceObservationSchema.parse(value);
   let observation: EvidenceObservation;
   if (parsed.kind === EvidenceKind.CANDIDATE_FREEZE) {
-    observation = Object.freeze({
-      schemaVersion: parsed.schemaVersion,
-      kind: parsed.kind,
-      firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
-      secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
-      changeSetDigest: sha256Digest(parsed.changeSetDigest),
-    });
+    observation =
+      parsed.schemaVersion === 1
+        ? Object.freeze({
+            schemaVersion: parsed.schemaVersion,
+            kind: parsed.kind,
+            firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
+            secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
+            changeSetDigest: sha256Digest(parsed.changeSetDigest),
+          })
+        : Object.freeze({
+            schemaVersion: parsed.schemaVersion,
+            kind: parsed.kind,
+            allowedPathPolicyDigest: sha256Digest(parsed.allowedPathPolicyDigest),
+            baseSourceDigest: sha256Digest(parsed.baseSourceDigest),
+            changeSetDigest: sha256Digest(parsed.changeSetDigest),
+            changeSetProfile: parsed.changeSetProfile,
+            changes: Object.freeze(
+              parsed.changes.map((change) =>
+                Object.freeze({
+                  after:
+                    change.after === null
+                      ? null
+                      : Object.freeze({
+                          byteLength: change.after.byteLength,
+                          contentDigest: sha256Digest(change.after.contentDigest),
+                          mode: change.after.mode,
+                        }),
+                  before:
+                    change.before === null
+                      ? null
+                      : Object.freeze({
+                          byteLength: change.before.byteLength,
+                          contentDigest: sha256Digest(change.before.contentDigest),
+                          mode: change.before.mode,
+                        }),
+                  kind: change.kind,
+                  path: change.path,
+                }),
+              ),
+            ),
+            firstSourceDigest: sha256Digest(parsed.firstSourceDigest),
+            secondSourceDigest: sha256Digest(parsed.secondSourceDigest),
+          });
   } else if (parsed.kind === 'FAKE_VERIFICATION') {
     observation = Object.freeze({ ...parsed });
   } else {
@@ -1495,6 +1563,7 @@ export function decodeEvidenceObservation(value: unknown): EvidenceObservation {
       diagnosticCode: parsed.diagnosticCode,
     });
   }
+  assertEvidenceObservationInvariant(observation);
   return observation;
 }
 
@@ -1583,6 +1652,16 @@ const candidateFreezeEvidenceRecordSchema = z
     resultStatus: z.literal(EvidenceResultStatus.OBSERVED),
   })
   .strict();
+const candidateFreezeEvidenceRecordV2Schema = z
+  .object({
+    ...evidenceRecordV1BaseShape,
+    schemaVersion: z.literal(2),
+    kind: z.literal(EvidenceKind.CANDIDATE_FREEZE),
+    producerType: z.literal(EvidenceProducerType.CANDIDATE_MANAGER),
+    observation: candidateFreezeObservationV2Schema,
+    resultStatus: z.literal(EvidenceResultStatus.OBSERVED),
+  })
+  .strict();
 const testResultEvidenceRecordSchema = z
   .object({
     ...evidenceRecordV1BaseShape,
@@ -1657,6 +1736,7 @@ const protectedLocalCommandTestResultEvidenceRecordSchema = z
   .strict();
 const evidenceRecordSchema = z.union([
   candidateFreezeEvidenceRecordSchema,
+  candidateFreezeEvidenceRecordV2Schema,
   testResultEvidenceRecordSchema,
   localCommandTestResultEvidenceRecordSchema,
   protectedLocalCommandTestResultEvidenceRecordSchema,
@@ -1685,23 +1765,42 @@ export function decodeEvidenceRecord(value: unknown): EvidenceRecord {
   if (parsed.kind === EvidenceKind.CANDIDATE_FREEZE) {
     const payloadReference = parsed.payloadRefs[0];
     if (payloadReference === undefined) {
-      throw new TypeError('M1 Evidence payload disappeared after schema validation');
+      throw new TypeError('Candidate freeze Evidence payload disappeared after schema validation');
     }
     const payloadRefs = Object.freeze([sha256Digest(payloadReference)] as const);
     const observation = decodeEvidenceObservation(parsed.observation);
     if (observation.kind !== EvidenceKind.CANDIDATE_FREEZE) {
       throw new TypeError('Candidate freeze Evidence observation changed kind');
     }
-    record = Object.freeze({
-      ...common,
-      schemaVersion: parsed.schemaVersion,
-      kind: parsed.kind,
-      producerType: parsed.producerType,
-      checkSpec: decodeCheckSpecification(parsed.checkSpec),
-      observation,
-      payloadRefs,
-      resultStatus: parsed.resultStatus,
-    });
+    if (observation.schemaVersion !== parsed.schemaVersion) {
+      throw new TypeError('Candidate freeze Evidence and observation schema versions differ');
+    }
+    const checkSpec = decodeCheckSpecification(parsed.checkSpec);
+    if (parsed.schemaVersion === 1 && observation.schemaVersion === 1) {
+      record = Object.freeze({
+        ...common,
+        schemaVersion: parsed.schemaVersion,
+        kind: parsed.kind,
+        producerType: parsed.producerType,
+        checkSpec,
+        observation,
+        payloadRefs,
+        resultStatus: parsed.resultStatus,
+      });
+    } else if (parsed.schemaVersion === 2 && observation.schemaVersion === 2) {
+      record = Object.freeze({
+        ...common,
+        schemaVersion: parsed.schemaVersion,
+        kind: parsed.kind,
+        producerType: parsed.producerType,
+        checkSpec,
+        observation,
+        payloadRefs,
+        resultStatus: parsed.resultStatus,
+      });
+    } else {
+      throw new TypeError('Candidate freeze Evidence changed variant during decoding');
+    }
   } else if (parsed.kind === EvidenceKind.TEST_RESULT) {
     const payloadReference = parsed.payloadRefs[0];
     if (payloadReference === undefined) {

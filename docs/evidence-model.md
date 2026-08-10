@@ -40,7 +40,17 @@ issue technical `ACCEPT`.
 The corrected assessment and independent review completed bounded M2.5 on
 2026-08-06. M2.5.1 Slice 0 adds no Evidence kind or eligibility path; its
 protected-check and proof-owner freeze cannot approve itself or become
-Acceptance input. Proposed M2.6 Frontstage messages, routes, answers, focus,
+Acceptance input. M2.5.1 Slice 3 additively implements Candidate-freeze
+Evidence schema version 2 under accepted ADR 0044. Candidate Manager supplies
+the stable base-to-current changed-file observation; Runtime derives the exact
+current Goal allowed-path disposition; Store recomputes the canonical Profile,
+Candidate, digest, path, Check, and Attempt relationships; SQLite guards their
+retained shape, cross-record bindings, audit, and atomicity; and the existing
+source-freeze transaction persists Candidate/Attempt/Workflow state, Evidence,
+eligibility, audits, and command Outcome atomically. Strict reopen repeats the
+Store validation. This adds no Evidence kind, does not reinterpret
+historical freeze schema version 1, and has no M2.5.1 acceptance verdict.
+Proposed M2.6 Frontstage messages, routes, answers, focus,
 pending actions, Goal summaries, and notifications add no Evidence kind or
 eligibility path.
 Proposed M2.7 Host, control-lease, project-slot, detach, and reconnect records
@@ -110,9 +120,16 @@ Current M1 `TEST_RESULT` Evidence also repeats the exact
 that obligation; a matching Check Specification alone is not equivalent.
 `CANDIDATE_FREEZE` Evidence MUST omit the field.
 
-M1 materializes this model as two strict variants. `CANDIDATE_FREEZE` MUST use
-the Candidate Manager producer, `OBSERVED`, no environment or Fact snapshot,
-and exactly one change-set-digest payload. `TEST_RESULT` MUST use the
+M1 materializes this model as two strict variants. Every `CANDIDATE_FREEZE`
+MUST use the Candidate Manager producer, `OBSERVED`, no environment or Fact
+snapshot, and exactly one change-set-digest payload. Historical schema version
+1 binds two equal source digests and its original change-set digest. The
+additive M2.5.1 schema version 2 also binds the exact base digest, Goal-derived
+allowed-path-policy digest, canonical path-sorted added/modified/deleted file
+identities, `candidate-change-set-v2`, and two equal current/frozen digests; it
+is admitted only under the exact M2.5.1 freeze-v2 Profile sub-contract and
+freeze-v2 Check.
+`TEST_RESULT` MUST use the
 Verification Runner producer, one exact obligation, one derived logical
 environment, no Fact snapshot, and exactly one observation-digest payload.
 Fields reserved for later Evidence kinds are rejected rather than persisted as

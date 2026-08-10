@@ -19,7 +19,7 @@
     "build": "tsc -b --pretty false",
     "clean": "tsc -b --clean",
     "test": "pnpm run build && node ../../scripts/run-node-tests.mjs test/*.test.ts",
-    "test:authority": "pnpm run build && node ../../scripts/run-node-tests.mjs test/application-boundary.test.ts test/authority-activation.test.ts test/candidate-evidence-adversarial.test.ts test/candidate-evidence-control.test.ts test/external-execution-profile-v3.test.ts test/intake-control-store.test.ts test/intake-coordinator.test.ts test/m2-orchestration.test.ts test/project-read-cleanup-control-store.test.ts test/project-read-cleanup-coordinator.test.ts test/project-read-control-store.test.ts test/worker-control.test.ts test/workflow-driver.test.ts",
+    "test:authority": "pnpm run build && node ../../scripts/run-node-tests.mjs test/application-boundary.test.ts test/authority-activation.test.ts test/candidate-evidence-adversarial.test.ts test/candidate-evidence-control.test.ts test/external-execution-profile-v3.test.ts test/intake-control-store.test.ts test/intake-coordinator.test.ts test/m2-orchestration.test.ts test/m2.5.1-candidate-freeze-v2-control.test.ts test/project-read-cleanup-control-store.test.ts test/project-read-cleanup-coordinator.test.ts test/project-read-control-store.test.ts test/worker-control.test.ts test/workflow-driver.test.ts",
     "test:migrations": "pnpm run build && node ../../scripts/run-node-tests.mjs test/migration-audit.test.ts test/control-store.test.ts",
     "typecheck": "tsc -b --pretty false"
   },

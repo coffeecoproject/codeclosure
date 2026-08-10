@@ -21,6 +21,7 @@ export * from './intake-store.js';
 export * from './m1-policy.js';
 export * from './local-command-verification-contracts.js';
 export * from './local-command-verification.js';
+export * from './m251-execution-profile.js';
 export * from './context-authority.js';
 export * from './context-compiler.js';
 export * from './ports.js';

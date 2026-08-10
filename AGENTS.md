@@ -86,7 +86,20 @@ ProjectRead authority record, cross-binds exact ProjectRead/Candidate roots,
 and uses the phase/source forbidden-root union. Fixture execution proves both
 candidate-free `readOnly` proposal handling and Candidate-bound
 `workspaceWrite` completion handling, including result discard for forbidden
-file changes.
+file changes. ADR 0044's additive Candidate freeze-v2 path is now implemented
+through the local Candidate Manager derivation, C11 Profile freeze-v2 sub-
+contract and freeze-only Check family, Runtime-owned current-Goal path
+disposition, Store/SQLite backstops with Store-owned canonical recomputation
+and SQLite structural/relational guards, atomic Evidence admission, closed
+failure handling, and strict reopen. Historical freeze-v1 keeps its M1/M2
+meaning; the reserved M2.5.1 Profile ID with any other schema, version,
+Candidate Source, Verification Runner, or external-execution schema fails
+install/read/reopen rather than selecting that historical path. The formal
+candidate preparation creates no Fake Verification obligation. The Adapter-
+local policy may admit the pinned best-effort `unknown` command action only for
+`IMPLEMENT`; that observation is not containment proof, and the later freeze-
+v2 result must succeed before Evidence can exist. This foundation has offline
+coverage but no `M251-C11` acceptance verdict.
 Fixture isolation selection is not effective live containment proof. The legacy
 Driver still rejects Profile v3; Runtime source-currency enforcement, real phase
 dispatch/composition, and milestone assessment have not started. A real pinned-version
@@ -123,13 +136,13 @@ Codex only for `IMPLEMENT` and delegates the candidate-free phases to
 `FakeWorker`. Fake Worker/Candidate/Verification components MUST remain
 explicit test infrastructure, MUST NOT be a production fallback, and Candidate
 authority MUST still begin only at the governed `PLAN -> IMPLEMENT` transition.
-A best-effort Codex `unknown` command action is not permanent proof of a
-forbidden IMPLEMENT effect and MUST NOT be admitted merely because its cwd is
-the Candidate. Accepted ADR 0044 requires additive schema-version-2 stable
-source-freeze changed-path proof, owned by Candidate Manager and independently
-checked by Runtime/Store against exact Goal allowed paths, before the formal
-IMPLEMENT path may admit it. Historical freeze schema version 1 keeps its
-M1/M2 meaning.
+A best-effort Codex `unknown` command action is not permanent proof of an
+allowed or forbidden IMPLEMENT effect and MUST NOT be admitted merely because
+its cwd is the Candidate. Under the now-installed ADR 0044 foundation it MAY be
+admitted only by the exact `IMPLEMENT` activity policy and remains contingent
+on additive schema-version-2 stable source-freeze changed-path proof, owned by
+Candidate Manager and independently checked by Runtime/Store against exact
+Goal allowed paths. Historical freeze schema version 1 keeps its M1/M2 meaning.
 A Plan/source mismatch MUST create no Candidate, MUST retain exact
 `PLAN_SOURCE_NOT_CURRENT` through Workflow integrity authority, MUST project the
 Goal to non-resumable `BLOCKED / INSPECT_BLOCKER`, and MUST NOT trigger
