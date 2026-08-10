@@ -13,6 +13,8 @@ import {
 } from './project-read-snapshot-cleanup-contracts.js';
 import type {
   ProjectReadSnapshotMaterializationReceipt,
+  ProjectReadSourceObservation,
+  ProjectReadSourceObservationRequest,
   ProjectReadWorkspaceAuthoritySnapshot,
   ProjectReadWorkspaceObservation,
 } from './project-read-workspace-contracts.js';
@@ -53,6 +55,9 @@ export function decodeProjectReadSnapshotCleanupRequest(
  * start a Worker, mutate Workflow state, or issue a Cleanup Grant.
  */
 export interface ProjectReadWorkspacePort {
+  observeSource(request: ProjectReadSourceObservationRequest): ProjectReadSourceObservation;
+  snapshotLeafFor(snapshotId: string): string;
+  readonly workspaceRootIdentity: string;
   materializeSnapshot(
     proposedRecord: ProjectReadSnapshotMaterializationRequest,
   ): ProjectReadSnapshotMaterializationReceipt;

@@ -29,11 +29,13 @@ import {
   ProjectReadWorkspaceClassification,
   ProjectReadWorkspaceRetention,
   createProjectReadOwnershipMarkerForRecord,
+  createProjectReadSourceObservation,
   createProjectReadSnapshotCleanupTargetObservation,
   createProjectReadSnapshotMaterializationReceipt,
   decodeProjectReadSnapshotCleanupObservation,
   decodeProjectReadSnapshotCleanupRequest,
   decodeProjectReadSnapshotMaterializationRequest,
+  decodeProjectReadSourceObservationRequest,
   decodeProjectReadWorkspaceAuthoritySnapshot,
   decodeProjectReadWorkspaceObservation,
   digestProjectReadSnapshotCleanupValue,
@@ -44,6 +46,8 @@ import {
   type ProjectReadSnapshotCleanupTargetObservation,
   type ProjectReadSnapshotMaterializationReceipt,
   type ProjectReadSnapshotMaterializationRequest,
+  type ProjectReadSourceObservation,
+  type ProjectReadSourceObservationRequest,
   type ProjectReadWorkspaceAuthoritySnapshot,
   type ProjectReadWorkspaceObservation,
 } from '@codeclosure/runtime';
@@ -61,6 +65,7 @@ import {
 import {
   assertProjectReadSourceSnapshotMatchesRequest,
   captureProjectReadSourceSnapshot,
+  captureProjectReadSourceSnapshotFromRoot,
 } from './git-source.js';
 import {
   assertRealDirectory,
@@ -505,6 +510,24 @@ class LocalProjectReadWorkspaceAdapter implements LocalProjectReadWorkspace {
       );
     }
     return resolve(this.#snapshotRoot, snapshotId);
+  }
+
+  public observeSource(
+    rawRequest: ProjectReadSourceObservationRequest,
+  ): ProjectReadSourceObservation {
+    const request = decodeProjectReadSourceObservationRequest(rawRequest);
+    const snapshot = withMappedCandidateFailures(() =>
+      captureProjectReadSourceSnapshotFromRoot(request.normalizedProjectRoot, this.#bounds),
+    );
+    return createProjectReadSourceObservation({
+      schemaVersion: 1,
+      normalizedProjectRoot: request.normalizedProjectRoot,
+      resolvedProjectRoot: snapshot.gitState.sourceProjectRoot,
+      repositoryControlRootIdentity: snapshot.gitState.repositoryControlRootIdentity,
+      sourceTree: snapshot.sourceTree,
+      gitState: snapshot.gitState,
+      observedAt: nowAtOrAfter(this.#hooks),
+    });
   }
 
   #markerPath(snapshotId: string): string {

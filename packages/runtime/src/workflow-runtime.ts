@@ -94,7 +94,9 @@ import {
   type CheckSpecification,
   type CommandId,
   type ContextCompilation,
+  type ContextManifest,
   type ContextManifestId,
+  type ContextPackage,
   type Goal,
   type GoalId,
   type GoalRevision,
@@ -108,6 +110,7 @@ import {
   type ProtectedAssetReadLease,
   type PolicyBundle,
   type PolicyBundleId,
+  type ProjectReadSnapshotCleanupGrantId,
   type ProjectSourceReadAuthorityRecord,
   type Sha256Digest,
   type PriorAttemptFeedback,
@@ -263,6 +266,14 @@ import {
   m1WorkerResponseContract,
 } from './context-compiler.js';
 import { assertM1WorkerPhaseAttemptAuthority } from './context-authority.js';
+import type { ProjectReadCleanupControlStore } from './project-read-cleanup-store.js';
+import {
+  authorProjectReadAttemptAuthorityRecord,
+  materializeProjectReadAttemptAuthority,
+  reconcileProjectReadAttemptOrphan,
+  type ProjectReadAttemptRuntimeDependencies,
+  type PreparedProjectReadAttemptAuthority,
+} from './project-read-attempt-authority.js';
 
 interface WorkflowCommandRequest {
   readonly commandId: CommandId;
@@ -312,6 +323,7 @@ export interface AttemptContextCompilationRequest {
     readonly id: AcceptanceCriticalVerificationPlanId;
     readonly digest: Sha256Digest;
   };
+  readonly projectReadAuthority?: ProjectSourceReadAuthorityRecord;
   readonly candidate?: {
     readonly generationId: CandidateGenerationId;
     readonly digest: Sha256Digest;
@@ -437,6 +449,7 @@ export interface WorkflowRuntimeKernelDependencies extends WorkflowRuntimeDepend
   readonly localCommandVerification?: LocalCommandVerificationRuntimeDependencies;
   readonly acceptance?: AcceptanceRuntimeDependencies;
   readonly protectedVerification?: ProtectedVerificationRuntimeDependencies;
+  readonly projectRead?: ProjectReadAttemptRuntimeDependencies;
 }
 
 type FinishAttemptRequest =
@@ -458,6 +471,8 @@ interface ApplyCommandPlan {
   readonly kind: 'APPLY';
   commit(): StoreCommandResult<unknown>;
   readonly afterApplied?: () => void;
+  /** External filesystem effects cannot be silently repeated under a new authority identity. */
+  readonly retryAfterVersionConflict?: boolean;
 }
 
 interface RejectCommandPlan {
@@ -489,6 +504,134 @@ interface PreparedAttemptContext {
   readonly request: WorkerRequest;
   readonly policyBinding: WorkflowPolicyBinding;
   readonly executionProfileBinding: ExecutionProfileBinding;
+  readonly projectRead?: PreparedProjectReadAttemptAuthority;
+}
+
+interface AuthoredProjectReadAttemptAuthority {
+  readonly record: ProjectSourceReadAuthorityRecord;
+  readonly cleanupGrantId: ProjectReadSnapshotCleanupGrantId;
+}
+
+function assertContextSourceSelectionIsClosed(
+  contextPackage: ContextPackage,
+  manifest: ContextManifest,
+): void {
+  if (contextPackage.selectedEntries.length !== 0 || manifest.omissionDecisions.length !== 0) {
+    throw new TypeError('Context compilation selected or omitted unsupported sources');
+  }
+}
+
+function assertProjectReadContextV5Bindings(
+  contextPackage: ContextPackage,
+  manifest: ContextManifest,
+  projectRead: AuthoredProjectReadAttemptAuthority,
+  protectedPlan: AcceptanceCriticalVerificationPlan | undefined,
+  repair: AttemptContextCompilationRequest['repair'] | undefined,
+): void {
+  const record = projectRead.record;
+  if (
+    protectedPlan === undefined ||
+    contextPackage.schemaVersion !== 5 ||
+    manifest.schemaVersion !== 5 ||
+    repair !== undefined ||
+    contextPackage.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+    contextPackage.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+    manifest.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+    manifest.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+    contextPackage.projectReadAuthorityId !== record.id ||
+    contextPackage.projectReadAuthorityRecordDigest !== record.recordDigest ||
+    contextPackage.projectReadSourceTreeProjectionDigest !== record.sourceTree.projectionDigest ||
+    contextPackage.projectReadGitStateProjectionDigest !== record.gitState.projectionDigest ||
+    manifest.projectReadAuthorityId !== record.id ||
+    manifest.projectReadAuthorityRecordDigest !== record.recordDigest ||
+    manifest.projectReadSourceTreeProjectionDigest !== record.sourceTree.projectionDigest ||
+    manifest.projectReadGitStateProjectionDigest !== record.gitState.projectionDigest
+  ) {
+    throw new TypeError('M2.5.1 Context v5 does not bind the exact ProjectRead authority');
+  }
+}
+
+function assertHistoricalContextSchemaBindings(
+  contextPackage: ContextPackage,
+  manifest: ContextManifest,
+  protectedPlan: AcceptanceCriticalVerificationPlan | undefined,
+  repair: AttemptContextCompilationRequest['repair'] | undefined,
+): void {
+  if (protectedPlan === undefined && repair === undefined) {
+    if (
+      contextPackage.schemaVersion !== 2 ||
+      manifest.schemaVersion !== 2 ||
+      contextPackage.repairContext !== undefined ||
+      contextPackage.priorAttemptFeedback !== undefined ||
+      manifest.repairContextDigest !== undefined ||
+      manifest.priorAttemptFeedbackDigest !== undefined
+    ) {
+      throw new TypeError('Context v2 contains non-authoritative repair or plan sources');
+    }
+    return;
+  }
+  if (protectedPlan === undefined) {
+    if (
+      repair === undefined ||
+      contextPackage.schemaVersion !== 3 ||
+      manifest.schemaVersion !== 3 ||
+      canonicalizeJson(contextPackage.repairContext) !== canonicalizeJson(repair.repairContext) ||
+      canonicalizeJson(contextPackage.priorAttemptFeedback) !==
+        canonicalizeJson(repair.priorAttemptFeedback)
+    ) {
+      throw new TypeError('Context v3 does not bind the exact repair authority');
+    }
+    return;
+  }
+  if (
+    contextPackage.schemaVersion !== 4 ||
+    manifest.schemaVersion !== 4 ||
+    contextPackage.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+    contextPackage.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+    manifest.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
+    manifest.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
+    (repair === undefined &&
+      (contextPackage.repairContext !== undefined ||
+        contextPackage.priorAttemptFeedback !== undefined ||
+        manifest.repairContextDigest !== undefined ||
+        manifest.priorAttemptFeedbackDigest !== undefined)) ||
+    (repair !== undefined &&
+      (canonicalizeJson(contextPackage.repairContext) !== canonicalizeJson(repair.repairContext) ||
+        canonicalizeJson(contextPackage.priorAttemptFeedback) !==
+          canonicalizeJson(repair.priorAttemptFeedback)))
+  ) {
+    throw new TypeError('Context v4 does not bind the exact protected verification authority');
+  }
+}
+
+function assertCandidateContextBindings(
+  contextPackage: ContextPackage,
+  manifest: ContextManifest,
+  candidateBinding:
+    | Readonly<{ readonly generationId: CandidateGenerationId; readonly digest: Sha256Digest }>
+    | undefined,
+): void {
+  if (candidateBinding === undefined) {
+    if (
+      contextPackage.candidateGenerationId !== undefined ||
+      contextPackage.candidateDigest !== undefined ||
+      manifest.candidateGenerationId !== undefined ||
+      manifest.candidateDigest !== undefined ||
+      manifest.entries.some((entry) => entry.kind === ContextEntryKind.CANDIDATE)
+    ) {
+      throw new TypeError('Candidate-free Context contains Candidate authority');
+    }
+    return;
+  }
+  if (
+    contextPackage.candidateGenerationId !== candidateBinding.generationId ||
+    contextPackage.candidateDigest !== candidateBinding.digest ||
+    manifest.candidateGenerationId !== candidateBinding.generationId ||
+    manifest.candidateDigest !== candidateBinding.digest ||
+    manifest.entries.filter((entry) => entry.kind === ContextEntryKind.CANDIDATE).length !== 1
+  ) {
+    throw new TypeError('Candidate-bound Context does not bind one exact Candidate generation');
+  }
 }
 
 interface ActiveWorkerPolicy {
@@ -591,6 +734,21 @@ function isWorkerControlStore(store: WorkflowControlStore): store is WorkerContr
     'recordIgnoredWorkerEvent',
     'installPolicyBundle',
     'installExecutionProfile',
+  ].every((method) => typeof Reflect.get(store, method) === 'function');
+}
+
+function isProjectReadCleanupControlStore(
+  store: WorkflowControlStore,
+): store is WorkflowControlStore & ProjectReadCleanupControlStore {
+  return [
+    'captureProjectReadWorkspaceAuthoritySnapshot',
+    'getProjectReadWorkspaceAuthoritySnapshot',
+    'recordProjectReadWorkspaceObservation',
+    'getProjectReadWorkspaceObservation',
+    'issueProjectReadSnapshotCleanupGrant',
+    'getProjectReadSnapshotCleanupGrant',
+    'getProjectReadSnapshotCleanupOutcome',
+    'resolveProjectReadSnapshotCleanupGrant',
   ].every((method) => typeof Reflect.get(store, method) === 'function');
 }
 
@@ -1073,6 +1231,8 @@ export class WorkflowRuntimeKernel {
   readonly #phaseGuards: PhaseGuardEvaluator;
   readonly #workerContext: WorkerContextRuntimeDependencies | undefined;
   readonly #workerStore: WorkerControlStore | undefined;
+  readonly #projectRead: ProjectReadAttemptRuntimeDependencies | undefined;
+  readonly #projectReadCleanupStore: ProjectReadCleanupControlStore | undefined;
   readonly #candidateEvidence: CandidateEvidenceRuntimeDependencies | undefined;
   readonly #candidateEvidenceStore: CandidateEvidenceControlStore | undefined;
   readonly #localCommandVerification: LocalCommandVerificationRuntimeDependencies | undefined;
@@ -1092,6 +1252,9 @@ export class WorkflowRuntimeKernel {
     this.#digests = dependencies.digests;
     this.#phaseGuards = dependencies.phaseGuards ?? unavailablePhaseGuards;
     this.#workerStore = isWorkerControlStore(dependencies.store) ? dependencies.store : undefined;
+    this.#projectReadCleanupStore = isProjectReadCleanupControlStore(dependencies.store)
+      ? dependencies.store
+      : undefined;
     this.#candidateEvidenceStore = isCandidateEvidenceControlStore(dependencies.store)
       ? dependencies.store
       : undefined;
@@ -1136,6 +1299,20 @@ export class WorkflowRuntimeKernel {
       });
     } else {
       this.#workerContext = undefined;
+    }
+    if (dependencies.projectRead !== undefined) {
+      if (this.#workerContext === undefined || this.#workerStore === undefined) {
+        throw new TypeError('Project-read runtime requires complete Worker Context authority');
+      }
+      if (this.#projectReadCleanupStore === undefined) {
+        throw new TypeError('Project-read runtime requires the complete cleanup Store port');
+      }
+      this.#projectRead = Object.freeze({
+        workspace: dependencies.projectRead.workspace,
+        identities: dependencies.projectRead.identities,
+      });
+    } else {
+      this.#projectRead = undefined;
     }
     if (dependencies.candidateEvidence !== undefined) {
       if (this.#candidateEvidenceStore === undefined) {
@@ -2142,8 +2319,9 @@ export class WorkflowRuntimeKernel {
         const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
         const plan: ApplyCommandPlan = {
           kind: 'APPLY',
+          retryAfterVersionConflict: prepared.projectRead === undefined,
           commit: () =>
-            this.requireWorkerStore().commitContextBoundAttemptStart({
+            this.commitPreparedContextAttempt(input.commandId, prepared, () => ({
               inputDigest,
               target,
               event,
@@ -2155,6 +2333,12 @@ export class WorkflowRuntimeKernel {
               policyBindingAuditEventId: this.nextAuditEventId(input.commandId),
               executionProfileBinding: prepared.executionProfileBinding,
               executionProfileBindingAuditEventId: this.nextAuditEventId(input.commandId),
+              ...(prepared.projectRead === undefined
+                ? {}
+                : {
+                    projectReadAuthority: prepared.projectRead.record,
+                    projectReadAuthorityAuditEventId: this.nextAuditEventId(input.commandId),
+                  }),
               ...(protectedPlan === undefined
                 ? {}
                 : {
@@ -2163,7 +2347,7 @@ export class WorkflowRuntimeKernel {
                       input.commandId,
                     ),
                   }),
-            }),
+            })),
           afterApplied: () => {
             this.#preparedWorkerRequests.set(attemptIdentifier, prepared.request);
           },
@@ -2282,6 +2466,7 @@ export class WorkflowRuntimeKernel {
         const payloadDigest = this.digest(input.commandId, event, 'COMMAND_PAYLOAD_DIGEST_FAILURE');
         const plan: ApplyCommandPlan = {
           kind: 'APPLY',
+          retryAfterVersionConflict: prepared?.projectRead === undefined,
           commit: () =>
             prepared === undefined
               ? this.#store.commitAttemptEvent({
@@ -2292,7 +2477,7 @@ export class WorkflowRuntimeKernel {
                   workflowAuditEventId,
                   payloadDigest,
                 })
-              : this.requireWorkerStore().commitContextBoundAttemptStart({
+              : this.commitPreparedContextAttempt(input.commandId, prepared, () => ({
                   inputDigest,
                   target,
                   event,
@@ -2302,7 +2487,13 @@ export class WorkflowRuntimeKernel {
                   contextManifest: prepared.compilation.manifest,
                   policyBinding: prepared.policyBinding,
                   executionProfileBinding: prepared.executionProfileBinding,
-                }),
+                  ...(prepared.projectRead === undefined
+                    ? {}
+                    : {
+                        projectReadAuthority: prepared.projectRead.record,
+                        projectReadAuthorityAuditEventId: this.nextAuditEventId(input.commandId),
+                      }),
+                })),
           ...(prepared === undefined
             ? {}
             : {
@@ -7363,6 +7554,52 @@ export class WorkflowRuntimeKernel {
             currentWorkflow,
             candidateBinding,
           );
+    let authoredProjectRead: AuthoredProjectReadAttemptAuthority | undefined;
+    const profileClassification = classifyM251CandidateFreezeProfile(activeProfile.profile);
+    if (
+      candidateBinding === undefined &&
+      profileClassification === M251CandidateFreezeProfileClassification.M251_FREEZE_V2
+    ) {
+      if (protectedPlan === undefined) {
+        throw new TypeError('Formal M2.5.1 ProjectRead requires protected verification authority');
+      }
+      const projectReadRuntime = this.#projectRead;
+      if (projectReadRuntime === undefined) {
+        throw new TypeError('Formal M2.5.1 candidate-free phase has no ProjectRead runtime');
+      }
+      const record = authorProjectReadAttemptAuthorityRecord(
+        {
+          goal,
+          workflow: applied.workflow,
+          attempt: applied.attempt,
+          policyBundle: installedPolicy,
+          executionProfile: activeProfile.profile,
+          issuedAt: event.occurredAt,
+          authorityId: this.internalOperation(
+            commandIdentifier,
+            'PROJECT_READ_AUTHORITY_ID_GENERATION_FAILURE',
+            () => projectReadRuntime.identities.nextProjectSourceReadAuthorityId(),
+          ),
+          snapshotId: this.internalOperation(
+            commandIdentifier,
+            'PROJECT_READ_SNAPSHOT_ID_GENERATION_FAILURE',
+            () => projectReadRuntime.identities.nextProjectReadSnapshotId(),
+          ),
+        },
+        { workspace: projectReadRuntime.workspace, digests: this.#digests },
+      );
+      const cleanupGrantId = this.internalOperation(
+        commandIdentifier,
+        'PROJECT_READ_CLEANUP_GRANT_ID_GENERATION_FAILURE',
+        () => projectReadRuntime.identities.nextProjectReadSnapshotCleanupGrantId(),
+      );
+      authoredProjectRead = Object.freeze({ record, cleanupGrantId });
+    } else if (
+      candidateBinding === undefined &&
+      profileClassification === M251CandidateFreezeProfileClassification.INCOMPATIBLE_M251
+    ) {
+      throw new TypeError('M2.5.1 Profile identity is incompatible with ProjectRead authority');
+    }
     const raw = workerContext.factory.compile({
       manifestId: applied.attempt.contextManifestId,
       createdAt: event.occurredAt,
@@ -7376,6 +7613,9 @@ export class WorkflowRuntimeKernel {
       ...(protectedPlan === undefined
         ? {}
         : { protectedPlan: { id: protectedPlan.id, digest: protectedPlan.planDigest } }),
+      ...(authoredProjectRead === undefined
+        ? {}
+        : { projectReadAuthority: authoredProjectRead.record }),
       ...(candidateBinding === undefined ? {} : { candidate: candidateBinding }),
       ...(repair === undefined ? {} : { repair }),
     });
@@ -7384,60 +7624,19 @@ export class WorkflowRuntimeKernel {
     }
     const contextPackage = decodeContextPackage(Reflect.get(raw, 'package'));
     const manifest = decodeContextManifest(Reflect.get(raw, 'manifest'));
-    if (
-      contextPackage.selectedEntries.length !== 0 ||
-      manifest.omissionDecisions.length !== 0 ||
-      (protectedPlan === undefined &&
-        repair === undefined &&
-        (contextPackage.schemaVersion !== 2 ||
-          manifest.schemaVersion !== 2 ||
-          contextPackage.repairContext !== undefined ||
-          contextPackage.priorAttemptFeedback !== undefined ||
-          manifest.repairContextDigest !== undefined ||
-          manifest.priorAttemptFeedbackDigest !== undefined)) ||
-      (protectedPlan === undefined &&
-        repair !== undefined &&
-        (contextPackage.schemaVersion !== 3 ||
-          manifest.schemaVersion !== 3 ||
-          canonicalizeJson(contextPackage.repairContext) !==
-            canonicalizeJson(repair.repairContext) ||
-          canonicalizeJson(contextPackage.priorAttemptFeedback) !==
-            canonicalizeJson(repair.priorAttemptFeedback))) ||
-      (protectedPlan !== undefined &&
-        (contextPackage.schemaVersion !== 4 ||
-          manifest.schemaVersion !== 4 ||
-          contextPackage.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
-          contextPackage.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
-          manifest.acceptanceCriticalVerificationPlanId !== protectedPlan.id ||
-          manifest.acceptanceCriticalVerificationPlanDigest !== protectedPlan.planDigest ||
-          (repair === undefined &&
-            (contextPackage.repairContext !== undefined ||
-              contextPackage.priorAttemptFeedback !== undefined ||
-              manifest.repairContextDigest !== undefined ||
-              manifest.priorAttemptFeedbackDigest !== undefined)) ||
-          (repair !== undefined &&
-            (canonicalizeJson(contextPackage.repairContext) !==
-              canonicalizeJson(repair.repairContext) ||
-              canonicalizeJson(contextPackage.priorAttemptFeedback) !==
-                canonicalizeJson(repair.priorAttemptFeedback))))) ||
-      (candidateBinding === undefined &&
-        (contextPackage.candidateGenerationId !== undefined ||
-          contextPackage.candidateDigest !== undefined ||
-          manifest.candidateGenerationId !== undefined ||
-          manifest.candidateDigest !== undefined ||
-          manifest.entries.some((entry) => entry.kind === ContextEntryKind.CANDIDATE))) ||
-      (candidateBinding !== undefined &&
-        (contextPackage.candidateGenerationId !== candidateBinding.generationId ||
-          contextPackage.candidateDigest !== candidateBinding.digest ||
-          manifest.candidateGenerationId !== candidateBinding.generationId ||
-          manifest.candidateDigest !== candidateBinding.digest ||
-          manifest.entries.filter((entry) => entry.kind === ContextEntryKind.CANDIDATE).length !==
-            1))
-    ) {
-      throw new TypeError(
-        'M1 Context contains selected, omitted, or non-authoritative Candidate sources',
+    assertContextSourceSelectionIsClosed(contextPackage, manifest);
+    if (authoredProjectRead === undefined) {
+      assertHistoricalContextSchemaBindings(contextPackage, manifest, protectedPlan, repair);
+    } else {
+      assertProjectReadContextV5Bindings(
+        contextPackage,
+        manifest,
+        authoredProjectRead,
+        protectedPlan,
+        repair,
       );
     }
+    assertCandidateContextBindings(contextPackage, manifest, candidateBinding);
     const packageDigest = this.digest(
       commandIdentifier,
       contextPackage,
@@ -7535,6 +7734,13 @@ export class WorkflowRuntimeKernel {
         manifest.acceptanceCriticalVerificationPlanId ||
       contextPackage.acceptanceCriticalVerificationPlanDigest !==
         manifest.acceptanceCriticalVerificationPlanDigest ||
+      contextPackage.projectReadAuthorityId !== manifest.projectReadAuthorityId ||
+      contextPackage.projectReadAuthorityRecordDigest !==
+        manifest.projectReadAuthorityRecordDigest ||
+      contextPackage.projectReadSourceTreeProjectionDigest !==
+        manifest.projectReadSourceTreeProjectionDigest ||
+      contextPackage.projectReadGitStateProjectionDigest !==
+        manifest.projectReadGitStateProjectionDigest ||
       contextPackage.executionProfileId !== activeProfile.profile.id ||
       contextPackage.executionProfileDigest !== activeProfile.profile.digest ||
       profileBinding.goalId !== goal.id ||
@@ -7567,19 +7773,102 @@ export class WorkflowRuntimeKernel {
     if (applied.attempt.workerSessionRef === undefined) {
       throw new TypeError('Context-bound Attempt has no Worker session identity');
     }
-    const request = createWorkerRequest(
-      applied.attempt.workerSessionRef,
-      manifest.id,
-      manifest.manifestDigest,
-      manifest.packageDigest,
-      contextPackage,
+    const request = decodeWorkerRequest(
+      createWorkerRequest(
+        applied.attempt.workerSessionRef,
+        manifest.id,
+        manifest.manifestDigest,
+        manifest.packageDigest,
+        contextPackage,
+      ),
     );
+    let projectRead: PreparedProjectReadAttemptAuthority | undefined;
+    if (authoredProjectRead !== undefined) {
+      const projectReadRuntime = this.#projectRead;
+      if (projectReadRuntime === undefined) {
+        throw new TypeError('Authored ProjectRead record has no configured workspace');
+      }
+      try {
+        projectRead = materializeProjectReadAttemptAuthority(
+          authoredProjectRead.record,
+          authoredProjectRead.cleanupGrantId,
+          projectReadRuntime.workspace,
+        );
+      } catch (error) {
+        this.reconcileProjectReadRecord(
+          commandIdentifier,
+          authoredProjectRead.record,
+          authoredProjectRead.cleanupGrantId,
+        );
+        throw error;
+      }
+    }
     return Object.freeze({
       compilation: Object.freeze({ package: contextPackage, manifest }),
-      request: decodeWorkerRequest(request),
+      request,
       policyBinding,
       executionProfileBinding: profileBinding,
+      ...(projectRead === undefined ? {} : { projectRead }),
     });
+  }
+
+  private reconcileProjectReadRecord(
+    commandIdentifier: CommandId,
+    record: ProjectSourceReadAuthorityRecord,
+    cleanupGrantId: ProjectReadSnapshotCleanupGrantId,
+  ): void {
+    const runtime = this.#projectRead;
+    const store = this.#projectReadCleanupStore;
+    if (runtime === undefined || store === undefined) {
+      throw new TypeError('Prepared ProjectRead authority has no reconciliation composition');
+    }
+    this.internalOperation(commandIdentifier, 'PROJECT_READ_ORPHAN_RECONCILIATION_FAILURE', () => {
+      const result = reconcileProjectReadAttemptOrphan(record, cleanupGrantId, {
+        store,
+        workspace: runtime.workspace,
+        clock: this.#clock,
+        identities: runtime.identities,
+        digests: this.#digests,
+      });
+      switch (result.status) {
+        case 'NO_ORPHAN':
+        case 'CLEANUP_RESOLVED':
+        case 'CLEANUP_UNRESOLVED':
+          return;
+        case 'CLEANUP_REJECTED':
+          throw new TypeError(
+            `Project-read orphan cleanup authority was rejected: ${result.cleanup.reasonCode}`,
+          );
+      }
+    });
+  }
+
+  private commitPreparedContextAttempt(
+    commandIdentifier: CommandId,
+    prepared: PreparedAttemptContext,
+    buildInput: () => Parameters<WorkerControlStore['commitContextBoundAttemptStart']>[0],
+  ): ReturnType<WorkerControlStore['commitContextBoundAttemptStart']> {
+    let result: ReturnType<WorkerControlStore['commitContextBoundAttemptStart']>;
+    try {
+      result = this.requireWorkerStore().commitContextBoundAttemptStart(buildInput());
+    } catch (error) {
+      if (prepared.projectRead !== undefined) {
+        this.reconcileProjectReadRecord(
+          commandIdentifier,
+          prepared.projectRead.record,
+          prepared.projectRead.cleanupGrantId,
+        );
+      }
+      throw error;
+    }
+    if (prepared.projectRead !== undefined && result.status !== 'APPLIED') {
+      this.reconcileProjectReadRecord(
+        commandIdentifier,
+        prepared.projectRead.record,
+        prepared.projectRead.cleanupGrantId,
+      );
+    }
+    return result;
   }
 
   private nextAuditEventId(commandIdentifier: CommandId): ReturnType<typeof auditEventId> {
@@ -7773,7 +8062,10 @@ export class WorkflowRuntimeKernel {
               ),
             );
           case 'VERSION_CONFLICT':
-            if (executionAttempt === 0) {
+            if (
+              executionAttempt === 0 &&
+              (plan.kind !== 'APPLY' || plan.retryAfterVersionConflict !== false)
+            ) {
               continue;
             }
             return rejected(
@@ -7781,7 +8073,9 @@ export class WorkflowRuntimeKernel {
               commandError(
                 RuntimeErrorCode.STALE_WORKFLOW_VERSION,
                 stored.message,
-                'CONCURRENT_MODIFICATION_RETRY_EXHAUSTED',
+                plan.kind === 'APPLY' && plan.retryAfterVersionConflict === false
+                  ? 'CONCURRENT_MODIFICATION_RETRY_SUPPRESSED_AFTER_EXTERNAL_EFFECT'
+                  : 'CONCURRENT_MODIFICATION_RETRY_EXHAUSTED',
                 true,
               ),
             );

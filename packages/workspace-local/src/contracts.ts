@@ -110,10 +110,7 @@ export interface LocalProjectReadWorkspaceOptions {
   readonly workspaceRoot: string;
 }
 
-export interface LocalProjectReadWorkspace extends ProjectReadWorkspacePort {
-  snapshotLeafFor(snapshotId: string): string;
-  readonly workspaceRootIdentity: string;
-}
+export type LocalProjectReadWorkspace = ProjectReadWorkspacePort;
 
 export const LocalProjectReadWorkspaceFailureCode = {
   AUTHORITY_SNAPSHOT_CONFLICT: 'AUTHORITY_SNAPSHOT_CONFLICT',

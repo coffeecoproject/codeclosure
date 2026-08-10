@@ -56,6 +56,7 @@ import {
   ProjectReadWorkspaceClassification,
   ProjectReadWorkspaceRetention,
   createProjectReadOwnershipMarker,
+  decodeProjectReadSourceObservation,
   decodeProjectReadWorkspaceAuthoritySnapshot,
   digestProjectReadWorkspaceValue,
   projectReadWorkspaceAuthoritySnapshotProjection,
@@ -441,6 +442,30 @@ function startConcurrentCleanupWorker(
   });
   return Object.freeze({ ready, result });
 }
+
+void test('project-read source observation is protocol-neutral and binds the exact selected Git projection', (t) => {
+  const value = fixture(t);
+  const observation = decodeProjectReadSourceObservation(
+    value.workspace.observeSource({
+      schemaVersion: 1,
+      normalizedProjectRoot: value.sourceRoot,
+    }),
+  );
+  assert.equal(observation.normalizedProjectRoot, value.sourceRoot);
+  assert.equal(observation.resolvedProjectRoot, realpathSync(value.sourceRoot));
+  assert.equal(
+    observation.repositoryControlRootIdentity,
+    observation.gitState.repositoryControlRootIdentity,
+  );
+  assert.deepEqual(
+    observation.sourceTree.entries.map((entry) => entry.path),
+    ['.gitignore', 'README.md', 'scripts/tool.sh', 'src/note.txt', 'src/order.ts'],
+  );
+  assert.equal(
+    observation.sourceTree.entries.some((entry) => entry.path === 'ignored.log'),
+    false,
+  );
+});
 
 void test('project-read materialization copies exact selected bytes into a marker-external read-only snapshot', (t) => {
   const value = fixture(t, { now: () => observedAt });

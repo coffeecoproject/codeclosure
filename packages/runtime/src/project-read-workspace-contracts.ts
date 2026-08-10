@@ -2,6 +2,8 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import {
   PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+  decodeProjectReadGitStateProjection,
+  decodeProjectReadSourceTreeProjection,
   decodeProjectSourceReadAuthorityRecord,
   attemptId,
   externalExecutionId,
@@ -9,12 +11,16 @@ import {
   projectReadSnapshotId,
   projectReadWorkspaceAuthoritySnapshotId,
   projectReadWorkspaceObservationId,
+  projectReadGitStateProjection,
+  projectReadSourceTreeProjection,
   projectSourceReadAuthorityId,
   sha256Digest,
   type AttemptId,
   type ExternalExecutionId,
   type IsoTimestamp,
   type ProjectReadSnapshotId,
+  type ProjectReadGitStateProjection,
+  type ProjectReadSourceTreeProjection,
   type ProjectReadWorkspaceAuthoritySnapshotId,
   type ProjectReadWorkspaceObservationId,
   type ProjectSourceReadAuthorityRecord,
@@ -42,6 +48,26 @@ export const ProjectReadWorkspaceClassification = {
 } as const;
 export type ProjectReadWorkspaceClassification =
   (typeof ProjectReadWorkspaceClassification)[keyof typeof ProjectReadWorkspaceClassification];
+
+export interface ProjectReadSourceObservationRequestV1 {
+  readonly schemaVersion: 1;
+  readonly normalizedProjectRoot: string;
+}
+
+export type ProjectReadSourceObservationRequest = ProjectReadSourceObservationRequestV1;
+
+export interface ProjectReadSourceObservationV1 {
+  readonly schemaVersion: 1;
+  readonly normalizedProjectRoot: string;
+  readonly resolvedProjectRoot: string;
+  readonly repositoryControlRootIdentity: string;
+  readonly sourceTree: ProjectReadSourceTreeProjection;
+  readonly gitState: ProjectReadGitStateProjection;
+  readonly observedAt: IsoTimestamp;
+  readonly observationDigest: Sha256Digest;
+}
+
+export type ProjectReadSourceObservation = ProjectReadSourceObservationV1;
 
 export interface ProjectReadOwnershipMarkerV1 {
   readonly schemaVersion: 1;
@@ -133,6 +159,24 @@ const boundedStringSchema = z
   );
 const digestSchema = z.string();
 const positiveSafeIntegerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+
+const sourceObservationRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    normalizedProjectRoot: boundedStringSchema,
+  })
+  .strict();
+
+const sourceObservationSchema = sourceObservationRequestSchema
+  .extend({
+    resolvedProjectRoot: boundedStringSchema,
+    repositoryControlRootIdentity: boundedStringSchema,
+    sourceTree: z.unknown(),
+    gitState: z.unknown(),
+    observedAt: z.string(),
+    observationDigest: digestSchema,
+  })
+  .strict();
 
 const ownershipMarkerSchema = z
   .object({
@@ -276,6 +320,95 @@ function sameOrderedStrings(left: readonly string[], right: readonly string[]): 
 
 export function digestProjectReadWorkspaceValue(value: unknown): Sha256Digest {
   return digests.digest(value);
+}
+
+export function decodeProjectReadSourceObservationRequest(
+  value: unknown,
+): ProjectReadSourceObservationRequest {
+  const parsed = sourceObservationRequestSchema.parse(value);
+  return Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    normalizedProjectRoot: exactAbsolutePath(
+      parsed.normalizedProjectRoot,
+      'Project-read source observation root',
+    ),
+  });
+}
+
+export function projectReadSourceObservationProjection(
+  observation: Omit<ProjectReadSourceObservation, 'observationDigest'>,
+): unknown {
+  return {
+    schemaVersion: observation.schemaVersion,
+    normalizedProjectRoot: observation.normalizedProjectRoot,
+    resolvedProjectRoot: observation.resolvedProjectRoot,
+    repositoryControlRootIdentity: observation.repositoryControlRootIdentity,
+    sourceTree: observation.sourceTree,
+    gitState: observation.gitState,
+    observedAt: observation.observedAt,
+  };
+}
+
+export function decodeProjectReadSourceObservation(value: unknown): ProjectReadSourceObservation {
+  const parsed = sourceObservationSchema.parse(value);
+  const normalizedProjectRoot = exactAbsolutePath(
+    parsed.normalizedProjectRoot,
+    'Project-read source observation normalized root',
+  );
+  const resolvedProjectRoot = exactAbsolutePath(
+    parsed.resolvedProjectRoot,
+    'Project-read source observation resolved root',
+  );
+  const repositoryControlRootIdentity = exactAbsolutePath(
+    parsed.repositoryControlRootIdentity,
+    'Project-read source observation repository control root',
+  );
+  const sourceTree = decodeProjectReadSourceTreeProjection(parsed.sourceTree);
+  const gitState = decodeProjectReadGitStateProjection(parsed.gitState);
+  if (
+    sourceTree.projectionDigest !==
+      digestProjectReadWorkspaceValue(projectReadSourceTreeProjection(sourceTree)) ||
+    gitState.projectionDigest !==
+      digestProjectReadWorkspaceValue(projectReadGitStateProjection(gitState)) ||
+    gitState.sourceProjectRoot !== resolvedProjectRoot ||
+    gitState.repositoryControlRootIdentity !== repositoryControlRootIdentity
+  ) {
+    throw new TypeError('Project-read source observation projections are inconsistent');
+  }
+  const withoutDigest = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    normalizedProjectRoot,
+    resolvedProjectRoot,
+    repositoryControlRootIdentity,
+    sourceTree,
+    gitState,
+    observedAt: isoTimestamp(parsed.observedAt),
+  });
+  const observationDigest = sha256Digest(parsed.observationDigest);
+  if (
+    observationDigest !==
+    digestProjectReadWorkspaceValue(projectReadSourceObservationProjection(withoutDigest))
+  ) {
+    throw new TypeError('Project-read source observation digest is inconsistent');
+  }
+  return Object.freeze({ ...withoutDigest, observationDigest });
+}
+
+export function createProjectReadSourceObservation(
+  observation: Omit<ProjectReadSourceObservation, 'observationDigest' | 'observedAt'> & {
+    readonly observedAt: string;
+  },
+): ProjectReadSourceObservation {
+  const withoutDigest = Object.freeze({
+    ...observation,
+    observedAt: isoTimestamp(observation.observedAt),
+  });
+  return decodeProjectReadSourceObservation({
+    ...withoutDigest,
+    observationDigest: digestProjectReadWorkspaceValue(
+      projectReadSourceObservationProjection(withoutDigest),
+    ),
+  });
 }
 
 export function projectReadOwnershipMarkerProjection(
@@ -428,6 +561,26 @@ export function createProjectReadSnapshotMaterializationReceipt(
       projectReadSnapshotMaterializationReceiptProjection(withoutDigest),
     ),
   });
+}
+
+export function assertProjectReadSnapshotMaterializationReceiptMatchesRecord(
+  rawReceipt: ProjectReadSnapshotMaterializationReceipt,
+  rawRecord: ProjectSourceReadAuthorityRecord,
+): void {
+  const receipt = decodeProjectReadSnapshotMaterializationReceipt(rawReceipt);
+  const record = decodeProjectSourceReadAuthorityRecord(rawRecord);
+  if (
+    receipt.projectReadAuthorityId !== record.id ||
+    receipt.authorityRecordDigest !== record.recordDigest ||
+    receipt.snapshotId !== record.snapshotId ||
+    receipt.workspaceRootIdentity !== record.workspaceRootIdentity ||
+    receipt.snapshotLeafRealpath !== record.snapshotLeafRealpath ||
+    receipt.snapshotTreeDigest !== record.snapshotTreeDigest ||
+    receipt.ownershipMarkerDigest !== record.ownershipMarkerDigest ||
+    receipt.observedAt < record.issuedAt
+  ) {
+    throw new TypeError('Project-read materialization receipt does not bind the exact record');
+  }
 }
 
 export function projectReadWorkspaceAuthoritySnapshotProjection(

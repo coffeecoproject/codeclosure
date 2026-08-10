@@ -3,10 +3,15 @@ import test from 'node:test';
 
 import {
   PROJECT_READ_OWNERSHIP_MARKER_PROFILE,
+  PROJECT_READ_GIT_STATE_PROFILE,
+  PROJECT_READ_SOURCE_TREE_PROFILE,
+  ProjectReadFileMode,
   attemptId,
   externalExecutionId,
   isoTimestamp,
+  projectReadGitStateProjection,
   projectReadSnapshotId,
+  projectReadSourceTreeProjection,
   projectReadWorkspaceAuthoritySnapshotId,
   projectReadWorkspaceObservationId,
   projectSourceReadAuthorityId,
@@ -17,6 +22,8 @@ import {
   ProjectReadWorkspaceClassification,
   ProjectReadWorkspaceRetention,
   assertProjectReadWorkspaceObservationMatchesAuthoritySnapshot,
+  createProjectReadSourceObservation,
+  decodeProjectReadSourceObservation,
   decodeProjectReadWorkspaceAuthoritySnapshot,
   decodeProjectReadWorkspaceObservation,
   digestProjectReadWorkspaceValue,
@@ -229,6 +236,75 @@ void test('project-read workspace authority snapshot binds exact persisted and a
         }),
       ]),
     /snapshot leaves must not overlap/u,
+  );
+});
+
+void test('project-read initial source observation rejects substituted roots and projection digests', () => {
+  const sourceTreeFields = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_SOURCE_TREE_PROFILE,
+    entries: Object.freeze([
+      Object.freeze({
+        schemaVersion: 1 as const,
+        path: 'src/payment.ts',
+        mode: ProjectReadFileMode.REGULAR,
+        size: 4,
+        contentDigest: sha256Digest(`sha256:${'6'.repeat(64)}`),
+      }),
+    ]),
+    fileCount: 1,
+    totalBytes: 4,
+  });
+  const sourceTree = Object.freeze({
+    ...sourceTreeFields,
+    projectionDigest: digestProjectReadWorkspaceValue(
+      projectReadSourceTreeProjection(sourceTreeFields),
+    ),
+  });
+  const gitStateFields = Object.freeze({
+    schemaVersion: 1 as const,
+    profile: PROJECT_READ_GIT_STATE_PROFILE,
+    sourceProjectRoot: '/fixture/source',
+    repositoryControlRootIdentity: '/fixture/source/.git',
+    headCommit: 'a'.repeat(40),
+    selectedPathSetDigest: sha256Digest(`sha256:${'7'.repeat(64)}`),
+    stagedIndexManifestDigest: sha256Digest(`sha256:${'8'.repeat(64)}`),
+    porcelainV2Digest: sha256Digest(`sha256:${'9'.repeat(64)}`),
+  });
+  const gitState = Object.freeze({
+    ...gitStateFields,
+    projectionDigest: digestProjectReadWorkspaceValue(
+      projectReadGitStateProjection(gitStateFields),
+    ),
+  });
+  const observation = createProjectReadSourceObservation({
+    schemaVersion: 1,
+    normalizedProjectRoot: '/fixture/source',
+    resolvedProjectRoot: '/fixture/source',
+    repositoryControlRootIdentity: '/fixture/source/.git',
+    sourceTree,
+    gitState,
+    observedAt: '2026-08-08T09:00:00.000Z',
+  });
+  assert.deepEqual(decodeProjectReadSourceObservation(observation), observation);
+  assert.throws(
+    () =>
+      decodeProjectReadSourceObservation({
+        ...observation,
+        resolvedProjectRoot: '/fixture/substituted',
+      }),
+    /projections are inconsistent|digest is inconsistent/u,
+  );
+  assert.throws(
+    () =>
+      decodeProjectReadSourceObservation({
+        ...observation,
+        sourceTree: {
+          ...sourceTree,
+          projectionDigest: sha256Digest(`sha256:${'f'.repeat(64)}`),
+        },
+      }),
+    /projections are inconsistent/u,
   );
 });
 

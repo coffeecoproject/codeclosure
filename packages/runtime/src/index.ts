@@ -30,6 +30,10 @@ export * from './policy-installer.js';
 export * from './protected-verification.js';
 export * from './project-read-workspace-contracts.js';
 export * from './project-read-workspace-port.js';
+export type {
+  ProjectReadAttemptIdentityGenerator,
+  ProjectReadAttemptRuntimeDependencies,
+} from './project-read-attempt-authority.js';
 export * from './project-read-snapshot-cleanup-contracts.js';
 export * from './project-read-cleanup-store.js';
 export type {

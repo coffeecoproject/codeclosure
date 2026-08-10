@@ -29,7 +29,11 @@ import {
   intentProjectionId,
   isoTimestamp,
   materialAmbiguityId,
+  projectReadSnapshotCleanupGrantId,
   projectReadSnapshotCleanupOutcomeId,
+  projectReadSnapshotId,
+  projectReadWorkspaceAuthoritySnapshotId,
+  projectSourceReadAuthorityId,
   rawRequestId,
   recoveryReconciliationId,
   successCriterionId,
@@ -64,7 +68,11 @@ import {
   type IntentProjectionId,
   type IsoTimestamp,
   type MaterialAmbiguityId,
+  type ProjectReadSnapshotCleanupGrantId,
   type ProjectReadSnapshotCleanupOutcomeId,
+  type ProjectReadSnapshotId,
+  type ProjectReadWorkspaceAuthoritySnapshotId,
+  type ProjectSourceReadAuthorityId,
   type RawRequestId,
   type RecoveryReconciliationId,
   type SuccessCriterionId,
@@ -242,6 +250,24 @@ export class CryptographicIdentityGenerator
 
   public nextProjectReadSnapshotCleanupOutcomeId(): ProjectReadSnapshotCleanupOutcomeId {
     return projectReadSnapshotCleanupOutcomeId(`project-read-cleanup-outcome_${this.nextSuffix()}`);
+  }
+
+  public nextProjectSourceReadAuthorityId(): ProjectSourceReadAuthorityId {
+    return projectSourceReadAuthorityId(`project-read_${this.nextSuffix()}`);
+  }
+
+  public nextProjectReadSnapshotId(): ProjectReadSnapshotId {
+    return projectReadSnapshotId(`project-read-snapshot_${this.nextSuffix()}`);
+  }
+
+  public nextProjectReadWorkspaceAuthoritySnapshotId(): ProjectReadWorkspaceAuthoritySnapshotId {
+    return projectReadWorkspaceAuthoritySnapshotId(
+      `project-read-authority-snapshot_${this.nextSuffix()}`,
+    );
+  }
+
+  public nextProjectReadSnapshotCleanupGrantId(): ProjectReadSnapshotCleanupGrantId {
+    return projectReadSnapshotCleanupGrantId(`project-read-cleanup-grant_${this.nextSuffix()}`);
   }
 
   private nextSuffix(): string {
