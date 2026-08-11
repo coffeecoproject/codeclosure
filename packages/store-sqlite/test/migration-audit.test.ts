@@ -51,6 +51,7 @@ const migrationNames = Object.freeze([
   '0032_external_execution_profile_v3.sql',
   '0033_external_execution_intent_v2.sql',
   '0034_candidate_freeze_evidence_v2.sql',
+  '0035_project_read_currency_failure.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -169,7 +170,7 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:057513a1369ae3dcf2da98a69504e4e99eeaea934af8c3d43afcfbcaa98d5f9a',
+    schemaDigest: 'sha256:f1c29ada81d0f9ecf2de9e0d1b94d6bc2d0493a356e0b8cd13de94bcf4853861',
   });
 
   const reopened = new Database(filename);

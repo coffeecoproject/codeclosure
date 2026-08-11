@@ -3,12 +3,40 @@ import {
   WorkerResultKind,
   WorkflowPhase,
   type Attempt,
+  type AttemptFailureClass,
   type ContextManifest,
   type Sha256Digest,
 } from '@codeclosure/domain';
 
 import { m1WorkerResponseContract } from './context-compiler.js';
+import { projectReadCurrencyFailureClassForReasonCode } from './project-read-currency-contracts.js';
 import { attemptFailureClassForKnownWorkerReasonCode } from './worker-contracts.js';
+
+export function attemptFailureClassForContextBoundReasonCode(
+  manifest: ContextManifest,
+  attempt: Attempt,
+): AttemptFailureClass | undefined {
+  const reasonCode = attempt.terminationReason;
+  if (reasonCode === undefined) {
+    return undefined;
+  }
+  const workerFailureClass = attemptFailureClassForKnownWorkerReasonCode(reasonCode);
+  if (workerFailureClass !== undefined) {
+    return workerFailureClass;
+  }
+  const candidateFreeProjectReadContext =
+    manifest.schemaVersion === 5 &&
+    (attempt.phase === WorkflowPhase.DISCOVERY || attempt.phase === WorkflowPhase.PLAN) &&
+    manifest.projectReadAuthorityId !== undefined &&
+    manifest.projectReadAuthorityRecordDigest !== undefined &&
+    manifest.projectReadSourceTreeProjectionDigest !== undefined &&
+    manifest.projectReadGitStateProjectionDigest !== undefined &&
+    manifest.candidateGenerationId === undefined &&
+    manifest.candidateDigest === undefined;
+  return candidateFreeProjectReadContext
+    ? projectReadCurrencyFailureClassForReasonCode(reasonCode)
+    : undefined;
+}
 
 /**
  * Proves the M1 Worker authority intrinsic to one retained
@@ -57,11 +85,9 @@ export function assertM1WorkerPhaseAttemptAuthority(
   }
 
   if (attempt.status === AttemptStatus.FAILED) {
-    const expectedFailureClass = attemptFailureClassForKnownWorkerReasonCode(
-      attempt.terminationReason,
-    );
+    const expectedFailureClass = attemptFailureClassForContextBoundReasonCode(manifest, attempt);
     if (expectedFailureClass === undefined || expectedFailureClass !== attempt.failureClass) {
-      throw new TypeError('M1 Worker failure has no exact closed failure classification');
+      throw new TypeError('Context-bound Attempt failure has no exact closed classification');
     }
   }
 }

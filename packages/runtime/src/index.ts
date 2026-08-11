@@ -30,6 +30,8 @@ export * from './policy-installer.js';
 export * from './protected-verification.js';
 export * from './project-read-workspace-contracts.js';
 export * from './project-read-workspace-port.js';
+export * from './project-read-currency.js';
+export * from './project-read-currency-contracts.js';
 export type {
   ProjectReadAttemptIdentityGenerator,
   ProjectReadAttemptRuntimeDependencies,

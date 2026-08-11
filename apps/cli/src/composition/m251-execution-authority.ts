@@ -376,6 +376,7 @@ export type M251RuntimeProfileCapabilities = Required<
     | 'candidateSource'
     | 'verification'
     | 'externalWorker'
+    | 'projectRead'
     | 'localCommandVerification'
     | 'protectedVerification'
   >

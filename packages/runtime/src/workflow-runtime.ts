@@ -210,6 +210,12 @@ import {
   classifyM251CandidateFreezeProfile,
   type M251CandidateFreezeProfileClassification as M251CandidateFreezeProfileClass,
 } from './m251-execution-profile.js';
+import {
+  ProjectReadCurrencyFailureReasonCode,
+  evaluateProjectReadCurrency,
+  type ProjectReadCurrencyFailureReasonCode as ProjectReadCurrencyFailureReason,
+} from './project-read-currency.js';
+import { projectReadCurrencyFailureClassForReasonCode } from './project-read-currency-contracts.js';
 import { canonicalizeJson } from './canonical-json.js';
 import {
   buildEvidenceSet,
@@ -388,6 +394,21 @@ export interface RecordAttemptFailureRequest extends WorkflowCommandRequest {
   readonly failureClass: AttemptFailureClass;
   readonly reason: string;
 }
+
+export interface EvaluateProjectReadCurrencyRequest extends WorkflowCommandRequest {
+  readonly attemptId: AttemptId;
+}
+
+export type ProjectReadCurrencyCheckpointResult =
+  | Readonly<{
+      readonly status: 'CURRENT';
+      readonly record: ProjectSourceReadAuthorityRecord;
+    }>
+  | Readonly<{
+      readonly status: 'FAILED';
+      readonly reasonCode: ProjectReadCurrencyFailureReason;
+      readonly command: RuntimeCommandResult;
+    }>;
 
 export interface InterruptAttemptRequest extends WorkflowCommandRequest {
   readonly attemptId: AttemptId;
@@ -836,6 +857,9 @@ const recordAttemptResultRequestSchema = workflowCommandRequestSchema
 const recordAttemptFailureRequestSchema = recordAttemptResultRequestSchema
   .extend({ failureClass: z.enum(Object.values(AttemptFailureClass)) })
   .strict();
+const evaluateProjectReadCurrencyRequestSchema = workflowCommandRequestSchema
+  .extend({ attemptId: z.string() })
+  .strict();
 const interruptAttemptRequestSchema = recordAttemptResultRequestSchema
   .extend({
     interruptionReason: z.enum(Object.values(AttemptInterruptionReason)),
@@ -995,6 +1019,20 @@ function decodeRecordAttemptFailureRequest(value: unknown): RecordAttemptFailure
     attemptId: attemptId(parsed.attemptId),
     failureClass: parsed.failureClass,
     reason: parsed.reason,
+  });
+}
+
+function decodeEvaluateProjectReadCurrencyRequest(
+  value: unknown,
+): EvaluateProjectReadCurrencyRequest {
+  const parsed = evaluateProjectReadCurrencyRequestSchema.parse(value);
+  return Object.freeze({
+    ...decodeBeginAttemptRequest({
+      commandId: parsed.commandId,
+      workflowId: parsed.workflowId,
+      expectedWorkflowVersion: parsed.expectedWorkflowVersion,
+    }),
+    attemptId: attemptId(parsed.attemptId),
   });
 }
 
@@ -4292,7 +4330,141 @@ export class WorkflowRuntimeKernel {
 
   public recordAttemptFailure(rawInput: RecordAttemptFailureRequest): RuntimeCommandResult {
     const input = decodeRecordAttemptFailureRequest(rawInput);
+    if (projectReadCurrencyFailureClassForReasonCode(input.reason) !== undefined) {
+      throw new TypeError(
+        'Project-read currency failure must be authored by its Runtime checkpoint',
+      );
+    }
     return this.finishAttempt({ ...input, type: 'RECORD_ATTEMPT_FAILURE' });
+  }
+
+  public evaluateProjectReadCurrency(
+    rawInput: EvaluateProjectReadCurrencyRequest,
+  ): ProjectReadCurrencyCheckpointResult {
+    const input = decodeEvaluateProjectReadCurrencyRequest(rawInput);
+    const resolution = this.resolveAuthority(input.commandId, workflowTarget(input.workflowId));
+    if (resolution.status !== 'FOUND') {
+      throw new TypeError('Project-read currency has no valid Workflow authority');
+    }
+    const { goal, workflow } = resolution.context;
+    const rawAttempt = this.storeOperation(
+      input.commandId,
+      'PROJECT_READ_CURRENCY_ATTEMPT_READ_FAILURE',
+      () => this.#store.getAttempt(input.attemptId),
+    );
+    if (rawAttempt === undefined) {
+      throw new TypeError('Project-read currency Attempt does not exist');
+    }
+    const attempt = decodeAttemptSnapshot(rawAttempt);
+    const contextManifestId = attempt.contextManifestId;
+    if (
+      workflow.version !== input.expectedWorkflowVersion ||
+      workflow.runStatus !== RunStatus.RUNNING ||
+      workflow.activeAttemptId !== attempt.id ||
+      attempt.id !== input.attemptId ||
+      attempt.workflowId !== workflow.id ||
+      attempt.phase !== workflow.phase ||
+      attempt.status !== AttemptStatus.RUNNING ||
+      (attempt.phase !== WorkflowPhase.DISCOVERY && attempt.phase !== WorkflowPhase.PLAN) ||
+      contextManifestId === undefined
+    ) {
+      throw new TypeError(
+        'Project-read currency requires one exact running candidate-free Attempt',
+      );
+    }
+
+    const fail = (
+      reasonCode: ProjectReadCurrencyFailureReason,
+    ): ProjectReadCurrencyCheckpointResult =>
+      Object.freeze({
+        status: 'FAILED',
+        reasonCode,
+        command: this.finishAttempt({
+          type: 'RECORD_ATTEMPT_FAILURE',
+          commandId: input.commandId,
+          workflowId: workflow.id,
+          expectedWorkflowVersion: workflow.version,
+          attemptId: attempt.id,
+          failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+          reason: reasonCode,
+        }),
+      });
+
+    const workerStore = this.requireWorkerStore();
+    const rawManifest = this.storeOperation(
+      input.commandId,
+      'PROJECT_READ_CURRENCY_CONTEXT_READ_FAILURE',
+      () => workerStore.getContextManifest(contextManifestId),
+    );
+    if (rawManifest === undefined) {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+    let manifest: ContextManifest;
+    try {
+      manifest = decodeContextManifest(rawManifest);
+    } catch {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+    const projectReadAuthorityId = manifest.projectReadAuthorityId;
+    if (
+      manifest.schemaVersion !== 5 ||
+      projectReadAuthorityId === undefined ||
+      workerStore.getProjectSourceReadAuthority === undefined
+    ) {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+    const rawRecord = this.storeOperation(
+      input.commandId,
+      'PROJECT_READ_CURRENCY_AUTHORITY_READ_FAILURE',
+      () => workerStore.getProjectSourceReadAuthority?.(projectReadAuthorityId),
+    );
+    if (rawRecord === undefined) {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+    let record: ProjectSourceReadAuthorityRecord;
+    try {
+      record = decodeProjectSourceReadAuthorityRecord(rawRecord);
+    } catch {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+    if (
+      manifest.id !== contextManifestId ||
+      manifest.attemptId !== attempt.id ||
+      manifest.goalId !== goal.id ||
+      manifest.goalRevision !== goal.revision ||
+      manifest.workflowId !== workflow.id ||
+      manifest.workflowVersion !== workflow.version ||
+      manifest.phase !== workflow.phase ||
+      manifest.projectReadAuthorityId !== record.id ||
+      manifest.projectReadAuthorityRecordDigest !== record.recordDigest ||
+      manifest.projectReadSourceTreeProjectionDigest !== record.sourceTree.projectionDigest ||
+      manifest.projectReadGitStateProjectionDigest !== record.gitState.projectionDigest ||
+      record.goalId !== goal.id ||
+      record.goalRevision !== goal.revision ||
+      record.workflowId !== workflow.id ||
+      record.workflowVersion !== workflow.version ||
+      record.phase !== workflow.phase ||
+      record.attemptId !== attempt.id ||
+      record.normalizedProjectRoot !== goal.scope.projectPath ||
+      record.policyBundleId !== manifest.policyBundleId ||
+      record.policyBundleDigest !== manifest.policyBundleDigest ||
+      record.executionProfileId !== manifest.executionProfileId ||
+      record.executionProfileDigest !== manifest.executionProfileDigest ||
+      record.capabilityGrantDigest !== manifest.capabilityGrantDigest ||
+      record.responseContractDigest !== manifest.responseContractDigest ||
+      record.snapshotTreeDigest !== record.sourceTree.projectionDigest
+    ) {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+
+    const runtime = this.#projectRead;
+    if (runtime === undefined) {
+      return fail(ProjectReadCurrencyFailureReasonCode.PROJECT_READ_AUTHORITY_INVALID);
+    }
+    const evaluation = evaluateProjectReadCurrency(record, runtime.workspace, this.#digests);
+    return evaluation.status === 'CURRENT'
+      ? Object.freeze({ status: 'CURRENT', record: evaluation.record })
+      : fail(evaluation.reasonCode);
   }
 
   public interruptAttempt(rawInput: InterruptAttemptRequest): RuntimeCommandResult {

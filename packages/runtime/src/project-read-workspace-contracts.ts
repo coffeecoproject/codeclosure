@@ -98,6 +98,35 @@ export interface ProjectReadSnapshotMaterializationReceiptV1 {
 
 export type ProjectReadSnapshotMaterializationReceipt = ProjectReadSnapshotMaterializationReceiptV1;
 
+export const ProjectReadSnapshotCurrencyState = {
+  CURRENT: 'CURRENT',
+  AUTHORITY_MISSING: 'AUTHORITY_MISSING',
+  AUTHORITY_ALIASED: 'AUTHORITY_ALIASED',
+  AUTHORITY_UNVERIFIABLE: 'AUTHORITY_UNVERIFIABLE',
+  SNAPSHOT_IDENTITY_MISMATCH: 'SNAPSHOT_IDENTITY_MISMATCH',
+  SNAPSHOT_CONTENT_MISMATCH: 'SNAPSHOT_CONTENT_MISMATCH',
+} as const;
+export type ProjectReadSnapshotCurrencyState =
+  (typeof ProjectReadSnapshotCurrencyState)[keyof typeof ProjectReadSnapshotCurrencyState];
+
+/**
+ * Point-in-time filesystem observation for one retained ProjectRead record.
+ * It is not persisted authority and cannot authorize dispatch or cleanup.
+ */
+export interface ProjectReadSnapshotCurrencyObservationV1 {
+  readonly schemaVersion: 1;
+  readonly projectReadAuthorityId: ProjectSourceReadAuthorityId;
+  readonly authorityRecordDigest: Sha256Digest;
+  readonly snapshotId: ProjectReadSnapshotId;
+  readonly workspaceRootIdentity: string;
+  readonly snapshotLeafRealpath: string;
+  readonly state: ProjectReadSnapshotCurrencyState;
+  readonly observedAt: IsoTimestamp;
+  readonly observationDigest: Sha256Digest;
+}
+
+export type ProjectReadSnapshotCurrencyObservation = ProjectReadSnapshotCurrencyObservationV1;
+
 export interface ProjectReadWorkspaceExpectedSnapshotV1 {
   readonly attemptId: AttemptId;
   readonly authorityRecordDigest: Sha256Digest;
@@ -204,6 +233,20 @@ const materializationReceiptSchema = z
     ownershipMarkerDigest: digestSchema,
     observedAt: z.string(),
     receiptDigest: digestSchema,
+  })
+  .strict();
+
+const snapshotCurrencyObservationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectReadAuthorityId: z.string(),
+    authorityRecordDigest: digestSchema,
+    snapshotId: z.string(),
+    workspaceRootIdentity: boundedStringSchema,
+    snapshotLeafRealpath: boundedStringSchema,
+    state: z.enum(Object.values(ProjectReadSnapshotCurrencyState)),
+    observedAt: z.string(),
+    observationDigest: digestSchema,
   })
   .strict();
 
@@ -580,6 +623,96 @@ export function assertProjectReadSnapshotMaterializationReceiptMatchesRecord(
     receipt.observedAt < record.issuedAt
   ) {
     throw new TypeError('Project-read materialization receipt does not bind the exact record');
+  }
+}
+
+export function projectReadSnapshotCurrencyObservationProjection(
+  observation: Omit<ProjectReadSnapshotCurrencyObservation, 'observationDigest'>,
+): unknown {
+  return {
+    schemaVersion: observation.schemaVersion,
+    projectReadAuthorityId: observation.projectReadAuthorityId,
+    authorityRecordDigest: observation.authorityRecordDigest,
+    snapshotId: observation.snapshotId,
+    workspaceRootIdentity: observation.workspaceRootIdentity,
+    snapshotLeafRealpath: observation.snapshotLeafRealpath,
+    state: observation.state,
+    observedAt: observation.observedAt,
+  };
+}
+
+export function decodeProjectReadSnapshotCurrencyObservation(
+  value: unknown,
+): ProjectReadSnapshotCurrencyObservation {
+  const parsed = snapshotCurrencyObservationSchema.parse(value);
+  const workspaceRootIdentity = exactAbsolutePath(
+    parsed.workspaceRootIdentity,
+    'Project-read snapshot-currency root',
+  );
+  const snapshotLeafRealpath = exactAbsolutePath(
+    parsed.snapshotLeafRealpath,
+    'Project-read snapshot-currency leaf',
+  );
+  assertOwnedLeaf(workspaceRootIdentity, snapshotLeafRealpath);
+  const withoutDigest = Object.freeze({
+    schemaVersion: parsed.schemaVersion,
+    projectReadAuthorityId: projectSourceReadAuthorityId(parsed.projectReadAuthorityId),
+    authorityRecordDigest: sha256Digest(parsed.authorityRecordDigest),
+    snapshotId: projectReadSnapshotId(parsed.snapshotId),
+    workspaceRootIdentity,
+    snapshotLeafRealpath,
+    state: parsed.state,
+    observedAt: isoTimestamp(parsed.observedAt),
+  });
+  const observationDigest = sha256Digest(parsed.observationDigest);
+  if (
+    observationDigest !==
+    digestProjectReadWorkspaceValue(projectReadSnapshotCurrencyObservationProjection(withoutDigest))
+  ) {
+    throw new TypeError('Project-read snapshot-currency observation digest is inconsistent');
+  }
+  return Object.freeze({ ...withoutDigest, observationDigest });
+}
+
+export function createProjectReadSnapshotCurrencyObservation(
+  rawRecord: ProjectSourceReadAuthorityRecord,
+  state: ProjectReadSnapshotCurrencyState,
+  observedAtValue: string,
+): ProjectReadSnapshotCurrencyObservation {
+  const record = decodeProjectSourceReadAuthorityRecord(rawRecord);
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    projectReadAuthorityId: record.id,
+    authorityRecordDigest: record.recordDigest,
+    snapshotId: record.snapshotId,
+    workspaceRootIdentity: record.workspaceRootIdentity,
+    snapshotLeafRealpath: record.snapshotLeafRealpath,
+    state,
+    observedAt: isoTimestamp(observedAtValue),
+  });
+  return decodeProjectReadSnapshotCurrencyObservation({
+    ...withoutDigest,
+    observationDigest: digestProjectReadWorkspaceValue(
+      projectReadSnapshotCurrencyObservationProjection(withoutDigest),
+    ),
+  });
+}
+
+export function assertProjectReadSnapshotCurrencyObservationMatchesRecord(
+  rawObservation: ProjectReadSnapshotCurrencyObservation,
+  rawRecord: ProjectSourceReadAuthorityRecord,
+): void {
+  const observation = decodeProjectReadSnapshotCurrencyObservation(rawObservation);
+  const record = decodeProjectSourceReadAuthorityRecord(rawRecord);
+  if (
+    observation.projectReadAuthorityId !== record.id ||
+    observation.authorityRecordDigest !== record.recordDigest ||
+    observation.snapshotId !== record.snapshotId ||
+    observation.workspaceRootIdentity !== record.workspaceRootIdentity ||
+    observation.snapshotLeafRealpath !== record.snapshotLeafRealpath ||
+    observation.observedAt < record.issuedAt
+  ) {
+    throw new TypeError('Project-read snapshot-currency observation substituted its record');
   }
 }
 

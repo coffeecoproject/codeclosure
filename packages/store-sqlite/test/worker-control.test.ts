@@ -52,6 +52,7 @@ import {
   RecoverableBlockerKind,
   Rfc8785Canonicalizer,
   RuntimeErrorCode,
+  ProjectReadCurrencyFailureReasonCode,
   WorkerFailureReasonCode,
   WorkerEventNonAdmissionClass,
   WorkerPortFailureReasonCode,
@@ -3594,6 +3595,7 @@ void test('[I-004][I-006][I-008][I-019] SQLite rejects an open-ended Worker fail
   if (running?.activeAttemptId === undefined) {
     assert.fail('Worker failure mapping trigger fixture must retain an active Attempt');
   }
+  const activeAttemptId = running.activeAttemptId;
 
   const database = new Database(filename);
   t.after(() => database.close());
@@ -3607,10 +3609,38 @@ void test('[I-004][I-006][I-008][I-019] SQLite rejects an open-ended Worker fail
                   ended_at = '2026-07-27T00:00:00.100Z'
             WHERE id = ?`,
         )
-        .run(running.activeAttemptId),
+        .run(activeAttemptId),
     /Worker failure reason has no exact M1 failure mapping/,
   );
-  assert.equal(store.getAttempt(running.activeAttemptId)?.status, AttemptStatus.RUNNING);
+  assert.equal(store.getAttempt(activeAttemptId)?.status, AttemptStatus.RUNNING);
+
+  for (const [index, reason] of Object.values(ProjectReadCurrencyFailureReasonCode).entries()) {
+    assert.throws(
+      () =>
+        kernel.recordAttemptFailure({
+          commandId: commandId(`command_workerfailuremappingtrigger-currency-${index}`),
+          workflowId: authority.workflow.id,
+          expectedWorkflowVersion: running.version,
+          attemptId: activeAttemptId,
+          failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+          reason,
+        }),
+      /must be authored by its Runtime checkpoint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `UPDATE attempts
+                SET status = 'FAILED', failure_class = 'INTEGRITY_VIOLATION',
+                    termination_reason = ?, ended_at = '2026-07-27T00:00:00.100Z'
+              WHERE id = ?`,
+          )
+          .run(reason, activeAttemptId),
+      /Worker failure reason has no exact M1 failure mapping/,
+    );
+    assert.equal(store.getAttempt(activeAttemptId)?.status, AttemptStatus.RUNNING);
+  }
 });
 
 void test('[I-005][I-006][I-009] reopen revalidates retained M1 Context source authority', (t) => {

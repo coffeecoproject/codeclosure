@@ -12,6 +12,7 @@ import {
   type ProjectReadSnapshotCleanupObservation,
 } from './project-read-snapshot-cleanup-contracts.js';
 import type {
+  ProjectReadSnapshotCurrencyObservation,
   ProjectReadSnapshotMaterializationReceipt,
   ProjectReadSourceObservation,
   ProjectReadSourceObservationRequest,
@@ -56,6 +57,7 @@ export function decodeProjectReadSnapshotCleanupRequest(
  */
 export interface ProjectReadWorkspacePort {
   observeSource(request: ProjectReadSourceObservationRequest): ProjectReadSourceObservation;
+  observeSnapshot(record: ProjectSourceReadAuthorityRecord): ProjectReadSnapshotCurrencyObservation;
   snapshotLeafFor(snapshotId: string): string;
   readonly workspaceRootIdentity: string;
   materializeSnapshot(

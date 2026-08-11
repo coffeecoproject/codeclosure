@@ -293,6 +293,8 @@ import {
   LocalCommandVerificationFailureCode,
   workerDispatchClaimProjection,
   attemptFailureClassForKnownWorkerReasonCode,
+  attemptFailureClassForContextBoundReasonCode,
+  projectReadCurrencyFailureClassForReasonCode,
   m1PhaseObjective,
   m1WorkerResponseContract,
   validateM1CandidateEvidencePolicy,
@@ -10405,6 +10407,7 @@ export class SqliteControlStore
       );
     }
     const applied = applyAttemptEvent(currentWorkflow, currentAttempt, input.event);
+    this.assertProjectReadCurrencyAttemptFailureAuthority(applied.attempt);
 
     if (input.event.type === 'ATTEMPT_STARTED') {
       const expectedSequence = this.nextAttemptSequenceInsideTransaction(input.event.workflowId);
@@ -10522,6 +10525,29 @@ export class SqliteControlStore
       outcome: persistedCommand.outcome,
       value: Object.freeze({ workflow: persistedWorkflow, attempt: persistedAttempt }),
     };
+  }
+
+  private assertProjectReadCurrencyAttemptFailureAuthority(attempt: Attempt): void {
+    const expectedFailureClass = projectReadCurrencyFailureClassForReasonCode(
+      attempt.terminationReason ?? '',
+    );
+    if (expectedFailureClass === undefined) {
+      return;
+    }
+    const manifest =
+      attempt.contextManifestId === undefined
+        ? undefined
+        : this.getContextManifest(attempt.contextManifestId);
+    if (
+      manifest === undefined ||
+      attempt.status !== AttemptStatus.FAILED ||
+      attempt.failureClass !== expectedFailureClass ||
+      attemptFailureClassForContextBoundReasonCode(manifest, attempt) !== expectedFailureClass
+    ) {
+      throw new StoreInvariantError(
+        `Project-read currency reason ${attempt.terminationReason ?? 'UNKNOWN'} has no exact Context v5 authority`,
+      );
+    }
   }
 
   public commitWorkflowEvent(
@@ -16248,7 +16274,21 @@ export class SqliteControlStore
           .get(attempt.id) !== undefined;
       const expectedWorkerFailureClass =
         workerBound && attempt.status === AttemptStatus.FAILED
-          ? attemptFailureClassForKnownWorkerReasonCode(attempt.terminationReason)
+          ? (() => {
+              const workerFailureClass = attemptFailureClassForKnownWorkerReasonCode(
+                attempt.terminationReason,
+              );
+              if (workerFailureClass !== undefined) {
+                return workerFailureClass;
+              }
+              const manifest =
+                attempt.contextManifestId === undefined
+                  ? undefined
+                  : this.getContextManifest(attempt.contextManifestId);
+              return manifest === undefined
+                ? undefined
+                : attemptFailureClassForContextBoundReasonCode(manifest, attempt);
+            })()
           : undefined;
       if (
         workflow === undefined ||

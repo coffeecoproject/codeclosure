@@ -28,7 +28,9 @@ import {
   ProjectReadSnapshotCleanupTargetState,
   ProjectReadWorkspaceClassification,
   ProjectReadWorkspaceRetention,
+  ProjectReadSnapshotCurrencyState,
   createProjectReadOwnershipMarkerForRecord,
+  createProjectReadSnapshotCurrencyObservation,
   createProjectReadSourceObservation,
   createProjectReadSnapshotCleanupTargetObservation,
   createProjectReadSnapshotMaterializationReceipt,
@@ -44,6 +46,7 @@ import {
   type ProjectReadSnapshotCleanupObservation,
   type ProjectReadSnapshotCleanupRequest,
   type ProjectReadSnapshotCleanupTargetObservation,
+  type ProjectReadSnapshotCurrencyObservation,
   type ProjectReadSnapshotMaterializationReceipt,
   type ProjectReadSnapshotMaterializationRequest,
   type ProjectReadSourceObservation,
@@ -344,6 +347,51 @@ function assertTreeReadOnly(root: string): void {
   }
 }
 
+function observeSnapshotTreePreflight(root: string): ProjectReadSnapshotCurrencyState | undefined {
+  const pending = [root];
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined) {
+        break;
+      }
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        return ProjectReadSnapshotCurrencyState.AUTHORITY_ALIASED;
+      }
+      if (!stat.isDirectory() && !stat.isFile()) {
+        return ProjectReadSnapshotCurrencyState.SNAPSHOT_IDENTITY_MISMATCH;
+      }
+      if ((stat.mode & 0o222) !== 0) {
+        return ProjectReadSnapshotCurrencyState.SNAPSHOT_CONTENT_MISMATCH;
+      }
+      if (stat.isDirectory()) {
+        for (const name of readdirSync(current)) {
+          pending.push(resolve(current, name));
+        }
+      }
+    }
+  } catch {
+    return ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE;
+  }
+  return undefined;
+}
+
+function snapshotScanFailureState(error: unknown): ProjectReadSnapshotCurrencyState {
+  if (error instanceof LocalProjectReadWorkspaceError) {
+    switch (error.code) {
+      case LocalProjectReadWorkspaceFailureCode.BOUNDS_EXCEEDED:
+      case LocalProjectReadWorkspaceFailureCode.SOURCE_UNSUPPORTED:
+        return ProjectReadSnapshotCurrencyState.SNAPSHOT_CONTENT_MISMATCH;
+      case LocalProjectReadWorkspaceFailureCode.CONTAINMENT_VIOLATION:
+        return ProjectReadSnapshotCurrencyState.AUTHORITY_ALIASED;
+      default:
+        return ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE;
+    }
+  }
+  return ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE;
+}
+
 function makeTreeRemovable(root: string): void {
   const pending = [root];
   while (pending.length > 0) {
@@ -528,6 +576,100 @@ class LocalProjectReadWorkspaceAdapter implements LocalProjectReadWorkspace {
       gitState: snapshot.gitState,
       observedAt: nowAtOrAfter(this.#hooks),
     });
+  }
+
+  public observeSnapshot(
+    rawRecord: ProjectReadSnapshotMaterializationRequest,
+  ): ProjectReadSnapshotCurrencyObservation {
+    const record = decodeProjectReadSnapshotMaterializationRequest(rawRecord);
+    if (
+      record.workspaceRootIdentity !== this.workspaceRootIdentity ||
+      record.snapshotLeafRealpath !== this.snapshotLeafFor(record.snapshotId)
+    ) {
+      fail(
+        LocalProjectReadWorkspaceFailureCode.CONTAINMENT_VIOLATION,
+        'Project-read snapshot observation is outside the configured workspace',
+      );
+    }
+    const observedAt = (): string => nowAtOrAfter(this.#hooks, record.issuedAt);
+    const observation = (
+      state: ProjectReadSnapshotCurrencyState,
+    ): ProjectReadSnapshotCurrencyObservation =>
+      createProjectReadSnapshotCurrencyObservation(record, state, observedAt());
+
+    if (!pathEntryExists(this.workspaceRootIdentity)) {
+      return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_MISSING);
+    }
+    try {
+      const root = lstatSync(this.workspaceRootIdentity);
+      if (
+        root.isSymbolicLink() ||
+        realpathSync(this.workspaceRootIdentity) !== this.workspaceRootIdentity
+      ) {
+        return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_ALIASED);
+      }
+      if (!root.isDirectory()) {
+        return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE);
+      }
+      this.#openOwnedRoot();
+    } catch {
+      return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE);
+    }
+
+    const markerPath = this.#markerPath(record.snapshotId);
+    if (!pathEntryExists(markerPath) || !pathEntryExists(record.snapshotLeafRealpath)) {
+      return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_MISSING);
+    }
+    let marker: ProjectReadOwnershipMarker;
+    try {
+      const markerStat = lstatSync(markerPath);
+      if (markerStat.isSymbolicLink() || !markerStat.isFile()) {
+        return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_ALIASED);
+      }
+      marker = readLocalProjectReadOwnershipMarker(markerPath);
+    } catch {
+      return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE);
+    }
+    if (
+      marker.projectReadAuthorityId !== record.id ||
+      marker.snapshotId !== record.snapshotId ||
+      marker.workspaceRootIdentity !== record.workspaceRootIdentity ||
+      marker.snapshotLeafRealpath !== record.snapshotLeafRealpath ||
+      marker.snapshotTreeDigest !== record.snapshotTreeDigest ||
+      marker.markerDigest !== record.ownershipMarkerDigest
+    ) {
+      return observation(ProjectReadSnapshotCurrencyState.SNAPSHOT_IDENTITY_MISMATCH);
+    }
+
+    try {
+      const leaf = lstatSync(record.snapshotLeafRealpath);
+      if (leaf.isSymbolicLink()) {
+        return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_ALIASED);
+      }
+      if (
+        !leaf.isDirectory() ||
+        realpathSync(record.snapshotLeafRealpath) !== record.snapshotLeafRealpath
+      ) {
+        return observation(ProjectReadSnapshotCurrencyState.SNAPSHOT_IDENTITY_MISMATCH);
+      }
+    } catch {
+      return observation(ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE);
+    }
+    const preflightState = observeSnapshotTreePreflight(record.snapshotLeafRealpath);
+    if (preflightState !== undefined) {
+      return observation(preflightState);
+    }
+    try {
+      const tree = withMappedCandidateFailures(() =>
+        scanProjectReadTree(record.snapshotLeafRealpath, this.#bounds),
+      );
+      if (tree.projectionDigest !== record.snapshotTreeDigest) {
+        return observation(ProjectReadSnapshotCurrencyState.SNAPSHOT_CONTENT_MISMATCH);
+      }
+    } catch (error) {
+      return observation(snapshotScanFailureState(error));
+    }
+    return observation(ProjectReadSnapshotCurrencyState.CURRENT);
   }
 
   #markerPath(snapshotId: string): string {

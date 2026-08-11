@@ -143,11 +143,12 @@ retained v2 Candidate Adapter suite remains green. Runtime and Store now bind
 the `PLAN -> IMPLEMENT` Candidate preparation to the exact completed PLAN
 ProjectRead authority: a matching preparation-v2 result is required for
 Candidate creation, while mismatch atomically fails the Workflow with
-`PLAN_SOURCE_NOT_CURRENT` and creates no Candidate. The legacy Driver still
-rejects v3 during installed-Profile preflight before Start mutation, Adapter,
-or FakeWorker dispatch; candidate-free pre/post-Turn source and snapshot
-currency, real phase dispatch/composition, and mandatory live proof remain
-pending.
+`PLAN_SOURCE_NOT_CURRENT` and creates no Candidate. The B3 Driver
+implementation now deterministically selects Profile v3 for all three Worker
+phases, authors Intent/Record v2, consumes the existing Adapter boundary, and
+closes candidate-free pre/post-Turn currency failures without a FakeWorker
+fallback. Its bounded review, trusted production composition, effective live
+containment, and mandatory live proof remain pending.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -169,9 +170,11 @@ plus read-only observers, and one started non-terminal Goal per exact project.
 M2.5.1 Slices 1 and 2 are complete, and Slice 3 has implemented its bounded
 project-read/cleanup, versioned external-execution, and Adapter-boundary
 foundation plus ADR 0044's additive Candidate freeze-v2 Domain/Runtime/Store/
-SQLite authority path with atomic Evidence and strict reopen. The C11
-implementation has offline coverage but no acceptance verdict; Runtime source-
-currency/phase composition and M2.5.1 assessment have not started.
+SQLite authority path with atomic Evidence and strict reopen. B3 now adds
+deterministic Runtime source-currency enforcement and Driver Profile v3 phase
+dispatch, but its bounded review has not issued a verdict. The C11
+implementation has offline coverage but no acceptance verdict; trusted
+production composition and M2.5.1 assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -801,15 +804,18 @@ Store Grant, strictly validates the Adapter observation, and returns the Store
 winner after an Outcome race. The local Adapter uses deterministic Grant-bound
 coordination and atomic exact-leaf effects across processes; incomplete or
 unclassifiable work leaves the same Grant unresolved. Real phase composition
-remains pending. The nested external-execution v3 definition now records the
+through the ordinary production assembly remains pending. The nested external-
+execution v3 definition now records the
 exact canonical phase set, `ALL_SELECTED_ATTEMPTS`, and shared-versus-phase
 authority without duplication; strict installation/reopen rejects
 configuration, capability, response-contract/schema, instruction, order, and
-source-kind substitution. The current Driver fails closed during installed-
-Profile preflight before Start mutation. The versioned phase Intent/Record and
-Adapter directive/observation/activity-policy boundary is now implemented but
-does not itself authorize dispatch; Runtime source-currency enforcement and
-Driver phase composition remain pending. The C11 Profile sub-contract now
+source-kind substitution. The B3 Driver now selects that exact phase authority,
+authors Intent/Record v2 with one discriminated ProjectRead or Candidate source,
+and invokes the existing Adapter boundary without a FakeWorker fallback. The
+Runtime owns both candidate-free currency checkpoints and terminalizes exact
+drift or invalid-authority failures before stale results can be admitted. These
+deterministic paths remain under bounded review; the versioned contracts alone
+still do not authorize trusted production publication. The C11 Profile sub-contract now
 selects a freeze-v2-only Candidate Check family without Fake Verification.
 Candidate Manager derives the stable base-to-current change set, Runtime owns
 the current Goal allowed-path disposition, Store recomputes the canonical
@@ -856,9 +862,10 @@ code, projects the Workflow to `FAILED` and Goal to non-resumable
 `BLOCKED / INSPECT_BLOCKER`, and creates no Candidate. Matching Candidate
 preparation carries the same exact PLAN authority and observed source
 projections into the Store-owned compound commit. This implements only the
-Candidate-creation source-currency boundary accepted under ADR 0043; the
-remaining candidate-free pre/post-Turn checks, phase-specific external
-execution, and production composition are not yet implemented.
+Candidate-creation source-currency boundary accepted under ADR 0043. B3 also
+implements deterministic candidate-free pre/post-Turn currency checkpoints and
+phase-specific external dispatch, but trusted production composition and live
+containment proof are not yet implemented.
 
 ### Evidence Store
 

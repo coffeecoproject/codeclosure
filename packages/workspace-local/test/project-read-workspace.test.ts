@@ -10,6 +10,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,10 +54,12 @@ import {
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
+  ProjectReadSnapshotCurrencyState,
   ProjectReadWorkspaceClassification,
   ProjectReadWorkspaceRetention,
   createProjectReadOwnershipMarker,
   decodeProjectReadSourceObservation,
+  decodeProjectReadSnapshotCurrencyObservation,
   decodeProjectReadWorkspaceAuthoritySnapshot,
   digestProjectReadWorkspaceValue,
   projectReadWorkspaceAuthoritySnapshotProjection,
@@ -500,6 +503,65 @@ void test('project-read materialization copies exact selected bytes into a marke
       ),
     ),
     true,
+  );
+});
+
+void test('snapshot currency observation distinguishes current, drifted, and missing retained authority', (t) => {
+  const value = fixture(t, { now: () => observedAt });
+  const record = authorityRecord(value, 'currency');
+  value.workspace.materializeSnapshot(record);
+
+  const current = decodeProjectReadSnapshotCurrencyObservation(
+    value.workspace.observeSnapshot(record),
+  );
+  assert.equal(current.state, ProjectReadSnapshotCurrencyState.CURRENT);
+  assert.equal(current.projectReadAuthorityId, record.id);
+  assert.equal(current.authorityRecordDigest, record.recordDigest);
+
+  const target = join(record.snapshotLeafRealpath, 'src', 'order.ts');
+  chmodSync(target, 0o644);
+  writeFileSync(target, 'export const charge = "drift";\n');
+  assert.equal(
+    value.workspace.observeSnapshot(record).state,
+    ProjectReadSnapshotCurrencyState.SNAPSHOT_CONTENT_MISMATCH,
+  );
+
+  removeFixtureRoot(record.snapshotLeafRealpath);
+  assert.equal(
+    value.workspace.observeSnapshot(record).state,
+    ProjectReadSnapshotCurrencyState.AUTHORITY_MISSING,
+  );
+});
+
+void test('snapshot currency observation distinguishes aliased content from unverifiable metadata', (t) => {
+  const aliased = fixture(t, { now: () => observedAt });
+  const aliasedRecord = authorityRecord(aliased, 'currency-aliased');
+  aliased.workspace.materializeSnapshot(aliasedRecord);
+  const aliasedDirectory = join(aliasedRecord.snapshotLeafRealpath, 'src');
+  const aliasedTarget = join(aliasedDirectory, 'order.ts');
+  chmodSync(aliasedDirectory, 0o755);
+  rmSync(aliasedTarget);
+  symlinkSync(join(aliased.sourceRoot, 'src', 'order.ts'), aliasedTarget);
+  chmodSync(aliasedDirectory, 0o555);
+  assert.equal(
+    aliased.workspace.observeSnapshot(aliasedRecord).state,
+    ProjectReadSnapshotCurrencyState.AUTHORITY_ALIASED,
+  );
+
+  const unverifiable = fixture(t, { now: () => observedAt });
+  const unverifiableRecord = authorityRecord(unverifiable, 'currency-unverifiable');
+  unverifiable.workspace.materializeSnapshot(unverifiableRecord);
+  const markerPath = join(
+    unverifiable.workspaceRoot,
+    '.codeclosure-project-read',
+    'markers',
+    `${unverifiableRecord.snapshotId}.json`,
+  );
+  chmodSync(markerPath, 0o600);
+  writeFileSync(markerPath, '{invalid-json');
+  assert.equal(
+    unverifiable.workspace.observeSnapshot(unverifiableRecord).state,
+    ProjectReadSnapshotCurrencyState.AUTHORITY_UNVERIFIABLE,
   );
 });
 

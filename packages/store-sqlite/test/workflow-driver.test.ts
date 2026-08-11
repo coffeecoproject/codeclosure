@@ -1151,7 +1151,7 @@ void test('[I-001][I-003][I-008] public StartGoal drives one deterministic path 
   assert.equal(auditAfterReplay.view.throughSequence, auditBeforeReplay.view.throughSequence);
 });
 
-void test('[I-004][I-023][I-027] legacy Driver rejects external Profile v3 without fake or Adapter fallback', async (t) => {
+void test('[I-004][I-023][I-027] Driver rejects external Profile v3 without ProjectRead composition or fallback', async (t) => {
   const harness = createHarness(t, 'driver-external-v3-unavailable', 'V3_UNAVAILABLE');
   const localWorker = new CountingWorker();
   const externalWorker = new ExternalWorkerFixture(harness.store, 'V3_UNAVAILABLE');
@@ -1174,7 +1174,7 @@ void test('[I-004][I-023][I-027] legacy Driver rejects external Profile v3 witho
   assert.equal(result.command.output.ok, false);
   assert.equal(
     result.command.output.error.detailCode,
-    'DRIVER_EXTERNAL_PROFILE_V3_COMPOSITION_UNAVAILABLE',
+    'DRIVER_START_EXECUTION_PROFILE_INCOMPATIBLE',
   );
   assert.equal(result.drive, undefined);
   assert.equal(harness.store.getWorkflow(harness.workflow.id)?.runStatus, RunStatus.READY);

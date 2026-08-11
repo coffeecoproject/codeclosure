@@ -35,8 +35,9 @@ binary and protocol snapshot while preserving historical `0.146.0` authority;
 contract validation and the versioned Intake Adapter correction have passed
 offline closure review. The separate bounded real Intake compatibility slice
 now also passes its lower-client prerequisite plus real Answer-only, clear
-Intent, and ambiguous Intent paths with metadata-only evidence. The real phase
-composition remains later work, and milestone assessment has not started.
+Intent, and ambiguous Intent paths with metadata-only evidence. The closure
+work remains in progress; trusted production composition and milestone
+assessment have not started.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

@@ -8,12 +8,14 @@ import {
   EvidenceEligibilityState,
   EvidenceKind,
   ExternalExecutionState,
+  ExternalPhaseSourceAuthorityKind,
   ExternalMaintenanceKind,
   ExternalMaintenanceState,
   ExternalThreadPolicy,
   ExternalWorkerDispatchPolicy,
   RunStatus,
   WorkflowPhase,
+  auditEventId,
   attemptId,
   acceptanceCriticalVerificationPlanId,
   commandId,
@@ -33,6 +35,7 @@ import {
   executionProfileId,
   executionProfileProjection,
   externalExecutionIntentProjection,
+  externalExecutionPhaseDispatchEntryProjection,
   externalExecutionObservationProjection,
   externalMaintenanceAuthorizationProjection,
   externalMaintenanceRecordProjection,
@@ -41,6 +44,11 @@ import {
   latestIsoTimestamp,
   policyBundleId,
   policyBundleProjection,
+  projectReadSnapshotCleanupGrantId,
+  projectReadSnapshotCleanupOutcomeId,
+  projectReadSnapshotId,
+  projectReadWorkspaceAuthoritySnapshotId,
+  projectSourceReadAuthorityId,
   sha256Digest,
   workerEventId,
   workerSessionId,
@@ -49,17 +57,23 @@ import {
   type CommandId,
   type ExecutionProfile,
   type ExecutionProfileId,
+  type ExternalCandidateSourceAuthority,
   type ExternalExecutionIntent,
   type ExternalExecutionIntentV1,
+  type ExternalExecutionIntentV2,
+  type ExternalExecutionPhaseDispatchEntry,
   type ExternalExecutionObservation,
   type ExternalExecutionProfileDefinitionV1,
   type ExternalExecutionProfileDefinitionV2,
+  type ExternalExecutionProfileDefinitionV3,
+  type ExternalProjectReadSourceAuthority,
   type ExternalExecutionRecord,
   type ExternalMaintenanceIntent,
   type ExternalProcessIdentity,
   type GoalId,
   type PolicyBundleId,
   type ProtectedAssetReadLease,
+  type ProjectSourceReadAuthorityRecord,
   type Sha256Digest,
   type WorkflowInstance,
   type WorkflowVersion,
@@ -90,6 +104,14 @@ import type {
   WorkflowDriverControlStore,
 } from './ports.js';
 import type { RecoveryCommandCapability, ResumeGoalRequest } from './recovery.js';
+import type { ProjectReadAttemptRuntimeDependencies } from './project-read-attempt-authority.js';
+import { decodeProjectReadSnapshotCleanupObservation } from './project-read-snapshot-cleanup-contracts.js';
+import {
+  decodeProjectReadSnapshotCurrencyObservation,
+  decodeProjectReadSnapshotMaterializationReceipt,
+  decodeProjectReadSourceObservation,
+  decodeProjectReadWorkspaceObservation,
+} from './project-read-workspace-contracts.js';
 import { canonicalizeJson } from './canonical-json.js';
 import {
   WorkflowRuntimeKernel,
@@ -358,6 +380,7 @@ export interface RuntimeExecutionProfileV1 extends RuntimeExecutionProfileBase {
 export interface RuntimeExecutionProfileV2 extends RuntimeExecutionProfileBase {
   readonly schemaVersion: 2;
   readonly externalWorker: ExternalWorkerInvocationPort;
+  readonly projectRead?: ProjectReadAttemptRuntimeDependencies;
 }
 
 export type RuntimeExecutionProfile = RuntimeExecutionProfileV1 | RuntimeExecutionProfileV2;
@@ -433,15 +456,6 @@ class DriverFailure extends Error {
   }
 }
 
-function assertLegacyDriverExternalProfileSupported(profile: ExecutionProfile): void {
-  if (profile.schemaVersion === 2 && profile.externalExecution.schemaVersion === 3) {
-    throw new DriverFailure(
-      WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
-      'DRIVER_EXTERNAL_PROFILE_V3_COMPOSITION_UNAVAILABLE',
-    );
-  }
-}
-
 function exactOwnKeys(value: object, expected: readonly string[]): boolean {
   const actual = Reflect.ownKeys(value);
   return (
@@ -457,6 +471,55 @@ function hasMethod(value: unknown, method: string): boolean {
     value !== null &&
     typeof Reflect.get(value, method) === 'function'
   );
+}
+
+type SelectedExternalPhasePolicy = Pick<
+  ExternalExecutionPhaseDispatchEntry,
+  | 'executionConfigDigest'
+  | 'instructionSourceManifestDigest'
+  | 'continuityPolicy'
+  | 'compactionPolicy'
+  | 'fallbackPolicy'
+>;
+
+type ExternalDispatchSource =
+  | Readonly<{
+      readonly kind: 'LEGACY';
+      readonly candidate?: Omit<ExternalCandidateSourceAuthority, 'kind'>;
+    }>
+  | Readonly<{
+      readonly kind: typeof ExternalPhaseSourceAuthorityKind.PROJECT_READ;
+      readonly phaseEntry: ExternalExecutionPhaseDispatchEntry;
+      readonly authority: ProjectSourceReadAuthorityRecord;
+      readonly intentSource: ExternalProjectReadSourceAuthority;
+    }>
+  | Readonly<{
+      readonly kind: typeof ExternalPhaseSourceAuthorityKind.CANDIDATE;
+      readonly phaseEntry: ExternalExecutionPhaseDispatchEntry;
+      readonly intentSource: ExternalCandidateSourceAuthority;
+    }>;
+
+type DriverProjectReadCurrencyCheckpoint =
+  | Readonly<{
+      readonly status: 'CURRENT';
+      readonly record: ProjectSourceReadAuthorityRecord;
+    }>
+  | Readonly<{ readonly status: 'TERMINALIZED' }>;
+
+function selectedExternalPhasePolicy(
+  profile:
+    | ExternalExecutionProfileDefinitionV1
+    | ExternalExecutionProfileDefinitionV2
+    | ExternalExecutionProfileDefinitionV3,
+  entry: ExternalExecutionPhaseDispatchEntry | undefined,
+): SelectedExternalPhasePolicy {
+  if (entry !== undefined) {
+    return entry;
+  }
+  if (profile.schemaVersion === 3) {
+    throw new TypeError('External Profile v3 has no selected phase entry');
+  }
+  return profile;
 }
 
 function abortRequested(signal: AbortSignal): boolean {
@@ -547,6 +610,160 @@ function decodeExternalWorkerInvocationPort(value: unknown): ExternalWorkerInvoc
     ): Promise<PreparedExternalWorkerInvocation> =>
       decodePreparedExternalWorkerInvocation(await Reflect.apply(prepare, target, [input])),
   });
+}
+
+function decodeProjectReadRuntimeDependencies(
+  value: unknown,
+): ProjectReadAttemptRuntimeDependencies {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !exactOwnKeys(value, ['workspace', 'identities'])
+  ) {
+    throw new TypeError('Runtime ProjectRead capability must be one closed dependency record');
+  }
+  const workspace: unknown = Reflect.get(value, 'workspace');
+  const identities: unknown = Reflect.get(value, 'identities');
+  const observeSource: unknown =
+    workspace === null || workspace === undefined
+      ? undefined
+      : Reflect.get(workspace, 'observeSource');
+  const observeSnapshot: unknown =
+    workspace === null || workspace === undefined
+      ? undefined
+      : Reflect.get(workspace, 'observeSnapshot');
+  const snapshotLeafFor: unknown =
+    workspace === null || workspace === undefined
+      ? undefined
+      : Reflect.get(workspace, 'snapshotLeafFor');
+  const materializeSnapshot: unknown =
+    workspace === null || workspace === undefined
+      ? undefined
+      : Reflect.get(workspace, 'materializeSnapshot');
+  const reconcile: unknown =
+    workspace === null || workspace === undefined ? undefined : Reflect.get(workspace, 'reconcile');
+  const cleanupSnapshot: unknown =
+    workspace === null || workspace === undefined
+      ? undefined
+      : Reflect.get(workspace, 'cleanupSnapshot');
+  const nextProjectSourceReadAuthorityId: unknown =
+    identities === null || identities === undefined
+      ? undefined
+      : Reflect.get(identities, 'nextProjectSourceReadAuthorityId');
+  const nextProjectReadSnapshotId: unknown =
+    identities === null || identities === undefined
+      ? undefined
+      : Reflect.get(identities, 'nextProjectReadSnapshotId');
+  const nextProjectReadWorkspaceAuthoritySnapshotId: unknown =
+    identities === null || identities === undefined
+      ? undefined
+      : Reflect.get(identities, 'nextProjectReadWorkspaceAuthoritySnapshotId');
+  const nextProjectReadSnapshotCleanupGrantId: unknown =
+    identities === null || identities === undefined
+      ? undefined
+      : Reflect.get(identities, 'nextProjectReadSnapshotCleanupGrantId');
+  const nextProjectReadSnapshotCleanupOutcomeId: unknown =
+    identities === null || identities === undefined
+      ? undefined
+      : Reflect.get(identities, 'nextProjectReadSnapshotCleanupOutcomeId');
+  const nextAuditEventId: unknown =
+    identities === null || identities === undefined
+      ? undefined
+      : Reflect.get(identities, 'nextAuditEventId');
+  const workspaceRootIdentity: unknown =
+    workspace === null || workspace === undefined
+      ? undefined
+      : Reflect.get(workspace, 'workspaceRootIdentity');
+  if (
+    (typeof workspace !== 'object' && typeof workspace !== 'function') ||
+    workspace === null ||
+    (typeof identities !== 'object' && typeof identities !== 'function') ||
+    identities === null ||
+    typeof observeSource !== 'function' ||
+    typeof observeSnapshot !== 'function' ||
+    typeof snapshotLeafFor !== 'function' ||
+    typeof materializeSnapshot !== 'function' ||
+    typeof reconcile !== 'function' ||
+    typeof cleanupSnapshot !== 'function' ||
+    typeof workspaceRootIdentity !== 'string' ||
+    typeof nextProjectSourceReadAuthorityId !== 'function' ||
+    typeof nextProjectReadSnapshotId !== 'function' ||
+    typeof nextProjectReadWorkspaceAuthoritySnapshotId !== 'function' ||
+    typeof nextProjectReadSnapshotCleanupGrantId !== 'function' ||
+    typeof nextProjectReadSnapshotCleanupOutcomeId !== 'function' ||
+    typeof nextAuditEventId !== 'function'
+  ) {
+    throw new TypeError('Runtime ProjectRead dependencies are incomplete');
+  }
+  const decodedWorkspace: ProjectReadAttemptRuntimeDependencies['workspace'] = Object.freeze({
+    workspaceRootIdentity,
+    observeSource: (
+      request: Parameters<ProjectReadAttemptRuntimeDependencies['workspace']['observeSource']>[0],
+    ) => decodeProjectReadSourceObservation(Reflect.apply(observeSource, workspace, [request])),
+    observeSnapshot: (
+      record: Parameters<ProjectReadAttemptRuntimeDependencies['workspace']['observeSnapshot']>[0],
+    ) =>
+      decodeProjectReadSnapshotCurrencyObservation(
+        Reflect.apply(observeSnapshot, workspace, [record]),
+      ),
+    snapshotLeafFor: (
+      snapshotId: Parameters<
+        ProjectReadAttemptRuntimeDependencies['workspace']['snapshotLeafFor']
+      >[0],
+    ) =>
+      z
+        .string()
+        .min(1)
+        .parse(Reflect.apply(snapshotLeafFor, workspace, [snapshotId])),
+    materializeSnapshot: (
+      record: Parameters<
+        ProjectReadAttemptRuntimeDependencies['workspace']['materializeSnapshot']
+      >[0],
+    ) =>
+      decodeProjectReadSnapshotMaterializationReceipt(
+        Reflect.apply(materializeSnapshot, workspace, [record]),
+      ),
+    reconcile: (
+      authority: Parameters<ProjectReadAttemptRuntimeDependencies['workspace']['reconcile']>[0],
+    ) =>
+      z
+        .array(z.unknown())
+        .parse(Reflect.apply(reconcile, workspace, [authority]))
+        .map((observation) => decodeProjectReadWorkspaceObservation(observation)),
+    cleanupSnapshot: (
+      grant: Parameters<ProjectReadAttemptRuntimeDependencies['workspace']['cleanupSnapshot']>[0],
+    ) => {
+      const observation: unknown = Reflect.apply(cleanupSnapshot, workspace, [grant]);
+      return observation === null ? null : decodeProjectReadSnapshotCleanupObservation(observation);
+    },
+  });
+  const decodedIdentities: ProjectReadAttemptRuntimeDependencies['identities'] = Object.freeze({
+    nextProjectSourceReadAuthorityId: () =>
+      projectSourceReadAuthorityId(
+        z.string().parse(Reflect.apply(nextProjectSourceReadAuthorityId, identities, [])),
+      ),
+    nextProjectReadSnapshotId: () =>
+      projectReadSnapshotId(
+        z.string().parse(Reflect.apply(nextProjectReadSnapshotId, identities, [])),
+      ),
+    nextProjectReadWorkspaceAuthoritySnapshotId: () =>
+      projectReadWorkspaceAuthoritySnapshotId(
+        z
+          .string()
+          .parse(Reflect.apply(nextProjectReadWorkspaceAuthoritySnapshotId, identities, [])),
+      ),
+    nextProjectReadSnapshotCleanupGrantId: () =>
+      projectReadSnapshotCleanupGrantId(
+        z.string().parse(Reflect.apply(nextProjectReadSnapshotCleanupGrantId, identities, [])),
+      ),
+    nextProjectReadSnapshotCleanupOutcomeId: () =>
+      projectReadSnapshotCleanupOutcomeId(
+        z.string().parse(Reflect.apply(nextProjectReadSnapshotCleanupOutcomeId, identities, [])),
+      ),
+    nextAuditEventId: () =>
+      auditEventId(z.string().parse(Reflect.apply(nextAuditEventId, identities, []))),
+  });
+  return Object.freeze({ workspace: decodedWorkspace, identities: decodedIdentities });
 }
 
 function decodeExternalWorkerObservation(value: unknown): ExternalWorkerObservation {
@@ -742,6 +959,7 @@ function decodeRuntimeExecutionProfile(
     'verification',
     ...(Reflect.has(value, 'localCommandVerification') ? ['localCommandVerification'] : []),
     ...(Reflect.has(value, 'protectedVerification') ? ['protectedVerification'] : []),
+    ...(Reflect.has(value, 'projectRead') ? ['projectRead'] : []),
     ...(schemaVersion === 2 ? ['externalWorker'] : []),
   ];
   if ((schemaVersion !== 1 && schemaVersion !== 2) || !exactOwnKeys(value, expectedKeys)) {
@@ -755,6 +973,7 @@ function decodeRuntimeExecutionProfile(
   const verification: unknown = Reflect.get(value, 'verification');
   const localCommandVerification: unknown = Reflect.get(value, 'localCommandVerification');
   const protectedVerification: unknown = Reflect.get(value, 'protectedVerification');
+  const projectRead: unknown = Reflect.get(value, 'projectRead');
   const externalWorker: unknown = Reflect.get(value, 'externalWorker');
   if (
     typeof rawProfileId !== 'string' ||
@@ -768,7 +987,7 @@ function decodeRuntimeExecutionProfile(
     !hasMethod(candidateSource, 'observeFrozen') ||
     !hasMethod(verification, 'run') ||
     (schemaVersion === 2 && !hasMethod(externalWorker, 'prepare')) ||
-    (schemaVersion === 1 && externalWorker !== undefined)
+    (schemaVersion === 1 && (externalWorker !== undefined || projectRead !== undefined))
   ) {
     throw new TypeError('Runtime Execution Profile contains malformed capabilities');
   }
@@ -785,6 +1004,8 @@ function decodeRuntimeExecutionProfile(
     protectedVerification === undefined
       ? undefined
       : decodeProtectedVerificationRuntimeDependencies(protectedVerification);
+  const decodedProjectRead =
+    projectRead === undefined ? undefined : decodeProjectReadRuntimeDependencies(projectRead);
   if (decodedProtectedVerification !== undefined && decodedLocalCommandVerification === undefined) {
     throw new TypeError('Protected verification requires local command verification');
   }
@@ -798,7 +1019,9 @@ function decodeRuntimeExecutionProfile(
         (decodedLocalCommandVerification.profile.check.runnerIdentity !==
           expected.verificationRunner ||
           decodedLocalCommandVerification.profile.check.runnerVersion !==
-            expected.verificationRunnerVersion)))
+            expected.verificationRunnerVersion)) ||
+      (expected.schemaVersion === 2 && expected.externalExecution.schemaVersion === 3) !==
+        (decodedProjectRead !== undefined))
   ) {
     throw new TypeError('Resolved Runtime Execution Profile does not bind installed authority');
   }
@@ -822,6 +1045,7 @@ function decodeRuntimeExecutionProfile(
         schemaVersion,
         ...common,
         externalWorker: decodeExternalWorkerInvocationPort(externalWorker),
+        ...(decodedProjectRead === undefined ? {} : { projectRead: decodedProjectRead }),
       });
 }
 
@@ -1753,15 +1977,10 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       binding.profile.schemaVersion === 2 && installedProfile?.schemaVersion === 2
         ? installedProfile.externalExecution
         : undefined;
-    if (externalProfile?.schemaVersion === 3) {
-      throw new DriverFailure(
-        WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
-        'DRIVER_EXTERNAL_PROFILE_V3_COMPOSITION_UNAVAILABLE',
-      );
-    }
     const externallyDispatched =
       externalProfile?.workerPhases.includes(request.contextPackage.phase) === true &&
       (externalProfile.schemaVersion === 1 ||
+        externalProfile.schemaVersion === 3 ||
         externalProfile.workerDispatchPolicy ===
           ExternalWorkerDispatchPolicy.ALL_SELECTED_ATTEMPTS ||
         request.contextPackage.repairContext !== undefined);
@@ -1846,7 +2065,10 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
     authority: DecodedDriverAuthority,
     binding: DriverKernelBinding,
     request: WorkerRequest,
-    externalProfile: ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2,
+    externalProfile:
+      | ExternalExecutionProfileDefinitionV1
+      | ExternalExecutionProfileDefinitionV2
+      | ExternalExecutionProfileDefinitionV3,
   ): Promise<void> {
     if (binding.profile.schemaVersion !== 2) {
       throw new DriverFailure(
@@ -1855,6 +2077,9 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       );
     }
     const runtimeProfile = binding.profile;
+    const phaseEntry = this.resolveExternalPhaseEntry(externalProfile, request);
+    const phasePolicy = selectedExternalPhasePolicy(externalProfile, phaseEntry);
+    const compactionPolicy = phasePolicy.compactionPolicy;
     const controller = new AbortController();
     this.#activeControllers.set(authority.goal.id, controller);
     let prepared: PreparedExternalWorkerInvocation | undefined;
@@ -1890,11 +2115,29 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         return;
       }
 
-      const authorization = this.createExternalDispatchAuthorization(
+      let projectReadAuthority: ProjectSourceReadAuthorityRecord | undefined;
+      if (phaseEntry?.sourceAuthorityKind === ExternalPhaseSourceAuthorityKind.PROJECT_READ) {
+        const checkpoint = this.evaluateProjectReadCurrencyCheckpoint(authority, binding, request);
+        if (checkpoint.status === 'TERMINALIZED') {
+          return;
+        }
+        projectReadAuthority = checkpoint.record;
+      }
+
+      const dispatchSource = this.resolveExternalDispatchSource(
         authority,
         request,
         externalProfile,
         prepared,
+        phaseEntry,
+        projectReadAuthority,
+      );
+
+      const authorization = this.createExternalDispatchAuthorization(
+        authority,
+        request,
+        externalProfile,
+        dispatchSource,
       );
       let rawClaimResult;
       try {
@@ -1942,7 +2185,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
           'DRIVER_EXTERNAL_DISPATCH_RESULT_MISMATCH',
         );
       }
-      if (externalProfile.compactionPolicy === 'MANUAL_BEFORE_OPERATION') {
+      if (compactionPolicy === 'MANUAL_BEFORE_OPERATION') {
         try {
           maintenance = this.authorizeExternalMaintenance(execution);
         } catch (error) {
@@ -2126,7 +2369,13 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
 
       let worker: ExternalObservedWorkerPort;
       try {
-        worker = prepared.createWorker({ intent: authorization.intent, onLifecycleEvent });
+        worker = prepared.createWorker({
+          intent: authorization.intent,
+          ...(dispatchSource.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ
+            ? { projectReadAuthority: dispatchSource.authority }
+            : {}),
+          onLifecycleEvent,
+        });
       } catch (error) {
         if (maintenance !== undefined) {
           maintenance = this.completeExternalMaintenance(
@@ -2201,7 +2450,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       let observed: ExternalWorkerObservation;
       try {
         observed = decodeExternalWorkerObservation(worker.observation());
-        this.assertExternalWorkerObservation(observed, authorization.intent, externalProfile);
+        this.assertExternalWorkerObservation(observed, authorization.intent, compactionPolicy);
         if (!lifecycleTerminalSeen) {
           throw new TypeError('External Worker omitted its terminal lifecycle event');
         }
@@ -2241,6 +2490,18 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
 
       if (abortRequested(controller.signal) || observed.state === 'INTERRUPTED') {
         return;
+      }
+
+      if (dispatchSource.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ) {
+        const checkpoint = this.evaluateProjectReadCurrencyCheckpoint(
+          authority,
+          binding,
+          request,
+          dispatchSource.authority.recordDigest,
+        );
+        if (checkpoint.status === 'TERMINALIZED') {
+          return;
+        }
       }
 
       const admissions = rawEvents.map((event) => binding.kernel.admitWorkerEvent(event, request));
@@ -2311,11 +2572,204 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
     }
   }
 
+  private resolveExternalPhaseEntry(
+    profile:
+      | ExternalExecutionProfileDefinitionV1
+      | ExternalExecutionProfileDefinitionV2
+      | ExternalExecutionProfileDefinitionV3,
+    request: WorkerRequest,
+  ): ExternalExecutionPhaseDispatchEntry | undefined {
+    if (profile.schemaVersion !== 3) {
+      return undefined;
+    }
+    const matches = profile.phaseDispatch.filter(
+      (entry) => entry.phase === request.contextPackage.phase,
+    );
+    const entry = matches[0];
+    const expectedCapabilityGrantDigest = sha256Digest(
+      this.#digests.digest({
+        schemaVersion: 1,
+        capabilityGrant: request.contextPackage.capabilityGrant,
+      }),
+    );
+    const expectedResponseContractDigest = sha256Digest(
+      this.#digests.digest({
+        schemaVersion: 1,
+        responseContract: request.contextPackage.responseContract,
+      }),
+    );
+    if (
+      matches.length !== 1 ||
+      entry === undefined ||
+      !profile.workerPhases.includes(request.contextPackage.phase) ||
+      entry.capabilityGrantDigest !== expectedCapabilityGrantDigest ||
+      entry.responseContractDigest !== expectedResponseContractDigest
+    ) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.EXECUTION_PROFILE_UNAVAILABLE,
+        'DRIVER_EXTERNAL_PHASE_ENTRY_INCOMPATIBLE',
+      );
+    }
+    return entry;
+  }
+
+  private evaluateProjectReadCurrencyCheckpoint(
+    authority: DecodedDriverAuthority,
+    binding: DriverKernelBinding,
+    request: WorkerRequest,
+    expectedRecordDigest?: Sha256Digest,
+  ): DriverProjectReadCurrencyCheckpoint {
+    const currency = binding.kernel.evaluateProjectReadCurrency({
+      commandId: this.nextCommandId(),
+      workflowId: authority.workflow.id,
+      expectedWorkflowVersion: authority.workflow.version,
+      attemptId: request.attemptId,
+    });
+    if (currency.status === 'FAILED') {
+      if (!currency.command.output.ok) {
+        throw new DriverFailure(
+          WorkflowDriveStopReason.INTERNAL_COMMAND_REJECTED,
+          currency.command.output.error.detailCode,
+        );
+      }
+      return Object.freeze({ status: 'TERMINALIZED' });
+    }
+    if (
+      expectedRecordDigest !== undefined &&
+      currency.record.recordDigest !== expectedRecordDigest
+    ) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+        'DRIVER_PROJECT_READ_AUTHORITY_SUBSTITUTED',
+      );
+    }
+    return Object.freeze({ status: 'CURRENT', record: currency.record });
+  }
+
+  private resolveExternalDispatchSource(
+    authority: DecodedDriverAuthority,
+    request: WorkerRequest,
+    profile:
+      | ExternalExecutionProfileDefinitionV1
+      | ExternalExecutionProfileDefinitionV2
+      | ExternalExecutionProfileDefinitionV3,
+    prepared: PreparedExternalWorkerInvocation,
+    phaseEntry: ExternalExecutionPhaseDispatchEntry | undefined,
+    projectReadAuthority: ProjectSourceReadAuthorityRecord | undefined,
+  ): ExternalDispatchSource {
+    const leaseId = prepared.candidateWorkspaceLeaseId;
+    const leaseDigest = prepared.candidateWorkspaceLeaseDigest;
+    const leaseCwdIdentity = prepared.candidateWorkspaceCwdIdentity;
+    let candidate: Omit<ExternalCandidateSourceAuthority, 'kind'> | undefined;
+    if (leaseId !== undefined || leaseDigest !== undefined || leaseCwdIdentity !== undefined) {
+      if (leaseId === undefined || leaseDigest === undefined || leaseCwdIdentity === undefined) {
+        throw new DriverFailure(
+          WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+          profile.schemaVersion === 3
+            ? 'DRIVER_EXTERNAL_SOURCE_AUTHORITY_MISMATCH'
+            : 'DRIVER_EXTERNAL_CANDIDATE_LEASE_MISMATCH',
+        );
+      }
+      candidate = Object.freeze({
+        candidateWorkspaceLeaseId: leaseId,
+        candidateWorkspaceLeaseDigest: leaseDigest,
+        candidateWorkspaceCwdIdentity: leaseCwdIdentity,
+      });
+    }
+
+    if (profile.schemaVersion !== 3) {
+      if (
+        phaseEntry !== undefined ||
+        projectReadAuthority !== undefined ||
+        (request.contextPackage.phase === WorkflowPhase.IMPLEMENT) !== (candidate !== undefined)
+      ) {
+        throw new DriverFailure(
+          WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+          'DRIVER_EXTERNAL_CANDIDATE_LEASE_MISMATCH',
+        );
+      }
+      return Object.freeze({
+        kind: 'LEGACY',
+        ...(candidate === undefined ? {} : { candidate }),
+      });
+    }
+
+    if (phaseEntry === undefined) {
+      throw new DriverFailure(
+        WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+        'DRIVER_EXTERNAL_SOURCE_AUTHORITY_MISMATCH',
+      );
+    }
+    switch (phaseEntry.sourceAuthorityKind) {
+      case ExternalPhaseSourceAuthorityKind.PROJECT_READ: {
+        if (
+          request.contextPackage.phase === WorkflowPhase.IMPLEMENT ||
+          candidate !== undefined ||
+          projectReadAuthority === undefined
+        ) {
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            'DRIVER_EXTERNAL_SOURCE_AUTHORITY_MISMATCH',
+          );
+        }
+        if (
+          projectReadAuthority.goalId !== authority.goal.id ||
+          projectReadAuthority.goalRevision !== authority.goal.revision ||
+          projectReadAuthority.workflowId !== authority.workflow.id ||
+          projectReadAuthority.workflowVersion !== authority.workflow.version ||
+          projectReadAuthority.phase !== request.contextPackage.phase ||
+          projectReadAuthority.attemptId !== request.attemptId ||
+          projectReadAuthority.id !== request.contextPackage.projectReadAuthorityId ||
+          projectReadAuthority.recordDigest !==
+            request.contextPackage.projectReadAuthorityRecordDigest
+        ) {
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            'DRIVER_EXTERNAL_PROJECT_READ_AUTHORITY_MISMATCH',
+          );
+        }
+        return Object.freeze({
+          kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+          phaseEntry,
+          authority: projectReadAuthority,
+          intentSource: Object.freeze({
+            kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+            projectReadAuthorityId: projectReadAuthority.id,
+            projectReadAuthorityRecordDigest: projectReadAuthority.recordDigest,
+            snapshotCwdIdentity: projectReadAuthority.snapshotLeafRealpath,
+          }),
+        });
+      }
+      case ExternalPhaseSourceAuthorityKind.CANDIDATE:
+        if (
+          request.contextPackage.phase !== WorkflowPhase.IMPLEMENT ||
+          candidate === undefined ||
+          projectReadAuthority !== undefined
+        ) {
+          throw new DriverFailure(
+            WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
+            'DRIVER_EXTERNAL_SOURCE_AUTHORITY_MISMATCH',
+          );
+        }
+        return Object.freeze({
+          kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+          phaseEntry,
+          intentSource: Object.freeze({
+            kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+            ...candidate,
+          }),
+        });
+    }
+  }
+
   private createExternalDispatchAuthorization(
     authority: DecodedDriverAuthority,
     request: WorkerRequest,
-    profile: ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2,
-    prepared: PreparedExternalWorkerInvocation,
+    profile:
+      | ExternalExecutionProfileDefinitionV1
+      | ExternalExecutionProfileDefinitionV2
+      | ExternalExecutionProfileDefinitionV3,
+    source: ExternalDispatchSource,
   ): Readonly<{
     claim: WorkerDispatchClaim;
     claimDigest: Sha256Digest;
@@ -2357,17 +2811,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         'DRIVER_EXTERNAL_DISPATCH_AUTHORITY_MISMATCH',
       );
     }
-    const hasLease = prepared.candidateWorkspaceLeaseId !== undefined;
-    if (
-      (request.contextPackage.phase === WorkflowPhase.IMPLEMENT) !== hasLease ||
-      hasLease !== (prepared.candidateWorkspaceLeaseDigest !== undefined) ||
-      hasLease !== (prepared.candidateWorkspaceCwdIdentity !== undefined)
-    ) {
-      throw new DriverFailure(
-        WorkflowDriveStopReason.INFRASTRUCTURE_FAILURE,
-        'DRIVER_EXTERNAL_CANDIDATE_LEASE_MISMATCH',
-      );
-    }
+    const phaseEntry = source.kind === 'LEGACY' ? undefined : source.phaseEntry;
 
     let observedAt: ReturnType<typeof isoTimestamp>;
     try {
@@ -2413,8 +2857,8 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         workerSessionId: request.workerSessionId,
       }),
     );
-    const intentWithoutDigest: Omit<ExternalExecutionIntentV1, 'intentDigest'> = Object.freeze({
-      schemaVersion: 1,
+    const phasePolicy = selectedExternalPhasePolicy(profile, phaseEntry);
+    const commonIntent = Object.freeze({
       id: executionIdentifier,
       goalId: authority.goal.id,
       goalRevision: authority.goal.revision,
@@ -2435,28 +2879,38 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       backendKind: profile.backendKind,
       binaryIdentityDigest: profile.binaryIdentityDigest,
       binaryProtocolSchemaDigest: profile.protocolSchemaDigest,
-      executionConfigDigest: profile.executionConfigDigest,
+      executionConfigDigest: phasePolicy.executionConfigDigest,
       managedRequirementsDigest: profile.managedRequirementsDigest,
-      instructionSourceManifestDigest: profile.instructionSourceManifestDigest,
+      instructionSourceManifestDigest: phasePolicy.instructionSourceManifestDigest,
       controlledStateRootIdentity: profile.controlledStateRootIdentity,
       processLaunchNonce,
       thread: Object.freeze({ kind: ExternalThreadPolicy.FRESH }),
-      continuityPolicy: profile.continuityPolicy,
-      compactionPolicy: profile.compactionPolicy,
+      continuityPolicy: phasePolicy.continuityPolicy,
+      compactionPolicy: phasePolicy.compactionPolicy,
       retentionPolicy: profile.retentionPolicy,
-      fallbackPolicy: profile.fallbackPolicy,
+      fallbackPolicy: phasePolicy.fallbackPolicy,
       interruptionPolicy: profile.interruptionPolicy,
-      ...(prepared.candidateWorkspaceLeaseId === undefined
-        ? {}
-        : { candidateWorkspaceLeaseId: prepared.candidateWorkspaceLeaseId }),
-      ...(prepared.candidateWorkspaceLeaseDigest === undefined
-        ? {}
-        : { candidateWorkspaceLeaseDigest: prepared.candidateWorkspaceLeaseDigest }),
-      ...(prepared.candidateWorkspaceCwdIdentity === undefined
-        ? {}
-        : { candidateWorkspaceCwdIdentity: prepared.candidateWorkspaceCwdIdentity }),
       authorizedAt: claimedAt,
     });
+    const intentWithoutDigest:
+      | Omit<ExternalExecutionIntentV1, 'intentDigest'>
+      | Omit<ExternalExecutionIntentV2, 'intentDigest'> =
+      source.kind === 'LEGACY'
+        ? Object.freeze({
+            schemaVersion: 1 as const,
+            ...commonIntent,
+            ...(source.candidate ?? {}),
+          })
+        : Object.freeze({
+            schemaVersion: 2 as const,
+            ...commonIntent,
+            phaseDispatchEntryDigest: sha256Digest(
+              this.#digests.digest(
+                externalExecutionPhaseDispatchEntryProjection(source.phaseEntry),
+              ),
+            ),
+            sourceAuthority: source.intentSource,
+          });
     const intent = decodeExternalExecutionIntent({
       ...intentWithoutDigest,
       intentDigest: sha256Digest(
@@ -2469,7 +2923,7 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
   private assertExternalWorkerObservation(
     observation: ExternalWorkerObservation,
     intent: ExternalExecutionIntent,
-    profile: ExternalExecutionProfileDefinitionV1 | ExternalExecutionProfileDefinitionV2,
+    compactionPolicy: ExternalExecutionPhaseDispatchEntry['compactionPolicy'],
   ): void {
     const terminal =
       observation.state === 'COMPLETED' ||
@@ -2501,8 +2955,8 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       (observation.resultEventId !== undefined && observation.backendOperationRef === undefined) ||
       (observation.state !== 'INTERRUPTED' && observation.turnInterruptCount !== 0) ||
       observation.turnInterruptCount > 1 ||
-      (profile.compactionPolicy === 'FAIL_ON_OBSERVATION' && observation.compactionCount !== 0) ||
-      (profile.compactionPolicy === 'MANUAL_BEFORE_OPERATION' &&
+      (compactionPolicy === 'FAIL_ON_OBSERVATION' && observation.compactionCount !== 0) ||
+      (compactionPolicy === 'MANUAL_BEFORE_OPERATION' &&
         (observation.compactionCount > 1 ||
           (observation.state === 'COMPLETED' && observation.compactionCount !== 1)))
     ) {
@@ -2794,7 +3248,6 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
     }
     let profile: RuntimeExecutionProfile;
     try {
-      assertLegacyDriverExternalProfileSupported(installed.profile);
       const raw = this.#profiles.resolve(installed.profile);
       profile = decodeRuntimeExecutionProfile(
         raw,
@@ -2831,7 +3284,6 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       ) {
         throw new TypeError('Installed Start Execution Profile has invalid authority identity');
       }
-      assertLegacyDriverExternalProfileSupported(installed);
       return decodeRuntimeExecutionProfile(
         this.#startProfile,
         installed,
@@ -2879,6 +3331,9 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
         ...(profile.protectedVerification === undefined
           ? {}
           : { protectedVerification: profile.protectedVerification }),
+        ...(profile.schemaVersion !== 2 || profile.projectRead === undefined
+          ? {}
+          : { projectRead: profile.projectRead }),
         acceptance: Object.freeze({
           identities: this.#ids,
           policyBundleId: this.#policyBundleId,
@@ -2906,6 +3361,8 @@ class RuntimeWorkflowDriver implements WorkflowDriverCapability {
       profile.profileId !== installed.id ||
       profile.profileDigest !== installed.digest ||
       profile.driverVersion !== installed.driverVersion ||
+      (installed.schemaVersion === 2 && installed.externalExecution.schemaVersion === 3) !==
+        (profile.schemaVersion === 2 && profile.projectRead !== undefined) ||
       (profile.protectedVerification !== undefined) !==
         (authority.acceptanceCriticalVerificationPlan !== undefined) ||
       (profile.localCommandVerification !== undefined &&

@@ -16,8 +16,12 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 
 import {
+  AttemptFailureClass,
+  AttemptStatus,
   ExternalBackendCapability,
   ExternalBackendCapabilityClassification,
+  ExternalExecutionState,
+  ExternalPhaseSourceAuthorityKind,
   GuardOutcome,
   IntakeInteractionAction,
   IntentProjectionField,
@@ -31,16 +35,23 @@ import {
   createWorkflow,
   executionProfileId,
   externalBackendCapabilityRecordProjection,
+  externalExecutionPhaseDispatchEntryProjection,
+  externalProcessIdentityProjection,
   goalId,
   goalRevision,
   isoTimestamp,
+  projectReadGitStateProjection,
   protectedAssetManifestProjection,
   rawRequestRevision,
   requiredGuardsForTransition,
+  sha256Digest,
   successCriterionId,
   workflowId,
   type DeclaredProjectRef,
   type ExternalBackendCapabilityRecord,
+  type ExternalExecutionIntent,
+  type ExternalExecutionProfileDefinitionV3,
+  type ProjectSourceReadAuthorityRecord,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
@@ -50,16 +61,42 @@ import {
   M25IntentProjectionCompiler,
   M251_REAL_CODEX_EXECUTION_PROFILE_ID,
   MinimalContextCompiler,
+  CandidatePreparationDisposition,
   ProjectReadSnapshotCleanupCoordinatorStatus,
   Rfc8785Canonicalizer,
+  WorkflowDriveStopReason,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
+  decodeCandidatePreparationV2,
+  decodeWorkerEvent,
   goalAndWorkflowCreationPayloadProjection,
+  validateCandidatePreparationRequestV2,
+  type CandidateSourcePort,
   type IntakeAssistantPort,
   type IntakeStartCompositionPort,
   type IntentAnalysisAssistantResponseV1,
+  type ExternalObservedWorkerPort,
+  type ExternalWorkerInvocationPort,
+  type PreparedExternalWorkerInvocation,
+  type WorkerRequest,
 } from '@codeclosure/runtime';
-import { createProjectReadSnapshotCleanupCoordinator } from '@codeclosure/runtime/composition';
+import {
+  createM2WorkflowDriver,
+  createProjectReadSnapshotCleanupCoordinator,
+} from '@codeclosure/runtime/composition';
+import {
+  assertDirectiveV3BindsWorkerRequest,
+  candidateWorkspaceLeaseProjection,
+  createCodexWorkerDirectiveV3,
+  decodeCodexCandidateWorkspaceLease,
+  digestCanonical,
+  type CandidateWorkspaceLease,
+  type CodexAdapterObservationV2,
+  type CodexWorkerDirectiveV3,
+  type CodexWorkerPhaseDirectiveV1,
+  type CodexWorkerRequestBindingV3,
+  type CodexWorkerSharedProfileDirectiveV1,
+} from '@codeclosure/adapter-codex';
 import { WorkerTransactionStep, openSqliteControlStore } from '@codeclosure/store-sqlite';
 import {
   DeterministicClock,
@@ -250,6 +287,7 @@ function authorityInput(
     readonly sourceRoot: string;
     readonly projectReadRoot: string;
     readonly authorityRoot: string;
+    readonly candidateRoot?: string;
   }>,
 ): InstallM251ExecutionAuthorityInput {
   const controlledStateRootIdentity =
@@ -281,7 +319,8 @@ function authorityInput(
           allowedRoots: Object.freeze([
             roots !== undefined && phase !== WorkflowPhase.IMPLEMENT
               ? roots.projectReadRoot
-              : `/authority/${namespace}/workspaces/${phase.toLowerCase()}`,
+              : (roots?.candidateRoot ??
+                `/authority/${namespace}/workspaces/${phase.toLowerCase()}`),
           ]),
           forbiddenRoots: Object.freeze(
             [
@@ -344,12 +383,27 @@ function runtimeCapabilities(
     releaseLease: () => undefined,
     assertLeaseCurrent: <Value>(lease: Value): Value => lease,
   });
+  const unavailableProjectRead = (): never => {
+    throw new Error('B1 must not invoke ProjectRead');
+  };
   return Object.freeze({
     worker: new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT }),
     candidateSource: new FakeCandidateSource(),
     verification: new FakeVerificationRunner(),
     externalWorker: Object.freeze({
       prepare: () => Promise.reject(new Error('B1 must not invoke Codex')),
+    }),
+    projectRead: Object.freeze({
+      workspace: Object.freeze({
+        workspaceRootIdentity: '/project-read/m251-b1',
+        observeSource: unavailableProjectRead,
+        observeSnapshot: unavailableProjectRead,
+        snapshotLeafFor: unavailableProjectRead,
+        materializeSnapshot: unavailableProjectRead,
+        reconcile: unavailableProjectRead,
+        cleanupSnapshot: unavailableProjectRead,
+      }),
+      identities: new DeterministicIds(`${namespace}-project-read`),
     }),
     localCommandVerification: Object.freeze({
       workspace,
@@ -399,6 +453,634 @@ function runtimeCapabilities(
         assertLeaseCurrent: <Value>(lease: Value): Value => lease,
       }),
     }),
+  });
+}
+
+type M251B3WorkerPhase =
+  typeof WorkflowPhase.DISCOVERY | typeof WorkflowPhase.IMPLEMENT | typeof WorkflowPhase.PLAN;
+
+type M251B3FixtureHookInput = Readonly<{
+  phase: M251B3WorkerPhase;
+  phaseEntry: CodexWorkerPhaseDirectiveV1;
+  projectReadAuthority?: ProjectSourceReadAuthorityRecord;
+  request: WorkerRequest;
+}>;
+
+type M251B3FixtureHooks = Readonly<{
+  afterPrepare?: (input: M251B3FixtureHookInput) => void;
+  afterTurn?: (input: M251B3FixtureHookInput) => void;
+}>;
+
+class M251B3ExternalWorkerFixture implements ExternalWorkerInvocationPort {
+  readonly #hooks: M251B3FixtureHooks;
+  public readonly adapterObservations: CodexAdapterObservationV2[] = [];
+  public readonly directives: CodexWorkerDirectiveV3[] = [];
+  public readonly intents: ExternalExecutionIntent[] = [];
+  public readonly resultEventIds: ReturnType<typeof decodeWorkerEvent>['id'][] = [];
+  public lastPreparationError: string | undefined;
+  public prepareCount = 0;
+  public releaseCount = 0;
+  public runCount = 0;
+
+  public constructor(hooks: M251B3FixtureHooks = {}) {
+    this.#hooks = hooks;
+  }
+
+  public prepare(
+    input: Parameters<ExternalWorkerInvocationPort['prepare']>[0],
+  ): ReturnType<ExternalWorkerInvocationPort['prepare']> {
+    this.prepareCount += 1;
+    if (input.profile.schemaVersion !== 3) {
+      throw new TypeError('B3 fixture requires External Profile v3');
+    }
+    const profile: ExternalExecutionProfileDefinitionV3 = input.profile;
+    const phase = input.request.contextPackage.phase;
+    if (
+      input.thread.kind !== 'FRESH' ||
+      (phase !== WorkflowPhase.DISCOVERY &&
+        phase !== WorkflowPhase.PLAN &&
+        phase !== WorkflowPhase.IMPLEMENT)
+    ) {
+      throw new TypeError('B3 fixture requires one fresh phase operation');
+    }
+    const phaseEntry = profile.phaseDispatch.find((entry) => entry.phase === phase);
+    if (phaseEntry === undefined) {
+      throw new TypeError('B3 fixture has no selected phase entry');
+    }
+    const adapterPhase: CodexWorkerPhaseDirectiveV1 = Object.freeze({
+      ...phaseEntry,
+      phase,
+    });
+    const context = input.request.contextPackage;
+    const candidateContext =
+      phase === WorkflowPhase.IMPLEMENT
+        ? (() => {
+            if (
+              context.candidateGenerationId === undefined ||
+              context.candidateDigest === undefined
+            ) {
+              throw new TypeError('B3 IMPLEMENT fixture has no Candidate Context authority');
+            }
+            return Object.freeze({
+              candidateGenerationId: context.candidateGenerationId,
+              candidateDigest: context.candidateDigest,
+            });
+          })()
+        : undefined;
+    let candidateLease: CandidateWorkspaceLease | undefined;
+    if (phase === WorkflowPhase.IMPLEMENT) {
+      if (candidateContext === undefined) {
+        throw new TypeError('B3 IMPLEMENT fixture has no Candidate Context authority');
+      }
+      const workspaceRootIdentity = phaseEntry.allowedRoots[0];
+      if (workspaceRootIdentity === undefined) {
+        throw new TypeError('B3 IMPLEMENT fixture has no Candidate workspace root');
+      }
+      const allowedPaths = context.goal.scope.allowedPaths;
+      mkdirSync(workspaceRootIdentity, { recursive: true });
+      const candidateWorkspaceRoot = join(
+        workspaceRootIdentity,
+        `candidate-${input.request.attemptId}`,
+      );
+      mkdirSync(candidateWorkspaceRoot);
+      const withoutDigest: Omit<CandidateWorkspaceLease, 'leaseDigest'> = Object.freeze({
+        accessMode: 'MUTABLE',
+        allowedPathPolicyDigest: digestCanonical({
+          allowedPaths,
+          reservedPathPolicy: 'M2_CONTROLLED_COPY_V1',
+        }),
+        allowedPaths,
+        candidateId: 'candidate_m251-b3-fixture',
+        candidateDigest: candidateContext.candidateDigest,
+        candidateGenerationId: candidateContext.candidateGenerationId,
+        candidateGenerationVersion: 1,
+        forbiddenRoots: phaseEntry.forbiddenRoots,
+        generationSequence: 1,
+        goalId: context.goalId,
+        goalRevision: context.goalRevision,
+        id: `candidate-workspace-lease_${input.request.attemptId}`,
+        issuedAt: fixedTime,
+        lifecyclePolicy: 'REVOKE_ON_FREEZE',
+        parentGenerationId: null,
+        reservedPathPolicy: 'M2_CONTROLLED_COPY_V1',
+        retentionPolicy: 'RUNTIME_OWNED',
+        root: realpathSync(candidateWorkspaceRoot),
+        schemaVersion: 1,
+        sourceGitMetadataDigest: digests.digest({
+          kind: 'M251_B3_CANDIDATE_SOURCE_GIT',
+          attemptId: input.request.attemptId,
+        }),
+        sourceProjectRoot: context.goal.scope.projectPath,
+        sourceTreeDigest: candidateContext.candidateDigest,
+        state: 'ACTIVE',
+        version: 1,
+        workspaceRootIdentity,
+        workflowId: context.workflowId,
+        workflowVersion: context.workflowVersion,
+      });
+      try {
+        candidateLease = decodeCodexCandidateWorkspaceLease({
+          ...withoutDigest,
+          leaseDigest: digestCanonical(candidateWorkspaceLeaseProjection(withoutDigest)),
+        });
+      } catch (error) {
+        this.lastPreparationError = error instanceof Error ? error.message : String(error);
+        throw error;
+      }
+    }
+    const adapterObservations = this.adapterObservations;
+    const directives = this.directives;
+    const hooks = this.#hooks;
+    const intents = this.intents;
+    const resultEventIds = this.resultEventIds;
+    const recordRun = (): void => {
+      this.runCount += 1;
+    };
+    const recordRelease = (): void => {
+      this.releaseCount += 1;
+    };
+    const hookInput = (
+      projectReadAuthority?: ProjectSourceReadAuthorityRecord,
+    ): M251B3FixtureHookInput =>
+      Object.freeze({
+        phase,
+        phaseEntry: adapterPhase,
+        ...(projectReadAuthority === undefined ? {} : { projectReadAuthority }),
+        request: input.request,
+      });
+    this.#hooks.afterPrepare?.(hookInput());
+    return Object.freeze({
+      ...(candidateLease === undefined
+        ? {}
+        : {
+            candidateWorkspaceLeaseId: candidateLease.id,
+            candidateWorkspaceLeaseDigest: sha256Digest(candidateLease.leaseDigest),
+            candidateWorkspaceCwdIdentity: candidateLease.root,
+          }),
+      createWorker({
+        intent,
+        projectReadAuthority,
+        onLifecycleEvent,
+      }: Parameters<
+        PreparedExternalWorkerInvocation['createWorker']
+      >[0]): ExternalObservedWorkerPort {
+        if (intent.schemaVersion !== 2) {
+          throw new TypeError('B3 fixture requires External Execution Intent v2');
+        }
+        const sourceBinding =
+          candidateLease === undefined
+            ? (() => {
+                if (projectReadAuthority === undefined) {
+                  throw new TypeError('B3 candidate-free fixture omitted ProjectRead authority');
+                }
+                return Object.freeze({
+                  kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+                  record: projectReadAuthority,
+                });
+              })()
+            : Object.freeze({
+                kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+                lease: candidateLease,
+              });
+        if (sourceBinding.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ) {
+          if (
+            intent.sourceAuthority.kind !== ExternalPhaseSourceAuthorityKind.PROJECT_READ ||
+            intent.sourceAuthority.projectReadAuthorityId !== sourceBinding.record.id ||
+            intent.sourceAuthority.projectReadAuthorityRecordDigest !==
+              sourceBinding.record.recordDigest ||
+            intent.sourceAuthority.snapshotCwdIdentity !== sourceBinding.record.snapshotLeafRealpath
+          ) {
+            throw new TypeError('B3 fixture received substituted ProjectRead dispatch authority');
+          }
+        } else if (
+          intent.sourceAuthority.kind !== ExternalPhaseSourceAuthorityKind.CANDIDATE ||
+          projectReadAuthority !== undefined ||
+          intent.sourceAuthority.candidateWorkspaceLeaseId !== sourceBinding.lease.id ||
+          intent.sourceAuthority.candidateWorkspaceLeaseDigest !==
+            sourceBinding.lease.leaseDigest ||
+          intent.sourceAuthority.candidateWorkspaceCwdIdentity !== sourceBinding.lease.root
+        ) {
+          throw new TypeError('B3 fixture received substituted Candidate dispatch authority');
+        }
+        const requestBase = Object.freeze({
+          attemptId: input.request.attemptId,
+          contextManifestDigest: input.request.contextManifestDigest,
+          contextManifestId: input.request.contextManifestId,
+          executionProfileDigest: input.request.executionProfileDigest,
+          executionProfileId: input.request.executionProfileId,
+          goalId: context.goalId,
+          goalRevision: context.goalRevision,
+          packageDigest: input.request.packageDigest,
+          policyBundleDigest: context.policyBundleDigest,
+          policyBundleId: context.policyBundleId,
+          workerSessionId: input.request.workerSessionId,
+          workflowId: context.workflowId,
+          workflowVersion: context.workflowVersion,
+        });
+        let requestBinding: CodexWorkerRequestBindingV3;
+        if (phase === WorkflowPhase.IMPLEMENT) {
+          if (candidateContext === undefined) {
+            throw new TypeError('B3 IMPLEMENT fixture has no Candidate Context authority');
+          }
+          requestBinding = Object.freeze({
+            ...requestBase,
+            phase,
+            candidateGenerationId: candidateContext.candidateGenerationId,
+            candidateDigest: candidateContext.candidateDigest,
+          });
+        } else {
+          requestBinding = Object.freeze({ ...requestBase, phase });
+        }
+        const shared: CodexWorkerSharedProfileDirectiveV1 = Object.freeze({
+          codexVersion: '0.146.1',
+          controlledStateRootIdentity: profile.controlledStateRootIdentity,
+          delegatedExecutableDigest: profile.binaryIdentityDigest,
+          environmentNames: Object.freeze([]),
+          launcherDigest: digests.digest({ kind: 'M251_B3_FIXTURE_LAUNCHER' }),
+          managedRequirementsDigest: profile.managedRequirementsDigest,
+          maximumPromptBytes: 256 * 1024,
+          model: profile.model,
+          modelProvider: profile.modelProvider,
+          nonSecretEnvironmentDigest: profile.environmentProjectionDigest,
+          protocolSnapshotDigest: profile.protocolSchemaDigest,
+          reasoningEffort: profile.reasoningEffort,
+          retentionPolicy: profile.retentionPolicy,
+          serviceTier: profile.serviceTier,
+          secretEnvironmentNames: Object.freeze([]),
+          terminalTimeoutMilliseconds: 1_000,
+          thread: Object.freeze({ kind: 'FRESH' }),
+        });
+        const directive = createCodexWorkerDirectiveV3({
+          externalExecutionIntentDigest: intent.intentDigest,
+          phaseDispatchEntryDigest: intent.phaseDispatchEntryDigest,
+          processLaunchNonce: intent.processLaunchNonce,
+          profile: Object.freeze({ phase: adapterPhase, shared }),
+          request: requestBinding,
+          schemaVersion: 3,
+          sourceAuthority:
+            sourceBinding.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ
+              ? Object.freeze({
+                  kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+                  authorityRecord: sourceBinding.record,
+                })
+              : Object.freeze({
+                  kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+                  workspaceLease: sourceBinding.lease,
+                }),
+        });
+        assertDirectiveV3BindsWorkerRequest(directive, input.request);
+        directives.push(directive);
+        intents.push(intent);
+        const worker = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+        let runtimeObservation: unknown;
+        return Object.freeze({
+          async *run(request: WorkerRequest, signal: AbortSignal): AsyncIterable<unknown> {
+            recordRun();
+            const processIdentityWithoutDigest = Object.freeze({
+              schemaVersion: 1 as const,
+              launchNonce: intent.processLaunchNonce,
+              processId: 25_100,
+              processGroupId: 25_100,
+              processGroupKind: 'POSIX_PROCESS_GROUP' as const,
+              processStartIdentity: `m251-b3:${intent.id}`,
+              executableIdentityDigest: intent.binaryIdentityDigest,
+              controlledStateRootIdentity: intent.controlledStateRootIdentity,
+            });
+            const processIdentity = Object.freeze({
+              ...processIdentityWithoutDigest,
+              identityDigest: digests.digest(
+                externalProcessIdentityProjection(processIdentityWithoutDigest),
+              ),
+            });
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'PROCESS_STARTED',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: intent.attemptId,
+              requestWorkerSessionId: intent.workerSessionId,
+              processIdentity,
+            });
+            const backendSessionRef = `session:${intent.id}`;
+            const backendOperationRef = `operation:${intent.id}`;
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'SESSION_STARTED',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: intent.attemptId,
+              requestWorkerSessionId: intent.workerSessionId,
+              backendSessionRef,
+            });
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'OPERATION_STARTED',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: intent.attemptId,
+              requestWorkerSessionId: intent.workerSessionId,
+              backendSessionRef,
+              backendOperationRef,
+              compactionCount: 0,
+            });
+            let resultEventId: ReturnType<typeof decodeWorkerEvent>['id'] | undefined;
+            for await (const rawEvent of worker.run(request, signal)) {
+              resultEventId = decodeWorkerEvent(rawEvent).id;
+              yield rawEvent;
+            }
+            if (resultEventId === undefined) {
+              throw new TypeError('B3 fixture Worker omitted its terminal result');
+            }
+            resultEventIds.push(resultEventId);
+            hooks.afterTurn?.(
+              hookInput(
+                sourceBinding.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ
+                  ? sourceBinding.record
+                  : undefined,
+              ),
+            );
+            onLifecycleEvent({
+              schemaVersion: 1,
+              kind: 'TERMINAL',
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: intent.attemptId,
+              requestWorkerSessionId: intent.workerSessionId,
+              state: 'COMPLETED',
+              processLaunchCount: 1,
+              backendSessionRef,
+              backendOperationRef,
+              compactionCount: 0,
+              turnInterruptCount: 0,
+              resultEventId,
+            });
+            const adapterObservation: CodexAdapterObservationV2 = Object.freeze({
+              activityDisposition: 'ADMITTED',
+              approvalRequestCount: 0,
+              backendOperationRef,
+              backendSessionRef,
+              compactionCount: 0,
+              directiveDigest: directive.directiveDigest,
+              externalExecutionIntentDigest: intent.intentDigest,
+              notificationCount: 1,
+              phase,
+              phaseDispatchEntryDigest: intent.phaseDispatchEntryDigest,
+              processLaunchCount: 1,
+              requestAttemptId: intent.attemptId,
+              requestWorkerSessionId: intent.workerSessionId,
+              resultEventId,
+              schemaVersion: 2,
+              sourceAuthority:
+                sourceBinding.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ
+                  ? Object.freeze({
+                      kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+                      projectReadAuthorityId: sourceBinding.record.id,
+                      projectReadAuthorityRecordDigest: sourceBinding.record.recordDigest,
+                      snapshotCwdIdentity: sourceBinding.record.snapshotLeafRealpath,
+                    })
+                  : Object.freeze({
+                      kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+                      candidateWorkspaceLeaseId: sourceBinding.lease.id,
+                      candidateWorkspaceLeaseDigest: sourceBinding.lease.leaseDigest,
+                      candidateWorkspaceCwdIdentity: sourceBinding.lease.root,
+                    }),
+              state: 'COMPLETED',
+              threadRequestCount: 1,
+              turnInterruptCount: 0,
+              turnRequestCount: 1,
+              workerActivityPolicyDigest: phaseEntry.workerActivityPolicyDigest,
+              workerActivityPolicyId: phaseEntry.workerActivityPolicyId,
+            });
+            adapterObservations.push(adapterObservation);
+            runtimeObservation = Object.freeze({
+              schemaVersion: 1,
+              externalExecutionIntentDigest: intent.intentDigest,
+              requestAttemptId: intent.attemptId,
+              requestWorkerSessionId: intent.workerSessionId,
+              state: adapterObservation.state,
+              processLaunchCount: adapterObservation.processLaunchCount,
+              backendSessionRef,
+              backendOperationRef,
+              compactionCount: adapterObservation.compactionCount,
+              turnInterruptCount: adapterObservation.turnInterruptCount,
+              resultEventId,
+            });
+          },
+          observation: () => runtimeObservation,
+        });
+      },
+      release: () => {
+        recordRelease();
+      },
+    });
+  }
+}
+
+class M251B3PlanSourceNotCurrentFixture implements CandidateSourcePort {
+  readonly #historical = new FakeCandidateSource();
+
+  public prepare(request: Parameters<CandidateSourcePort['prepare']>[0]): unknown {
+    if (request.schemaVersion !== 2) {
+      return this.#historical.prepare(request);
+    }
+    const validated = validateCandidatePreparationRequestV2(request);
+    const changedGitStateFields = Object.freeze({
+      schemaVersion: validated.expectedGitState.schemaVersion,
+      profile: validated.expectedGitState.profile,
+      sourceProjectRoot: validated.expectedGitState.sourceProjectRoot,
+      repositoryControlRootIdentity: validated.expectedGitState.repositoryControlRootIdentity,
+      headCommit: validated.expectedGitState.headCommit,
+      selectedPathSetDigest: validated.expectedGitState.selectedPathSetDigest,
+      stagedIndexManifestDigest: validated.expectedGitState.stagedIndexManifestDigest,
+      porcelainV2Digest: digests.digest({
+        kind: 'M251_B3_PLAN_SOURCE_NOT_CURRENT',
+        generationId: validated.generationId,
+      }),
+    });
+    const observedGitState = Object.freeze({
+      ...changedGitStateFields,
+      projectionDigest: digests.digest(projectReadGitStateProjection(changedGitStateFields)),
+    });
+    return decodeCandidatePreparationV2({
+      schemaVersion: 2,
+      disposition: CandidatePreparationDisposition.SOURCE_NOT_CURRENT,
+      goalId: validated.goalId,
+      workflowId: validated.workflowId,
+      candidateId: validated.candidateId,
+      generationId: validated.generationId,
+      planProjectReadAuthorityId: validated.planProjectReadAuthorityId,
+      planProjectReadAuthorityRecordDigest: validated.planProjectReadAuthorityRecordDigest,
+      observedSourceTree: validated.expectedSourceTree,
+      observedGitState,
+    });
+  }
+
+  public prepareRepair(request: Parameters<CandidateSourcePort['prepareRepair']>[0]): unknown {
+    return this.#historical.prepareRepair(request);
+  }
+
+  public observeFreeze(request: Parameters<CandidateSourcePort['observeFreeze']>[0]): unknown {
+    return this.#historical.observeFreeze(request);
+  }
+
+  public observeFrozen(request: Parameters<CandidateSourcePort['observeFrozen']>[0]): unknown {
+    return this.#historical.observeFrozen(request);
+  }
+}
+
+function createM251B3DriverScenario(
+  t: TestContext,
+  namespace: string,
+  options: Readonly<{
+    candidateSource?: CandidateSourcePort;
+    hooks?: M251B3FixtureHooks;
+    maxOperations?: number;
+  }> = {},
+) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'codeclosure-m251-b3-')));
+  t.after(() => removeProjectReadFixtureRoot(root));
+  const authorityRoot = join(root, 'authority');
+  const sourceRoot = join(root, 'source');
+  const projectReadRoot = join(root, 'project-read');
+  const candidateRoot = join(root, 'candidates');
+  const filename = join(authorityRoot, 'state.sqlite');
+  mkdirSync(authorityRoot);
+  mkdirSync(join(authorityRoot, 'codex-state'));
+  mkdirSync(sourceRoot);
+  initializeProjectReadSource(sourceRoot);
+  const store = openSqliteControlStore({
+    filename,
+    now: () => fixedTime,
+  });
+  t.after(() => store.close());
+  const ids = new DeterministicIds(`${namespace}-runtime`);
+  const authority = installM251ExecutionAuthority(
+    authorityInput(store, namespace, {
+      sourceRoot,
+      projectReadRoot,
+      authorityRoot,
+      candidateRoot,
+    }),
+  );
+  const criterionId = successCriterionId(`criterion_${namespace}`);
+  const goal = createGoal({
+    id: goalId(`goal_${namespace}`),
+    revision: goalRevision(1),
+    objective: 'Inspect the exact retained source snapshot',
+    successCriteria: Object.freeze([
+      Object.freeze({
+        id: criterionId,
+        description: 'Produce source-bound discovery proposals',
+        required: true,
+      }),
+    ]),
+    scope: Object.freeze({
+      projectPath: sourceRoot,
+      allowedPaths: Object.freeze(['src/payment.ts']),
+    }),
+    nonGoals: Object.freeze(['No Candidate during DISCOVERY']),
+    createdAt: fixedTime,
+  });
+  const workflow = createWorkflow({
+    id: workflowId(`workflow_${namespace}`),
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    createdAt: fixedTime,
+  });
+  assert.equal(
+    store.createGoalWithWorkflow({
+      commandId: ids.nextCommandId(),
+      inputDigest: digests.digest({ schemaVersion: 1, operation: 'CREATE', namespace }),
+      goal,
+      workflow,
+      auditEventId: ids.nextAuditEventId(),
+      workflowAuditEventId: ids.nextAuditEventId(),
+      payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
+    }).status,
+    'APPLIED',
+  );
+  const workspace = createLocalProjectReadWorkspace({
+    authorityRoots: Object.freeze([authorityRoot]),
+    ownerId: `project-read-owner_${namespace}`,
+    workspaceRoot: projectReadRoot,
+  });
+  const externalWorker = new M251B3ExternalWorkerFixture(options.hooks);
+  const baseCapabilities = runtimeCapabilities(namespace, criterionId);
+  let localWorkerRunCount = 0;
+  const localFixture = new FakeWorker({ fixture: FakeWorkerFixture.VALID_RESULT });
+  const registry = createM251RuntimeProfileRegistry(
+    authority.profile,
+    Object.freeze({
+      ...baseCapabilities,
+      candidateSource: options.candidateSource ?? baseCapabilities.candidateSource,
+      worker: Object.freeze({
+        run: (request: WorkerRequest, signal: AbortSignal) => {
+          localWorkerRunCount += 1;
+          return localFixture.run(request, signal);
+        },
+      }),
+      externalWorker,
+      projectRead: Object.freeze({ workspace, identities: ids }),
+      protectedVerification: Object.freeze({
+        ...baseCapabilities.protectedVerification,
+        proposal: Object.freeze({
+          ...baseCapabilities.protectedVerification.proposal,
+          acceptanceRuleIds: Object.freeze([...authority.policy.bundle.acceptanceRules].toSorted()),
+        }),
+      }),
+    }),
+    digests,
+  );
+  const compiler = new MinimalContextCompiler({
+    compilerVersion: 'm2.5.1-b3-context-v1',
+    maxPackageBytes: 64 * 1024,
+    canonicalizer,
+    digests,
+  });
+  const phaseGuards = Object.freeze({
+    evaluate: ({ workflow: current, requestedPhase }: PhaseGuardEvaluationRequest) =>
+      Object.freeze(
+        (requiredGuardsForTransition(current.phase, requestedPhase) ?? [])
+          .filter((guard) => !isRuntimeOwnedPhaseGuard(guard))
+          .map((guard) =>
+            Object.freeze({
+              guard,
+              outcome: GuardOutcome.PASS,
+              reasonCode: 'M251_B3_FIXTURE_GUARD',
+              supportingRefs: Object.freeze([`fixture:${guard}`]),
+            }),
+          ),
+      ),
+  });
+  const execution = createM2WorkflowDriver({
+    store,
+    clock: Object.freeze({ now: () => fixedTime }),
+    ids,
+    digests,
+    contextFactory: Object.freeze({
+      compile: (request: AttemptContextCompilationRequest) => compiler.compile(request),
+    }),
+    policyBundleId: authority.policy.bundle.id,
+    policyBundleDigest: authority.policy.bundle.digest,
+    phaseGuards,
+    recovery: Object.freeze({
+      resumeGoal: () => {
+        throw new Error('B3 deterministic Start must not enter recovery');
+      },
+    }),
+    startProfile: registry.startProfile,
+    profiles: registry.resolver,
+    maxOperations: options.maxOperations ?? 7,
+  });
+  return Object.freeze({
+    authority,
+    candidateRoot,
+    execution,
+    externalWorker,
+    filename,
+    goal,
+    ids,
+    localWorkerRunCount: () => localWorkerRunCount,
+    projectReadRoot,
+    sourceRoot,
+    store,
+    workflow,
   });
 }
 
@@ -677,6 +1359,8 @@ void test('[M251-C08][B2] Runtime atomically binds exact ProjectRead and Context
     snapshotLeafFor: (snapshotId: string) => workspace.snapshotLeafFor(snapshotId),
     observeSource: (request: Parameters<typeof workspace.observeSource>[0]) =>
       workspace.observeSource(request),
+    observeSnapshot: (record: Parameters<typeof workspace.observeSnapshot>[0]) =>
+      workspace.observeSnapshot(record),
     materializeSnapshot: (record: Parameters<typeof workspace.materializeSnapshot>[0]) => {
       const receipt = workspace.materializeSnapshot(record);
       return corruptMaterializationReceipt
@@ -1134,4 +1818,222 @@ void test('[M251-C08][B2] Runtime atomically binds exact ProjectRead and Context
     planRead.gitState.projectionDigest,
   );
   assert.equal(reopened.getCandidateForGoal(goal.id), undefined);
+});
+
+void test('[M251-B3] Driver dispatches all Profile v3 Worker phases through Intent v2 and the v3 Adapter boundary', async (t) => {
+  const { authority, execution, externalWorker, goal, ids, localWorkerRunCount, store, workflow } =
+    createM251B3DriverScenario(t, 'm251-b3-driver-discovery');
+
+  const result = await execution.startGoal({
+    commandId: ids.nextCommandId(),
+    goalId: goal.id,
+    expectedGoalRevision: goal.revision,
+    expectedWorkflowVersion: workflow.version,
+  });
+  assert.equal(result.command.status, 'APPLIED', JSON.stringify(result));
+  assert.equal(
+    result.drive?.stopReason,
+    WorkflowDriveStopReason.OPERATION_LIMIT,
+    JSON.stringify({ result, lastPreparationError: externalWorker.lastPreparationError }),
+  );
+  assert.equal(result.drive.operationCount, 7);
+  assert.equal(localWorkerRunCount(), 0);
+  assert.equal(externalWorker.prepareCount, 3);
+  assert.equal(externalWorker.runCount, 3);
+  assert.equal(externalWorker.releaseCount, 3);
+  assert.equal(externalWorker.intents.length, 3);
+  assert.deepEqual(
+    externalWorker.intents.map((value) => value.phase),
+    [WorkflowPhase.DISCOVERY, WorkflowPhase.PLAN, WorkflowPhase.IMPLEMENT],
+  );
+  const intent = externalWorker.intents[0];
+  assert.ok(intent);
+  assert.equal(intent.schemaVersion, 2);
+  assert.equal(intent.phase, WorkflowPhase.DISCOVERY);
+  assert.equal(intent.sourceAuthority.kind, ExternalPhaseSourceAuthorityKind.PROJECT_READ);
+  const installedProfile = authority.profile.profile;
+  if (
+    installedProfile.schemaVersion !== 2 ||
+    installedProfile.externalExecution.schemaVersion !== 3
+  ) {
+    assert.fail('B3 installed authority did not retain External Profile v3');
+  }
+  const phaseEntry = installedProfile.externalExecution.phaseDispatch.find(
+    (entry) => entry.phase === WorkflowPhase.DISCOVERY,
+  );
+  assert.ok(phaseEntry);
+  assert.equal(
+    intent.phaseDispatchEntryDigest,
+    digests.digest(externalExecutionPhaseDispatchEntryProjection(phaseEntry)),
+  );
+  const retained = store.getExternalExecutionForAttempt(intent.attemptId);
+  assert.ok(retained);
+  assert.equal(retained.schemaVersion, 2);
+  assert.equal(retained.state, ExternalExecutionState.COMPLETED);
+  assert.deepEqual(
+    externalWorker.intents.map((value) => value.schemaVersion),
+    [2, 2, 2],
+  );
+  assert.deepEqual(
+    externalWorker.directives.map((value) => value.schemaVersion),
+    [3, 3, 3],
+  );
+  assert.deepEqual(
+    externalWorker.adapterObservations.map((value) => value.schemaVersion),
+    [2, 2, 2],
+  );
+  assert.equal(
+    externalWorker.adapterObservations[0]?.sourceAuthority.kind,
+    ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+  );
+  assert.ok(store.getCandidateForGoal(goal.id));
+  assert.equal(store.getWorkflow(workflow.id)?.phase, WorkflowPhase.IMPLEMENT);
+  assert.equal(store.getWorkflow(workflow.id)?.runStatus, RunStatus.READY);
+});
+
+void test('[M251-B3] pre-dispatch source drift terminalizes the Attempt without dispatch or fallback', async (t) => {
+  let sourceRoot = '';
+  const scenario = createM251B3DriverScenario(t, 'm251-b3-pre-source-drift', {
+    hooks: Object.freeze({
+      afterPrepare: ({ phase }) => {
+        if (phase === WorkflowPhase.DISCOVERY) {
+          writeFileSync(join(sourceRoot, 'src', 'payment.ts'), 'export const drifted = true;\n');
+        }
+      },
+    }),
+  });
+  sourceRoot = scenario.sourceRoot;
+
+  const result = await scenario.execution.startGoal({
+    commandId: scenario.ids.nextCommandId(),
+    goalId: scenario.goal.id,
+    expectedGoalRevision: scenario.goal.revision,
+    expectedWorkflowVersion: scenario.workflow.version,
+  });
+  assert.equal(result.command.status, 'APPLIED', JSON.stringify(result));
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.FAILED, JSON.stringify(result));
+  assert.equal(result.drive.detailCode, 'PROJECT_SOURCE_DRIFT');
+  assert.equal(scenario.localWorkerRunCount(), 0);
+  assert.equal(scenario.externalWorker.prepareCount, 1);
+  assert.equal(scenario.externalWorker.runCount, 0);
+  assert.equal(scenario.externalWorker.intents.length, 0);
+  const authority = scenario.store.getWorkflowDriverAuthority(scenario.goal.id);
+  assert.ok(authority?.latestPhaseAttempt);
+  assert.equal(authority.latestPhaseAttempt.status, AttemptStatus.FAILED);
+  assert.equal(authority.latestPhaseAttempt.failureClass, AttemptFailureClass.INTEGRITY_VIOLATION);
+  assert.equal(authority.latestPhaseAttempt.terminationReason, 'PROJECT_SOURCE_DRIFT');
+
+  const reopened = openSqliteControlStore({ filename: scenario.filename, now: () => fixedTime });
+  t.after(() => reopened.close());
+  const reopenedAttempt = reopened.getWorkflowDriverAuthority(scenario.goal.id)?.latestPhaseAttempt;
+  assert.ok(reopenedAttempt);
+  assert.equal(reopenedAttempt.status, AttemptStatus.FAILED);
+  assert.equal(reopenedAttempt.terminationReason, 'PROJECT_SOURCE_DRIFT');
+});
+
+void test('[M251-B3] missing pre-dispatch snapshot authority closes under its exact reason', async (t) => {
+  let projectReadRoot = '';
+  const scenario = createM251B3DriverScenario(t, 'm251-b3-pre-snapshot-missing', {
+    hooks: Object.freeze({
+      afterPrepare: ({ phase }) => {
+        if (phase !== WorkflowPhase.DISCOVERY) {
+          return;
+        }
+        const snapshotsRoot = join(projectReadRoot, 'snapshots');
+        const snapshots = readdirSync(snapshotsRoot);
+        assert.equal(snapshots.length, 1);
+        const snapshot = snapshots[0];
+        assert.ok(snapshot);
+        removeProjectReadFixtureRoot(join(snapshotsRoot, snapshot));
+      },
+    }),
+  });
+  projectReadRoot = scenario.projectReadRoot;
+
+  const result = await scenario.execution.startGoal({
+    commandId: scenario.ids.nextCommandId(),
+    goalId: scenario.goal.id,
+    expectedGoalRevision: scenario.goal.revision,
+    expectedWorkflowVersion: scenario.workflow.version,
+  });
+  assert.equal(result.command.status, 'APPLIED', JSON.stringify(result));
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.FAILED, JSON.stringify(result));
+  assert.equal(result.drive.detailCode, 'PROJECT_READ_AUTHORITY_INVALID');
+  assert.equal(scenario.localWorkerRunCount(), 0);
+  assert.equal(scenario.externalWorker.prepareCount, 1);
+  assert.equal(scenario.externalWorker.runCount, 0);
+  assert.equal(scenario.externalWorker.intents.length, 0);
+  const authority = scenario.store.getWorkflowDriverAuthority(scenario.goal.id);
+  assert.ok(authority?.latestPhaseAttempt);
+  assert.equal(authority.latestPhaseAttempt.status, AttemptStatus.FAILED);
+  assert.equal(authority.latestPhaseAttempt.failureClass, AttemptFailureClass.INTEGRITY_VIOLATION);
+  assert.equal(authority.latestPhaseAttempt.terminationReason, 'PROJECT_READ_AUTHORITY_INVALID');
+});
+
+void test('[M251-B3] post-Turn snapshot drift discards the stale Worker result', async (t) => {
+  const scenario = createM251B3DriverScenario(t, 'm251-b3-post-snapshot-drift', {
+    hooks: Object.freeze({
+      afterTurn: ({ phase, projectReadAuthority }) => {
+        if (phase !== WorkflowPhase.DISCOVERY || projectReadAuthority === undefined) {
+          return;
+        }
+        const snapshotFile = join(projectReadAuthority.snapshotLeafRealpath, 'src', 'payment.ts');
+        chmodSync(snapshotFile, 0o644);
+        writeFileSync(snapshotFile, 'export const staleSnapshot = true;\n');
+      },
+    }),
+  });
+
+  const result = await scenario.execution.startGoal({
+    commandId: scenario.ids.nextCommandId(),
+    goalId: scenario.goal.id,
+    expectedGoalRevision: scenario.goal.revision,
+    expectedWorkflowVersion: scenario.workflow.version,
+  });
+  assert.equal(result.command.status, 'APPLIED', JSON.stringify(result));
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.FAILED, JSON.stringify(result));
+  assert.equal(result.drive.detailCode, 'PROJECT_READ_SNAPSHOT_DRIFT');
+  assert.equal(scenario.localWorkerRunCount(), 0);
+  assert.equal(scenario.externalWorker.prepareCount, 1);
+  assert.equal(scenario.externalWorker.runCount, 1);
+  assert.equal(scenario.externalWorker.intents.length, 1);
+  const resultEventId = scenario.externalWorker.resultEventIds[0];
+  assert.ok(resultEventId);
+  assert.equal(scenario.store.getWorkerEventReceipt(resultEventId), undefined);
+  const authority = scenario.store.getWorkflowDriverAuthority(scenario.goal.id);
+  assert.ok(authority?.latestPhaseAttempt);
+  assert.equal(authority.latestPhaseAttempt.status, AttemptStatus.FAILED);
+  assert.equal(authority.latestPhaseAttempt.failureClass, AttemptFailureClass.INTEGRITY_VIOLATION);
+  assert.equal(authority.latestPhaseAttempt.terminationReason, 'PROJECT_READ_SNAPSHOT_DRIFT');
+  const retained = scenario.store.getExternalExecutionForAttempt(authority.latestPhaseAttempt.id);
+  assert.ok(retained);
+  assert.equal(retained.state, ExternalExecutionState.COMPLETED);
+});
+
+void test('[M251-B3] retained PLAN_SOURCE_NOT_CURRENT stops Driver without Candidate or fallback', async (t) => {
+  const scenario = createM251B3DriverScenario(t, 'm251-b3-plan-source-not-current', {
+    candidateSource: new M251B3PlanSourceNotCurrentFixture(),
+  });
+
+  const result = await scenario.execution.startGoal({
+    commandId: scenario.ids.nextCommandId(),
+    goalId: scenario.goal.id,
+    expectedGoalRevision: scenario.goal.revision,
+    expectedWorkflowVersion: scenario.workflow.version,
+  });
+  assert.equal(result.command.status, 'APPLIED', JSON.stringify(result));
+  assert.equal(result.drive?.stopReason, WorkflowDriveStopReason.FAILED, JSON.stringify(result));
+  assert.equal(result.drive.detailCode, 'PLAN_SOURCE_NOT_CURRENT');
+  assert.equal(result.drive.operationCount, 5);
+  assert.equal(scenario.localWorkerRunCount(), 0);
+  assert.equal(scenario.externalWorker.prepareCount, 2);
+  assert.equal(scenario.externalWorker.runCount, 2);
+  assert.equal(scenario.externalWorker.intents.length, 2);
+  assert.equal(scenario.store.getCandidateForGoal(scenario.goal.id), undefined);
+  const retained = scenario.store.getWorkflowDriverAuthority(scenario.goal.id);
+  assert.ok(retained);
+  assert.equal(retained.workflow.phase, WorkflowPhase.PLAN);
+  assert.equal(retained.workflow.runStatus, RunStatus.FAILED);
+  assert.equal(retained.workflow.suspendedReason, 'PLAN_SOURCE_NOT_CURRENT');
+  assert.equal(retained.latestPhaseAttempt?.status, AttemptStatus.RESULT_RECORDED);
 });

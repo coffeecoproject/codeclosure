@@ -198,6 +198,7 @@ export interface PreparedExternalWorkerInvocation {
   readonly candidateWorkspaceCwdIdentity?: string;
   createWorker(input: {
     readonly intent: ExternalExecutionIntent;
+    readonly projectReadAuthority?: ProjectSourceReadAuthorityRecord;
     readonly onLifecycleEvent: (event: unknown) => void;
   }): ExternalObservedWorkerPort;
   release(): void | Promise<void>;

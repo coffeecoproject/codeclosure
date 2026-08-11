@@ -100,12 +100,16 @@ local policy may admit the pinned best-effort `unknown` command action only for
 `IMPLEMENT`; that observation is not containment proof, and the later freeze-
 v2 result must succeed before Evidence can exist. This foundation has offline
 coverage but no `M251-C11` acceptance verdict.
-Fixture isolation selection is not effective live containment proof. The legacy
-Driver still rejects Profile v3. The Candidate-creation source-currency guard
-now binds exact PLAN ProjectRead authority through preparation v2 and the Store
-commit; mismatch atomically retains `PLAN_SOURCE_NOT_CURRENT` without creating
-a Candidate. Candidate-free pre/post-Turn source and snapshot currency, real
-phase dispatch/composition, and milestone assessment have not started. A real
+Fixture isolation selection is not effective live containment proof. B3 now
+implements deterministic Driver Profile v3 dispatch for all selected Worker
+phases, Runtime-owned candidate-free pre/post-Turn source and snapshot currency,
+Intent/Record v2 authorization, and exact integrity-failure closure without a
+FakeWorker fallback; its bounded review has not yet issued a verdict. The
+Candidate-creation source-currency guard binds exact PLAN ProjectRead authority
+through preparation v2 and the Store commit; mismatch atomically retains
+`PLAN_SOURCE_NOT_CURRENT` without creating a Candidate. Trusted production
+composition, effective live containment, and milestone assessment have not
+started. A real
 pinned-version integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
