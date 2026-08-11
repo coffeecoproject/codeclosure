@@ -76,6 +76,7 @@ import {
   goalAndWorkflowCreationPayloadProjection,
   validateCandidatePreparationRequestV2,
   type CandidateSourcePort,
+  type DrivenGoalCommandResult,
   type IntakeAssistantPort,
   type IntakeStartCompositionPort,
   type IntentAnalysisAssistantResponseV1,
@@ -2347,7 +2348,21 @@ function createM251B4CompositionScenario(
 void test('[M251-B4] trusted production composition closes the deterministic Intake-to-Acceptance chain without a Fake fallback', async (t) => {
   const scenario = createM251B4CompositionScenario(t, 'm251-b4-production');
   const { admittedUserContent, fixture, initialSource, sourceRoot } = scenario;
-  const composition = createM251TrustedProductionComposition(scenario.compositionOptions);
+  const adapterObservations: CodexAdapterObservationV2[] = [];
+  const ordinaryStartResults: DrivenGoalCommandResult[] = [];
+  const composition = createM251TrustedProductionComposition({
+    ...scenario.compositionOptions,
+    observationSink: Object.freeze({
+      onAdapterObservation: (observation: CodexAdapterObservationV2) => {
+        adapterObservations.push(observation);
+        throw new Error('non-authoritative Adapter observation sink failure');
+      },
+      onOrdinaryStartResult: (result: DrivenGoalCommandResult) => {
+        ordinaryStartResults.push(result);
+        throw new Error('non-authoritative Start observation sink failure');
+      },
+    }),
+  });
   t.after(() => composition.close());
   assert.deepEqual(scenario.intakeAssistantFixture.observation(), {
     closeCount: 0,
@@ -2364,8 +2379,9 @@ void test('[M251-B4] trusted production composition closes the deterministic Int
   assert.equal(result.kind, 'OUTCOME', JSON.stringify(result));
   assert.equal(result.outcome.result.kind, 'MATERIALIZED', JSON.stringify(result));
   const goalIdentifier = result.outcome.result.materializedGoalRef.goalId;
+  const startCommandIdentifier = commandId('command_m251-b4-production-start');
   const started = await composition.application.startGoal({
-    commandId: commandId('command_m251-b4-production-start'),
+    commandId: startCommandIdentifier,
     goalId: goalIdentifier,
     expectedGoalRevision: result.outcome.result.materializedGoalRef.goalRevision,
     expectedWorkflowVersion: result.outcome.result.materializedGoalRef.workflowVersion,
@@ -2387,6 +2403,33 @@ void test('[M251-B4] trusted production composition closes the deterministic Int
   assert.ok(status.view.executionProfileRef);
   assert.equal(status.view.executionProfileRef.id, composition.profile.id);
   assert.equal(status.view.executionProfileRef.digest, composition.profile.digest);
+  assert.equal(ordinaryStartResults.length, 1);
+  assert.deepEqual(
+    adapterObservations.map(({ phase }) => phase),
+    [WorkflowPhase.DISCOVERY, WorkflowPhase.PLAN, WorkflowPhase.IMPLEMENT],
+  );
+  for (const observation of adapterObservations) {
+    const phaseAuthority = composition.inspection.readPhaseAuthority(observation);
+    assert.equal(phaseAuthority.attempt.id, observation.requestAttemptId);
+    assert.equal(phaseAuthority.workerEventReceipt.eventId, observation.resultEventId);
+    assert.equal(phaseAuthority.externalRecord.schemaVersion, 2);
+    assert.equal(
+      phaseAuthority.projectReadAuthority === undefined,
+      observation.phase === WorkflowPhase.IMPLEMENT,
+    );
+  }
+  const inspectedIntake = composition.inspection.getIntakeAuthority(result.outcome.intakeRunId);
+  const inspectedGoal = composition.inspection.getGoalAuthority(goalIdentifier);
+  assert.ok(inspectedIntake?.materialization);
+  assert.ok(inspectedGoal?.closeout);
+  assert.ok(inspectedGoal.policyBinding);
+  assert.ok(composition.inspection.getProcessedCommand(startCommandIdentifier));
+  assert.ok(
+    composition.inspection.getAcceptanceAuthority(
+      inspectedGoal.workflow.id,
+      inspectedGoal.policyBinding.policyBundleId,
+    ),
+  );
 
   const observed = fixture.observation();
   assert.deepEqual(observed.phaseRuns, [

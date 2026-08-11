@@ -9,6 +9,7 @@ import {
   decodeCodexCandidateWorkspaceLease,
   digestCanonical,
   type CodexAdapterDiagnosticEvent,
+  type CodexAdapterObservationV2,
   type CodexWorkerPhaseDirectiveV1,
   type CodexWorkerRequestBindingV3,
   type CodexWorkerSharedProfileDirectiveV1,
@@ -611,6 +612,7 @@ export interface CreateM251TrustedCodexInvocationInput {
   readonly clock: Clock;
   readonly forbiddenRoots: readonly string[];
   readonly onAdapterDiagnostic?: (event: CodexAdapterDiagnosticEvent) => void;
+  readonly onAdapterObservation?: (observation: CodexAdapterObservationV2) => void;
   readonly profile: M251TrustedCodexProfileAuthority;
   readonly expectedExternalProfile: ExternalExecutionProfileDefinitionV3;
   readonly workspace: CandidateWorkspaceLeasePort & CandidateWorkspaceLeaseAuthorityPort;
@@ -763,9 +765,33 @@ class M251TrustedCodexInvocation implements ExternalWorkerInvocationPort {
           onLifecycleEvent,
           observedAt: () => this.#input.clock.now(),
         });
+        let observationPublished = false;
+        const publishObservation = (): void => {
+          if (observationPublished || this.#input.onAdapterObservation === undefined) {
+            return;
+          }
+          observationPublished = true;
+          try {
+            const observation = adapter.observation();
+            if (observation.schemaVersion !== 2) {
+              throw new TypeError('M2.5.1 Adapter observation must use schema version 2');
+            }
+            this.#input.onAdapterObservation(observation);
+          } catch {
+            // Slice 4 observation is non-authoritative and cannot change execution.
+          }
+        };
         return Object.freeze({
-          run: (workerRequest: WorkerRequest, signal: AbortSignal) =>
-            adapter.run(workerRequest, signal),
+          run: async function* (
+            workerRequest: WorkerRequest,
+            signal: AbortSignal,
+          ): AsyncIterable<unknown> {
+            try {
+              yield* adapter.run(workerRequest, signal);
+            } finally {
+              publishObservation();
+            }
+          },
           observation: () => adapter.runtimeObservation(),
         });
       },

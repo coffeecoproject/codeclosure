@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import process from 'node:process';
 import test from 'node:test';
-import { URL } from 'node:url';
+import { URL, fileURLToPath } from 'node:url';
 
 import {
   M251_LIVE_COMPOSITION_AUTHORIZATION_ENV,
@@ -38,6 +40,7 @@ const contract = JSON.parse(
   readFileSync(new URL('./fixtures/m2.5.1/slice0-contract.json', import.meta.url), 'utf8'),
 );
 const { protectedCheck, ...projectContract } = contract.demonstration;
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
 function digest(value) {
   return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`;
@@ -1039,5 +1042,35 @@ test('M2.5.1 Live composition project projection rejects a changed demonstration
   assert.throws(
     () => projectM251LiveCompositionProjectIdentity(changed, protectedCheck),
     /project contract drifted or was substituted/u,
+  );
+});
+
+test('M2.5.1 Live composition command rejects missing authorization before external work', () => {
+  const environment = { ...process.env };
+  delete environment[M251_LIVE_COMPOSITION_AUTHORIZATION_ENV];
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL('./run-m2.5.1-live-composition.mjs', import.meta.url))],
+    { cwd: repositoryRoot, encoding: 'utf8', env: environment },
+  );
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'M2.5.1 live composition failed at ENTRY\n');
+});
+
+test('M2.5.1 Live composition command has one explicit non-automatic package entry', () => {
+  const packageDocument = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+  assert.deepEqual(
+    Object.entries(packageDocument.scripts).filter(([, command]) =>
+      command.includes('run-m2.5.1-live-composition.mjs'),
+    ),
+    [
+      [
+        'probe:m2.5.1:composition:live',
+        'pnpm build && node scripts/run-m2.5.1-live-composition.mjs',
+      ],
+    ],
   );
 });

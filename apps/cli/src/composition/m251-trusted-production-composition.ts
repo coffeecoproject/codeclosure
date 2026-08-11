@@ -3,14 +3,22 @@ import { execFileSync } from 'node:child_process';
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
-import { createCodexExternalProcessReconciler } from '@codeclosure/adapter-codex';
+import {
+  createCodexExternalProcessReconciler,
+  type CodexAdapterObservationV2,
+} from '@codeclosure/adapter-codex';
 import {
   ProtectedAssetReadLeasePolicy,
   WorkflowPhase,
+  attemptId,
   sha256Digest,
+  workerEventId,
   type Goal,
   type GoalId,
+  type CommandId,
+  type PolicyBundleId,
   type Sha256Digest,
+  type WorkflowId,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
@@ -31,6 +39,11 @@ import {
   type M25IntakeStartupRecoverySummary,
   type StartupRecoverySummary,
   type Clock,
+  type AcceptanceAuthorityView,
+  type GoalStatusAuthoritySnapshot,
+  type IntakeAuthorityView,
+  type ProcessedCommandView,
+  type DrivenGoalCommandResult,
   type VerificationPort,
   type WorkerPort,
 } from '@codeclosure/runtime';
@@ -64,6 +77,7 @@ import { openCliSqliteAuthority, type OpenCliSqliteAuthorityOptions } from './sq
 import {
   createM251RuntimeProfileRegistry,
   installM251ExecutionAuthority,
+  type InstalledM251ExecutionAuthority,
   type M251PhaseExecutionAuthorityInput,
 } from './m251-execution-authority.js';
 import {
@@ -124,6 +138,7 @@ export interface M251ExternalWorkerFactoryInput {
     typeof createM251TrustedCodexInvocation
   >[0]['expectedExternalProfile'];
   readonly forbiddenRoots: readonly string[];
+  readonly onAdapterObservation?: (observation: CodexAdapterObservationV2) => void;
   readonly workspace: Parameters<typeof createM251TrustedCodexInvocation>[0]['workspace'];
 }
 
@@ -158,6 +173,7 @@ export interface CreateM251TrustedProductionCompositionOptions extends Omit<
 > {
   readonly activation: M251ProductionActivation;
   readonly intakeAssistant: ProductionIntakeAssistantResource;
+  readonly observationSink?: M251TrustedProductionObservationSink;
   readonly candidateSourceFixture?: Parameters<
     typeof createM251RuntimeProfileRegistry
   >[1]['candidateSource'];
@@ -178,10 +194,63 @@ export type M251TrustedProductionIdentityGenerator = Parameters<
   Parameters<typeof reconcileProjectReadSnapshots>[0]['identities'] &
   Parameters<typeof createM251RuntimeProfileRegistry>[1]['protectedVerification']['identities'];
 
+export interface M251TrustedProductionObservationSink {
+  onAdapterObservation?(observation: CodexAdapterObservationV2): void;
+  onOrdinaryStartResult?(result: DrivenGoalCommandResult): void;
+}
+
+export interface M251TrustedProductionPhaseAuthority {
+  readonly adapterObservation: CodexAdapterObservationV2;
+  readonly attempt: NonNullable<ReturnType<CodeClosureApplicationStoreReader['getAttempt']>>;
+  readonly contextManifest: NonNullable<
+    ReturnType<CodeClosureApplicationStoreReader['getContextManifest']>
+  >;
+  readonly externalRecord: NonNullable<
+    ReturnType<CodeClosureApplicationStoreReader['getExternalExecutionForAttempt']>
+  >;
+  readonly projectReadAuthority?: NonNullable<
+    ReturnType<CodeClosureApplicationStoreReader['getProjectSourceReadAuthority']>
+  >;
+  readonly workerEventReceipt: NonNullable<
+    ReturnType<CodeClosureApplicationStoreReader['getWorkerEventReceipt']>
+  >;
+}
+
+interface CodeClosureApplicationStoreReader {
+  getAttempt: ReturnType<typeof openCliSqliteAuthority>['getAttempt'];
+  getContextManifest: ReturnType<typeof openCliSqliteAuthority>['getContextManifest'];
+  getExternalExecutionForAttempt: ReturnType<
+    typeof openCliSqliteAuthority
+  >['getExternalExecutionForAttempt'];
+  getProjectSourceReadAuthority: ReturnType<
+    typeof openCliSqliteAuthority
+  >['getProjectSourceReadAuthority'];
+  getWorkerEventReceipt: ReturnType<typeof openCliSqliteAuthority>['getWorkerEventReceipt'];
+}
+
+export interface M251TrustedProductionInspection {
+  getAcceptanceAuthority(
+    workflowId: Parameters<
+      ReturnType<typeof openCliSqliteAuthority>['getAcceptanceAuthorityForWorkflow']
+    >[0],
+    policyBundleId: Parameters<
+      ReturnType<typeof openCliSqliteAuthority>['getAcceptanceAuthorityForWorkflow']
+    >[1],
+  ): AcceptanceAuthorityView | undefined;
+  getGoalAuthority(goalId: GoalId): GoalStatusAuthoritySnapshot | undefined;
+  getIntakeAuthority(intakeRunId: string): IntakeAuthorityView | undefined;
+  getInstalledAuthority(): Readonly<Pick<InstalledM251ExecutionAuthority, 'policy' | 'profile'>>;
+  getProcessedCommand(
+    commandId: Parameters<ReturnType<typeof openCliSqliteAuthority>['getProcessedCommand']>[0],
+  ): ProcessedCommandView | undefined;
+  readPhaseAuthority(observation: CodexAdapterObservationV2): M251TrustedProductionPhaseAuthority;
+}
+
 export interface M251TrustedProductionComposition {
   readonly application: CodeClosureApplication;
   readonly intakeApplication: IntakeCliApplication;
   readonly intakeRecovery: M25IntakeStartupRecoverySummary;
+  readonly inspection: M251TrustedProductionInspection;
   readonly startupRecovery: StartupRecoverySummary;
   readonly profile: Readonly<{ id: string; version: string; digest: string }>;
   close(): void;
@@ -360,6 +429,20 @@ function noLegacyVerificationFallback(): VerificationPort {
       throw new TypeError('M2.5.1 formal Profile requires protected local verification');
     },
   });
+}
+
+function publishNonAuthoritativeObservation<T>(
+  sink: ((value: T) => void) | undefined,
+  value: T,
+): void {
+  if (sink === undefined) {
+    return;
+  }
+  try {
+    sink(value);
+  } catch {
+    // Assessment observation cannot participate in product execution authority.
+  }
 }
 
 function validateGoal(
@@ -676,6 +759,15 @@ function createM251TrustedProductionCompositionWithOwnedAssistant(
       forbiddenRoots: Object.freeze(
         [...workerForbiddenRoots, roots.projectReadWorkspace].toSorted(),
       ),
+      ...(options.observationSink?.onAdapterObservation === undefined
+        ? {}
+        : {
+            onAdapterObservation: (observation: CodexAdapterObservationV2) =>
+              publishNonAuthoritativeObservation(
+                (value) => options.observationSink?.onAdapterObservation?.(value),
+                observation,
+              ),
+          }),
       workspace: candidateWorkspace,
     });
     const recovery = createRecoveryCoordinator({
@@ -770,6 +862,10 @@ function createM251TrustedProductionCompositionWithOwnedAssistant(
       startGoal: async (input: Parameters<ReturnType<typeof driverForGoal>['startGoal']>[0]) => {
         const result = await driverForGoal(input.goalId).startGoal(input);
         reconcileProjectRead();
+        publishNonAuthoritativeObservation(
+          (value) => options.observationSink?.onOrdinaryStartResult?.(value),
+          result,
+        );
         return result;
       },
       resumeGoal: async (input: Parameters<ReturnType<typeof driverForGoal>['resumeGoal']>[0]) => {
@@ -827,6 +923,61 @@ function createM251TrustedProductionCompositionWithOwnedAssistant(
       ids,
     });
     const intakeRecovery = coordinator.reconcileStartup();
+    const inspection: M251TrustedProductionInspection = Object.freeze({
+      getAcceptanceAuthority: (workflowId: WorkflowId, policyBundleId: PolicyBundleId) =>
+        store.getAcceptanceAuthorityForWorkflow(workflowId, policyBundleId),
+      getGoalAuthority: (goalId: GoalId) => store.getGoalStatusAuthority(goalId),
+      getIntakeAuthority: (intakeRunId: string) => store.getIntakeAuthority(intakeRunId),
+      getInstalledAuthority: () =>
+        Object.freeze({ policy: authority.policy, profile: authority.profile }),
+      getProcessedCommand: (commandId: CommandId) => store.getProcessedCommand(commandId),
+      readPhaseAuthority: (adapterObservation: CodexAdapterObservationV2) => {
+        const selectedAttemptId = attemptId(adapterObservation.requestAttemptId);
+        const attempt = store.getAttempt(selectedAttemptId);
+        const externalRecord = store.getExternalExecutionForAttempt(selectedAttemptId);
+        const contextManifest =
+          attempt?.contextManifestId === undefined
+            ? undefined
+            : store.getContextManifest(attempt.contextManifestId);
+        const workerEventReceipt =
+          adapterObservation.resultEventId === undefined
+            ? undefined
+            : store.getWorkerEventReceipt(workerEventId(adapterObservation.resultEventId));
+        if (
+          attempt === undefined ||
+          externalRecord === undefined ||
+          contextManifest === undefined ||
+          workerEventReceipt === undefined ||
+          externalRecord.attemptId !== attempt.id ||
+          contextManifest.attemptId !== attempt.id ||
+          workerEventReceipt.attemptId !== attempt.id
+        ) {
+          throw new TypeError('M2.5.1 phase inspection lacks exact retained authority');
+        }
+        const projectReadAuthority =
+          externalRecord.schemaVersion === 2 &&
+          externalRecord.sourceAuthority.kind === 'PROJECT_READ'
+            ? store.getProjectSourceReadAuthority(
+                externalRecord.sourceAuthority.projectReadAuthorityId,
+              )
+            : undefined;
+        if (
+          externalRecord.schemaVersion === 2 &&
+          externalRecord.sourceAuthority.kind === 'PROJECT_READ' &&
+          projectReadAuthority === undefined
+        ) {
+          throw new TypeError('M2.5.1 phase inspection lacks ProjectRead authority');
+        }
+        return Object.freeze({
+          adapterObservation,
+          attempt,
+          contextManifest,
+          externalRecord,
+          ...(projectReadAuthority === undefined ? {} : { projectReadAuthority }),
+          workerEventReceipt,
+        });
+      },
+    });
     const declaredProjectRef = (declaredProjectPath: string | undefined) => {
       if (declaredProjectPath === undefined) {
         return undefined;
@@ -872,6 +1023,7 @@ function createM251TrustedProductionCompositionWithOwnedAssistant(
         getAudit: (intakeRunId) => coordinator.getAudit(intakeRunId),
       } satisfies IntakeCliApplication),
       intakeRecovery,
+      inspection,
       startupRecovery,
       profile: Object.freeze({
         id: authority.profile.profile.id,

@@ -5,6 +5,7 @@ import {
   createCodexWorkerDirectiveV3,
   decodeCodexCandidateWorkspaceLease,
   type CodexWorkerDirectiveV3,
+  type CodexAdapterObservationV2,
   type CodexWorkerPhaseDirectiveV1,
   type CodexWorkerRequestBindingV3,
   type CodexWorkerSourceAuthorityV1,
@@ -264,6 +265,7 @@ export function createM251ProductionProtocolFixtureActivation(
       clock,
       expectedExternalProfile,
       forbiddenRoots,
+      onAdapterObservation,
       workspace,
     }: M251ExternalWorkerFactoryInput) =>
       Object.freeze({
@@ -443,6 +445,47 @@ export function createM251ProductionProtocolFixtureActivation(
                     turnInterruptCount: 0,
                     resultEventId: event.id,
                   });
+                  const adapterObservation: CodexAdapterObservationV2 = Object.freeze({
+                    schemaVersion: 2,
+                    activityDisposition: 'ADMITTED',
+                    approvalRequestCount: 0,
+                    backendSessionRef,
+                    backendOperationRef,
+                    compactionCount: 0,
+                    directiveDigest: directive.directiveDigest,
+                    externalExecutionIntentDigest: intent.intentDigest,
+                    notificationCount: 3,
+                    phase: directive.request.phase,
+                    phaseDispatchEntryDigest: intent.phaseDispatchEntryDigest,
+                    processLaunchCount: 1,
+                    requestAttemptId: intent.attemptId,
+                    requestWorkerSessionId: intent.workerSessionId,
+                    resultEventId: event.id,
+                    sourceAuthority:
+                      sourceAuthority.kind === ExternalPhaseSourceAuthorityKind.PROJECT_READ
+                        ? Object.freeze({
+                            kind: ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+                            projectReadAuthorityId: sourceAuthority.authorityRecord.id,
+                            projectReadAuthorityRecordDigest:
+                              sourceAuthority.authorityRecord.recordDigest,
+                            snapshotCwdIdentity:
+                              sourceAuthority.authorityRecord.snapshotLeafRealpath,
+                          })
+                        : Object.freeze({
+                            kind: ExternalPhaseSourceAuthorityKind.CANDIDATE,
+                            candidateWorkspaceCwdIdentity: sourceAuthority.workspaceLease.root,
+                            candidateWorkspaceLeaseDigest:
+                              sourceAuthority.workspaceLease.leaseDigest,
+                            candidateWorkspaceLeaseId: sourceAuthority.workspaceLease.id,
+                          }),
+                    state: 'COMPLETED',
+                    threadRequestCount: 1,
+                    turnInterruptCount: 0,
+                    turnRequestCount: 1,
+                    workerActivityPolicyDigest: selectedPhase.workerActivityPolicyDigest,
+                    workerActivityPolicyId: selectedPhase.workerActivityPolicyId,
+                  });
+                  onAdapterObservation?.(adapterObservation);
                   observation = Object.freeze({
                     schemaVersion: 1,
                     externalExecutionIntentDigest: intent.intentDigest,

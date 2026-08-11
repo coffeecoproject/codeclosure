@@ -26,6 +26,7 @@
     "probe:m2:slice0:live": "node scripts/run-m2-slice0-app-server-probe.mjs",
     "probe:m2:slice1:live": "pnpm --filter @codeclosure/codex-app-server-client probe:live",
     "probe:m2.5.1:intake:live": "pnpm build && node scripts/run-m2.5.1-live-intake.mjs",
+    "probe:m2.5.1:composition:live": "pnpm build && node scripts/run-m2.5.1-live-composition.mjs",
     "test": "pnpm test:unit && pnpm test:digests && pnpm test:migrations && pnpm test:authority && pnpm test:cli && pnpm test:demos && pnpm test:invariants",
     "test:authority": "pnpm --filter @codeclosure/store-sqlite test:authority",
     "test:cli": "pnpm --filter @codeclosure/cli test:integration",
