@@ -61,6 +61,14 @@ function failWithReason(reasonCode, message) {
   fail(message);
 }
 
+function cleanupStep(reasonCode, operation) {
+  try {
+    return operation();
+  } catch {
+    failWithReason(reasonCode, 'M2.5.1 cleanup step failed');
+  }
+}
+
 function argument(name) {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
@@ -783,31 +791,44 @@ async function main() {
     );
 
     stage = 'CLEANUP';
-    const projectReadClean = snapshotsRemoved(roots.projectReadWorkspace);
-    reopenedComposition.close();
+    const projectReadClean = cleanupStep('CLEANUP_PROJECT_READ_INSPECTION_FAILED', () =>
+      snapshotsRemoved(roots.projectReadWorkspace),
+    );
+    cleanupStep('CLEANUP_REOPENED_COMPOSITION_CLOSE_FAILED', () => reopenedComposition.close());
     reopenedComposition = undefined;
     const intakeRootsRemoved =
       !existsSync(intakeDescriptor.root) && !existsSync(reopenedDescriptor.root);
-    const projectClosing = m251ProjectObservation(
-      projectPath,
-      workspace.observeLocalCandidateSourceIdentity,
+    const projectClosing = cleanupStep('CLEANUP_PROJECT_OBSERVATION_FAILED', () =>
+      m251ProjectObservation(projectPath, workspace.observeLocalCandidateSourceIdentity),
     );
-    assertM251LiveCompositionProjectClosure(projectOpening, projectClosing);
-    const sourceClosingBeforeCleanup = m251ExactSourceIdentity(
-      repositoryRoot,
-      M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+    cleanupStep('CLEANUP_PROJECT_CLOSURE_FAILED', () =>
+      assertM251LiveCompositionProjectClosure(projectOpening, projectClosing),
     );
-    assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosingBeforeCleanup);
-    const credentialUnchanged =
-      JSON.stringify(authOpening) === JSON.stringify(m251MetadataFingerprint(authSource));
-    const protectedCheckUnchanged = protectedCheckOpening === m251FileDigest(protectedCheckPath);
-    rmSync(assessmentRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+    const sourceClosingBeforeCleanup = cleanupStep(
+      'CLEANUP_SOURCE_OBSERVATION_BEFORE_ROOT_REMOVAL_FAILED',
+      () => m251ExactSourceIdentity(repositoryRoot, M251_LIVE_COMPOSITION_REVIEW_EXCLUSION),
+    );
+    cleanupStep('CLEANUP_SOURCE_CLOSURE_BEFORE_ROOT_REMOVAL_FAILED', () =>
+      assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosingBeforeCleanup),
+    );
+    const credentialUnchanged = cleanupStep(
+      'CLEANUP_CREDENTIAL_ROOT_INSPECTION_FAILED',
+      () => JSON.stringify(authOpening) === JSON.stringify(m251MetadataFingerprint(authSource)),
+    );
+    const protectedCheckUnchanged = cleanupStep(
+      'CLEANUP_PROTECTED_ASSET_INSPECTION_FAILED',
+      () => protectedCheckOpening === m251FileDigest(protectedCheckPath),
+    );
+    cleanupStep('CLEANUP_ASSESSMENT_ROOT_REMOVAL_FAILED', () =>
+      rmSync(assessmentRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 }),
+    );
     const assessmentRootRemoved = !existsSync(assessmentRoot);
-    const sourceClosing = m251ExactSourceIdentity(
-      repositoryRoot,
-      M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+    const sourceClosing = cleanupStep('CLEANUP_SOURCE_OBSERVATION_FAILED', () =>
+      m251ExactSourceIdentity(repositoryRoot, M251_LIVE_COMPOSITION_REVIEW_EXCLUSION),
     );
-    assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosing);
+    cleanupStep('CLEANUP_SOURCE_CLOSURE_FAILED', () =>
+      assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosing),
+    );
     const cleanupObservation = Object.freeze({
       ownedProcessesShutdownClean:
         adapterObservations.every(({ state }) => state === 'COMPLETED') &&
