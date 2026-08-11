@@ -16,10 +16,7 @@ export const M251_LIVE_COMPOSITION_REVIEW_EXCLUSION =
   'docs/reviews/m2.5.1-slice4-real-user-path-and-failure-closure.md';
 export const M251_LIVE_COMPOSITION_SCENARIO = Object.freeze({
   id: 'PAYMENT_IDEMPOTENCY_LINKED_PATH',
-  request: Object.freeze([
-    'Objective: Prevent duplicate payment callbacks in src/payment.js.',
-    'Scope: Only src/payment.js may change.',
-  ]).join('\n'),
+  request: 'Objective: Prevent duplicate payment callbacks in src/payment.js.',
   clarificationAnswer:
     'Required criterion: a duplicate callback for one order is ignored, exactly one charge is retained for that order, and different orders remain independent.',
 });

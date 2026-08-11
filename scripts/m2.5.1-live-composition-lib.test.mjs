@@ -717,6 +717,18 @@ test('M2.5.1 Live composition receipt accepts one complete metadata-only linked 
   assert.doesNotMatch(JSON.stringify(value), /src\/payment\.js/u);
 });
 
+test('M2.5.1 Live composition scenario leaves formal scope to the trusted Policy', () => {
+  assert.equal(
+    M251_LIVE_COMPOSITION_SCENARIO.request,
+    'Objective: Prevent duplicate payment callbacks in src/payment.js.',
+  );
+  assert.doesNotMatch(M251_LIVE_COMPOSITION_SCENARIO.request, /(?:^|\n)Scope:/u);
+  assert.match(
+    M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer,
+    /^Required criterion: /u,
+  );
+});
+
 test('M2.5.1 Live composition authorization is one new exact admission binding', () => {
   assert.equal(
     admitM251LiveCompositionAuthorization({
