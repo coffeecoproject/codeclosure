@@ -64,8 +64,12 @@ function failWithReason(reasonCode, message) {
 function cleanupStep(reasonCode, operation) {
   try {
     return operation();
-  } catch {
-    failWithReason(reasonCode, 'M2.5.1 cleanup step failed');
+  } catch (error) {
+    const rawCode =
+      error instanceof Error && 'code' in error ? Reflect.get(error, 'code') : undefined;
+    const safeCode =
+      typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/u.test(rawCode) ? rawCode : 'UNKNOWN';
+    failWithReason(`${reasonCode}_${safeCode}`, 'M2.5.1 cleanup step failed');
   }
 }
 
