@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, type Hash } from 'node:crypto';
+import { isAbsolute, resolve } from 'node:path';
 import { clearTimeout, setTimeout } from 'node:timers';
 
 import {
@@ -16,6 +17,7 @@ import {
 } from './errors.js';
 import { appServerClientLimits, type AppServerClientLimits } from './limits.js';
 import {
+  generatedClientMethods,
   generatedServerNotificationMethods,
   generatedServerRequestMethods,
   selectedStableClientMethods,
@@ -78,6 +80,42 @@ export interface AppServerCloseResult {
   readonly failureCode?: ErrorCode;
   readonly requestedShutdown: boolean;
   readonly signal: NodeJS.Signals | null;
+}
+
+export type BufferedSandboxKind = 'READ_ONLY' | 'WORKSPACE_WRITE';
+
+export interface BufferedSandboxCommandInput {
+  readonly command: readonly string[];
+  readonly cwd: string;
+  readonly sandboxKind: BufferedSandboxKind;
+  readonly timeoutMilliseconds: number;
+}
+
+export interface BufferedSandboxCommandRequest {
+  readonly command: readonly string[];
+  readonly cwd: string;
+  readonly outputBytesCap: 1_024;
+  readonly sandboxPolicy:
+    | Readonly<{ networkAccess: false; type: 'readOnly' }>
+    | Readonly<{
+        excludeSlashTmp: true;
+        excludeTmpdirEnvVar: true;
+        networkAccess: false;
+        type: 'workspaceWrite';
+        writableRoots: readonly string[];
+      }>;
+  readonly timeoutMs: number;
+}
+
+export interface BufferedSandboxCommandResponse {
+  readonly exitCode: number;
+  readonly stderr: string;
+  readonly stdout: string;
+}
+
+export interface BufferedSandboxCommandResult {
+  readonly request: BufferedSandboxCommandRequest;
+  readonly response: BufferedSandboxCommandResponse;
 }
 
 export type ProtocolDecoder<T> = (value: JsonValue) => T;
@@ -150,6 +188,7 @@ interface ObservedCompaction {
 
 const notificationMethodSet = new Set<string>(generatedServerNotificationMethods);
 const serverRequestMethodSet = new Set<string>(generatedServerRequestMethods);
+const generatedClientMethodSet = new Set<string>(generatedClientMethods);
 const stableClientMethodSet = new Set<string>(
   selectedStableClientMethods.filter((method) => method !== 'initialize'),
 );
@@ -232,6 +271,96 @@ function validateInitializeParams(params: InitializeParams): void {
       );
     }
   }
+}
+
+function invalidBufferedSandboxCommandInput(): never {
+  throw clientError(
+    AppServerClientErrorCode.PROTOCOL_LIMIT,
+    'Buffered sandbox command input is outside the selected boundary',
+  );
+}
+
+function bufferedSandboxCommandRequest(input: unknown): BufferedSandboxCommandRequest {
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    Array.isArray(input) ||
+    JSON.stringify(Object.keys(input).toSorted()) !==
+      JSON.stringify(['command', 'cwd', 'sandboxKind', 'timeoutMilliseconds'])
+  ) {
+    return invalidBufferedSandboxCommandInput();
+  }
+  const rawCommand: unknown = Reflect.get(input, 'command');
+  const cwd: unknown = Reflect.get(input, 'cwd');
+  const sandboxKind: unknown = Reflect.get(input, 'sandboxKind');
+  const timeoutMilliseconds: unknown = Reflect.get(input, 'timeoutMilliseconds');
+  if (
+    !Array.isArray(rawCommand) ||
+    rawCommand.length === 0 ||
+    rawCommand.length > 64 ||
+    typeof cwd !== 'string' ||
+    !isAbsolute(cwd) ||
+    resolve(cwd) !== cwd ||
+    cwd.normalize('NFC') !== cwd ||
+    (sandboxKind !== 'READ_ONLY' && sandboxKind !== 'WORKSPACE_WRITE') ||
+    typeof timeoutMilliseconds !== 'number' ||
+    !Number.isSafeInteger(timeoutMilliseconds) ||
+    timeoutMilliseconds < 1 ||
+    timeoutMilliseconds > 600_000
+  ) {
+    return invalidBufferedSandboxCommandInput();
+  }
+  const command = rawCommand.map((value: unknown) => {
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      Buffer.byteLength(value, 'utf8') > 16_384
+    ) {
+      return invalidBufferedSandboxCommandInput();
+    }
+    return value;
+  });
+  const sandboxPolicy =
+    sandboxKind === 'READ_ONLY'
+      ? Object.freeze({ networkAccess: false, type: 'readOnly' })
+      : Object.freeze({
+          excludeSlashTmp: true,
+          excludeTmpdirEnvVar: true,
+          networkAccess: false,
+          type: 'workspaceWrite',
+          writableRoots: Object.freeze([cwd]),
+        });
+  return Object.freeze({
+    command: Object.freeze(command),
+    cwd,
+    outputBytesCap: 1_024,
+    sandboxPolicy,
+    timeoutMs: timeoutMilliseconds,
+  });
+}
+
+function decodeBufferedSandboxCommandResponse(value: JsonValue): BufferedSandboxCommandResponse {
+  const exitCode = isJsonObject(value) ? value['exitCode'] : undefined;
+  const stderr = isJsonObject(value) ? value['stderr'] : undefined;
+  const stdout = isJsonObject(value) ? value['stdout'] : undefined;
+  if (
+    !isJsonObject(value) ||
+    JSON.stringify(Object.keys(value).toSorted()) !==
+      JSON.stringify(['exitCode', 'stderr', 'stdout']) ||
+    typeof exitCode !== 'number' ||
+    !Number.isSafeInteger(exitCode) ||
+    typeof stderr !== 'string' ||
+    Buffer.byteLength(stderr, 'utf8') > 1_024 ||
+    typeof stdout !== 'string' ||
+    Buffer.byteLength(stdout, 'utf8') > 1_024
+  ) {
+    throw new TypeError('command/exec result is outside the buffered sandbox boundary');
+  }
+  return Object.freeze({
+    exitCode,
+    stderr,
+    stdout,
+  });
 }
 
 function errorFromUnknown(
@@ -489,47 +618,43 @@ export class AppServerClient {
     decoder: ProtocolDecoder<TResult>,
     options: Readonly<{ signal?: AbortSignal; timeoutMilliseconds?: number }> = {},
   ): Promise<TResult> {
-    if (!this.#ready || this.#requestedShutdown || this.#closed) {
-      return Promise.reject(
-        clientError(AppServerClientErrorCode.SHUTDOWN, 'App Server client is not ready'),
-      );
-    }
-    if (!stableClientMethodSet.has(method)) {
+    return this.#requestAdmitted(method, params, decoder, options, true);
+  }
+
+  public executeBufferedSandboxCommand(
+    input: BufferedSandboxCommandInput,
+    options: Readonly<{ signal?: AbortSignal }> = {},
+  ): Promise<BufferedSandboxCommandResult> {
+    if (!generatedClientMethodSet.has('command/exec')) {
       return Promise.reject(
         clientError(
-          AppServerClientErrorCode.UNSUPPORTED_METHOD,
-          'Client request method is outside the selected stable protocol',
-          { method },
+          AppServerClientErrorCode.VERSION_MISMATCH,
+          'The pinned protocol does not contain buffered sandbox execution',
         ),
       );
     }
-    if (options.signal?.aborted === true) {
+    let request: BufferedSandboxCommandRequest;
+    try {
+      request = bufferedSandboxCommandRequest(input);
+    } catch (error) {
       return Promise.reject(
-        clientError(AppServerClientErrorCode.HOST_CANCELLED, 'Host cancellation preceded request'),
+        errorFromUnknown(
+          error,
+          AppServerClientErrorCode.PROTOCOL_LIMIT,
+          'Buffered sandbox command input is invalid',
+        ),
       );
     }
-    const request = this.#requestInternal(
-      method,
-      params,
-      decoder,
-      options.timeoutMilliseconds ?? this.#limits.requestTimeoutMilliseconds,
+    return this.#requestAdmitted(
+      'command/exec',
+      request,
+      decodeBufferedSandboxCommandResponse,
+      {
+        ...options,
+        timeoutMilliseconds: input.timeoutMilliseconds,
+      },
       false,
-    );
-    if (options.signal === undefined) {
-      return request;
-    }
-    const signal = options.signal;
-    const abort = (): void => {
-      this.#fail(
-        clientError(
-          AppServerClientErrorCode.HOST_CANCELLED,
-          'Host cancelled an in-flight App Server request',
-          { method },
-        ),
-      );
-    };
-    signal.addEventListener('abort', abort, { once: true });
-    return request.finally(() => signal.removeEventListener('abort', abort));
+    ).then((response) => Object.freeze({ request, response }));
   }
 
   public interruptTurn(
@@ -648,6 +773,56 @@ export class AppServerClient {
       throw error;
     }
     return killed;
+  }
+
+  #requestAdmitted<TResult>(
+    method: string,
+    params: unknown,
+    decoder: ProtocolDecoder<TResult>,
+    options: Readonly<{ signal?: AbortSignal; timeoutMilliseconds?: number }>,
+    requireSelectedMethod: boolean,
+  ): Promise<TResult> {
+    if (!this.#ready || this.#requestedShutdown || this.#closed) {
+      return Promise.reject(
+        clientError(AppServerClientErrorCode.SHUTDOWN, 'App Server client is not ready'),
+      );
+    }
+    if (requireSelectedMethod && !stableClientMethodSet.has(method)) {
+      return Promise.reject(
+        clientError(
+          AppServerClientErrorCode.UNSUPPORTED_METHOD,
+          'Client request method is outside the selected stable protocol',
+          { method },
+        ),
+      );
+    }
+    if (options.signal?.aborted === true) {
+      return Promise.reject(
+        clientError(AppServerClientErrorCode.HOST_CANCELLED, 'Host cancellation preceded request'),
+      );
+    }
+    const request = this.#requestInternal(
+      method,
+      params,
+      decoder,
+      options.timeoutMilliseconds ?? this.#limits.requestTimeoutMilliseconds,
+      false,
+    );
+    if (options.signal === undefined) {
+      return request;
+    }
+    const signal = options.signal;
+    const abort = (): void => {
+      this.#fail(
+        clientError(
+          AppServerClientErrorCode.HOST_CANCELLED,
+          'Host cancelled an in-flight App Server request',
+          { method },
+        ),
+      );
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    return request.finally(() => signal.removeEventListener('abort', abort));
   }
 
   #requestInternal<TResult>(

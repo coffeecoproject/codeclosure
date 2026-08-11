@@ -526,6 +526,66 @@ void test('experimental or unselected methods are rejected without wire traffic'
   assert.equal(await client.request('thread/start', {}, decodeThread), 'thread-fixture');
 });
 
+void test('the narrow buffered sandbox command uses command/exec without widening request', async (t) => {
+  const { client, root } = await startFixture(t, 'happy');
+  const cwd = join(root, 'candidate');
+  const command = Object.freeze(['/bin/sh', '-c', 'exit 0']);
+  const result = await client.executeBufferedSandboxCommand({
+    command,
+    cwd,
+    sandboxKind: 'READ_ONLY',
+    timeoutMilliseconds: 1_000,
+  });
+
+  assert.deepEqual(result, {
+    request: {
+      command,
+      cwd,
+      outputBytesCap: 1_024,
+      sandboxPolicy: { networkAccess: false, type: 'readOnly' },
+      timeoutMs: 1_000,
+    },
+    response: { exitCode: 0, stderr: '', stdout: '' },
+  });
+  await assert.rejects(
+    client.request(
+      // @ts-expect-error -- command/exec remains outside the generic selected method surface.
+      'command/exec',
+      result.request,
+      jsonObject,
+    ),
+    isClientError(AppServerClientErrorCode.UNSUPPORTED_METHOD),
+  );
+});
+
+void test('the narrow buffered sandbox command rejects unsafe input before wire traffic', async (t) => {
+  const { client, root } = await startFixture(t, 'happy');
+  await assert.rejects(
+    client.executeBufferedSandboxCommand({
+      command: ['/bin/sh', '-c', 'exit 0'],
+      cwd: join(root, 'candidate'),
+      // @ts-expect-error -- the runtime boundary must reject a widened sandbox kind.
+      sandboxKind: 'DANGER_FULL_ACCESS',
+      timeoutMilliseconds: 1_000,
+    }),
+    isClientError(AppServerClientErrorCode.PROTOCOL_LIMIT),
+  );
+  assert.equal(await client.request('thread/start', {}, decodeThread), 'thread-fixture');
+});
+
+void test('the narrow buffered sandbox command rejects a malformed response', async (t) => {
+  const { client, root } = await startFixture(t, 'malformed-command-exec');
+  await assert.rejects(
+    client.executeBufferedSandboxCommand({
+      command: ['/bin/sh', '-c', 'exit 0'],
+      cwd: join(root, 'candidate'),
+      sandboxKind: 'WORKSPACE_WRITE',
+      timeoutMilliseconds: 1_000,
+    }),
+    isClientError(AppServerClientErrorCode.MALFORMED_RESPONSE),
+  );
+});
+
 void test('a connection cannot perform initialize twice', async (t) => {
   const { client } = await startFixture(t, 'happy');
   await assert.rejects(

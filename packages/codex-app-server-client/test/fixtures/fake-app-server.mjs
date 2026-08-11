@@ -129,6 +129,16 @@ function handleInitialize(message) {
 
 function handleRequest(message) {
   requests.push(message.method);
+  if (message.method === 'command/exec') {
+    send({
+      id: message.id,
+      result:
+        scenario === 'malformed-command-exec'
+          ? { exitCode: 0, extra: true, stderr: '', stdout: '' }
+          : { exitCode: 0, stderr: '', stdout: '' },
+    });
+    return;
+  }
   if (message.method === 'thread/start') {
     if (scenario === 'unknown-server-request') {
       send({ id: 'server-unknown', method: 'experimental/unknown', params: {} });

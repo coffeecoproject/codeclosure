@@ -65,6 +65,43 @@ function fixture(overrides = {}) {
       serviceTier: 'priority',
     }),
     startAppServerClient: async (clientInput) => ({
+      executeBufferedSandboxCommand: async (commandInput) => {
+        state.requests.push(
+          Object.freeze({ method: 'executeBufferedSandboxCommand', params: commandInput }),
+        );
+        if (overrides.commandRequestError !== undefined) {
+          throw overrides.commandRequestError;
+        }
+        if (overrides.forbiddenEffect === true) {
+          clientInput.onNotification({
+            method: overrides.forbiddenEffectMethod ?? 'item/started',
+            params: {},
+          });
+        }
+        return {
+          request: overrides.returnedCommandRequest ?? {
+            command: commandInput.command,
+            cwd: commandInput.cwd,
+            outputBytesCap: 1_024,
+            sandboxPolicy:
+              commandInput.sandboxKind === 'READ_ONLY'
+                ? { networkAccess: false, type: 'readOnly' }
+                : {
+                    excludeSlashTmp: true,
+                    excludeTmpdirEnvVar: true,
+                    networkAccess: false,
+                    type: 'workspaceWrite',
+                    writableRoots: [commandInput.cwd],
+                  },
+            timeoutMs: commandInput.timeoutMilliseconds,
+          },
+          response: {
+            exitCode: overrides.commandExitCode ?? 0,
+            stderr: overrides.commandStderr ?? '',
+            stdout: overrides.commandStdout ?? '',
+          },
+        };
+      },
       request: async (method, params) => {
         state.requests.push(Object.freeze({ method, params }));
         if (method === 'configRequirements/read') {
@@ -91,22 +128,6 @@ function fixture(overrides = {}) {
             sandbox: overrides.effectiveSandbox ?? { networkAccess: false, type: 'readOnly' },
             serviceTier: 'priority',
             thread: { id: 'thread_fixture' },
-          };
-        }
-        if (method === 'command/exec') {
-          if (overrides.commandRequestError !== undefined) {
-            throw overrides.commandRequestError;
-          }
-          if (overrides.forbiddenEffect === true) {
-            clientInput.onNotification({
-              method: overrides.forbiddenEffectMethod ?? 'item/started',
-              params: {},
-            });
-          }
-          return {
-            exitCode: overrides.commandExitCode ?? 0,
-            stderr: overrides.commandStderr ?? '',
-            stdout: overrides.commandStdout ?? '',
           };
         }
         throw new TypeError(`Unexpected fixture request: ${method}`);
@@ -137,15 +158,14 @@ test('projects one exact direct sandbox command into containment metadata', asyn
       'permissionProfile/list',
       'thread/start',
       'config/read',
-      'command/exec',
+      'executeBufferedSandboxCommand',
     ],
   );
   assert.deepEqual(state.requests.at(-1)?.params, {
     command: input.command,
     cwd: input.cwd,
-    outputBytesCap: 1_024,
-    sandboxPolicy: { networkAccess: false, type: 'readOnly' },
-    timeoutMs: input.terminalTimeoutMilliseconds,
+    sandboxKind: 'READ_ONLY',
+    timeoutMilliseconds: input.terminalTimeoutMilliseconds,
   });
 });
 
@@ -187,6 +207,24 @@ test('classifies a rejected command request without retaining the server message
       'COMMAND_REQUEST_REQUEST_REJECTED_PROTOCOL_NEG_32602',
     );
     assert.equal(error.message.includes('fixture server message'), false);
+    return true;
+  });
+  assert.equal(state.shutdownObserved, true);
+});
+
+test('rejects a substituted lower-client command request', async () => {
+  const { input, state } = fixture({
+    returnedCommandRequest: {
+      command: ['/bin/sh', '-c', 'exit 0'],
+      cwd: '/assessment/project-read/snapshot',
+      outputBytesCap: 1_024,
+      sandboxPolicy: { type: 'dangerFullAccess' },
+      timeoutMs: 100,
+    },
+  });
+
+  await assert.rejects(runM251LiveContainmentProbe(input), (error) => {
+    assert.equal(m251LiveContainmentFailureReasonCode(error), 'COMMAND_REQUEST_MISMATCH');
     return true;
   });
   assert.equal(state.shutdownObserved, true);

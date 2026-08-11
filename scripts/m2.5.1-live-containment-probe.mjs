@@ -257,30 +257,16 @@ export async function runM251LiveContainmentProbe(input) {
       permissionProfileId: input.phaseEntry.permissionProfileId,
       reasoningEffort: input.sharedProfile.reasoningEffort,
     });
-    const sandboxPolicy =
-      input.expectedSandboxType === 'readOnly'
-        ? Object.freeze({ networkAccess: false, type: 'readOnly' })
-        : Object.freeze({
-            excludeSlashTmp: true,
-            excludeTmpdirEnvVar: true,
-            networkAccess: false,
-            type: 'workspaceWrite',
-            writableRoots: Object.freeze([input.cwd]),
-          });
-    const commandRequest = Object.freeze({
-      command: input.command,
-      cwd: input.cwd,
-      outputBytesCap: 1_024,
-      sandboxPolicy,
-      timeoutMs: input.terminalTimeoutMilliseconds,
-    });
-    let commandResponseValue;
+    let commandExecution;
     try {
-      commandResponseValue = await client.request(
-        'command/exec',
-        commandRequest,
-        (value) => value,
-        requestOptions,
+      commandExecution = await client.executeBufferedSandboxCommand(
+        {
+          command: input.command,
+          cwd: input.cwd,
+          sandboxKind: input.receiptSandboxType,
+          timeoutMilliseconds: input.terminalTimeoutMilliseconds,
+        },
+        { signal: requestOptions.signal },
       );
     } catch (error) {
       fail(
@@ -288,7 +274,27 @@ export async function runM251LiveContainmentProbe(input) {
         'Containment command request failed before a response was available',
       );
     }
-    const commandResponse = jsonObject(commandResponseValue, 'Command response');
+    const commandRequest = jsonObject(commandExecution.request, 'Command request');
+    const commandResponse = jsonObject(commandExecution.response, 'Command response');
+    const expectedCommandRequest = Object.freeze({
+      command: input.command,
+      cwd: input.cwd,
+      outputBytesCap: 1_024,
+      sandboxPolicy:
+        input.receiptSandboxType === 'READ_ONLY'
+          ? Object.freeze({ networkAccess: false, type: 'readOnly' })
+          : Object.freeze({
+              excludeSlashTmp: true,
+              excludeTmpdirEnvVar: true,
+              networkAccess: false,
+              type: 'workspaceWrite',
+              writableRoots: Object.freeze([input.cwd]),
+            }),
+      timeoutMs: input.terminalTimeoutMilliseconds,
+    });
+    if (input.digestCanonical(commandRequest) !== input.digestCanonical(expectedCommandRequest)) {
+      fail('COMMAND_REQUEST_MISMATCH', 'Containment command request was substituted');
+    }
     if (
       JSON.stringify(Object.keys(commandResponse).toSorted()) !==
         JSON.stringify(['exitCode', 'stderr', 'stdout']) ||
