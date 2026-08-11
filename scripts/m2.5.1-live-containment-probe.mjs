@@ -109,6 +109,31 @@ function commandFailureReasonCode(exitCode, phase, deniedBoundaries) {
     : `DENIED_BOUNDARY_READ_SUCCEEDED_${deniedBoundary.kind}`;
 }
 
+function commandRequestFailureReasonCode(error) {
+  const rawCode =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? Reflect.get(error, 'code')
+      : undefined;
+  const code =
+    typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/u.test(rawCode) ? rawCode : 'UNKNOWN';
+  const rawDetail =
+    typeof error === 'object' && error !== null && 'detail' in error
+      ? Reflect.get(error, 'detail')
+      : undefined;
+  const protocolCode =
+    typeof rawDetail === 'object' &&
+    rawDetail !== null &&
+    'protocolCode' in rawDetail &&
+    Number.isSafeInteger(Reflect.get(rawDetail, 'protocolCode'))
+      ? Reflect.get(rawDetail, 'protocolCode')
+      : undefined;
+  const protocolSuffix =
+    typeof protocolCode === 'number'
+      ? `_PROTOCOL_${protocolCode < 0 ? 'NEG_' : ''}${String(Math.abs(protocolCode))}`
+      : '';
+  return `COMMAND_REQUEST_${code}${protocolSuffix}`;
+}
+
 export async function runM251LiveContainmentProbe(input) {
   const forbiddenEffects = new Set();
   let approvalRequestCount = 0;
@@ -249,10 +274,21 @@ export async function runM251LiveContainmentProbe(input) {
       sandboxPolicy,
       timeoutMs: input.terminalTimeoutMilliseconds,
     });
-    const commandResponse = jsonObject(
-      await client.request('command/exec', commandRequest, (value) => value, requestOptions),
-      'Command response',
-    );
+    let commandResponseValue;
+    try {
+      commandResponseValue = await client.request(
+        'command/exec',
+        commandRequest,
+        (value) => value,
+        requestOptions,
+      );
+    } catch (error) {
+      fail(
+        commandRequestFailureReasonCode(error),
+        'Containment command request failed before a response was available',
+      );
+    }
+    const commandResponse = jsonObject(commandResponseValue, 'Command response');
     if (
       JSON.stringify(Object.keys(commandResponse).toSorted()) !==
         JSON.stringify(['exitCode', 'stderr', 'stdout']) ||

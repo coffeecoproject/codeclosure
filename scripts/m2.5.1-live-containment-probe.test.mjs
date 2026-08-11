@@ -94,6 +94,9 @@ function fixture(overrides = {}) {
           };
         }
         if (method === 'command/exec') {
+          if (overrides.commandRequestError !== undefined) {
+            throw overrides.commandRequestError;
+          }
           if (overrides.forbiddenEffect === true) {
             clientInput.onNotification({
               method: overrides.forbiddenEffectMethod ?? 'item/started',
@@ -166,6 +169,24 @@ test('classifies a successful denied-boundary open without retaining its path', 
       `DENIED_BOUNDARY_READ_SUCCEEDED_${M251_CANDIDATE_FREE_DENIED_BOUNDARIES[0]}`,
     );
     assert.equal('path' in error, false);
+    return true;
+  });
+  assert.equal(state.shutdownObserved, true);
+});
+
+test('classifies a rejected command request without retaining the server message', async () => {
+  const requestError = Object.assign(new Error('non-sensitive fixture server message'), {
+    code: 'REQUEST_REJECTED',
+    detail: { method: 'command/exec', protocolCode: -32_602 },
+  });
+  const { input, state } = fixture({ commandRequestError: requestError });
+
+  await assert.rejects(runM251LiveContainmentProbe(input), (error) => {
+    assert.equal(
+      m251LiveContainmentFailureReasonCode(error),
+      'COMMAND_REQUEST_REQUEST_REJECTED_PROTOCOL_NEG_32602',
+    );
+    assert.equal(error.message.includes('fixture server message'), false);
     return true;
   });
   assert.equal(state.shutdownObserved, true);
