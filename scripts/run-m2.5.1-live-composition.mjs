@@ -69,6 +69,35 @@ function cleanupStep(reasonCode, operation) {
   }
 }
 
+function linkedExecutionFailureMetadata(inspection, authority) {
+  try {
+    const policyBundleId = authority.policyBinding?.policyBundleId;
+    if (policyBundleId === undefined) {
+      return 'POLICY_BINDING_NONE';
+    }
+    const acceptance = inspection.getAcceptanceAuthority(authority.workflow.id, policyBundleId);
+    const evidence =
+      acceptance?.currentEvidence
+        .map(({ record }) => {
+          const observation = record.observation;
+          return [
+            record.kind,
+            record.resultStatus,
+            'terminationKind' in observation ? observation.terminationKind : 'NONE',
+            'exitCode' in observation ? (observation.exitCode ?? 'NONE') : 'NONE',
+            'diagnosticCode' in observation ? observation.diagnosticCode : 'NONE',
+          ].join(':');
+        })
+        .join('+') || 'NONE';
+    const freeze = inspection.getCurrentCandidateFreezeEvidence(authority.workflow.id);
+    const changeCount =
+      freeze?.record.schemaVersion === 2 ? freeze.record.observation.changes.length : 'NONE';
+    return `EVIDENCE_${evidence}_CANDIDATE_CHANGES_${String(changeCount)}`;
+  } catch {
+    return 'INSPECTION_FAILED';
+  }
+}
+
 function argument(name) {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
@@ -550,7 +579,8 @@ async function main() {
     if (observedStartResult?.drive?.stopReason !== 'CLOSED') {
       failWithReason(
         `LINKED_EXECUTION_DRIVE_${observedStartResult?.drive?.stopReason ?? 'NONE'}` +
-          `_DETAIL_${observedStartResult?.drive?.detailCode ?? 'NONE'}`,
+          `_DETAIL_${observedStartResult?.drive?.detailCode ?? 'NONE'}` +
+          `_${linkedExecutionFailureMetadata(primaryComposition.inspection, finalAuthority)}`,
         'M2.5.1 linked execution did not reach technical closeout',
       );
     }
