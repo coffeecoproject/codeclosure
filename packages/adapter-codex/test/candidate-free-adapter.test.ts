@@ -54,6 +54,7 @@ import {
   CODEX_M251_WORKER_EFFECTIVE_FEATURES,
   CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
   CodexWorkerAdapter,
+  assertM251EffectiveConfiguration,
   assertDirectiveV3BindsWorkerRequest,
   candidateWorkspaceLeaseProjection,
   codexFinalPayloadBindingV3,
@@ -87,6 +88,11 @@ const slice0ContractPath = resolve(
   'slice0-contract.json',
 );
 const fixedObservedAt = '2026-08-09T14:00:00.000Z';
+const fixtureClientLimits = Object.freeze({
+  requestTimeoutMilliseconds: 500,
+  shutdownGraceMilliseconds: 1_000,
+  shutdownKillMilliseconds: 1_000,
+});
 
 const hash = (value: string): string => `sha256:${value.padEnd(64, value.slice(-1)).slice(0, 64)}`;
 
@@ -658,6 +664,25 @@ const unsafeEffectiveConfig = Object.freeze({
     }),
   }),
 });
+
+void test('[M251-B4] shared v3 config validator rejects a poisoned prepublication projection', () => {
+  const expectation = Object.freeze({
+    executionConfigDigest: digestCanonical(effectiveConfig),
+    model: 'gpt-fixture',
+    modelProvider: 'openai',
+    permissionProfileId: 'codeclosure-m2',
+    reasoningEffort: 'low',
+  });
+  assert.doesNotThrow(() => assertM251EffectiveConfiguration(effectiveConfig, expectation));
+  assert.throws(
+    () =>
+      assertM251EffectiveConfiguration(unsafeEffectiveConfig, {
+        ...expectation,
+        executionConfigDigest: digestCanonical(unsafeEffectiveConfig),
+      }),
+    /outside the closed profile/,
+  );
+});
 const permissionProfile = Object.freeze({
   allowed: true,
   id: 'codeclosure-m2',
@@ -791,11 +816,7 @@ function integrationHarness(
   });
   return Object.freeze({
     adapter: new CodexWorkerAdapter({
-      clientLimits: {
-        requestTimeoutMilliseconds: 500,
-        shutdownGraceMilliseconds: 100,
-        shutdownKillMilliseconds: 100,
-      },
+      clientLimits: fixtureClientLimits,
       directive: selectedDirective,
       launch,
       onLifecycleEvent: () => undefined,
@@ -1223,11 +1244,7 @@ void test('[I-023][I-027][M251-C10] bound unsafe effective configuration still f
 void test('[I-004][I-023][M251-C10] v3 IMPLEMENT Adapter binds workspaceWrite and emits only a completion request', async (t) => {
   const fixture = candidateDirective(t, 'candidate-change');
   const adapter = new CodexWorkerAdapter({
-    clientLimits: {
-      requestTimeoutMilliseconds: 500,
-      shutdownGraceMilliseconds: 100,
-      shutdownKillMilliseconds: 100,
-    },
+    clientLimits: fixtureClientLimits,
     directive: fixture.directive,
     launch: fixture.launch,
     onLifecycleEvent: () => undefined,
@@ -1261,11 +1278,7 @@ void test('[I-004][I-023][M251-C10] v3 IMPLEMENT Adapter binds workspaceWrite an
 void test('[I-023][I-027][M251-X11] v3 IMPLEMENT discards an out-of-scope Candidate file change', async (t) => {
   const fixture = candidateDirective(t, 'candidate-outside-change');
   const adapter = new CodexWorkerAdapter({
-    clientLimits: {
-      requestTimeoutMilliseconds: 500,
-      shutdownGraceMilliseconds: 100,
-      shutdownKillMilliseconds: 100,
-    },
+    clientLimits: fixtureClientLimits,
     directive: fixture.directive,
     launch: fixture.launch,
     onLifecycleEvent: () => undefined,

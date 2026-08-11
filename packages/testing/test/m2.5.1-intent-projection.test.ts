@@ -21,10 +21,12 @@ import {
 import {
   CanonicalJsonSha256DigestProvider,
   M251IntentProjectionCompiler,
+  M251TrustedIntentProjectionCompiler,
   M25IntentProjectionCompiler,
   Rfc8785Canonicalizer,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
+  createM251ProductionAdmissionPolicyDefinition,
   type IntentAnalysisAssistantResponseV1,
 } from '@codeclosure/runtime';
 
@@ -168,6 +170,46 @@ void test('M2.5.1 exact-value matching fails closed at the fixed source-binding 
         },
       }),
     /fixed source-binding budget/u,
+  );
+});
+
+void test('[M251-B4] trusted Projection derives exact allowed paths only from its bound Policy', () => {
+  const projectPath = '/fixture/m251-b4-trusted-project';
+  const allowedPaths = Object.freeze(['src/payment.js', 'test/payment.test.js']);
+  const trustedPolicy = createM25AdmissionPolicy(
+    createM251ProductionAdmissionPolicyDefinition({ projectPath, allowedPaths }),
+    digests,
+  );
+  const trustedBase = {
+    ...rawBase,
+    declaredProjectRef: Object.freeze({
+      schemaVersion: 1 as const,
+      normalizedPath: projectPath,
+      identityDigest: digests.digest({ normalizedPath: projectPath }),
+    }),
+  } satisfies RawRequestRevisionProjectionInput;
+  const trustedRaw = Object.freeze({
+    ...trustedBase,
+    rawRequestDigest: digests.digest(rawRequestRevisionProjection(trustedBase)),
+  });
+  const projected = new M251TrustedIntentProjectionCompiler({ canonicalizer, digests }).project({
+    ...input('codeclosure-m2-5-1-intake-adapter-v3'),
+    admissionPolicy: trustedPolicy,
+    rawRequestRevisions: [trustedRaw],
+  });
+  assert.equal(
+    projected.projection.canonicalProfileVersion,
+    IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4,
+  );
+  assert.deepEqual(projected.projection.scope, { projectPath, allowedPaths });
+  assert.deepEqual(
+    projected.projection.sourceBindings.flatMap((binding) =>
+      binding.projectionFieldRef === IntentProjectionField.SCOPE &&
+      binding.authorityClass === SourceAuthorityClass.POLICY_DERIVED
+        ? [binding.sourceFieldPath]
+        : [],
+    ),
+    ['/trustedProjectScope/allowedPaths/0', '/trustedProjectScope/allowedPaths/1'],
   );
 });
 

@@ -57,6 +57,14 @@ const m251ExecutionAuthorityFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/m251-execution-authority.ts',
 );
+const m251CodexInvocationFixturePath = resolve(
+  repositoryRoot,
+  'apps/cli/src/composition/m251-codex-worker-invocation.ts',
+);
+const m251ProductionCompositionFixturePath = resolve(
+  repositoryRoot,
+  'apps/cli/src/composition/m251-trusted-production-composition.ts',
+);
 const m2ProtectedProofFixturePath = resolve(
   repositoryRoot,
   'apps/cli/src/composition/m2-protected-demo-proof.ts',
@@ -343,7 +351,7 @@ void test('only named composition owners may import their exact privileged packa
   }
 });
 
-void test('M2.5.1 execution authority has one closed owner and no production consumer before B4', () => {
+void test('M2.5.1 execution authority and B4 production consumers have exact named owners', () => {
   const allowedOwnerImports = [
     "import { CODEX_M251_WORKER_ACTIVITY_POLICY_ID } from '@codeclosure/adapter-codex';",
     "import { WorkflowPhase } from '@codeclosure/domain';",
@@ -366,6 +374,34 @@ void test('M2.5.1 execution authority has one closed owner and no production con
   assert.equal(
     violations(
       "import { installM251ExecutionAuthority } from './m251-execution-authority.js';",
+      trustedCompositionFixturePath,
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    violations(
+      "import { installM251ExecutionAuthority } from './m251-execution-authority.js';",
+      m251ProductionCompositionFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      "import type { M251PhaseExecutionAuthorityInput } from './m251-execution-authority.js';",
+      m251CodexInvocationFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      "import { createM251TrustedCodexInvocation, type M251TrustedCodexProfileAuthority } from './m251-codex-worker-invocation.js';",
+      m251ProductionCompositionFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations(
+      "import { createM251TrustedCodexInvocation } from './m251-codex-worker-invocation.js';",
       trustedCompositionFixturePath,
     ).length,
     1,

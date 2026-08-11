@@ -32,6 +32,11 @@ import {
 
 const fixtureScript = resolve(import.meta.dirname, 'fixtures', 'fake-app-server.mjs');
 const fixedObservedAt = '2026-07-31T08:00:00.000Z';
+const fixtureClientLimits = Object.freeze({
+  requestTimeoutMilliseconds: 500,
+  shutdownGraceMilliseconds: 1_000,
+  shutdownKillMilliseconds: 1_000,
+});
 
 function hash(character: string): string {
   return `sha256:${character.repeat(64)}`;
@@ -382,11 +387,7 @@ function createHarness(
   const lifecycleEvents: unknown[] = [];
   return Object.freeze({
     adapter: new CodexWorkerAdapter({
-      clientLimits: {
-        requestTimeoutMilliseconds: 500,
-        shutdownGraceMilliseconds: 100,
-        shutdownKillMilliseconds: 100,
-      },
+      clientLimits: fixtureClientLimits,
       directive: selectedDirective,
       launch,
       onDiagnosticEvent: (event) => diagnostics.push(event),
@@ -713,11 +714,7 @@ void test('[I-027] cancellation after the terminal payload but before event admi
   const harness = createHarness(t, 'happy');
   const controller = new AbortController();
   const adapter = new CodexWorkerAdapter({
-    clientLimits: {
-      requestTimeoutMilliseconds: 500,
-      shutdownGraceMilliseconds: 100,
-      shutdownKillMilliseconds: 100,
-    },
+    clientLimits: fixtureClientLimits,
     directive: harness.directive,
     launch: harness.launch,
     onLifecycleEvent: () => undefined,

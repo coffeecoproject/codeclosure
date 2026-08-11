@@ -35,7 +35,11 @@ export * from './project-read-currency-contracts.js';
 export type {
   ProjectReadAttemptIdentityGenerator,
   ProjectReadAttemptRuntimeDependencies,
+  ProjectReadTerminalCleanupDependencies,
+  ProjectReadTerminalCleanupStore,
+  ProjectReadTerminalCleanupSummary,
 } from './project-read-attempt-authority.js';
+export { reconcileProjectReadSnapshots } from './project-read-attempt-authority.js';
 export * from './project-read-snapshot-cleanup-contracts.js';
 export * from './project-read-cleanup-store.js';
 export type {

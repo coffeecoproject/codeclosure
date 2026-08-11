@@ -398,7 +398,10 @@ export function validateAcceptanceCandidateEvidencePolicy(
   if (rawPolicy.verification.kind !== CheckSpecificationKind.LOCAL_COMMAND) {
     throw new TypeError('Acceptance verification Check kind is unsupported');
   }
-  const freeze = validateM1CandidateFreezeCheck(generation, rawPolicy.freeze);
+  const freeze =
+    rawPolicy.freeze.version === M251CandidateFreezePolicy.VERSION
+      ? validateM251CandidateFreezeCheck(generation, rawPolicy.freeze)
+      : validateM1CandidateFreezeCheck(generation, rawPolicy.freeze);
   const local = validateLocalCommandVerificationPolicy(
     goal,
     generation,

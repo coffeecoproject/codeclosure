@@ -1,4 +1,6 @@
 import {
+  AttemptStatus,
+  ExternalExecutionState,
   ExternalPhaseCwdKind,
   ExternalPhaseSourceAuthorityKind,
   PROJECT_READ_CLEANUP_POLICY,
@@ -8,6 +10,7 @@ import {
   ProjectReadRetentionPolicy,
   ProjectReadSnapshotAccessMode,
   ProjectReadSnapshotCleanupEligibilityKind,
+  ProjectReadSnapshotCleanupDisposition,
   ProjectReadSnapshotCleanupLifecyclePolicy,
   ProjectReadSourceCheckoutAccess,
   WorkflowPhase,
@@ -25,6 +28,7 @@ import {
   sha256Digest,
   type AuditEventId,
   type ExecutionProfile,
+  type ExternalExecutionRecord,
   type Goal,
   type IsoTimestamp,
   type PolicyBundle,
@@ -61,6 +65,7 @@ import {
   decodeProjectReadWorkspaceAuthoritySnapshot,
   decodeProjectReadWorkspaceObservation,
   type ProjectReadWorkspaceAuthoritySnapshot,
+  type ProjectReadWorkspaceObservation,
 } from './project-read-workspace-contracts.js';
 import type { ProjectReadWorkspacePort } from './project-read-workspace-port.js';
 import { digestProjectReadSnapshotCleanupValue } from './project-read-snapshot-cleanup-contracts.js';
@@ -101,6 +106,32 @@ export interface ProjectReadOrphanReconciliationDependencies {
   readonly clock: Clock;
   readonly identities: ProjectReadAttemptIdentityGenerator;
   readonly digests: DigestProvider;
+}
+
+export interface ProjectReadTerminalCleanupStore extends ProjectReadCleanupControlStore {
+  getProjectReadSnapshotCleanupGrantForAuthority(
+    projectReadAuthorityId: ProjectSourceReadAuthorityId,
+  ): ProjectReadSnapshotCleanupGrant | undefined;
+  getProjectSourceReadAuthority(
+    id: ProjectSourceReadAuthorityId,
+  ): ProjectSourceReadAuthorityRecord | undefined;
+  getAttempt(id: Attempt['id']): Attempt | undefined;
+  getExternalExecutionForAttempt(attemptId: Attempt['id']): ExternalExecutionRecord | undefined;
+}
+
+export interface ProjectReadTerminalCleanupDependencies {
+  readonly store: ProjectReadTerminalCleanupStore;
+  readonly workspace: ProjectReadWorkspacePort;
+  readonly clock: Clock;
+  readonly identities: ProjectReadAttemptIdentityGenerator;
+  readonly digests: DigestProvider;
+}
+
+export interface ProjectReadTerminalCleanupSummary {
+  readonly authoritySnapshotId: ProjectReadWorkspaceAuthoritySnapshotId;
+  readonly observedSnapshotCount: number;
+  readonly resolvedOrphanCount: number;
+  readonly resolvedTerminalCount: number;
 }
 
 export type ProjectReadOrphanReconciliationResult =
@@ -372,6 +403,278 @@ function resolveCleanupGrant(
     case ProjectReadSnapshotCleanupCoordinatorStatus.REJECTED:
       return Object.freeze({ status: 'CLEANUP_REJECTED', grant, cleanup });
   }
+}
+
+function requireResolvedCleanup(
+  grant: ProjectReadSnapshotCleanupGrant,
+  dependencies: ProjectReadTerminalCleanupDependencies,
+): void {
+  const result = createProjectReadSnapshotCleanupCoordinator({
+    store: dependencies.store,
+    workspace: dependencies.workspace,
+    clock: dependencies.clock,
+    ids: dependencies.identities,
+    digests: dependencies.digests,
+  }).resolve({ grant });
+  if (
+    result.status !== ProjectReadSnapshotCleanupCoordinatorStatus.RESOLVED ||
+    (result.outcome.disposition !== ProjectReadSnapshotCleanupDisposition.DELETED &&
+      result.outcome.disposition !== ProjectReadSnapshotCleanupDisposition.ALREADY_ABSENT)
+  ) {
+    throw new TypeError('Project-read snapshot cleanup did not close safely');
+  }
+}
+
+function retainWorkspaceObservation(
+  observation: ProjectReadWorkspaceObservation,
+  dependencies: ProjectReadTerminalCleanupDependencies,
+): ProjectReadWorkspaceObservation {
+  const result = dependencies.store.recordProjectReadWorkspaceObservation({
+    observation,
+    auditEventId: dependencies.identities.nextAuditEventId(),
+  });
+  if (result.status === 'OBSERVATION_CONFLICT') {
+    throw new TypeError('Project-read reconciliation observation conflicted');
+  }
+  const retained = decodeProjectReadWorkspaceObservation(result.value);
+  if (
+    retained.id !== observation.id ||
+    retained.observationDigest !== observation.observationDigest
+  ) {
+    throw new TypeError('Project-read Store substituted a reconciliation observation');
+  }
+  return retained;
+}
+
+function issueCleanupGrant(
+  grant: ProjectReadSnapshotCleanupGrant,
+  dependencies: ProjectReadTerminalCleanupDependencies,
+): ProjectReadSnapshotCleanupGrant {
+  const result = dependencies.store.issueProjectReadSnapshotCleanupGrant({
+    grant,
+    auditEventId: dependencies.identities.nextAuditEventId(),
+  });
+  if (result.status === 'GRANT_CONFLICT' || result.status === 'NOT_ELIGIBLE') {
+    throw new TypeError('Project-read cleanup Grant was not admitted');
+  }
+  if (!('value' in result)) {
+    throw new TypeError('Project-read cleanup Grant result is malformed');
+  }
+  const retained = decodeProjectReadSnapshotCleanupGrant(result.value, dependencies.digests);
+  if (retained.id !== grant.id || retained.grantDigest !== grant.grantDigest) {
+    throw new TypeError('Project-read Store substituted a cleanup Grant');
+  }
+  return retained;
+}
+
+function terminalCleanupGrant(
+  snapshot: ProjectReadWorkspaceAuthoritySnapshot,
+  record: ProjectSourceReadAuthorityRecord,
+  attempt: Attempt,
+  execution: ExternalExecutionRecord,
+  dependencies: ProjectReadTerminalCleanupDependencies,
+): ProjectReadSnapshotCleanupGrant {
+  if (
+    (attempt.status !== AttemptStatus.RESULT_RECORDED &&
+      attempt.status !== AttemptStatus.FAILED &&
+      attempt.status !== AttemptStatus.INTERRUPTED) ||
+    (execution.state !== ExternalExecutionState.COMPLETED &&
+      execution.state !== ExternalExecutionState.INTERRUPTED &&
+      execution.state !== ExternalExecutionState.FAILED &&
+      execution.state !== ExternalExecutionState.ABANDONED) ||
+    execution.terminalAt === undefined
+  ) {
+    throw new TypeError('Project-read terminal cleanup lacks exact terminal authority');
+  }
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    id: projectReadSnapshotCleanupGrantId(
+      dependencies.identities.nextProjectReadSnapshotCleanupGrantId(),
+    ),
+    eligibilityKind: ProjectReadSnapshotCleanupEligibilityKind.TERMINAL,
+    authoritySnapshotId: snapshot.id,
+    authoritySnapshotDigest: snapshot.authorityDigest,
+    authoritySequence: snapshot.authoritySequence,
+    projectReadAuthorityId: record.id,
+    projectReadAuthorityRecordDigest: record.recordDigest,
+    snapshotId: record.snapshotId,
+    workspaceRootIdentity: record.workspaceRootIdentity,
+    snapshotLeafRealpath: record.snapshotLeafRealpath,
+    ownershipMarkerProfile: record.ownershipMarkerProfile,
+    ownershipMarkerDigest: record.ownershipMarkerDigest,
+    cleanupPolicy: record.cleanupPolicy,
+    lifecyclePolicy: ProjectReadSnapshotCleanupLifecyclePolicy.CONSUME_ONCE,
+    issuedAt: latestIsoTimestamp(
+      dependencies.clock.now(),
+      snapshot.issuedAt,
+      attempt.endedAt,
+      execution.terminalAt,
+    ),
+    attemptId: attempt.id,
+    terminalAttemptStatus: attempt.status,
+    terminalAttemptEndedAt: attempt.endedAt,
+    externalExecutionId: execution.id,
+    terminalExternalExecutionState: execution.state,
+    terminalExternalExecutionAt: execution.terminalAt,
+    terminalExternalExecutionRecordDigest: execution.recordDigest,
+  });
+  return decodeProjectReadSnapshotCleanupGrant(
+    {
+      ...withoutDigest,
+      grantDigest: digestProjectReadSnapshotCleanupValue(
+        projectReadSnapshotCleanupGrantProjection(withoutDigest),
+      ),
+    },
+    dependencies.digests,
+  );
+}
+
+function orphanCleanupGrant(
+  snapshot: ProjectReadWorkspaceAuthoritySnapshot,
+  observation: ProjectReadWorkspaceObservation,
+  dependencies: ProjectReadTerminalCleanupDependencies,
+): ProjectReadSnapshotCleanupGrant {
+  if (
+    observation.classification !== ProjectReadWorkspaceClassification.OWNED_ORPHANED ||
+    observation.projectReadAuthorityId === null ||
+    observation.snapshotId === null ||
+    observation.ownershipMarkerProfile !== PROJECT_READ_OWNERSHIP_MARKER_PROFILE ||
+    observation.ownershipMarkerDigest === null
+  ) {
+    throw new TypeError('Project-read orphan cleanup lacks exact owned observation');
+  }
+  const withoutDigest = Object.freeze({
+    schemaVersion: 1 as const,
+    id: projectReadSnapshotCleanupGrantId(
+      dependencies.identities.nextProjectReadSnapshotCleanupGrantId(),
+    ),
+    eligibilityKind: ProjectReadSnapshotCleanupEligibilityKind.ORPHANED,
+    authoritySnapshotId: snapshot.id,
+    authoritySnapshotDigest: snapshot.authorityDigest,
+    authoritySequence: snapshot.authoritySequence,
+    projectReadAuthorityId: observation.projectReadAuthorityId,
+    snapshotId: observation.snapshotId,
+    workspaceRootIdentity: observation.workspaceRootIdentity,
+    snapshotLeafRealpath: observation.snapshotLeafRealpath,
+    ownershipMarkerProfile: observation.ownershipMarkerProfile,
+    ownershipMarkerDigest: observation.ownershipMarkerDigest,
+    cleanupPolicy: PROJECT_READ_CLEANUP_POLICY,
+    lifecyclePolicy: ProjectReadSnapshotCleanupLifecyclePolicy.CONSUME_ONCE,
+    issuedAt: latestIsoTimestamp(
+      dependencies.clock.now(),
+      snapshot.issuedAt,
+      observation.observedAt,
+    ),
+    workspaceObservationId: observation.id,
+    workspaceObservationDigest: observation.observationDigest,
+  });
+  return decodeProjectReadSnapshotCleanupGrant(
+    {
+      ...withoutDigest,
+      grantDigest: digestProjectReadSnapshotCleanupValue(
+        projectReadSnapshotCleanupGrantProjection(withoutDigest),
+      ),
+    },
+    dependencies.digests,
+  );
+}
+
+/**
+ * Trusted Runtime reconciliation for terminal and pre-commit orphaned
+ * ProjectRead snapshots. The workspace reports physical observations; only
+ * retained Store authority can issue and consume Cleanup Grants.
+ */
+export function reconcileProjectReadSnapshots(
+  dependencies: ProjectReadTerminalCleanupDependencies,
+): ProjectReadTerminalCleanupSummary {
+  const captured = dependencies.store.captureProjectReadWorkspaceAuthoritySnapshot({
+    id: dependencies.identities.nextProjectReadWorkspaceAuthoritySnapshotId(),
+    issuedAt: latestIsoTimestamp(dependencies.clock.now()),
+    auditEventId: dependencies.identities.nextAuditEventId(),
+  });
+  if (captured.status === 'SNAPSHOT_CONFLICT') {
+    throw new TypeError('Project-read reconciliation authority snapshot conflicted');
+  }
+  const snapshot = decodeProjectReadWorkspaceAuthoritySnapshot(captured.value);
+  const observations = dependencies.workspace.reconcile(snapshot).map((raw) => {
+    const observation = decodeProjectReadWorkspaceObservation(raw);
+    assertProjectReadWorkspaceObservationMatchesAuthoritySnapshot(observation, snapshot);
+    return retainWorkspaceObservation(observation, dependencies);
+  });
+  if (
+    observations.some(
+      ({ classification }) => classification === ProjectReadWorkspaceClassification.UNSAFE,
+    )
+  ) {
+    throw new TypeError('Project-read reconciliation found an unsafe workspace entry');
+  }
+
+  let resolvedTerminalCount = 0;
+  for (const expected of snapshot.expectedSnapshots) {
+    if (expected.retention !== 'RETAINED') {
+      continue;
+    }
+    const existing = dependencies.store.getProjectReadSnapshotCleanupGrantForAuthority(
+      expected.projectReadAuthorityId,
+    );
+    if (existing !== undefined) {
+      requireResolvedCleanup(existing, dependencies);
+      resolvedTerminalCount += 1;
+      continue;
+    }
+    const observation = observations.find(
+      (candidate) =>
+        candidate.classification === ProjectReadWorkspaceClassification.OWNED_RETAINED &&
+        candidate.projectReadAuthorityId === expected.projectReadAuthorityId,
+    );
+    const record = dependencies.store.getProjectSourceReadAuthority(
+      expected.projectReadAuthorityId,
+    );
+    const attempt =
+      record === undefined ? undefined : dependencies.store.getAttempt(record.attemptId);
+    const execution =
+      record === undefined
+        ? undefined
+        : dependencies.store.getExternalExecutionForAttempt(record.attemptId);
+    if (
+      observation === undefined ||
+      record === undefined ||
+      attempt === undefined ||
+      execution === undefined
+    ) {
+      throw new TypeError('Project-read retained snapshot lacks terminal cleanup authority');
+    }
+    const grant = issueCleanupGrant(
+      terminalCleanupGrant(snapshot, record, attempt, execution, dependencies),
+      dependencies,
+    );
+    requireResolvedCleanup(grant, dependencies);
+    resolvedTerminalCount += 1;
+  }
+
+  let resolvedOrphanCount = 0;
+  for (const observation of observations.filter(
+    ({ classification }) => classification === ProjectReadWorkspaceClassification.OWNED_ORPHANED,
+  )) {
+    if (observation.projectReadAuthorityId === null) {
+      throw new TypeError('Project-read orphan observation lacks authority identity');
+    }
+    const existing = dependencies.store.getProjectReadSnapshotCleanupGrantForAuthority(
+      observation.projectReadAuthorityId,
+    );
+    const grant =
+      existing ??
+      issueCleanupGrant(orphanCleanupGrant(snapshot, observation, dependencies), dependencies);
+    requireResolvedCleanup(grant, dependencies);
+    resolvedOrphanCount += 1;
+  }
+
+  return Object.freeze({
+    authoritySnapshotId: snapshot.id,
+    observedSnapshotCount: observations.length,
+    resolvedOrphanCount,
+    resolvedTerminalCount,
+  });
 }
 
 export function reconcileProjectReadAttemptOrphan(

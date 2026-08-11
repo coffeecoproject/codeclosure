@@ -61,6 +61,7 @@ import {
 import {
   M25_CLARIFICATION_QUESTION_PROMPTS,
   M25_DERIVATION_RULE_VERSION,
+  M251_DERIVATION_RULE_VERSION,
 } from './intake-projection.js';
 
 interface IntentAdmissionInputViewCommon {
@@ -294,6 +295,74 @@ function assertExactProposalSourceBinding(
     !allowedPaths.includes(binding.sourceFieldPath)
   ) {
     throw new TypeError(`${binding.authorityClass} binding does not bind an exact Proposal field`);
+  }
+}
+
+function assertPolicyDerivedSourceBinding(
+  binding: Extract<
+    SourceBinding,
+    { readonly authorityClass: typeof SourceAuthorityClass.POLICY_DERIVED }
+  >,
+  current: RawRequestRevisionRecord,
+  policy: IntentAdmissionPolicy,
+): void {
+  if (
+    binding.derivationPolicyRef.digest !== policy.digest ||
+    binding.derivationPolicyRef.orderedInputBindingDigests.length !== 0
+  ) {
+    throw new TypeError('POLICY_DERIVED binding does not bind the exact Admission Policy');
+  }
+  switch (binding.projectionFieldRef) {
+    case IntentProjectionField.PROJECT_IDENTITY:
+      if (
+        binding.sourceRecordRef !== current.rawRequestId ||
+        binding.sourceRevision !== current.revision ||
+        binding.sourceDigest !== current.rawRequestDigest ||
+        binding.sourceFieldPath !== '/declaredProjectRef/normalizedPath' ||
+        binding.derivationPolicyRef.id !==
+          IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE ||
+        binding.derivationPolicyRef.version !== M25_DERIVATION_RULE_VERSION
+      ) {
+        throw new TypeError('POLICY_DERIVED Project binding is invalid');
+      }
+      return;
+    case IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION:
+      if (
+        binding.sourceRecordRef !== current.rawRequestId ||
+        binding.sourceRevision !== current.revision ||
+        binding.sourceDigest !== current.rawRequestDigest ||
+        binding.sourceFieldPath !== '/interactionAction' ||
+        binding.derivationPolicyRef.id !==
+          IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION ||
+        binding.derivationPolicyRef.version !== M25_DERIVATION_RULE_VERSION
+      ) {
+        throw new TypeError('POLICY_DERIVED action binding is invalid');
+      }
+      return;
+    case IntentProjectionField.SCOPE: {
+      const prefix = '/trustedProjectScope/allowedPaths/';
+      const indexText = binding.sourceFieldPath.startsWith(prefix)
+        ? binding.sourceFieldPath.slice(prefix.length)
+        : '';
+      const index = /^(0|[1-9][0-9]*)$/u.test(indexText) ? Number(indexText) : -1;
+      if (
+        binding.sourceRecordRef !== policy.id ||
+        binding.sourceRevision !== policy.schemaVersion ||
+        binding.sourceDigest !== policy.digest ||
+        binding.derivationPolicyRef.id !==
+          IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE ||
+        binding.derivationPolicyRef.version !== M251_DERIVATION_RULE_VERSION ||
+        policy.trustedProjectScope?.allowedPaths[index] === undefined
+      ) {
+        throw new TypeError('POLICY_DERIVED allowed-path binding is invalid');
+      }
+      return;
+    }
+    case IntentProjectionField.OBJECTIVE:
+    case IntentProjectionField.REQUIRED_CRITERION:
+    case IntentProjectionField.NON_GOAL:
+    case IntentProjectionField.ASSUMPTION:
+      throw new TypeError('POLICY_DERIVED binding targets a forbidden Projection field');
   }
 }
 
@@ -626,26 +695,7 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
           assertExactProposalSourceBinding(binding, proposal);
           break;
         case SourceAuthorityClass.POLICY_DERIVED:
-          if (
-            binding.sourceRecordRef !== current.rawRequestId ||
-            binding.sourceRevision !== current.revision ||
-            binding.sourceDigest !== current.rawRequestDigest ||
-            binding.derivationPolicyRef.digest !== policy.digest ||
-            binding.derivationPolicyRef.orderedInputBindingDigests.length !== 0 ||
-            (binding.projectionFieldRef === IntentProjectionField.PROJECT_IDENTITY
-              ? binding.sourceFieldPath !== '/declaredProjectRef/normalizedPath' ||
-                binding.derivationPolicyRef.id !==
-                  IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE ||
-                binding.derivationPolicyRef.version !== M25_DERIVATION_RULE_VERSION
-              : binding.projectionFieldRef === IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION
-                ? binding.sourceFieldPath !== '/interactionAction' ||
-                  binding.derivationPolicyRef.id !==
-                    IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION ||
-                  binding.derivationPolicyRef.version !== M25_DERIVATION_RULE_VERSION
-                : true)
-          ) {
-            throw new TypeError('POLICY_DERIVED binding does not bind the exact policy input');
-          }
+          assertPolicyDerivedSourceBinding(binding, current, policy);
           break;
         case SourceAuthorityClass.PROJECT_OBSERVED:
           throw new TypeError('M2.5 local Admission does not admit project observation');
@@ -867,7 +917,7 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
         IntentProjectionField.PROJECT_IDENTITY,
         allowedClasses(IntentAdmissionMaterialFieldKind.PROJECT_PATH),
       ],
-      [IntentProjectionField.SCOPE, new Set()],
+      [IntentProjectionField.SCOPE, allowedClasses(IntentAdmissionMaterialFieldKind.ALLOWED_PATHS)],
       [IntentProjectionField.NON_GOAL, allowedClasses(IntentAdmissionMaterialFieldKind.NON_GOALS)],
       [
         IntentProjectionField.ASSUMPTION,
@@ -913,6 +963,17 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
         binding.projectionFieldRef === IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION &&
         binding.authorityClass === SourceAuthorityClass.POLICY_DERIVED,
     );
+    const allowedPathBindings = projection.sourceBindings.filter(
+      (
+        binding,
+      ): binding is Extract<
+        SourceBinding,
+        { readonly authorityClass: typeof SourceAuthorityClass.POLICY_DERIVED }
+      > =>
+        binding.projectionFieldRef === IntentProjectionField.SCOPE &&
+        binding.authorityClass === SourceAuthorityClass.POLICY_DERIVED,
+    );
+    const expectedAllowedPaths = policy.trustedProjectScope?.allowedPaths ?? [];
     if (
       projection.objective === undefined ||
       projection.objective.trim().length === 0 ||
@@ -924,7 +985,12 @@ export class M25IntentAdmissionEngine implements IntentAdmissionEngine {
       criterionValues.some((criterion) => !projection.requiredCriteria.includes(criterion)) ||
       projection.optionalCriteria.length !== 0 ||
       projection.scope.projectPath !== current.declaredProjectRef?.normalizedPath ||
-      projection.scope.allowedPaths.length !== 0 ||
+      JSON.stringify(projection.scope.allowedPaths) !== JSON.stringify(expectedAllowedPaths) ||
+      allowedPathBindings.length !== expectedAllowedPaths.length ||
+      allowedPathBindings.some(
+        (binding, index) =>
+          binding.sourceFieldPath !== `/trustedProjectScope/allowedPaths/${String(index)}`,
+      ) ||
       projection.nonGoals.length > 16 ||
       projection.nonGoals.some((nonGoal) => !nonGoalValues.includes(nonGoal)) ||
       nonGoalValues.some((nonGoal) => !projection.nonGoals.includes(nonGoal)) ||

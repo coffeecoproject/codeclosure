@@ -515,11 +515,14 @@ source-currency boundary now requires a preparation-v2 result bound to the
 exact completed PLAN ProjectRead authority; mismatch creates no Candidate and
 atomically retains `PLAN_SOURCE_NOT_CURRENT` as `PLAN / FAILED`, including
 processed-command replay, strict reopen, and `BLOCKED / INSPECT_BLOCKER`
-projection. B3 now implements deterministic Driver Profile v3 dispatch,
+projection. B3 implements deterministic Driver Profile v3 dispatch,
 Intent/Record v2 authorization, and Runtime-owned candidate-free pre/post-Turn
-source and snapshot currency with no FakeWorker fallback. Its bounded review
-has not yet issued a verdict; trusted production composition, mandatory live
-proof, and milestone assessment have not started. The
+source and snapshot currency with no FakeWorker fallback, and its bounded
+review passed. B4 now composes the trusted production graph and deterministic
+Intake-to-closeout chain under bounded review, including terminal ProjectRead
+cleanup and no production Fake fallback; its protocol fixture is not Live
+evidence. B5 closure, mandatory real user-path proof, and milestone assessment
+have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

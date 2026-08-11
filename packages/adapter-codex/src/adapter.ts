@@ -468,13 +468,81 @@ function selectedThreadConfiguration(directive: SelectedCodexWorkerDirective) {
   });
 }
 
+export interface M251EffectiveConfigurationExpectation {
+  readonly executionConfigDigest: string;
+  readonly model: string;
+  readonly modelProvider: string;
+  readonly permissionProfileId: string;
+  readonly reasoningEffort: string;
+}
+
+/** Shared strict check for the pinned M2.5.1 config/read projection. */
+export function assertM251EffectiveConfiguration(
+  value: JsonValue,
+  expected: M251EffectiveConfigurationExpectation,
+): void {
+  if (digestProtocolValue(value) !== expected.executionConfigDigest || !isJsonObject(value)) {
+    throw new TypeError('M2.5.1 effective configuration digest is inconsistent');
+  }
+  const config = value['config'];
+  if (!isJsonObject(config)) {
+    throw new TypeError('M2.5.1 effective configuration is malformed');
+  }
+  const features = config['features'];
+  const orchestrator = config['orchestrator'];
+  const orchestratorMcp = isJsonObject(orchestrator) ? orchestrator['mcp'] : undefined;
+  const orchestratorSkills = isJsonObject(orchestrator) ? orchestrator['skills'] : undefined;
+  const skills = config['skills'];
+  const bundledSkills = isJsonObject(skills) ? skills['bundled'] : undefined;
+  const mcpServers = config['mcp_servers'];
+  if (
+    config['model'] !== expected.model ||
+    config['model_provider'] !== expected.modelProvider ||
+    config['model_reasoning_effort'] !== expected.reasoningEffort ||
+    config['approval_policy'] !== 'never' ||
+    config['default_permissions'] !== expected.permissionProfileId ||
+    config['web_search'] !== 'disabled' ||
+    config['include_apps_instructions'] !== false ||
+    config['include_collaboration_mode_instructions'] !== false ||
+    !isJsonObject(features) ||
+    canonicalizeJson(features) !== canonicalizeJson(CODEX_M251_WORKER_EFFECTIVE_FEATURES) ||
+    !isJsonObject(orchestratorMcp) ||
+    orchestratorMcp['enabled'] !== false ||
+    !isJsonObject(orchestratorSkills) ||
+    orchestratorSkills['enabled'] !== false ||
+    !isJsonObject(skills) ||
+    skills['include_instructions'] !== false ||
+    !isJsonObject(bundledSkills) ||
+    bundledSkills['enabled'] !== false ||
+    !isJsonObject(mcpServers) ||
+    Object.keys(mcpServers).length !== 0 ||
+    ['compact_prompt', 'developer_instructions', 'instructions', 'tools'].some(
+      (key) => !(key in config) || config[key] !== null,
+    )
+  ) {
+    throw new TypeError('M2.5.1 effective configuration is outside the closed profile');
+  }
+}
+
 function assertEffectiveConfiguration(
   value: JsonValue,
   directive: SelectedCodexWorkerDirective,
 ): void {
-  const expectedDigest = isV3Directive(directive)
-    ? directive.profile.phase.executionConfigDigest
-    : directive.profile.configReadDigest;
+  if (isV3Directive(directive)) {
+    try {
+      assertM251EffectiveConfiguration(value, {
+        executionConfigDigest: directive.profile.phase.executionConfigDigest,
+        model: directive.profile.shared.model,
+        modelProvider: directive.profile.shared.modelProvider,
+        permissionProfileId: directive.profile.phase.permissionProfileId,
+        reasoningEffort: directive.profile.shared.reasoningEffort,
+      });
+    } catch {
+      throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
+    }
+    return;
+  }
+  const expectedDigest = directive.profile.configReadDigest;
   if (digestProtocolValue(value) !== expectedDigest || !isJsonObject(value)) {
     throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
   }
@@ -501,9 +569,7 @@ function assertEffectiveConfiguration(
     config['include_apps_instructions'] !== false ||
     config['include_collaboration_mode_instructions'] !== false ||
     !isJsonObject(features) ||
-    (isV3Directive(directive)
-      ? canonicalizeJson(features) !== canonicalizeJson(CODEX_M251_WORKER_EFFECTIVE_FEATURES)
-      : phaseDisabledFeatures(directive).some((feature) => features[feature] !== false)) ||
+    phaseDisabledFeatures(directive).some((feature) => features[feature] !== false) ||
     !isJsonObject(orchestratorMcp) ||
     orchestratorMcp['enabled'] !== false ||
     !isJsonObject(orchestratorSkills) ||
@@ -514,14 +580,6 @@ function assertEffectiveConfiguration(
     bundledSkills['enabled'] !== false ||
     !isJsonObject(mcpServers) ||
     Object.keys(mcpServers).length !== 0
-  ) {
-    throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
-  }
-  if (
-    isV3Directive(directive) &&
-    ['compact_prompt', 'developer_instructions', 'instructions', 'tools'].some(
-      (key) => !(key in config) || config[key] !== null,
-    )
   ) {
     throw adapterFailure('EFFECTIVE_INPUT_MISMATCH');
   }

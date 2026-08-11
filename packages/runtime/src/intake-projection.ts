@@ -60,7 +60,10 @@ export const M25_INTENT_PROJECTION_PROFILE_VERSION =
   IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2;
 export const M251_INTENT_PROJECTION_PROFILE_VERSION =
   IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3;
+export const M251_TRUSTED_SCOPE_PROJECTION_PROFILE_VERSION =
+  IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4;
 export const M25_DERIVATION_RULE_VERSION = 'codeclosure-m2-5-v1';
+export const M251_DERIVATION_RULE_VERSION = 'codeclosure-m2-5-1-v1';
 
 export class IntakeAnalysisResponseRejectedError extends TypeError {
   public constructor(message: string, options?: ErrorOptions) {
@@ -603,6 +606,33 @@ export class M25IntentProjectionCompiler {
         ),
       );
     }
+    const trustedAllowedPaths = this.trustedAllowedPaths(input.admissionPolicy, current);
+    trustedAllowedPaths.forEach((_, index) => {
+      const base = {
+        schemaVersion: 1 as const,
+        projectionFieldRef: IntentProjectionField.SCOPE,
+        authorityClass: SourceAuthorityClass.POLICY_DERIVED,
+        sourceRecordRef: input.admissionPolicy.id,
+        sourceRevision: input.admissionPolicy.schemaVersion,
+        sourceDigest: input.admissionPolicy.digest,
+        sourceFieldPath: `/trustedProjectScope/allowedPaths/${String(index)}`,
+        derivationPolicyRef: {
+          id: IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE,
+          version: M251_DERIVATION_RULE_VERSION,
+          digest: input.admissionPolicy.digest,
+          orderedInputBindingDigests: [],
+        },
+      } satisfies SourceBindingProjectionInput;
+      policyDerivedBindings.push(
+        decodeSourceBinding(
+          {
+            ...base,
+            bindingDigest: this.#digests.digest(sourceBindingProjection(base)),
+          },
+          this.#digests,
+        ),
+      );
+    });
     const actionBase = {
       schemaVersion: 1 as const,
       projectionFieldRef: IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION,
@@ -780,7 +810,7 @@ export class M25IntentProjectionCompiler {
         ...(current.declaredProjectRef === undefined
           ? {}
           : { projectPath: current.declaredProjectRef.normalizedPath }),
-        allowedPaths: [],
+        allowedPaths: trustedAllowedPaths,
       },
       nonGoals: boundItems
         .filter(
@@ -885,9 +915,19 @@ export class M25IntentProjectionCompiler {
     return response.candidateSourceSpanSuggestions;
   }
 
+  protected trustedAllowedPaths(
+    policy: IntentAdmissionPolicy,
+    current: RawRequestRevisionRecord,
+  ): readonly string[] {
+    void policy;
+    void current;
+    return Object.freeze([]);
+  }
+
   protected canonicalProfileVersion():
     | typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2
-    | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3 {
+    | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3
+    | typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4 {
     return M25_INTENT_PROJECTION_PROFILE_VERSION;
   }
 }
@@ -900,7 +940,29 @@ export class M251IntentProjectionCompiler extends M25IntentProjectionCompiler {
     return exactValueMatchSuggestions(response, revisions);
   }
 
-  protected override canonicalProfileVersion(): typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3 {
+  protected override canonicalProfileVersion():
+    | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3
+    | typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4 {
     return M251_INTENT_PROJECTION_PROFILE_VERSION;
+  }
+}
+
+/** M2.5.1 production projection with exact-value provenance and Policy-owned allowed paths. */
+export class M251TrustedIntentProjectionCompiler extends M251IntentProjectionCompiler {
+  protected override trustedAllowedPaths(
+    policy: IntentAdmissionPolicy,
+    current: RawRequestRevisionRecord,
+  ): readonly string[] {
+    const scope = policy.trustedProjectScope;
+    if (scope === undefined || current.declaredProjectRef?.normalizedPath !== scope.projectPath) {
+      throw new TypeError(
+        'M2.5.1 trusted-scope Projection requires the exact Policy-owned project scope',
+      );
+    }
+    return Object.freeze([...scope.allowedPaths]);
+  }
+
+  protected override canonicalProfileVersion(): typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4 {
+    return M251_TRUSTED_SCOPE_PROJECTION_PROFILE_VERSION;
   }
 }

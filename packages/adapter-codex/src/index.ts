@@ -1,6 +1,8 @@
 export {
   CodexWorkerAdapter,
+  assertM251EffectiveConfiguration,
   createCodexWorkerAdapter,
+  type M251EffectiveConfigurationExpectation,
   type CodexWorkerAdapterInput,
 } from './adapter.js';
 export {

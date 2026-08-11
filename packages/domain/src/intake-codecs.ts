@@ -493,6 +493,7 @@ const projectionSchema = z.discriminatedUnion('schemaVersion', [
       canonicalProfileVersion: z.enum([
         IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2,
         IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3,
+        IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4,
       ]),
     })
     .strict(),
@@ -1630,11 +1631,16 @@ const policyRuleSchema = z.discriminatedUnion('kind', [
 const derivationRuleSchema = z
   .object({
     id: z.enum(Object.values(IntentAdmissionDerivationRuleId)),
-    version: z.literal('codeclosure-m2-5-v1'),
-    sourceKind: z.enum(['DECLARED_PROJECT_REF', 'TRUSTED_INTERACTION_ACTION']),
+    version: z.enum(['codeclosure-m2-5-v1', 'codeclosure-m2-5-1-v1']),
+    sourceKind: z.enum([
+      'DECLARED_PROJECT_REF',
+      'TRUSTED_INTERACTION_ACTION',
+      'TRUSTED_ADMISSION_POLICY',
+    ]),
     targetField: z.enum([
       IntentProjectionField.PROJECT_IDENTITY,
       IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION,
+      IntentProjectionField.SCOPE,
     ]),
     meaningPreserving: z.literal(true),
   })
@@ -1645,6 +1651,13 @@ const policyDefinitionFields = {
   version: nonBlankStringSchema,
   orderedRules: z.array(policyRuleSchema),
   derivationRules: z.array(derivationRuleSchema),
+  trustedProjectScope: z
+    .object({
+      projectPath: nonBlankStringSchema,
+      allowedPaths: z.array(nonBlankStringSchema),
+    })
+    .strict()
+    .optional(),
   policyDeniedRuleIds: z.array(z.enum(Object.values(IntentAdmissionRuleId))),
   unsupportedRuleIds: z.array(z.enum(Object.values(IntentAdmissionRuleId))),
 };

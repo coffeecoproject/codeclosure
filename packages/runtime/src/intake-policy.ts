@@ -26,6 +26,11 @@ export const M25_LOCAL_ADMISSION_POLICY_ID = intentAdmissionPolicyId(
   'admission-policy_codeclosure-m2-5-local',
 );
 export const M25_LOCAL_ADMISSION_POLICY_VERSION = 'codeclosure-m2-5-local-admission-v1';
+export const M251_PRODUCTION_ADMISSION_POLICY_ID = intentAdmissionPolicyId(
+  'admission-policy_codeclosure-m2-5-1-production',
+);
+export const M251_PRODUCTION_ADMISSION_POLICY_VERSION =
+  'codeclosure-m2-5-1-production-admission-v1';
 export const M25_TEST_DENY_ADMISSION_POLICY_ID = intentAdmissionPolicyId(
   'admission-policy_codeclosure-m2-5-test-deny',
 );
@@ -39,7 +44,11 @@ export const M25_TEST_DENIED_PRINCIPAL_ID = principalId('principal_fixture-polic
 const LOCAL_RULE_VERSION = 'codeclosure-m2-5-v1';
 const TEST_RULE_VERSION = 'codeclosure-m2-5-test-v1';
 
-function localRuleRegistry(): readonly unknown[] {
+function localRuleRegistry(
+  options: { readonly trustedAllowedPaths: boolean } = {
+    trustedAllowedPaths: false,
+  },
+): readonly unknown[] {
   return [
     {
       ruleId: IntentAdmissionRuleId.ANSWER_ONLY_ACTION,
@@ -90,8 +99,18 @@ function localRuleRegistry(): readonly unknown[] {
         },
         {
           field: IntentAdmissionMaterialFieldKind.ALLOWED_PATHS,
-          cardinality: IntentAdmissionFieldCardinality.FIXED_EMPTY,
-          allowedAuthorityClasses: [],
+          cardinality: options.trustedAllowedPaths
+            ? IntentAdmissionFieldCardinality.ONE_TO_SIXTEEN
+            : IntentAdmissionFieldCardinality.FIXED_EMPTY,
+          allowedAuthorityClasses: options.trustedAllowedPaths
+            ? [SourceAuthorityClass.POLICY_DERIVED]
+            : [],
+          ...(options.trustedAllowedPaths
+            ? {
+                exactDerivationRuleId:
+                  IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE,
+              }
+            : {}),
         },
         {
           field: IntentAdmissionMaterialFieldKind.NON_GOALS,
@@ -150,7 +169,11 @@ function localRuleRegistry(): readonly unknown[] {
   ];
 }
 
-function derivationRuleRegistry(): readonly unknown[] {
+function derivationRuleRegistry(
+  options: { readonly trustedAllowedPaths: boolean } = {
+    trustedAllowedPaths: false,
+  },
+): readonly unknown[] {
   return [
     {
       id: IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE,
@@ -166,6 +189,17 @@ function derivationRuleRegistry(): readonly unknown[] {
       targetField: IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION,
       meaningPreserving: true,
     },
+    ...(options.trustedAllowedPaths
+      ? [
+          {
+            id: IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE,
+            version: 'codeclosure-m2-5-1-v1',
+            sourceKind: 'TRUSTED_ADMISSION_POLICY',
+            targetField: IntentProjectionField.SCOPE,
+            meaningPreserving: true,
+          },
+        ]
+      : []),
   ];
 }
 
@@ -180,6 +214,26 @@ export function createM25LocalAdmissionPolicyDefinition(): IntentAdmissionPolicy
     version: M25_LOCAL_ADMISSION_POLICY_VERSION,
     orderedRules: localRuleRegistry(),
     derivationRules: derivationRuleRegistry(),
+    policyDeniedRuleIds: [],
+    unsupportedRuleIds: [],
+  });
+}
+
+export function createM251ProductionAdmissionPolicyDefinition(input: {
+  readonly projectPath: string;
+  readonly allowedPaths: readonly string[];
+}): IntentAdmissionPolicyDefinition {
+  const trustedProjectScope = Object.freeze({
+    projectPath: input.projectPath,
+    allowedPaths: Object.freeze([...input.allowedPaths].toSorted()),
+  });
+  return decodeDefinition({
+    id: M251_PRODUCTION_ADMISSION_POLICY_ID,
+    schemaVersion: 1,
+    version: M251_PRODUCTION_ADMISSION_POLICY_VERSION,
+    orderedRules: localRuleRegistry({ trustedAllowedPaths: true }),
+    derivationRules: derivationRuleRegistry({ trustedAllowedPaths: true }),
+    trustedProjectScope,
     policyDeniedRuleIds: [],
     unsupportedRuleIds: [],
   });

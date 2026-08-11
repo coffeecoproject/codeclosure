@@ -36,8 +36,10 @@ contract validation and the versioned Intake Adapter correction have passed
 offline closure review. The separate bounded real Intake compatibility slice
 now also passes its lower-client prerequisite plus real Answer-only, clear
 Intent, and ambiguous Intent paths with metadata-only evidence. The closure
-work remains in progress; trusted production composition and milestone
-assessment have not started.
+work remains in progress: deterministic phase dispatch has passed bounded
+review, and the trusted production graph plus deterministic full chain are
+implemented under bounded review without a Live claim. Proof/document closure,
+mandatory real user-path proof, and milestone assessment have not started.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

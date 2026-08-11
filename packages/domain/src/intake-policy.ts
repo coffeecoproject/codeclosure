@@ -60,6 +60,8 @@ export type IntentAdmissionFieldCardinality =
 export const IntentAdmissionDerivationRuleId = {
   DECLARED_PROJECT_TO_SCOPE: 'declared-project-to-scope_codeclosure-m2-5-v1',
   INTERACTION_ACTION_TO_DISPOSITION: 'interaction-action-to-disposition_codeclosure-m2-5-v1',
+  TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE:
+    'trusted-policy-allowed-paths-to-scope_codeclosure-m2-5-1-v1',
 } as const;
 export type IntentAdmissionDerivationRuleId =
   (typeof IntentAdmissionDerivationRuleId)[keyof typeof IntentAdmissionDerivationRuleId];
@@ -87,11 +89,13 @@ export interface IntentAdmissionMaterialFieldRule {
 
 export interface IntentAdmissionDerivationRuleDefinition {
   readonly id: IntentAdmissionDerivationRuleId;
-  readonly version: 'codeclosure-m2-5-v1';
-  readonly sourceKind: 'DECLARED_PROJECT_REF' | 'TRUSTED_INTERACTION_ACTION';
+  readonly version: 'codeclosure-m2-5-v1' | 'codeclosure-m2-5-1-v1';
+  readonly sourceKind:
+    'DECLARED_PROJECT_REF' | 'TRUSTED_INTERACTION_ACTION' | 'TRUSTED_ADMISSION_POLICY';
   readonly targetField:
     | typeof IntentProjectionField.PROJECT_IDENTITY
-    | typeof IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION;
+    | typeof IntentProjectionField.REQUESTED_EXECUTION_DISPOSITION
+    | typeof IntentProjectionField.SCOPE;
   readonly meaningPreserving: true;
 }
 
@@ -201,6 +205,10 @@ export interface IntentAdmissionPolicyDefinition {
   readonly version: string;
   readonly orderedRules: readonly IntentAdmissionPolicyRule[];
   readonly derivationRules: readonly IntentAdmissionDerivationRuleDefinition[];
+  readonly trustedProjectScope?: {
+    readonly projectPath: string;
+    readonly allowedPaths: readonly string[];
+  };
   readonly policyDeniedRuleIds: readonly IntentAdmissionRuleId[];
   readonly unsupportedRuleIds: readonly IntentAdmissionRuleId[];
 }
@@ -293,6 +301,19 @@ const localMaterialFieldRules: readonly IntentAdmissionMaterialFieldRule[] = [
   },
 ];
 
+const m251ProductionMaterialFieldRules: readonly IntentAdmissionMaterialFieldRule[] =
+  localMaterialFieldRules.map((rule) =>
+    rule.field === IntentAdmissionMaterialFieldKind.ALLOWED_PATHS
+      ? {
+          field: IntentAdmissionMaterialFieldKind.ALLOWED_PATHS,
+          cardinality: IntentAdmissionFieldCardinality.ONE_TO_SIXTEEN,
+          allowedAuthorityClasses: [SourceAuthorityClass.POLICY_DERIVED],
+          exactDerivationRuleId:
+            IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE,
+        }
+      : rule,
+  );
+
 const localAmbiguityFieldPriority = [
   IntentProjectionField.PROJECT_IDENTITY,
   IntentProjectionField.OBJECTIVE,
@@ -329,6 +350,7 @@ function expectedPolicyRuleOrder(policy: IntentAdmissionPolicyDefinition): reado
   const identity = `${policy.id}\u0000${policy.version}`;
   switch (identity) {
     case 'admission-policy_codeclosure-m2-5-local\u0000codeclosure-m2-5-local-admission-v1':
+    case 'admission-policy_codeclosure-m2-5-1-production\u0000codeclosure-m2-5-1-production-admission-v1':
       return localAdmissionRuleOrder;
     case 'admission-policy_codeclosure-m2-5-test-deny\u0000codeclosure-m2-5-test-deny-v1':
       return [
@@ -347,6 +369,13 @@ function expectedPolicyRuleOrder(policy: IntentAdmissionPolicyDefinition): reado
         'Intent Admission Policy identity and version must select one reviewed M2.5 registry',
       );
   }
+}
+
+function isM251ProductionPolicy(policy: IntentAdmissionPolicyDefinition): boolean {
+  return (
+    policy.id === 'admission-policy_codeclosure-m2-5-1-production' &&
+    policy.version === 'codeclosure-m2-5-1-production-admission-v1'
+  );
 }
 
 export function assertIntentAdmissionPolicyDefinitionInvariant(
@@ -403,7 +432,10 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
         }
         assertExactOrderedValues(
           rule.fields.map(materialFieldRuleFingerprint),
-          localMaterialFieldRules.map(materialFieldRuleFingerprint),
+          (isM251ProductionPolicy(policy)
+            ? m251ProductionMaterialFieldRules
+            : localMaterialFieldRules
+          ).map(materialFieldRuleFingerprint),
           'Intent Admission material fields',
         );
         break;
@@ -432,18 +464,19 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
   }
   const derivationIds = policy.derivationRules.map(({ id }) => id);
   assertUnique(derivationIds, 'Intent Admission derivation rule ID');
-  if (
-    derivationIds.length !== Object.values(IntentAdmissionDerivationRuleId).length ||
-    !Object.values(IntentAdmissionDerivationRuleId).every((id) => derivationIds.includes(id))
-  ) {
-    throw new DomainInvariantError('Intent Admission derivation registry must be exact');
-  }
+  const expectedDerivationIds = isM251ProductionPolicy(policy)
+    ? [
+        IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE,
+        IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION,
+        IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE,
+      ]
+    : [
+        IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE,
+        IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION,
+      ];
   assertExactOrderedValues(
     derivationIds,
-    [
-      IntentAdmissionDerivationRuleId.DECLARED_PROJECT_TO_SCOPE,
-      IntentAdmissionDerivationRuleId.INTERACTION_ACTION_TO_DISPOSITION,
-    ],
+    expectedDerivationIds,
     'Intent Admission derivation rules',
   );
   for (const rule of policy.derivationRules) {
@@ -467,7 +500,41 @@ export function assertIntentAdmissionPolicyDefinitionInvariant(
           );
         }
         break;
+      case IntentAdmissionDerivationRuleId.TRUSTED_POLICY_ALLOWED_PATHS_TO_SCOPE:
+        if (
+          rule.version !== 'codeclosure-m2-5-1-v1' ||
+          rule.sourceKind !== 'TRUSTED_ADMISSION_POLICY' ||
+          rule.targetField !== IntentProjectionField.SCOPE
+        ) {
+          throw new DomainInvariantError(
+            'Trusted allowed-path derivation has invalid fixed semantics',
+          );
+        }
+        break;
     }
+  }
+  if (isM251ProductionPolicy(policy)) {
+    const scope = policy.trustedProjectScope;
+    if (
+      scope === undefined ||
+      scope.projectPath.trim().length === 0 ||
+      scope.allowedPaths.length < 1 ||
+      scope.allowedPaths.length > 16 ||
+      scope.allowedPaths.some((path) => path.trim().length === 0) ||
+      new Set(scope.allowedPaths).size !== scope.allowedPaths.length ||
+      scope.allowedPaths.some((path, index, paths) => {
+        const previous = paths[index - 1];
+        return previous !== undefined && path <= previous;
+      })
+    ) {
+      throw new DomainInvariantError(
+        'M2.5.1 production Admission Policy requires one exact sorted trusted project scope',
+      );
+    }
+  } else if (policy.trustedProjectScope !== undefined) {
+    throw new DomainInvariantError(
+      'Historical M2.5 Admission Policies cannot acquire a trusted project scope',
+    );
   }
   assertUnique(policy.policyDeniedRuleIds, 'POLICY_DENIED rule ID');
   assertUnique(policy.unsupportedRuleIds, 'UNSUPPORTED rule ID');
@@ -514,6 +581,9 @@ export function intentAdmissionPolicyProjection(policy: IntentAdmissionPolicyDef
     version: policy.version,
     orderedRules: policy.orderedRules,
     derivationRules: policy.derivationRules,
+    ...(policy.trustedProjectScope === undefined
+      ? {}
+      : { trustedProjectScope: policy.trustedProjectScope }),
     policyDeniedRuleIds: policy.policyDeniedRuleIds,
     unsupportedRuleIds: policy.unsupportedRuleIds,
   };

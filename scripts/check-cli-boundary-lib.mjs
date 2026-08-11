@@ -222,6 +222,84 @@ const M251_EXECUTION_RUNTIME_COMPOSITION_IMPORTS = new Set([
   'bindRuntimeExecutionProfileAuthority',
 ]);
 
+const M251_CODEX_ADAPTER_IMPORTS = new Set([
+  'CODEX_M251_WORKER_DISABLED_FEATURES',
+  'CodexAdapterDiagnosticEvent',
+  'CodexWorkerPhaseDirectiveV1',
+  'CodexWorkerRequestBindingV3',
+  'CodexWorkerSharedProfileDirectiveV1',
+  'CodexWorkerSourceAuthorityV1',
+  'assertM251EffectiveConfiguration',
+  'createCodexWorkerAdapter',
+  'createCodexWorkerDirectiveV3',
+  'decodeCodexCandidateWorkspaceLease',
+  'digestCanonical',
+]);
+
+const M251_CODEX_CLIENT_IMPORTS = new Set([
+  'AppServerProcessLaunch',
+  'JsonValue',
+  'VerifiedCodexInstallation',
+  'createControlledAppServerLaunch',
+  'isJsonObject',
+  'startAppServerClient',
+  'verifyBundledCodexInstallation',
+]);
+
+const M251_CODEX_DOMAIN_IMPORTS = new Set([
+  'CandidateGenerationState',
+  'ExternalBackendCapability',
+  'ExternalBackendCapabilityClassification',
+  'ExternalBackendCapabilityRecord',
+  'ExternalExecutionIntent',
+  'ExternalExecutionPhaseDispatchEntry',
+  'ExternalExecutionProfileDefinitionV3',
+  'ExternalFallbackPolicy',
+  'ExternalPhaseSourceAuthorityKind',
+  'ExternalRetentionPolicy',
+  'ExternalThreadPolicy',
+  'RunStatus',
+  'Sha256Digest',
+  'WorkflowPhase',
+  'externalBackendCapabilityRecordProjection',
+  'externalExecutionPhaseDispatchEntryProjection',
+  'isoTimestamp',
+  'sha256Digest',
+]);
+
+const M251_PRODUCTION_DOMAIN_IMPORTS = new Set([
+  'Goal',
+  'GoalId',
+  'ProtectedAssetReadLeasePolicy',
+  'Sha256Digest',
+  'WorkflowPhase',
+  'sha256Digest',
+]);
+
+const M251_PRODUCTION_RUNTIME_COMPOSITION_IMPORTS = new Set([
+  'CryptographicIdentityGenerator',
+  'SystemUtcClock',
+  'createM1DeterministicPhaseGuardEvaluator',
+  'createProtectedM2WorkflowDriver',
+  'createRecoveryCoordinator',
+]);
+
+const M251_PRODUCTION_VERIFICATION_IMPORTS = new Set([
+  'DARWIN_SEATBELT_PROFILE_ID',
+  'createDarwinSeatbeltIsolation',
+  'createLocalCommandVerificationRunner',
+  'createProtectedAssetReadLeaseAuthority',
+  'darwinSeatbeltProtectedProfileDigest',
+  'inspectProtectedVerificationAsset',
+  'protectedVerificationAssetManifestDigest',
+]);
+
+const M251_PRODUCTION_WORKSPACE_IMPORTS = new Set([
+  'createLocalCandidateWorkspace',
+  'createLocalProjectReadWorkspace',
+  'observeLocalCandidateSourceIdentity',
+]);
+
 const M2_PROOF_CLIENT_IMPORTS = new Set(['AppServerClientError', 'AppServerClientErrorCode']);
 
 const M2_PROOF_DOMAIN_IMPORTS = new Set([
@@ -311,6 +389,25 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
       ['@codeclosure/adapter-codex', M251_EXECUTION_ADAPTER_IMPORTS],
       ['@codeclosure/domain', M251_EXECUTION_DOMAIN_IMPORTS],
       ['@codeclosure/runtime/composition', M251_EXECUTION_RUNTIME_COMPOSITION_IMPORTS],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m251-codex-worker-invocation.ts',
+    new Map([
+      ['@codeclosure/adapter-codex', M251_CODEX_ADAPTER_IMPORTS],
+      ['@codeclosure/codex-app-server-client', M251_CODEX_CLIENT_IMPORTS],
+      ['@codeclosure/domain', M251_CODEX_DOMAIN_IMPORTS],
+      ['@codeclosure/runtime/composition', new Set(['CandidateLeasedWorkerAuthorityReader'])],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m251-trusted-production-composition.ts',
+    new Map([
+      ['@codeclosure/adapter-codex', new Set(['createCodexExternalProcessReconciler'])],
+      ['@codeclosure/domain', M251_PRODUCTION_DOMAIN_IMPORTS],
+      ['@codeclosure/runtime/composition', M251_PRODUCTION_RUNTIME_COMPOSITION_IMPORTS],
+      ['@codeclosure/verification-local', M251_PRODUCTION_VERIFICATION_IMPORTS],
+      ['@codeclosure/workspace-local', M251_PRODUCTION_WORKSPACE_IMPORTS],
     ]),
   ],
   [
@@ -485,6 +582,46 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
     }),
   ],
   [
+    'apps/cli/src/composition/m251-codex-worker-invocation.ts',
+    Object.freeze({
+      values: new Set([
+        'M251_CODEX_CONFIGURATION_PROFILE_ID',
+        'M251_CODEX_INSTRUCTION_MANIFEST_ID',
+        'M251_CODEX_PERMISSION_PROFILE_ID',
+        'createM251TrustedCodexInvocation',
+        'prepareM251TrustedCodexProfile',
+      ]),
+      types: new Set([
+        'CreateM251TrustedCodexInvocationInput',
+        'M251TrustedCodexProfileAuthority',
+        'M251TrustedCodexRoots',
+        'PrepareM251TrustedCodexProfileInput',
+      ]),
+    }),
+  ],
+  [
+    'apps/cli/src/composition/m251-trusted-production-composition.ts',
+    Object.freeze({
+      values: new Set([
+        'M251_PAYMENT_DEMO_EXPECTED_RESULT',
+        'M251_PAYMENT_DEMO_PROJECT_CONTRACT',
+        'M251_PAYMENT_DEMO_PROTECTED_CHECK_ID',
+        'M251_PAYMENT_DEMO_PROTECTED_CHECK_VERSION',
+        'createM251RealCodexProductionActivation',
+        'createM251TrustedProductionComposition',
+      ]),
+      types: new Set([
+        'CreateM251TrustedProductionCompositionOptions',
+        'M251ExternalWorkerFactoryInput',
+        'M251ProductionActivation',
+        'M251ProductionProjectContract',
+        'M251TrustedProductionComposition',
+        'M251TrustedProductionIdentityGenerator',
+        'M251TrustedProductionRoots',
+      ]),
+    }),
+  ],
+  [
     'apps/cli/src/composition/m2-protected-demo-proof.ts',
     Object.freeze({
       values: new Set(['M2ExternalDemoBlockedError', 'runM2ProtectedDemoProof']),
@@ -620,6 +757,10 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
         'apps/cli/src/composition/trusted-intake-composition.ts',
         new Set(['OpenCliSqliteAuthorityOptions', 'openCliSqliteAuthority']),
       ],
+      [
+        'apps/cli/src/composition/m251-trusted-production-composition.ts',
+        new Set(['OpenCliSqliteAuthorityOptions', 'openCliSqliteAuthority']),
+      ],
     ]),
   ],
   [
@@ -682,7 +823,33 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
       ],
     ]),
   ],
-  ['apps/cli/src/composition/m251-execution-authority.js', new Map()],
+  [
+    'apps/cli/src/composition/m251-execution-authority.js',
+    new Map([
+      [
+        'apps/cli/src/composition/m251-codex-worker-invocation.ts',
+        new Set(['M251PhaseExecutionAuthorityInput']),
+      ],
+      [
+        'apps/cli/src/composition/m251-trusted-production-composition.ts',
+        new Set([
+          'M251PhaseExecutionAuthorityInput',
+          'createM251RuntimeProfileRegistry',
+          'installM251ExecutionAuthority',
+        ]),
+      ],
+    ]),
+  ],
+  [
+    'apps/cli/src/composition/m251-codex-worker-invocation.js',
+    new Map([
+      [
+        'apps/cli/src/composition/m251-trusted-production-composition.ts',
+        new Set(['M251TrustedCodexProfileAuthority', 'createM251TrustedCodexInvocation']),
+      ],
+    ]),
+  ],
+  ['apps/cli/src/composition/m251-trusted-production-composition.js', new Map()],
   [
     'apps/cli/src/composition/m2-protected-demo-proof.js',
     new Map([
@@ -776,6 +943,11 @@ const NODE_BUILTIN_MODULES_BY_FILE = new Map([
   ['apps/cli/src/composition/recovery-inspector.ts', new Set(['node:fs'])],
   ['apps/cli/src/composition/demo-proof.ts', new Set(['node:fs', 'node:os', 'node:path'])],
   ['apps/cli/src/composition/m2-codex-worker-invocation.ts', new Set(['node:fs', 'node:path'])],
+  ['apps/cli/src/composition/m251-codex-worker-invocation.ts', new Set(['node:fs', 'node:path'])],
+  [
+    'apps/cli/src/composition/m251-trusted-production-composition.ts',
+    new Set(['node:child_process', 'node:crypto', 'node:fs', 'node:path']),
+  ],
   [
     'apps/cli/src/composition/m2-protected-demo-proof.ts',
     new Set(['node:child_process', 'node:crypto', 'node:fs', 'node:os', 'node:path']),

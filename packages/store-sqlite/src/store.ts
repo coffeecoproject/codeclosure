@@ -7546,6 +7546,26 @@ export class SqliteControlStore
     return grant;
   }
 
+  public getProjectReadSnapshotCleanupGrantForAuthority(
+    rawProjectReadAuthorityId: ProjectSourceReadAuthorityId,
+  ): ProjectReadSnapshotCleanupGrant | undefined {
+    this.assertOpen();
+    const projectReadAuthorityIdentifier = projectSourceReadAuthorityId(rawProjectReadAuthorityId);
+    if (!this.hasTable('project_read_snapshot_cleanup_grants')) {
+      return undefined;
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT id FROM project_read_snapshot_cleanup_grants
+          WHERE project_read_authority_id = ?`,
+      )
+      .get(projectReadAuthorityIdentifier);
+    const identifier = z.object({ id: z.string() }).optional().parse(row)?.id;
+    return identifier === undefined
+      ? undefined
+      : this.getProjectReadSnapshotCleanupGrant(projectReadSnapshotCleanupGrantId(identifier));
+  }
+
   public getProjectReadSnapshotCleanupOutcome(
     rawGrantId: ProjectReadSnapshotCleanupGrantId,
   ): ProjectReadSnapshotCleanupOutcome | undefined {

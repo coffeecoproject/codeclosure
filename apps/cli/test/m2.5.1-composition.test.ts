@@ -12,8 +12,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   AttemptFailureClass,
@@ -33,6 +34,7 @@ import {
   commandId,
   createGoal,
   createWorkflow,
+  clarificationQuestionId,
   executionProfileId,
   externalBackendCapabilityRecordProjection,
   externalExecutionPhaseDispatchEntryProjection,
@@ -40,6 +42,7 @@ import {
   goalId,
   goalRevision,
   isoTimestamp,
+  intakeRunId,
   projectReadGitStateProjection,
   protectedAssetManifestProjection,
   rawRequestRevision,
@@ -106,7 +109,10 @@ import {
   FakeWorker,
   FakeWorkerFixture,
 } from '@codeclosure/testing';
-import { createLocalProjectReadWorkspace } from '@codeclosure/workspace-local';
+import {
+  createLocalProjectReadWorkspace,
+  observeLocalCandidateSourceIdentity,
+} from '@codeclosure/workspace-local';
 import {
   WorkflowRuntimeKernel,
   isRuntimeOwnedPhaseGuard,
@@ -121,6 +127,17 @@ import {
   type InstallM251ExecutionAuthorityInput,
   type M251RuntimeProfileCapabilities,
 } from '../dist/composition/m251-execution-authority.js';
+import {
+  prepareM251TrustedCodexProfile,
+  type M251TrustedCodexRoots,
+} from '../dist/composition/m251-codex-worker-invocation.js';
+import {
+  M251_PAYMENT_DEMO_EXPECTED_RESULT,
+  createM251TrustedProductionComposition,
+  type CreateM251TrustedProductionCompositionOptions,
+  type M251ProductionProjectContract,
+} from '../dist/composition/m251-trusted-production-composition.js';
+import { createM251ProductionProtocolFixtureActivation } from './fixtures/m251-production-protocol-fixture.ts';
 
 const digests = new CanonicalJsonSha256DigestProvider();
 const canonicalizer = new Rfc8785Canonicalizer();
@@ -2036,4 +2053,552 @@ void test('[M251-B3] retained PLAN_SOURCE_NOT_CURRENT stops Driver without Candi
   assert.equal(retained.workflow.runStatus, RunStatus.FAILED);
   assert.equal(retained.workflow.suspendedReason, 'PLAN_SOURCE_NOT_CURRENT');
   assert.equal(retained.latestPhaseAttempt?.status, AttemptStatus.RESULT_RECORDED);
+});
+
+function createM251B4Project(sourceRoot: string): M251ProductionProjectContract {
+  mkdirSync(join(sourceRoot, 'src'), { recursive: true });
+  writeFileSync(
+    join(sourceRoot, 'package.json'),
+    `${JSON.stringify({ name: 'm251-b4-payment-demo', private: true, type: 'module' }, null, 2)}\n`,
+  );
+  writeFileSync(
+    join(sourceRoot, 'src', 'payment.js'),
+    `export class PaymentProcessor {
+  #charges = [];
+
+  processCallback({ orderId, amount }) {
+    this.#charges.push({ orderId, amount });
+    return { status: 'charged' };
+  }
+
+  getCharges() {
+    return [...this.#charges];
+  }
+}
+`,
+  );
+  const git = (arguments_: readonly string[]): string =>
+    execFileSync('git', arguments_, {
+      cwd: sourceRoot,
+      encoding: 'utf8',
+      env: {
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_OPTIONAL_LOCKS: '0',
+        LC_ALL: 'C',
+        PATH: process.env['PATH'] ?? '/usr/bin:/bin',
+      },
+    }).trim();
+  git(['init', '--quiet']);
+  git(['config', 'user.name', 'CodeClosure Test']);
+  git(['config', 'user.email', 'codeclosure@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '--quiet', '-m', 'test: add duplicate payment callback reproduction']);
+  const observed = observeLocalCandidateSourceIdentity(sourceRoot);
+  return Object.freeze({
+    projectFamily: 'CodeClosureM251B4Test',
+    gitCommit: git(['rev-parse', 'HEAD']),
+    gitTree: git(['rev-parse', 'HEAD^{tree}']),
+    sourceTreeDigest: observed.sourceTreeDigest,
+    sourceGitMetadataDigest: observed.sourceGitMetadataDigest,
+    allowedPaths: Object.freeze(['src/payment.js']),
+    expectedResult: M251_PAYMENT_DEMO_EXPECTED_RESULT,
+  });
+}
+
+function m251B4Clock(
+  start = '2026-08-11T01:00:00.000Z',
+): Readonly<{ now(): ReturnType<typeof isoTimestamp> }> {
+  let tick = 0;
+  return Object.freeze({
+    now: () => {
+      const value = new Date(Date.parse(start) + tick * 1_000).toISOString();
+      tick += 1;
+      return isoTimestamp(value);
+    },
+  });
+}
+
+function createM251B4CompositionScenario(
+  t: TestContext,
+  namespace: string,
+  implementationResult: 'CORRECT' | 'VERIFICATION_REJECTED' = 'CORRECT',
+): Readonly<{
+  admittedUserContent: string;
+  compositionOptions: CreateM251TrustedProductionCompositionOptions;
+  fixture: ReturnType<typeof createM251ProductionProtocolFixtureActivation>;
+  initialSource: ReturnType<typeof observeLocalCandidateSourceIdentity>;
+  sourceRoot: string;
+}> {
+  const testRoot = realpathSync(
+    mkdtempSync(join(tmpdir(), `codeclosure-${namespace}-production-`)),
+  );
+  t.after(() => removeProjectReadFixtureRoot(testRoot));
+  const sourceRoot = join(testRoot, 'source');
+  mkdirSync(sourceRoot, { recursive: true });
+  const projectContract = createM251B4Project(sourceRoot);
+  const initialSource = observeLocalCandidateSourceIdentity(sourceRoot);
+  const protectedCheckPath = realpathSync(
+    fileURLToPath(
+      new URL('../../../scripts/fixtures/m2.5.1/payment-idempotency-check.mjs', import.meta.url),
+    ),
+  );
+  const roots = Object.freeze({
+    authorityHome: join(testRoot, 'authority'),
+    candidateWorkspace: join(testRoot, 'candidate'),
+    credentialRoot: join(testRoot, 'credentials'),
+    projectReadWorkspace: join(testRoot, 'project-read'),
+    protectedAssetRoot: realpathSync(dirname(protectedCheckPath)),
+    verificationRunRoot: join(testRoot, 'verification'),
+  });
+  const operationRoots = Object.freeze([
+    join(testRoot, 'operation-a'),
+    join(testRoot, 'operation-b'),
+  ]);
+  const workerForbiddenRoots = Object.freeze(
+    [
+      roots.authorityHome,
+      roots.credentialRoot,
+      roots.protectedAssetRoot,
+      roots.verificationRunRoot,
+      sourceRoot,
+      ...operationRoots,
+    ].toSorted(),
+  );
+  const fixture = createM251ProductionProtocolFixtureActivation({
+    candidateWorkspaceRoot: roots.candidateWorkspace,
+    implementationResult,
+    operationRoots,
+    phaseForbiddenRoots: Object.freeze({
+      [WorkflowPhase.DISCOVERY]: Object.freeze(
+        [...workerForbiddenRoots, roots.candidateWorkspace].toSorted(),
+      ),
+      [WorkflowPhase.PLAN]: Object.freeze(
+        [...workerForbiddenRoots, roots.candidateWorkspace].toSorted(),
+      ),
+      [WorkflowPhase.IMPLEMENT]: Object.freeze(
+        [...workerForbiddenRoots, roots.projectReadWorkspace].toSorted(),
+      ),
+    }),
+    projectReadWorkspaceRoot: roots.projectReadWorkspace,
+  });
+  const objective = 'Fix duplicate payment callback handling';
+  const admittedUserContent = `${objective}\n${M251_PAYMENT_DEMO_EXPECTED_RESULT}`;
+  const assistant: IntakeAssistantPort = Object.freeze({
+    analyze: () =>
+      Promise.resolve({
+        kind: 'COMPLETED' as const,
+        response: Object.freeze({
+          proposedObjective: objective,
+          proposedCriteria: Object.freeze([M251_PAYMENT_DEMO_EXPECTED_RESULT]),
+          proposedNonGoals: Object.freeze([]),
+          proposedAssumptions: Object.freeze([]),
+          proposedQuestions: Object.freeze([]),
+          candidateSourceSpanSuggestions: Object.freeze([]),
+        }),
+        observation: Object.freeze({
+          schemaVersion: 1 as const,
+          operation: 'INTENT_ANALYSIS' as const,
+          state: 'COMPLETED' as const,
+          processLaunchCount: 1,
+          threadStartCount: 1,
+          turnStartCount: 1,
+          turnInterruptCount: 0,
+          compactionCount: 0,
+        }),
+      }),
+    answer: () => Promise.reject(new Error('B4 full-chain fixture must not answer-only')),
+  });
+  return Object.freeze({
+    admittedUserContent,
+    compositionOptions: Object.freeze({
+      activation: fixture.activation,
+      assistant,
+      clock: m251B4Clock(),
+      ids: new DeterministicIds(namespace),
+      projectContract,
+      projectPath: sourceRoot,
+      protectedCheckPath,
+      roots,
+    }),
+    fixture,
+    initialSource,
+    sourceRoot,
+  });
+}
+
+void test('[M251-B4] trusted production composition closes the deterministic Intake-to-Acceptance chain without a Fake fallback', async (t) => {
+  const scenario = createM251B4CompositionScenario(t, 'm251-b4-production');
+  const { admittedUserContent, fixture, initialSource, sourceRoot } = scenario;
+  const composition = createM251TrustedProductionComposition(scenario.compositionOptions);
+  t.after(() => composition.close());
+  const submitCommandId = commandId('command_m251-b4-production-submit');
+  const result = await composition.intakeApplication.submit({
+    commandId: submitCommandId,
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent,
+    declaredProjectPath: sourceRoot,
+  });
+  assert.equal(result.kind, 'OUTCOME', JSON.stringify(result));
+  assert.equal(result.outcome.result.kind, 'MATERIALIZED', JSON.stringify(result));
+  const goalIdentifier = result.outcome.result.materializedGoalRef.goalId;
+  const started = await composition.application.startGoal({
+    commandId: commandId('command_m251-b4-production-start'),
+    goalId: goalIdentifier,
+    expectedGoalRevision: result.outcome.result.materializedGoalRef.goalRevision,
+    expectedWorkflowVersion: result.outcome.result.materializedGoalRef.workflowVersion,
+  });
+  const status = composition.application.getGoalStatus(goalIdentifier);
+  assert.equal(started.command.status, 'APPLIED', JSON.stringify(started));
+  assert.equal(started.drive?.stopReason, 'CLOSED', JSON.stringify(started));
+  assert.equal(status.status, 'FOUND');
+  assert.equal(
+    status.view.technicalCloseout,
+    true,
+    JSON.stringify({
+      status,
+      audit: composition.application.getGoalAudit(goalIdentifier),
+      fixture: fixture.observation(),
+    }),
+  );
+  assert.equal(status.view.acceptanceSummary?.outcome, 'ACCEPT');
+  assert.ok(status.view.executionProfileRef);
+  assert.equal(status.view.executionProfileRef.id, composition.profile.id);
+  assert.equal(status.view.executionProfileRef.digest, composition.profile.digest);
+
+  const observed = fixture.observation();
+  assert.deepEqual(observed.phaseRuns, [
+    WorkflowPhase.DISCOVERY,
+    WorkflowPhase.PLAN,
+    WorkflowPhase.IMPLEMENT,
+  ]);
+  assert.equal(observed.prepareCount, 3);
+  assert.equal(observed.releaseCount, 3);
+  assert.deepEqual(
+    observed.directives.map(({ sourceAuthority }) => sourceAuthority.kind),
+    [
+      ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+      ExternalPhaseSourceAuthorityKind.PROJECT_READ,
+      ExternalPhaseSourceAuthorityKind.CANDIDATE,
+    ],
+  );
+  assert.deepEqual(observeLocalCandidateSourceIdentity(sourceRoot), initialSource);
+  assert.equal(
+    execFileSync('git', ['status', '--porcelain=v2'], {
+      cwd: sourceRoot,
+      encoding: 'utf8',
+      env: {
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_OPTIONAL_LOCKS: '0',
+        LC_ALL: 'C',
+        PATH: process.env['PATH'] ?? '/usr/bin:/bin',
+      },
+    }).trim(),
+    '',
+  );
+
+  const replay = await composition.intakeApplication.submit({
+    commandId: submitCommandId,
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent,
+    declaredProjectPath: sourceRoot,
+  });
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(fixture.observation().prepareCount, 3);
+
+  const replayedStart = await composition.application.startGoal({
+    commandId: commandId('command_m251-b4-production-start'),
+    goalId: goalIdentifier,
+    expectedGoalRevision: result.outcome.result.materializedGoalRef.goalRevision,
+    expectedWorkflowVersion: result.outcome.result.materializedGoalRef.workflowVersion,
+  });
+  assert.equal(replayedStart.command.status, 'REPLAYED');
+  assert.equal(replayedStart.drive?.stopReason, WorkflowDriveStopReason.CLOSED);
+  assert.equal(fixture.observation().prepareCount, 3);
+  const projectReadRoot = scenario.compositionOptions.roots.projectReadWorkspace;
+  assert.deepEqual(readdirSync(join(projectReadRoot, 'snapshots')), []);
+  assert.deepEqual(readdirSync(join(projectReadRoot, '.codeclosure-project-read', 'markers')), []);
+
+  composition.close();
+  const reopened = createM251TrustedProductionComposition({
+    ...scenario.compositionOptions,
+    clock: m251B4Clock('2026-08-12T01:00:00.000Z'),
+    ids: new DeterministicIds('m251-b4-production-reopen'),
+  });
+  t.after(() => reopened.close());
+  const reopenedStatus = reopened.application.getGoalStatus(goalIdentifier);
+  assert.equal(reopenedStatus.status, 'FOUND');
+  assert.equal(reopenedStatus.view.technicalCloseout, true);
+  const reopenedReplay = await reopened.intakeApplication.submit({
+    commandId: submitCommandId,
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent,
+    declaredProjectPath: sourceRoot,
+  });
+  assert.equal(reopenedReplay.kind, 'OUTCOME');
+  assert.equal(reopenedReplay.replayed, true);
+  assert.equal(fixture.observation().prepareCount, 3);
+});
+
+void test('[M251-B4] protected verification rejection remains repair-required without fallback', async (t) => {
+  const scenario = createM251B4CompositionScenario(
+    t,
+    'm251-b4-verification-rejected',
+    'VERIFICATION_REJECTED',
+  );
+  const composition = createM251TrustedProductionComposition(scenario.compositionOptions);
+  t.after(() => composition.close());
+  const result = await composition.intakeApplication.submit({
+    commandId: commandId('command_m251-b4-verification-rejected-submit'),
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: scenario.admittedUserContent,
+    declaredProjectPath: scenario.sourceRoot,
+  });
+  assert.equal(result.kind, 'OUTCOME');
+  assert.equal(result.outcome.result.kind, 'MATERIALIZED');
+  const started = await composition.application.startGoal({
+    commandId: commandId('command_m251-b4-verification-rejected-start'),
+    goalId: result.outcome.result.materializedGoalRef.goalId,
+    expectedGoalRevision: result.outcome.result.materializedGoalRef.goalRevision,
+    expectedWorkflowVersion: result.outcome.result.materializedGoalRef.workflowVersion,
+  });
+  assert.equal(started.command.status, 'APPLIED');
+  assert.ok(started.drive);
+  assert.equal(started.drive.stopReason, WorkflowDriveStopReason.ACCEPTANCE_REPAIR_REQUIRED);
+  assert.equal(started.drive.detailCode, 'REQUIRED_EVIDENCE_FAILED_REPAIRABLE');
+  const status = composition.application.getGoalStatus(
+    result.outcome.result.materializedGoalRef.goalId,
+  );
+  assert.equal(status.status, 'FOUND');
+  assert.equal(status.view.technicalCloseout, false);
+  assert.equal(status.view.acceptanceSummary?.outcome, 'REJECT_REPAIRABLE');
+  assert.equal(scenario.fixture.observation().prepareCount, 3);
+  assert.equal(scenario.fixture.observation().releaseCount, 3);
+  assert.deepEqual(
+    observeLocalCandidateSourceIdentity(scenario.sourceRoot),
+    scenario.initialSource,
+  );
+});
+
+void test('[M251-B4] formal composition preserves PLAN_SOURCE_NOT_CURRENT without Candidate or fallback', async (t) => {
+  const scenario = createM251B4CompositionScenario(t, 'm251-b4-plan-source-not-current');
+  const composition = createM251TrustedProductionComposition({
+    ...scenario.compositionOptions,
+    candidateSourceFixture: new M251B3PlanSourceNotCurrentFixture(),
+  });
+  t.after(() => composition.close());
+  const result = await composition.intakeApplication.submit({
+    commandId: commandId('command_m251-b4-plan-source-not-current-submit'),
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: scenario.admittedUserContent,
+    declaredProjectPath: scenario.sourceRoot,
+  });
+  assert.equal(result.kind, 'OUTCOME');
+  assert.equal(result.outcome.result.kind, 'MATERIALIZED');
+  const started = await composition.application.startGoal({
+    commandId: commandId('command_m251-b4-plan-source-not-current-start'),
+    goalId: result.outcome.result.materializedGoalRef.goalId,
+    expectedGoalRevision: result.outcome.result.materializedGoalRef.goalRevision,
+    expectedWorkflowVersion: result.outcome.result.materializedGoalRef.workflowVersion,
+  });
+  assert.equal(started.command.status, 'APPLIED');
+  assert.ok(started.drive);
+  assert.equal(started.drive.stopReason, WorkflowDriveStopReason.FAILED);
+  assert.equal(started.drive.detailCode, 'PLAN_SOURCE_NOT_CURRENT');
+  assert.equal(scenario.fixture.observation().prepareCount, 2);
+  assert.equal(scenario.fixture.observation().releaseCount, 2);
+  const status = composition.application.getGoalStatus(
+    result.outcome.result.materializedGoalRef.goalId,
+  );
+  assert.equal(status.status, 'FOUND');
+  assert.equal(status.view.activeCandidateRef, undefined);
+  assert.equal(status.view.nextSafeAction, 'INSPECT_BLOCKER');
+});
+
+void test('[M251-B4] substituted activation, phase roots, and protected asset fail before publication', (t) => {
+  const rootScenario = createM251B4CompositionScenario(t, 'm251-b4-root-substitution');
+  const sourceNestedRoot = join(rootScenario.sourceRoot, 'forbidden-authority-root');
+  assert.throws(
+    () =>
+      createM251TrustedProductionComposition({
+        ...rootScenario.compositionOptions,
+        roots: Object.freeze({
+          ...rootScenario.compositionOptions.roots,
+          authorityHome: sourceNestedRoot,
+        }),
+      }),
+    /roots must be pairwise separated/,
+  );
+  assert.equal(existsSync(sourceNestedRoot), false);
+  assert.deepEqual(
+    observeLocalCandidateSourceIdentity(rootScenario.sourceRoot),
+    rootScenario.initialSource,
+  );
+  assert.equal(rootScenario.fixture.observation().prepareCount, 0);
+
+  const capabilityScenario = createM251B4CompositionScenario(t, 'm251-b4-capability-substitution');
+  assert.throws(
+    () =>
+      createM251TrustedProductionComposition({
+        ...capabilityScenario.compositionOptions,
+        activation: Object.freeze({
+          ...capabilityScenario.fixture.activation,
+          capabilityRecord: Object.freeze({
+            ...capabilityScenario.fixture.activation.capabilityRecord,
+            binaryIdentityDigest: digests.digest({ substituted: 'binary' }),
+          }),
+        }),
+      }),
+    /pinned shared toolchain identity/,
+  );
+  assert.equal(capabilityScenario.fixture.observation().prepareCount, 0);
+
+  const phaseScenario = createM251B4CompositionScenario(t, 'm251-b4-phase-substitution');
+  const substitutedPhase = phaseScenario.fixture.activation.phaseAuthorities.map((phase) =>
+    phase.phase === WorkflowPhase.PLAN
+      ? Object.freeze({ ...phase, allowedRoots: Object.freeze([phaseScenario.sourceRoot]) })
+      : phase,
+  );
+  assert.throws(
+    () =>
+      createM251TrustedProductionComposition({
+        ...phaseScenario.compositionOptions,
+        activation: Object.freeze({
+          ...phaseScenario.fixture.activation,
+          phaseAuthorities: Object.freeze(substitutedPhase),
+        }),
+      }),
+    /activation roots do not bind trusted production roots/,
+  );
+  assert.equal(phaseScenario.fixture.observation().prepareCount, 0);
+
+  const assetScenario = createM251B4CompositionScenario(t, 'm251-b4-asset-substitution');
+  assert.throws(
+    () =>
+      createM251TrustedProductionComposition({
+        ...assetScenario.compositionOptions,
+        protectedCheckPath: join(assetScenario.sourceRoot, 'src', 'payment.js'),
+      }),
+    /protected checker does not match the frozen asset/,
+  );
+  assert.equal(assetScenario.fixture.observation().prepareCount, 0);
+});
+
+void test('[M251-B4] Profile preparation rejects an overlapping root before filesystem effects', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'codeclosure-m251-b4-profile-roots-')));
+  t.after(() => removeProjectReadFixtureRoot(root));
+  const sourceRoot = join(root, 'source');
+  const candidateRoot = join(root, 'candidate');
+  const projectReadRoot = join(root, 'project-read');
+  const credentialRoot = join(root, 'credentials');
+  for (const path of [sourceRoot, candidateRoot, projectReadRoot, credentialRoot]) {
+    mkdirSync(path);
+  }
+  const authSource = join(credentialRoot, 'auth.json');
+  writeFileSync(authSource, '{}\n', { mode: 0o600 });
+  const overlappingCodexHome = join(sourceRoot, 'forbidden-codex-home');
+  const roots: M251TrustedCodexRoots = Object.freeze({
+    codexHome: overlappingCodexHome,
+    probeWorkspace: join(root, 'probe'),
+    processHome: join(root, 'process-home'),
+    stateRoot: join(root, 'state'),
+    temporaryDirectory: join(root, 'temporary'),
+  });
+  await assert.rejects(
+    prepareM251TrustedCodexProfile({
+      authSource,
+      candidateWorkspaceRoot: candidateRoot,
+      forbiddenRoots: Object.freeze([sourceRoot, credentialRoot]),
+      model: 'gpt-fixture',
+      projectReadWorkspaceRoot: projectReadRoot,
+      roots,
+    }),
+    /Profile roots must be pairwise separated/,
+  );
+  assert.equal(existsSync(overlappingCodexHome), false);
+  assert.deepEqual(readdirSync(sourceRoot), []);
+});
+
+void test('[M251-B4] Intake clarification rejects another declared project without dispatch', (t) => {
+  const scenario = createM251B4CompositionScenario(t, 'm251-b4-clarify-project-substitution');
+  const composition = createM251TrustedProductionComposition(scenario.compositionOptions);
+  t.after(() => composition.close());
+  const otherProject = join(dirname(scenario.sourceRoot), 'other-project');
+  mkdirSync(otherProject);
+  assert.throws(
+    () =>
+      composition.intakeApplication.clarify({
+        commandId: commandId('command_m251-b4-clarify-project-substitution'),
+        intakeRunId: intakeRunId('intake_m251-b4-clarify-project-substitution'),
+        expectedIntakeRunVersion: 1,
+        clarificationQuestionId: clarificationQuestionId(
+          'clarification-question_m251-b4-project-substitution',
+        ),
+        answer: 'Use the other project.',
+        declaredProjectPath: otherProject,
+      }),
+    /declared another project/,
+  );
+  assert.equal(scenario.fixture.observation().prepareCount, 0);
+});
+
+void test('[M251-B4] production Intake preserves declared constraints and binds them to replay', async (t) => {
+  const scenario = createM251B4CompositionScenario(t, 'm251-b4-declared-constraints');
+  const delegate = scenario.compositionOptions.assistant;
+  let analyzeCount = 0;
+  let observedConstraints: readonly string[] | undefined;
+  const assistant: IntakeAssistantPort = Object.freeze({
+    analyze: (
+      input: Parameters<IntakeAssistantPort['analyze']>[0],
+      signal: Parameters<IntakeAssistantPort['analyze']>[1],
+    ) => {
+      analyzeCount += 1;
+      observedConstraints = input.package.rawRequestRevisions.at(-1)?.declaredConstraints;
+      return delegate.analyze(input, signal);
+    },
+    answer: (
+      input: Parameters<IntakeAssistantPort['answer']>[0],
+      signal: Parameters<IntakeAssistantPort['answer']>[1],
+    ) => delegate.answer(input, signal),
+  });
+  const composition = createM251TrustedProductionComposition({
+    ...scenario.compositionOptions,
+    assistant,
+  });
+  t.after(() => composition.close());
+  const submitCommandId = commandId('command_m251-b4-declared-constraints');
+  const declaredConstraints = Object.freeze(['Preserve the public payment API.']);
+  const first = await composition.intakeApplication.submit({
+    commandId: submitCommandId,
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: scenario.admittedUserContent,
+    declaredProjectPath: scenario.sourceRoot,
+    declaredConstraints,
+  });
+  assert.equal(first.kind, 'OUTCOME');
+  assert.deepEqual(observedConstraints, declaredConstraints);
+  assert.equal(analyzeCount, 1);
+
+  const replay = await composition.intakeApplication.submit({
+    commandId: submitCommandId,
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: scenario.admittedUserContent,
+    declaredProjectPath: scenario.sourceRoot,
+    declaredConstraints,
+  });
+  assert.equal(replay.kind, 'OUTCOME');
+  assert.equal(replay.replayed, true);
+  assert.equal(analyzeCount, 1);
+
+  const conflict = await composition.intakeApplication.submit({
+    commandId: submitCommandId,
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: scenario.admittedUserContent,
+    declaredProjectPath: scenario.sourceRoot,
+    declaredConstraints: Object.freeze(['Change the public payment API.']),
+  });
+  assert.equal(conflict.kind, 'COMMAND_CONFLICT');
+  assert.equal(analyzeCount, 1);
 });
