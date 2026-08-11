@@ -9,7 +9,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,6 +42,7 @@ import {
   m251MetadataFingerprint,
   m251PnpmVersion,
   m251ProjectObservation,
+  m251RemoveOwnedAssessmentRoot,
   m251RootPathDigest,
 } from './m2.5.1-live-environment-lib.mjs';
 import { runM251LiveContainmentTurn } from './m2.5.1-live-containment-turn.mjs';
@@ -112,26 +112,6 @@ function exactRealFile(path, label) {
 function ensureDirectory(path) {
   mkdirSync(path, { mode: 0o700, recursive: true });
   return realpathSync(path);
-}
-
-function makeTreeRemovable(root) {
-  if (!existsSync(root)) {
-    return;
-  }
-  const stat = lstatSync(root);
-  if (stat.isSymbolicLink()) {
-    fail('Assessment cleanup encountered a symbolic link');
-  }
-  if (stat.isDirectory()) {
-    chmodSync(root, 0o700);
-    for (const name of readdirSync(root)) {
-      makeTreeRemovable(join(root, name));
-    }
-  } else if (stat.isFile()) {
-    chmodSync(root, 0o600);
-  } else {
-    fail('Assessment cleanup encountered a special filesystem entry');
-  }
 }
 
 function selectedSourcePaths(observation) {
@@ -606,8 +586,7 @@ async function main() {
         path,
       })),
     ]);
-    makeTreeRemovable(assessmentRoot);
-    rmSync(assessmentRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+    m251RemoveOwnedAssessmentRoot(assessmentRoot);
     const sourceClosing = m251ExactSourceIdentity(
       repositoryRoot,
       M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION,
@@ -676,13 +655,7 @@ async function main() {
   } finally {
     if (existsSync(assessmentRoot)) {
       try {
-        makeTreeRemovable(assessmentRoot);
-        rmSync(assessmentRoot, {
-          force: true,
-          maxRetries: 10,
-          recursive: true,
-          retryDelay: 100,
-        });
+        m251RemoveOwnedAssessmentRoot(assessmentRoot);
       } catch {
         failure ??= new TypeError('Live containment assessment-root cleanup failed');
       }

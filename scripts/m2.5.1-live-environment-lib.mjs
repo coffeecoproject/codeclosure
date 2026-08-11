@@ -1,14 +1,26 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 
 import { m251ProjectTreeIdentity } from './m2.5.1-live-intake-lib.mjs';
 import { parseSourceIdentity } from './m2-acceptance-lib.mjs';
 
 const maximumChildOutputBytes = 16 * 1024 * 1024;
+const assessmentRootPrefixes = Object.freeze([
+  'codeclosure-m2-5-1-live-composition-',
+  'codeclosure-m2-5-1-live-containment-',
+]);
 
 function fail(message) {
   throw new TypeError(message);
@@ -109,4 +121,39 @@ export function m251RootPathDigest(kind, path) {
       .update(JSON.stringify(['codeclosure-m2-5-1-live-root-v1', realpathSync(path)]), 'utf8')
       .digest('hex')}`,
   });
+}
+
+export function m251RemoveOwnedAssessmentRoot(root) {
+  if (!existsSync(root)) {
+    return;
+  }
+  const exactRoot = realpathSync(root);
+  const exactTemporaryRoot = realpathSync(tmpdir());
+  if (
+    exactRoot !== resolve(root) ||
+    dirname(exactRoot) !== exactTemporaryRoot ||
+    !assessmentRootPrefixes.some((prefix) => basename(exactRoot).startsWith(prefix))
+  ) {
+    fail('Assessment cleanup target is not one exact owned root');
+  }
+  const pending = [exactRoot];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) {
+      continue;
+    }
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      fail('Assessment cleanup encountered a symbolic link');
+    }
+    if (stat.isDirectory()) {
+      chmodSync(current, 0o700);
+      pending.push(...readdirSync(current).map((name) => join(current, name)));
+    } else if (stat.isFile()) {
+      chmodSync(current, 0o600);
+    } else {
+      fail('Assessment cleanup encountered a special filesystem entry');
+    }
+  }
+  rmSync(exactRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
 }

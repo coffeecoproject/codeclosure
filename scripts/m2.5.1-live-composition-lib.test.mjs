@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
 import { URL, fileURLToPath } from 'node:url';
@@ -37,6 +49,7 @@ import {
   projectM251LiveCompositionVerification,
   validateM251LiveCompositionReceipt,
 } from './m2.5.1-live-composition-lib.mjs';
+import { m251RemoveOwnedAssessmentRoot } from './m2.5.1-live-environment-lib.mjs';
 const contract = JSON.parse(
   readFileSync(new URL('./fixtures/m2.5.1/slice0-contract.json', import.meta.url), 'utf8'),
 );
@@ -717,6 +730,43 @@ void test('[M251-S4-B5] cleanup diagnostics name only failed metadata checks', (
         unexpectedPath: '/private/sensitive/path',
       }),
     /cleanup observation has unknown or missing fields/u,
+  );
+});
+
+void test('[M251-S4-B5] owned assessment cleanup removes frozen trees without following aliases', (t) => {
+  const temporaryRoot = realpathSync(tmpdir());
+  const ownedRoot = realpathSync(
+    mkdtempSync(join(temporaryRoot, 'codeclosure-m2-5-1-live-composition-test-')),
+  );
+  const frozenRoot = join(ownedRoot, 'candidate', 'generation');
+  mkdirSync(frozenRoot, { recursive: true });
+  writeFileSync(join(frozenRoot, 'source.js'), 'fixture\n');
+  chmodSync(frozenRoot, 0o500);
+  m251RemoveOwnedAssessmentRoot(ownedRoot);
+  assert.equal(existsSync(ownedRoot), false);
+
+  const externalRoot = mkdtempSync(join(temporaryRoot, 'codeclosure-m251-cleanup-external-'));
+  const aliasedRoot = realpathSync(
+    mkdtempSync(join(temporaryRoot, 'codeclosure-m2-5-1-live-containment-test-')),
+  );
+  t.after(() => {
+    rmSync(aliasedRoot, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  });
+  symlinkSync(externalRoot, join(aliasedRoot, 'escape'));
+  assert.throws(
+    () => m251RemoveOwnedAssessmentRoot(aliasedRoot),
+    /cleanup encountered a symbolic link/u,
+  );
+  assert.equal(existsSync(externalRoot), true);
+
+  const unownedRoot = realpathSync(
+    mkdtempSync(join(temporaryRoot, 'codeclosure-unowned-assessment-')),
+  );
+  t.after(() => rmSync(unownedRoot, { force: true, recursive: true }));
+  assert.throws(
+    () => m251RemoveOwnedAssessmentRoot(unownedRoot),
+    /cleanup target is not one exact owned root/u,
   );
 });
 

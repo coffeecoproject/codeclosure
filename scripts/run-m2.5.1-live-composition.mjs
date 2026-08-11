@@ -5,7 +5,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
@@ -45,6 +44,7 @@ import {
   m251MetadataFingerprint,
   m251PnpmVersion,
   m251ProjectObservation,
+  m251RemoveOwnedAssessmentRoot,
 } from './m2.5.1-live-environment-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
@@ -854,7 +854,7 @@ async function main() {
       () => protectedCheckOpening === m251FileDigest(protectedCheckPath),
     );
     cleanupStep('CLEANUP_ASSESSMENT_ROOT_REMOVAL_FAILED', () =>
-      rmSync(assessmentRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 }),
+      m251RemoveOwnedAssessmentRoot(assessmentRoot),
     );
     const assessmentRootRemoved = !existsSync(assessmentRoot);
     const sourceClosing = cleanupStep('CLEANUP_SOURCE_OBSERVATION_FAILED', () =>
@@ -963,12 +963,7 @@ async function main() {
     }
     if (existsSync(assessmentRoot)) {
       try {
-        rmSync(assessmentRoot, {
-          force: true,
-          maxRetries: 10,
-          recursive: true,
-          retryDelay: 100,
-        });
+        m251RemoveOwnedAssessmentRoot(assessmentRoot);
       } catch {
         failure ??= new TypeError('Assessment-root cleanup failed');
       }
