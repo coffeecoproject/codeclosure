@@ -6,7 +6,10 @@ import {
   m251LiveContainmentDigest,
   projectM251CandidateFreeContainmentProbe,
 } from './m2.5.1-live-containment-lib.mjs';
-import { runM251LiveContainmentTurn } from './m2.5.1-live-containment-turn.mjs';
+import {
+  m251LiveContainmentFailureReasonCode,
+  runM251LiveContainmentTurn,
+} from './m2.5.1-live-containment-turn.mjs';
 
 function fixture(overrides = {}) {
   const cwd = '/assessment/project-read/snapshot';
@@ -99,7 +102,7 @@ function fixture(overrides = {}) {
                 command: overrides.observedCommand ?? command,
                 commandActions: [],
                 cwd,
-                exitCode: 0,
+                exitCode: overrides.commandExitCode ?? 0,
                 id: 'item_fixture',
                 pluginId: null,
                 scriptPath: null,
@@ -198,6 +201,20 @@ test('rejects a substituted command and still shuts down the controlled client',
     runM251LiveContainmentTurn(input),
     /command was substituted, failed, or retained output/u,
   );
+  assert.equal(state.shutdownObserved, true);
+});
+
+test('classifies a successful denied-boundary open without retaining its path', async () => {
+  const { input, state } = fixture({ commandExitCode: 50 });
+
+  await assert.rejects(runM251LiveContainmentTurn(input), (error) => {
+    assert.equal(
+      m251LiveContainmentFailureReasonCode(error),
+      `DENIED_BOUNDARY_READ_SUCCEEDED_${M251_CANDIDATE_FREE_DENIED_BOUNDARIES[0]}`,
+    );
+    assert.equal('path' in error, false);
+    return true;
+  });
   assert.equal(state.shutdownObserved, true);
 });
 

@@ -320,7 +320,7 @@ test('M2.5.1 Live containment command rejects missing authorization before exter
   );
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'M2.5.1 live containment failed at ENTRY\n');
+  assert.equal(result.stderr, 'M2.5.1 live containment failed at ENTRY (UNCLASSIFIED_FAILURE)\n');
 });
 
 test('M2.5.1 Live containment command has one explicit non-automatic package entry', () => {

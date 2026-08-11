@@ -1,12 +1,24 @@
 import { m251LiveContainmentDigest } from './m2.5.1-live-containment-lib.mjs';
 
-function fail(message) {
-  throw new TypeError(message);
+class M251LiveContainmentTurnError extends TypeError {
+  constructor(reasonCode, message) {
+    super(message);
+    this.name = 'M251LiveContainmentTurnError';
+    this.reasonCode = reasonCode;
+  }
+}
+
+function fail(reasonCode, message) {
+  throw new M251LiveContainmentTurnError(reasonCode, message);
+}
+
+export function m251LiveContainmentFailureReasonCode(error) {
+  return error instanceof M251LiveContainmentTurnError ? error.reasonCode : 'UNCLASSIFIED_FAILURE';
 }
 
 function jsonObject(value, label) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    fail(`${label} must be an object`);
+    fail('RESPONSE_SHAPE_INVALID', `${label} must be an object`);
   }
   return value;
 }
@@ -15,7 +27,7 @@ function selectedPermissionProfile(value, phaseEntry, digestCanonical) {
   const response = jsonObject(value, 'Permission-profile response');
   const data = response.data;
   if (!Array.isArray(data) || (response.nextCursor !== undefined && response.nextCursor !== null)) {
-    fail('Permission-profile response is malformed');
+    fail('PERMISSION_PROFILE_RESPONSE_INVALID', 'Permission-profile response is malformed');
   }
   const selected = data.filter(
     (entry) =>
@@ -29,7 +41,7 @@ function selectedPermissionProfile(value, phaseEntry, digestCanonical) {
     selected[0].allowed !== true ||
     digestCanonical(selected[0]) !== phaseEntry.permissionProfileDigest
   ) {
-    fail('The exact phase permission profile is unavailable');
+    fail('PERMISSION_PROFILE_MISMATCH', 'The exact phase permission profile is unavailable');
   }
 }
 
@@ -56,7 +68,10 @@ function effectiveThread(value, input) {
     !Array.isArray(instructionSources) ||
     instructionSources.length !== 0
   ) {
-    fail('Effective Thread differs from the exact phase isolation input');
+    fail(
+      'EFFECTIVE_THREAD_ISOLATION_MISMATCH',
+      'Effective Thread differs from the exact phase isolation input',
+    );
   }
   return Object.freeze({
     threadId: thread.id,
@@ -85,7 +100,7 @@ function startedTurn(value) {
   const response = jsonObject(value, 'Started Turn response');
   const turn = jsonObject(response.turn, 'Started Turn identity');
   if (typeof turn.id !== 'string') {
-    fail('Started Turn lacks one exact identity');
+    fail('TURN_IDENTITY_INVALID', 'Started Turn lacks one exact identity');
   }
   return turn.id;
 }
@@ -97,7 +112,7 @@ function terminalFromNotification(notification) {
   const params = jsonObject(notification.params, 'Terminal notification');
   const turn = jsonObject(params.turn, 'Terminal Turn');
   if (typeof turn.id !== 'string' || typeof params.threadId !== 'string') {
-    fail('Terminal Turn lacks exact Thread/Turn identity');
+    fail('TERMINAL_IDENTITY_INVALID', 'Terminal Turn lacks exact Thread/Turn identity');
   }
   return Object.freeze({
     errorIsNull: turn.error === null,
@@ -194,7 +209,10 @@ export async function runM251LiveContainmentTurn(input) {
       requestOptions,
     );
     if (input.digestCanonical(requirements) !== input.sharedProfile.managedRequirementsDigest) {
-      fail('Managed requirements differ from the prepared profile');
+      fail(
+        'MANAGED_REQUIREMENTS_MISMATCH',
+        'Managed requirements differ from the prepared profile',
+      );
     }
     const configuration = await client.request(
       'config/read',
@@ -293,7 +311,7 @@ export async function runM251LiveContainmentTurn(input) {
     const deadline = Date.now() + input.terminalTimeoutMilliseconds;
     while (terminalNotifications.length === 0) {
       if (Date.now() >= deadline) {
-        fail('Containment probe did not reach one terminal Turn');
+        fail('TERMINAL_TIMEOUT', 'Containment probe did not reach one terminal Turn');
       }
       await new Promise((resolveWait) => globalThis.setTimeout(resolveWait, 25));
     }
@@ -307,25 +325,68 @@ export async function runM251LiveContainmentTurn(input) {
       terminals[0].errorIsNull !== true ||
       commandItems.length !== 1
     ) {
-      fail('Containment probe did not produce one completed command and terminal Turn');
+      fail(
+        'TERMINAL_COMMAND_CARDINALITY_MISMATCH',
+        'Containment probe did not produce one completed command and terminal Turn',
+      );
     }
     const commandRecord = commandItems[0];
     const commandItem = commandRecord.item;
     const output = commandItem.aggregatedOutput;
+    if (commandRecord.threadId !== thread.threadId || commandRecord.turnId !== turnId) {
+      fail(
+        'COMMAND_TURN_IDENTITY_MISMATCH',
+        'Containment probe command was substituted, failed, or retained output',
+      );
+    }
+    if (commandItem.command !== input.command) {
+      fail(
+        'COMMAND_SUBSTITUTED',
+        'Containment probe command was substituted, failed, or retained output',
+      );
+    }
+    if (commandItem.cwd !== input.cwd) {
+      fail(
+        'COMMAND_CWD_MISMATCH',
+        'Containment probe command was substituted, failed, or retained output',
+      );
+    }
+    if (commandItem.status !== 'completed') {
+      fail(
+        'COMMAND_NOT_COMPLETED',
+        'Containment probe command was substituted, failed, or retained output',
+      );
+    }
+    if (commandItem.exitCode !== 0) {
+      const deniedBoundary = input.deniedBoundaries[commandItem.exitCode - 50];
+      const reasonCode =
+        commandItem.exitCode === 40
+          ? input.phaseEntry.phase === 'IMPLEMENT'
+            ? 'CANDIDATE_WRITE_FAILED'
+            : 'SELECTED_SOURCE_READ_FAILED'
+          : commandItem.exitCode === 41 && input.phaseEntry.phase !== 'IMPLEMENT'
+            ? 'READ_ONLY_SNAPSHOT_WRITE_SUCCEEDED'
+            : deniedBoundary === undefined
+              ? 'COMMAND_EXIT_NON_ZERO'
+              : `DENIED_BOUNDARY_READ_SUCCEEDED_${deniedBoundary.kind}`;
+      fail(reasonCode, 'Containment probe command was substituted, failed, or retained output');
+    }
     if (
-      commandRecord.threadId !== thread.threadId ||
-      commandRecord.turnId !== turnId ||
-      commandItem.command !== input.command ||
-      commandItem.cwd !== input.cwd ||
-      commandItem.status !== 'completed' ||
-      commandItem.exitCode !== 0 ||
       commandItem.pluginId !== null ||
       commandItem.scriptPath !== null ||
       !['agent', 'unifiedExecStartup'].includes(commandItem.source) ||
-      !Array.isArray(commandItem.commandActions) ||
-      (output !== '' && output !== null)
+      !Array.isArray(commandItem.commandActions)
     ) {
-      fail('Containment probe command was substituted, failed, or retained output');
+      fail(
+        'COMMAND_METADATA_INVALID',
+        'Containment probe command was substituted, failed, or retained output',
+      );
+    }
+    if (output !== '' && output !== null) {
+      fail(
+        'COMMAND_OUTPUT_RETAINED',
+        'Containment probe command was substituted, failed, or retained output',
+      );
     }
     return Object.freeze({
       approvalRequestCount,

@@ -45,12 +45,16 @@ import {
   m251RemoveOwnedAssessmentRoot,
   m251RootPathDigest,
 } from './m2.5.1-live-environment-lib.mjs';
-import { runM251LiveContainmentTurn } from './m2.5.1-live-containment-turn.mjs';
+import {
+  m251LiveContainmentFailureReasonCode,
+  runM251LiveContainmentTurn,
+} from './m2.5.1-live-containment-turn.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const contractPath = join(repositoryRoot, 'scripts', 'fixtures', 'm2.5.1', 'slice0-contract.json');
 const terminalTimeoutMilliseconds = 300_000;
 let stage = 'ENTRY';
+let failureReasonCode;
 
 function fail(message) {
   throw new TypeError(message);
@@ -652,17 +656,21 @@ async function main() {
     ]);
   } catch (error) {
     failure = error;
+    failureReasonCode = m251LiveContainmentFailureReasonCode(error);
   } finally {
     if (existsSync(assessmentRoot)) {
       try {
         m251RemoveOwnedAssessmentRoot(assessmentRoot);
       } catch {
         failure ??= new TypeError('Live containment assessment-root cleanup failed');
+        failureReasonCode ??= 'ASSESSMENT_ROOT_CLEANUP_FAILED';
       }
     }
   }
   if (failure !== undefined || receipt === undefined) {
-    process.stderr.write(`M2.5.1 live containment failed at ${stage}\n`);
+    process.stderr.write(
+      `M2.5.1 live containment failed at ${stage} (${failureReasonCode ?? 'UNCLASSIFIED_FAILURE'})\n`,
+    );
     process.exitCode = 1;
     return;
   }
@@ -672,6 +680,8 @@ async function main() {
 try {
   await main();
 } catch {
-  process.stderr.write(`M2.5.1 live containment failed at ${stage}\n`);
+  process.stderr.write(
+    `M2.5.1 live containment failed at ${stage} (${failureReasonCode ?? 'UNCLASSIFIED_FAILURE'})\n`,
+  );
   process.exitCode = 1;
 }
