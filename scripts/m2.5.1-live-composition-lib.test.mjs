@@ -530,7 +530,7 @@ function receipt(options = {}) {
     candidateGenerationId: identifiers.generationId,
     candidateDigest: candidate.firstSourceDigest,
     recordDigest: digest('verification-evidence'),
-    resultStatus: 'PASSED',
+    resultStatus: 'PASS',
     observation: { exitCode: 0 },
     checkSpec: verificationCheck,
     acceptanceCriticalVerificationPlanId: identifiers.verificationPlanId,
@@ -1064,6 +1064,13 @@ test('M2.5.1 Live composition receipt rejects Profile, Candidate, and Check subs
   checkSubstitution.verification.checkId = 'check_substituted';
   assert.throws(
     () => strictValidate(checkSubstitution),
+    /protected verification identity or result is invalid/u,
+  );
+
+  const inventedResultStatus = receipt();
+  inventedResultStatus.verification.result = 'PASSED';
+  assert.throws(
+    () => strictValidate(inventedResultStatus),
     /protected verification identity or result is invalid/u,
   );
 });

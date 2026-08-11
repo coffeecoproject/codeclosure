@@ -1590,7 +1590,7 @@ function validateVerification(value, candidate, project) {
     value.runnerVersion !== 'v1' ||
     value.candidateGenerationRefDigest !== candidate.generationRefDigest ||
     value.candidateDigest !== candidate.firstSourceDigest ||
-    value.result !== 'PASSED' ||
+    value.result !== 'PASS' ||
     value.exitCode !== 0
   ) {
     fail('Live composition protected verification identity or result is invalid');
