@@ -49,9 +49,15 @@ import {
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const contractPath = join(repositoryRoot, 'scripts', 'fixtures', 'm2.5.1', 'slice0-contract.json');
 let stage = 'ENTRY';
+let failureReasonCode;
 
 function fail(message) {
   throw new TypeError(message);
+}
+
+function failWithReason(reasonCode, message) {
+  failureReasonCode ??= reasonCode;
+  fail(message);
 }
 
 function argument(name) {
@@ -113,9 +119,9 @@ function wrapAssistantResource(resource, operationCounter) {
   });
 }
 
-function requireOutcome(result, kind, label) {
+function requireOutcome(result, kind, label, reasonCode) {
   if (result?.kind !== 'OUTCOME' || result.outcome.result.kind !== kind) {
-    fail(`${label} did not retain ${kind}`);
+    failWithReason(reasonCode, `${label} did not retain ${kind}`);
   }
   return result;
 }
@@ -241,17 +247,23 @@ function rootProjection(projectPath, roots, workerRoots, intakeDescriptor) {
   ]);
 }
 
-function selectEvidence(acceptanceAuthority) {
-  const freezeEvidence = acceptanceAuthority.currentEvidence.find(
-    ({ record }) => record.kind === 'CANDIDATE_FREEZE',
-  )?.record;
-  const verificationEvidence = acceptanceAuthority.currentEvidence.find(
+function selectVerificationEvidence(acceptanceAuthority) {
+  const verificationEntries = acceptanceAuthority.currentEvidence.filter(
     ({ record }) => record.kind === 'LOCAL_COMMAND_TEST_RESULT',
-  )?.record;
-  return Object.freeze({
-    freezeEvidence: requireValue(freezeEvidence, 'Candidate freeze-v2 Evidence'),
-    verificationEvidence: requireValue(verificationEvidence, 'Protected local-command Evidence'),
-  });
+  );
+  const verificationEvidence = verificationEntries[0]?.record;
+  if (
+    acceptanceAuthority.currentEvidence.length !== 1 ||
+    verificationEntries.length !== 1 ||
+    verificationEvidence === undefined
+  ) {
+    const evidenceKinds = acceptanceAuthority.currentEvidence.map(({ record }) => record.kind);
+    failWithReason(
+      `ACCEPTANCE_EVIDENCE_KINDS_${evidenceKinds.join('+') || 'NONE'}`,
+      'M2.5.1 Acceptance authority lacks its exact protected Verification Evidence',
+    );
+  }
+  return verificationEvidence;
 }
 
 function snapshotsRemoved(projectReadRoot) {
@@ -382,12 +394,14 @@ async function main() {
     assertExactToolchainPreflight(toolchain, contract);
     const activation = production.createM251RealCodexProductionActivation(profileAuthority);
     const rootIdentity = rootProjection(projectPath, roots, workerRoots, intakeDescriptor);
+    const adapterDiagnostics = [];
     const adapterObservations = [];
     const ordinaryStartResults = [];
     primaryComposition = production.createM251TrustedProductionComposition({
       activation,
       intakeAssistant: primaryAssistant,
       observationSink: Object.freeze({
+        onAdapterDiagnostic: (event) => adapterDiagnostics.push(event),
         onAdapterObservation: (observation) => adapterObservations.push(observation),
         onOrdinaryStartResult: (result) => ordinaryStartResults.push(result),
       }),
@@ -413,28 +427,54 @@ async function main() {
       }),
       'CLARIFICATION_REQUIRED',
       'M2.5.1 initial Intake',
+      'INITIAL_INTAKE_OUTCOME_NOT_CLARIFICATION_REQUIRED',
     );
     const initialStatus = requireValue(
       primaryComposition.intakeApplication.getStatus(submitted.outcome.intakeRunId),
       'M2.5.1 initial Intake status',
     );
     if (initialStatus.status !== 'NEEDS_CLARIFICATION') {
-      fail('M2.5.1 Intake did not retain one active clarification');
+      failWithReason(
+        'INITIAL_INTAKE_STATUS_NOT_NEEDS_CLARIFICATION',
+        'M2.5.1 Intake did not retain one active clarification',
+      );
     }
     const clarificationCommandId = createCliCommandId();
+    const clarificationResult = await primaryComposition.intakeApplication.clarify({
+      commandId: clarificationCommandId,
+      intakeRunId: submitted.outcome.intakeRunId,
+      expectedIntakeRunVersion: initialStatus.intakeRunVersion,
+      clarificationQuestionId: initialStatus.activeQuestion.id,
+      answer: M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer,
+    });
+    if (
+      clarificationResult?.kind !== 'OUTCOME' ||
+      clarificationResult.outcome.result.kind !== 'MATERIALIZED'
+    ) {
+      const currentStatus = primaryComposition.intakeApplication.getStatus(
+        submitted.outcome.intakeRunId,
+      );
+      const outcomeKind =
+        clarificationResult?.kind === 'OUTCOME'
+          ? clarificationResult.outcome.result.kind
+          : 'NO_OUTCOME';
+      const affectedFields = currentStatus?.activeQuestion?.affectedFields.join('+') ?? 'NONE';
+      failWithReason(
+        `CLARIFIED_INTAKE_${outcomeKind}_${affectedFields}`,
+        'M2.5.1 clarified Intake did not retain MATERIALIZED',
+      );
+    }
     const clarified = requireOutcome(
-      await primaryComposition.intakeApplication.clarify({
-        commandId: clarificationCommandId,
-        intakeRunId: submitted.outcome.intakeRunId,
-        expectedIntakeRunVersion: initialStatus.intakeRunVersion,
-        clarificationQuestionId: initialStatus.activeQuestion.id,
-        answer: M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer,
-      }),
+      clarificationResult,
       'MATERIALIZED',
       'M2.5.1 clarified Intake',
+      'CLARIFIED_INTAKE_OUTCOME_NOT_MATERIALIZED',
     );
     if (clarified.startDisposition !== 'START_COMMAND_APPLIED') {
-      fail('M2.5.1 governed Intake did not apply its separate ordinary Start');
+      failWithReason(
+        `CLARIFIED_INTAKE_${clarified.startDisposition}`,
+        'M2.5.1 governed Intake did not apply its separate ordinary Start',
+      );
     }
 
     stage = 'EVIDENCE_ACCEPTANCE_CLOSEOUT';
@@ -462,14 +502,51 @@ async function main() {
       primaryComposition.inspection.getProcessedCommand(startAuthorization.startCommandId),
       'M2.5.1 processed ordinary Start',
     );
+    const observedStartResult = ordinaryStartResults[0];
     if (
       primaryAssistantOperations.count !== 2 ||
       ordinaryStartResults.length !== 1 ||
       adapterObservations.length !== 3
     ) {
-      fail('M2.5.1 linked execution did not produce one Start and three real phase observations');
+      failWithReason(
+        `LINKED_EXECUTION_COUNTS_ASSISTANT_${String(primaryAssistantOperations.count)}` +
+          `_START_${String(ordinaryStartResults.length)}` +
+          `_PHASES_${
+            adapterObservations
+              .map(
+                ({ activityDisposition, failureCode, phase, state }) =>
+                  `${phase}:${state}:${failureCode ?? 'NONE'}:${activityDisposition}`,
+              )
+              .join('+') || 'NONE'
+          }` +
+          `_DRIVE_${observedStartResult?.drive?.stopReason ?? 'NONE'}` +
+          `_DETAIL_${observedStartResult?.drive?.detailCode ?? 'NONE'}` +
+          `_DIAGNOSTICS_${
+            adapterDiagnostics
+              .map((event) =>
+                [
+                  event.kind,
+                  'itemType' in event ? event.itemType : 'NONE',
+                  'location' in event ? event.location : 'NONE',
+                  'reasonCode' in event ? event.reasonCode : 'NONE',
+                  'activityDetail' in event ? event.activityDetail : 'NONE',
+                  'method' in event ? event.method : 'NONE',
+                ].join(':'),
+              )
+              .join('+') || 'NONE'
+          }`,
+        'M2.5.1 linked execution did not produce one Start and three real phase observations',
+      );
     }
-    const startResult = ordinaryStartResults[0];
+    if (observedStartResult?.drive?.stopReason !== 'CLOSED') {
+      failWithReason(
+        `LINKED_EXECUTION_DRIVE_${observedStartResult?.drive?.stopReason ?? 'NONE'}` +
+          `_DETAIL_${observedStartResult?.drive?.detailCode ?? 'NONE'}`,
+        'M2.5.1 linked execution did not reach technical closeout',
+      );
+    }
+    const startResult = observedStartResult;
+    stage = 'PROJECT_GOAL_RECEIPT';
     const goal = projectM251LiveCompositionGoal(
       {
         finalAuthority,
@@ -480,6 +557,7 @@ async function main() {
       },
       profile,
     );
+    stage = 'PROJECT_INTAKE_RECEIPT';
     const intake = projectM251LiveCompositionIntake(
       {
         submitCommandId,
@@ -489,14 +567,53 @@ async function main() {
       goal,
       profile,
     );
-    const acceptanceAuthority = requireValue(
-      primaryComposition.inspection.getAcceptanceAuthority(
+    stage = 'READ_ACCEPTANCE_AUTHORITY';
+    let acceptanceAuthority;
+    try {
+      acceptanceAuthority = primaryComposition.inspection.getAcceptanceAuthority(
         finalAuthority.workflow.id,
         requireValue(finalAuthority.policyBinding, 'M2.5.1 Workflow Policy binding').policyBundleId,
-      ),
-      'M2.5.1 Acceptance authority',
-    );
-    const { freezeEvidence, verificationEvidence } = selectEvidence(acceptanceAuthority);
+      );
+    } catch {
+      failWithReason(
+        'ACCEPTANCE_AUTHORITY_READ_FAILED',
+        'M2.5.1 Acceptance authority inspection failed',
+      );
+    }
+    if (acceptanceAuthority === undefined) {
+      failWithReason(
+        `ACCEPTANCE_AUTHORITY_MISSING_OUTCOME_${finalStatus.acceptanceSummary?.outcome ?? 'NONE'}` +
+          `_TECHNICAL_CLOSEOUT_${String(finalStatus.technicalCloseout)}` +
+          `_ACTIVE_CANDIDATE_${
+            finalAuthority.workflow.activeCandidateGenerationId === undefined ? 'NONE' : 'BOUND'
+          }` +
+          `_CANDIDATE_STATE_${finalAuthority.candidateAuthority?.generation.state ?? 'NONE'}` +
+          `_DECISION_${finalAuthority.acceptanceAuthority?.decision.outcome ?? 'NONE'}`,
+        'M2.5.1 Acceptance authority is unavailable after linked closeout',
+      );
+    }
+    stage = 'READ_CANDIDATE_FREEZE_AUTHORITY';
+    let candidateFreezeAuthority;
+    try {
+      candidateFreezeAuthority = primaryComposition.inspection.getCurrentCandidateFreezeEvidence(
+        finalAuthority.workflow.id,
+      );
+    } catch {
+      failWithReason(
+        'CANDIDATE_FREEZE_AUTHORITY_READ_FAILED',
+        'M2.5.1 Candidate freeze authority inspection failed',
+      );
+    }
+    if (candidateFreezeAuthority === undefined) {
+      failWithReason(
+        'CANDIDATE_FREEZE_AUTHORITY_MISSING',
+        'M2.5.1 current Candidate freeze Evidence authority is unavailable',
+      );
+    }
+    const freezeEvidence = candidateFreezeAuthority.record;
+    stage = 'SELECT_ACCEPTANCE_EVIDENCE';
+    const verificationEvidence = selectVerificationEvidence(acceptanceAuthority);
+    stage = 'PROJECT_CANDIDATE_RECEIPT';
     const candidate = projectM251LiveCompositionCandidate(
       {
         authority: requireValue(finalAuthority.candidateAuthority, 'M2.5.1 Candidate authority'),
@@ -504,6 +621,7 @@ async function main() {
       },
       goal,
     );
+    stage = 'PROJECT_PHASE_RECEIPT';
     const phaseInputs = M251_LIVE_COMPOSITION_PHASES.map((expected) => {
       const observation = adapterObservations.find(({ phase }) => phase === expected.phase);
       return primaryComposition.inspection.readPhaseAuthority(
@@ -515,11 +633,13 @@ async function main() {
       finalAuthority.acceptanceCriticalVerificationPlan,
       'M2.5.1 protected Verification Plan',
     );
+    stage = 'PROJECT_VERIFICATION_RECEIPT';
     const verification = projectM251LiveCompositionVerification(
       { plan: verificationPlan, evidence: verificationEvidence },
       candidate,
       expectedProject,
     );
+    stage = 'PROJECT_EVIDENCE_RECEIPT';
     const evidence = projectM251LiveCompositionEvidence(
       {
         evidenceSet: acceptanceAuthority.evidenceSet,
@@ -529,6 +649,7 @@ async function main() {
       candidate,
       verification,
     );
+    stage = 'PROJECT_ACCEPTANCE_RECEIPT';
     const persistedAcceptance = requireValue(
       finalAuthority.acceptanceAuthority,
       'M2.5.1 persisted Acceptance Decision',
@@ -545,6 +666,7 @@ async function main() {
       verification,
       profile,
     );
+    stage = 'PROJECT_CLOSEOUT_RECEIPT';
     const closeout = projectM251LiveCompositionCloseout(
       {
         workflow: finalAuthority.workflow,
@@ -598,6 +720,7 @@ async function main() {
       }),
       'CLARIFICATION_REQUIRED',
       'Reopened initial Intake replay',
+      'REOPENED_INITIAL_INTAKE_REPLAY_MISMATCH',
     );
     const replayedClarification = requireOutcome(
       await reopenedComposition.intakeApplication.clarify({
@@ -609,6 +732,7 @@ async function main() {
       }),
       'MATERIALIZED',
       'Reopened clarification replay',
+      'REOPENED_CLARIFICATION_REPLAY_MISMATCH',
     );
     const replayedStart = await reopenedComposition.application.startGoal({
       commandId: startAuthorization.startCommandId,
@@ -790,7 +914,11 @@ async function main() {
     }
   }
   if (failure !== undefined || receipt === undefined) {
-    process.stderr.write(`M2.5.1 live composition failed at ${stage}\n`);
+    process.stderr.write(
+      `M2.5.1 live composition failed at ${stage}${
+        failureReasonCode === undefined ? '' : ` (${failureReasonCode})`
+      }\n`,
+    );
     process.exitCode = 1;
     return;
   }

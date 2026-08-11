@@ -28,6 +28,7 @@ export {
   type CodexExecutionProfileDirective,
   type CodexInstructionSourceBinding,
   type CodexItemRejectionCode,
+  type CodexWorkerActivityDiagnosticDetail,
   type CodexThreadDirective,
   type CodexWorkerDirective,
   type CodexWorkerRequestBinding,

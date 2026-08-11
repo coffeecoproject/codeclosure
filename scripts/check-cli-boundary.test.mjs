@@ -408,7 +408,14 @@ void test('M2.5.1 execution authority and B4 production consumers have exact nam
   );
   assert.deepEqual(
     violations(
-      "import { attemptId, workerEventId, type CommandId, type PolicyBundleId, type WorkflowId } from '@codeclosure/domain';",
+      "import { EvidenceEligibilityState, EvidenceKind, attemptId, workerEventId, type CandidateFreezeEvidenceRecord, type CommandId, type EvidenceEligibility, type PolicyBundleId, type WorkflowId } from '@codeclosure/domain';",
+      m251ProductionCompositionFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      "import { type CodexAdapterDiagnosticEvent, type CodexAdapterObservationV2 } from '@codeclosure/adapter-codex';",
       m251ProductionCompositionFixturePath,
     ),
     [],
@@ -426,6 +433,7 @@ void test('M2.5.1 execution authority and B4 production consumers have exact nam
         'export interface M251TrustedProductionObservationSink {}',
         'export interface M251TrustedProductionPhaseAuthority {}',
         'export interface M251TrustedProductionInspection {}',
+        'export interface M251CurrentCandidateFreezeEvidenceAuthority {}',
       ].join('\n'),
       m251ProductionCompositionFixturePath,
     ),

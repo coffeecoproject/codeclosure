@@ -12,6 +12,7 @@ import {
   codexFinalPayloadBinding,
   digestCanonical,
   type CodexItemRejectionCode,
+  type CodexWorkerActivityDiagnosticDetail,
   type CodexWorkerDirective,
 } from './contracts.js';
 import {
@@ -52,7 +53,10 @@ export interface TerminalTurn {
 }
 
 export type CodexThreadItemDisposition =
-  'ALLOWED' | 'COMPACTION_POLICY_VIOLATION' | 'UNSUPPORTED_BACKEND_ACTIVITY';
+  | 'ALLOWED'
+  | 'COMPACTION_POLICY_VIOLATION'
+  | 'PENDING_BACKEND_ACTIVITY'
+  | 'UNSUPPORTED_BACKEND_ACTIVITY';
 
 export type CodexThreadItemEvaluation =
   | Readonly<{
@@ -60,8 +64,13 @@ export type CodexThreadItemEvaluation =
       rejectionCode?: never;
     }>
   | Readonly<{
+      disposition: 'PENDING_BACKEND_ACTIVITY';
+      rejectionCode?: never;
+    }>
+  | Readonly<{
       disposition: 'UNSUPPORTED_BACKEND_ACTIVITY';
       rejectionCode: CodexItemRejectionCode;
+      activityDetail?: CodexWorkerActivityDiagnosticDetail;
     }>;
 
 export type CodexThreadItemLocation = 'COMPLETED' | 'STARTED' | 'TERMINAL';
@@ -419,12 +428,18 @@ export function evaluateCodexThreadItem(
   try {
     validateAllowedThreadItem(item, location, policy);
     if (policy.workerActivityPolicy !== undefined) {
-      const activity = evaluateCodexWorkerActivityV1(item, policy.workerActivityPolicy);
+      const activity = evaluateCodexWorkerActivityV1(item, policy.workerActivityPolicy, location);
       if (activity.disposition === 'REJECTED_DISCARDED') {
         return Object.freeze({
           disposition: 'UNSUPPORTED_BACKEND_ACTIVITY',
           rejectionCode: activity.rejectionCode,
+          ...(activity.diagnosticDetail === undefined
+            ? {}
+            : { activityDetail: activity.diagnosticDetail }),
         });
+      }
+      if (activity.disposition === 'PENDING') {
+        return Object.freeze({ disposition: 'PENDING_BACKEND_ACTIVITY' });
       }
     }
     return Object.freeze({ disposition: 'ALLOWED' });

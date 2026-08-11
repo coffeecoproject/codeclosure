@@ -494,6 +494,7 @@ const projectionSchema = z.discriminatedUnion('schemaVersion', [
         IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2,
         IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3,
         IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4,
+        IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5,
       ]),
     })
     .strict(),

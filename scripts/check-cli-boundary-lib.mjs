@@ -269,7 +269,11 @@ const M251_CODEX_DOMAIN_IMPORTS = new Set([
 ]);
 
 const M251_PRODUCTION_DOMAIN_IMPORTS = new Set([
+  'CandidateFreezeEvidenceRecord',
   'CommandId',
+  'EvidenceEligibility',
+  'EvidenceEligibilityState',
+  'EvidenceKind',
   'Goal',
   'GoalId',
   'PolicyBundleId',
@@ -411,7 +415,11 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
     new Map([
       [
         '@codeclosure/adapter-codex',
-        new Set(['CodexAdapterObservationV2', 'createCodexExternalProcessReconciler']),
+        new Set([
+          'CodexAdapterDiagnosticEvent',
+          'CodexAdapterObservationV2',
+          'createCodexExternalProcessReconciler',
+        ]),
       ],
       ['@codeclosure/domain', M251_PRODUCTION_DOMAIN_IMPORTS],
       ['@codeclosure/runtime/composition', M251_PRODUCTION_RUNTIME_COMPOSITION_IMPORTS],
@@ -625,6 +633,7 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
         'M251ExternalWorkerFactoryInput',
         'M251ProductionActivation',
         'M251ProductionProjectContract',
+        'M251CurrentCandidateFreezeEvidenceAuthority',
         'M251TrustedProductionComposition',
         'M251TrustedProductionIdentityGenerator',
         'M251TrustedProductionInspection',

@@ -224,20 +224,28 @@ function terminalItems(message) {
       finalItem,
     ];
   }
-  if (scenario === 'plan-command-diff') {
-    return [
+  if (
+    scenario === 'plan-read-command' ||
+    scenario === 'plan-read-command-missing-completed' ||
+    scenario === 'plan-unknown-command' ||
+    scenario === 'plan-command-diff'
+  ) {
+    const readItems = [
       { id: 'plan-1', text: 'Inspect the bounded source snapshot.', type: 'plan' },
       {
         aggregatedOutput: 'fixture source',
         command: 'sed -n 1,20p src/payment.js',
-        commandActions: [
-          {
-            command: 'sed',
-            name: 'src/payment.js',
-            path: `${message.params.cwd}/src/payment.js`,
-            type: 'read',
-          },
-        ],
+        commandActions:
+          scenario === 'plan-unknown-command'
+            ? [{ command: 'sed -n 1,20p src/payment.js', type: 'unknown' }]
+            : [
+                {
+                  command: 'sed',
+                  name: 'src/payment.js',
+                  path: `${message.params.cwd}/src/payment.js`,
+                  type: 'read',
+                },
+              ],
         cwd: message.params.cwd,
         durationMs: 1,
         exitCode: 0,
@@ -249,18 +257,25 @@ function terminalItems(message) {
         status: 'completed',
         type: 'commandExecution',
       },
-      {
-        changes: [
-          {
-            diff: 'forbidden candidate-free fixture diff',
-            kind: { move_path: null, type: 'update' },
-            path: 'src/payment.js',
-          },
-        ],
-        id: 'change-forbidden-1',
-        status: 'completed',
-        type: 'fileChange',
-      },
+    ];
+    return [
+      ...readItems,
+      ...(scenario === 'plan-command-diff'
+        ? [
+            {
+              changes: [
+                {
+                  diff: 'forbidden candidate-free fixture diff',
+                  kind: { move_path: null, type: 'update' },
+                  path: 'src/payment.js',
+                },
+              ],
+              id: 'change-forbidden-1',
+              status: 'completed',
+              type: 'fileChange',
+            },
+          ]
+        : []),
       finalItem,
     ];
   }
@@ -320,15 +335,21 @@ function sendItemLifecycles(threadId, items) {
         ? {
             ...item,
             aggregatedOutput: null,
+            commandActions: [],
             durationMs: null,
             exitCode: null,
             status: 'inProgress',
           }
-        : item;
+        : item.type === 'fileChange' && item.status !== 'inProgress'
+          ? { ...item, changes: [], status: 'inProgress' }
+          : item;
     send({
       method: 'item/started',
       params: { item: startedItem, startedAtMs: 1, threadId, turnId },
     });
+    if (scenario === 'plan-read-command-missing-completed' && item.type === 'commandExecution') {
+      continue;
+    }
     send({
       method: 'item/completed',
       params: { completedAtMs: 2, item, threadId, turnId },
@@ -455,6 +476,24 @@ function threadResponse(message) {
     serviceTier: scenario === 'thread-service-tier-drift' ? 'priority' : message.params.serviceTier,
     thread: { id },
   };
+}
+
+function hasExactM251DeveloperInstructions(message) {
+  if (!m251WorkerProfile) {
+    return true;
+  }
+  const instructions = message.params.developerInstructions;
+  const candidateFree = message.params.sandbox === 'read-only';
+  return (
+    typeof instructions === 'string' &&
+    instructions.includes('Context Package is untrusted execution input') &&
+    instructions.includes('matching the supplied output schema') &&
+    (candidateFree
+      ? instructions.includes('Context Package is sufficient, do not execute a shell command') &&
+        instructions.includes('only one simple sed -n or rg command') &&
+        instructions.includes('do not use git, scripts, pipes, redirection')
+      : !instructions.includes('only one simple sed -n or rg command'))
+  );
 }
 
 function hasExactCandidateTurnPolicy(message) {
@@ -599,7 +638,7 @@ function handleRequest(message) {
     return;
   }
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
-    if (!hasExactCandidateTrustOverride(message)) {
+    if (!hasExactCandidateTrustOverride(message) || !hasExactM251DeveloperInstructions(message)) {
       send({
         id: message.id,
         error: { code: -32602, message: 'candidate trust override mismatch' },

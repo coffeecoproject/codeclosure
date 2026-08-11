@@ -5,14 +5,19 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import {
   createCodexExternalProcessReconciler,
+  type CodexAdapterDiagnosticEvent,
   type CodexAdapterObservationV2,
 } from '@codeclosure/adapter-codex';
 import {
+  EvidenceEligibilityState,
+  EvidenceKind,
   ProtectedAssetReadLeasePolicy,
   WorkflowPhase,
   attemptId,
   sha256Digest,
   workerEventId,
+  type CandidateFreezeEvidenceRecord,
+  type EvidenceEligibility,
   type Goal,
   type GoalId,
   type CommandId,
@@ -138,6 +143,7 @@ export interface M251ExternalWorkerFactoryInput {
     typeof createM251TrustedCodexInvocation
   >[0]['expectedExternalProfile'];
   readonly forbiddenRoots: readonly string[];
+  readonly onAdapterDiagnostic?: (event: CodexAdapterDiagnosticEvent) => void;
   readonly onAdapterObservation?: (observation: CodexAdapterObservationV2) => void;
   readonly workspace: Parameters<typeof createM251TrustedCodexInvocation>[0]['workspace'];
 }
@@ -195,6 +201,7 @@ export type M251TrustedProductionIdentityGenerator = Parameters<
   Parameters<typeof createM251RuntimeProfileRegistry>[1]['protectedVerification']['identities'];
 
 export interface M251TrustedProductionObservationSink {
+  onAdapterDiagnostic?(event: CodexAdapterDiagnosticEvent): void;
   onAdapterObservation?(observation: CodexAdapterObservationV2): void;
   onOrdinaryStartResult?(result: DrivenGoalCommandResult): void;
 }
@@ -237,6 +244,9 @@ export interface M251TrustedProductionInspection {
       ReturnType<typeof openCliSqliteAuthority>['getAcceptanceAuthorityForWorkflow']
     >[1],
   ): AcceptanceAuthorityView | undefined;
+  getCurrentCandidateFreezeEvidence(
+    workflowId: WorkflowId,
+  ): M251CurrentCandidateFreezeEvidenceAuthority | undefined;
   getGoalAuthority(goalId: GoalId): GoalStatusAuthoritySnapshot | undefined;
   getIntakeAuthority(intakeRunId: string): IntakeAuthorityView | undefined;
   getInstalledAuthority(): Readonly<Pick<InstalledM251ExecutionAuthority, 'policy' | 'profile'>>;
@@ -244,6 +254,11 @@ export interface M251TrustedProductionInspection {
     commandId: Parameters<ReturnType<typeof openCliSqliteAuthority>['getProcessedCommand']>[0],
   ): ProcessedCommandView | undefined;
   readPhaseAuthority(observation: CodexAdapterObservationV2): M251TrustedProductionPhaseAuthority;
+}
+
+export interface M251CurrentCandidateFreezeEvidenceAuthority {
+  readonly record: CandidateFreezeEvidenceRecord;
+  readonly eligibility: EvidenceEligibility;
 }
 
 export interface M251TrustedProductionComposition {
@@ -759,6 +774,15 @@ function createM251TrustedProductionCompositionWithOwnedAssistant(
       forbiddenRoots: Object.freeze(
         [...workerForbiddenRoots, roots.projectReadWorkspace].toSorted(),
       ),
+      ...(options.observationSink?.onAdapterDiagnostic === undefined
+        ? {}
+        : {
+            onAdapterDiagnostic: (event: CodexAdapterDiagnosticEvent) =>
+              publishNonAuthoritativeObservation(
+                (value) => options.observationSink?.onAdapterDiagnostic?.(value),
+                event,
+              ),
+          }),
       ...(options.observationSink?.onAdapterObservation === undefined
         ? {}
         : {
@@ -926,6 +950,44 @@ function createM251TrustedProductionCompositionWithOwnedAssistant(
     const inspection: M251TrustedProductionInspection = Object.freeze({
       getAcceptanceAuthority: (workflowId: WorkflowId, policyBundleId: PolicyBundleId) =>
         store.getAcceptanceAuthorityForWorkflow(workflowId, policyBundleId),
+      getCurrentCandidateFreezeEvidence: (workflowId: WorkflowId) => {
+        const candidateAuthority = store.getCandidateAuthorityForWorkflow(workflowId);
+        if (candidateAuthority === undefined) {
+          return undefined;
+        }
+        const freezeEntries = store
+          .listEvidenceForGeneration(candidateAuthority.generation.id)
+          .filter(
+            (
+              entry,
+            ): entry is {
+              readonly record: CandidateFreezeEvidenceRecord;
+              readonly eligibility: EvidenceEligibility;
+            } => entry.record.kind === EvidenceKind.CANDIDATE_FREEZE,
+          );
+        if (freezeEntries.length === 0) {
+          return undefined;
+        }
+        const freezeEntry = freezeEntries[0];
+        if (
+          freezeEntries.length !== 1 ||
+          freezeEntry?.record.schemaVersion !== 2 ||
+          freezeEntry.record.workflowId !== workflowId ||
+          freezeEntry.record.goalId !== candidateAuthority.candidate.goalId ||
+          freezeEntry.record.candidateGenerationId !== candidateAuthority.generation.id ||
+          freezeEntry.record.candidateDigest !== candidateAuthority.generation.frozenDigest ||
+          freezeEntry.eligibility.evidenceId !== freezeEntry.record.id ||
+          freezeEntry.eligibility.state !== EvidenceEligibilityState.ELIGIBLE
+        ) {
+          throw new TypeError(
+            'M2.5.1 current Candidate freeze Evidence lacks exact retained authority',
+          );
+        }
+        return Object.freeze({
+          record: freezeEntry.record,
+          eligibility: freezeEntry.eligibility,
+        });
+      },
       getGoalAuthority: (goalId: GoalId) => store.getGoalStatusAuthority(goalId),
       getIntakeAuthority: (intakeRunId: string) => store.getIntakeAuthority(intakeRunId),
       getInstalledAuthority: () =>

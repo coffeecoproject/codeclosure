@@ -68,6 +68,9 @@ export type CodexItemRejectionCode =
   | 'ITEM_SCHEMA'
   | 'UNSELECTED_ITEM_TYPE';
 
+export type CodexWorkerActivityDiagnosticDetail =
+  'EMPTY_COMMAND_ACTIONS' | 'UNKNOWN_COMMAND_ACTION' | 'COMMAND_ACTION_PATH_OUTSIDE_CWD';
+
 export type CodexAdapterDiagnosticEvent =
   | Readonly<{
       schemaVersion: 1;
@@ -94,6 +97,7 @@ export type CodexAdapterDiagnosticEvent =
       itemType: string;
       location: 'COMPLETED' | 'STARTED' | 'TERMINAL';
       reasonCode: CodexItemRejectionCode;
+      activityDetail?: CodexWorkerActivityDiagnosticDetail;
     }>;
 
 export interface CodexWorkerRequestBinding {

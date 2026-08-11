@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { JsonObject, JsonValue } from '@codeclosure/codex-app-server-client';
 
-import type { CodexItemRejectionCode } from './contracts.js';
+import type { CodexItemRejectionCode, CodexWorkerActivityDiagnosticDetail } from './contracts.js';
 import {
   CODEX_M251_WORKER_ACTIVITY_POLICY_DIGEST,
   CODEX_M251_WORKER_ACTIVITY_POLICY_ID,
@@ -21,10 +21,11 @@ export interface CodexWorkerActivityPolicyV1 {
 }
 
 export type CodexWorkerActivityEvaluation =
-  | Readonly<{ readonly disposition: 'ADMITTED' }>
+  | Readonly<{ readonly disposition: 'ADMITTED' | 'PENDING' }>
   | Readonly<{
       readonly disposition: 'REJECTED_DISCARDED';
       readonly rejectionCode: CodexItemRejectionCode;
+      readonly diagnosticDetail?: CodexWorkerActivityDiagnosticDetail;
     }>;
 
 function isSameOrWithin(candidate: string, parent: string): boolean {
@@ -64,8 +65,15 @@ export function codexWorkerActivityPolicyV1(
   });
 }
 
-function rejection(rejectionCode: CodexItemRejectionCode): CodexWorkerActivityEvaluation {
-  return Object.freeze({ disposition: 'REJECTED_DISCARDED', rejectionCode });
+function rejection(
+  rejectionCode: CodexItemRejectionCode,
+  diagnosticDetail?: CodexWorkerActivityDiagnosticDetail,
+): CodexWorkerActivityEvaluation {
+  return Object.freeze({
+    disposition: 'REJECTED_DISCARDED',
+    rejectionCode,
+    ...(diagnosticDetail === undefined ? {} : { diagnosticDetail }),
+  });
 }
 
 function optionalActionPath(value: JsonValue | undefined): string | undefined {
@@ -83,13 +91,20 @@ function admittedPath(path: string, policy: CodexWorkerActivityPolicyV1): boolea
 function commandActivity(
   item: JsonObject,
   policy: CodexWorkerActivityPolicyV1,
+  location: 'COMPLETED' | 'STARTED' | 'TERMINAL',
 ): CodexWorkerActivityEvaluation {
   if (item['cwd'] !== policy.cwd) {
     return rejection('COMMAND_CWD');
   }
   const actions = item['commandActions'];
-  if (!Array.isArray(actions) || actions.length === 0) {
+  if (!Array.isArray(actions)) {
     return rejection('COMMAND_ACTIONS');
+  }
+  if (location === 'STARTED') {
+    return Object.freeze({ disposition: 'PENDING' });
+  }
+  if (actions.length === 0) {
+    return rejection('COMMAND_ACTIONS', 'EMPTY_COMMAND_ACTIONS');
   }
   for (const value of actions) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -100,7 +115,7 @@ function commandActivity(
       if (policy.phase === 'IMPLEMENT') {
         continue;
       }
-      return rejection('COMMAND_ACTIONS');
+      return rejection('COMMAND_ACTIONS', 'UNKNOWN_COMMAND_ACTION');
     }
     if (
       action['type'] !== 'read' &&
@@ -111,7 +126,7 @@ function commandActivity(
     }
     const path = optionalActionPath(action['path']);
     if (path !== undefined && !admittedPath(path, policy)) {
-      return rejection('COMMAND_ACTIONS');
+      return rejection('COMMAND_ACTIONS', 'COMMAND_ACTION_PATH_OUTSIDE_CWD');
     }
   }
   return Object.freeze({ disposition: 'ADMITTED' });
@@ -130,12 +145,19 @@ function candidateFilePathAllowed(path: string, policy: CodexWorkerActivityPolic
 function fileChangeActivity(
   item: JsonObject,
   policy: CodexWorkerActivityPolicyV1,
+  location: 'COMPLETED' | 'STARTED' | 'TERMINAL',
 ): CodexWorkerActivityEvaluation {
   if (policy.phase !== 'IMPLEMENT') {
     return rejection('UNSELECTED_ITEM_TYPE');
   }
   const changes = item['changes'];
-  if (!Array.isArray(changes) || changes.length === 0) {
+  if (!Array.isArray(changes)) {
+    return rejection('ITEM_SCHEMA');
+  }
+  if (location === 'STARTED') {
+    return Object.freeze({ disposition: 'PENDING' });
+  }
+  if (changes.length === 0) {
     return rejection('ITEM_SCHEMA');
   }
   for (const value of changes) {
@@ -163,12 +185,13 @@ function fileChangeActivity(
 export function evaluateCodexWorkerActivityV1(
   item: JsonObject,
   policy: CodexWorkerActivityPolicyV1,
+  location: 'COMPLETED' | 'STARTED' | 'TERMINAL' = 'COMPLETED',
 ): CodexWorkerActivityEvaluation {
   if (item['type'] === 'commandExecution') {
-    return commandActivity(item, policy);
+    return commandActivity(item, policy, location);
   }
   if (item['type'] === 'fileChange') {
-    return fileChangeActivity(item, policy);
+    return fileChangeActivity(item, policy, location);
   }
   return Object.freeze({ disposition: 'ADMITTED' });
 }

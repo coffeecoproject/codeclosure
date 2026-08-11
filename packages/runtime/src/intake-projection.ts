@@ -62,6 +62,8 @@ export const M251_INTENT_PROJECTION_PROFILE_VERSION =
   IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3;
 export const M251_TRUSTED_SCOPE_PROJECTION_PROFILE_VERSION =
   IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4;
+export const M251_POLICY_OWNED_SCOPE_PROJECTION_PROFILE_VERSION =
+  IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5;
 export const M25_DERIVATION_RULE_VERSION = 'codeclosure-m2-5-v1';
 export const M251_DERIVATION_RULE_VERSION = 'codeclosure-m2-5-1-v1';
 
@@ -551,10 +553,13 @@ export class M25IntentProjectionCompiler {
     }
 
     const fieldItems = fieldItemsFor(response);
-    const boundItems: BoundFieldItem[] = fieldItems.map((item) => {
+    const boundItems: BoundFieldItem[] = fieldItems.flatMap((item) => {
       const userBindings = userBindingsByItem.get(itemKey(item.field, item.itemIndex)) ?? [];
+      if (!this.retainAssistantFieldItem(item, userBindings)) {
+        return [];
+      }
       if (userBindings.length > 0) {
-        return { ...item, bindings: userBindings };
+        return [{ ...item, bindings: userBindings }];
       }
       const bindingBase = {
         schemaVersion: 1 as const,
@@ -565,18 +570,20 @@ export class M25IntentProjectionCompiler {
         sourceDigest: proposal.proposalDigest,
         sourceFieldPath: proposalSourceFieldPath(item),
       } satisfies SourceBindingProjectionInput;
-      return {
-        ...item,
-        bindings: [
-          decodeSourceBinding(
-            {
-              ...bindingBase,
-              bindingDigest: this.#digests.digest(sourceBindingProjection(bindingBase)),
-            },
-            this.#digests,
-          ),
-        ],
-      };
+      return [
+        {
+          ...item,
+          bindings: [
+            decodeSourceBinding(
+              {
+                ...bindingBase,
+                bindingDigest: this.#digests.digest(sourceBindingProjection(bindingBase)),
+              },
+              this.#digests,
+            ),
+          ],
+        },
+      ];
     });
 
     const policyDerivedBindings: SourceBinding[] = [];
@@ -924,10 +931,20 @@ export class M25IntentProjectionCompiler {
     return Object.freeze([]);
   }
 
+  protected retainAssistantFieldItem(
+    item: FieldItem,
+    userBindings: readonly SourceBinding[],
+  ): boolean {
+    void item;
+    void userBindings;
+    return true;
+  }
+
   protected canonicalProfileVersion():
     | typeof IntentProjectionCanonicalProfileVersion.M25_LOCAL_V2
     | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3
-    | typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4 {
+    | typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4
+    | typeof IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5 {
     return M25_INTENT_PROJECTION_PROFILE_VERSION;
   }
 }
@@ -942,13 +959,21 @@ export class M251IntentProjectionCompiler extends M25IntentProjectionCompiler {
 
   protected override canonicalProfileVersion():
     | typeof IntentProjectionCanonicalProfileVersion.M251_EXACT_VALUE_MATCH_V3
-    | typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4 {
+    | typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4
+    | typeof IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5 {
     return M251_INTENT_PROJECTION_PROFILE_VERSION;
   }
 }
 
 /** M2.5.1 production projection with exact-value provenance and Policy-owned allowed paths. */
 export class M251TrustedIntentProjectionCompiler extends M251IntentProjectionCompiler {
+  protected override retainAssistantFieldItem(
+    item: FieldItem,
+    userBindings: readonly SourceBinding[],
+  ): boolean {
+    return item.field !== IntentProjectionField.SCOPE || userBindings.length > 0;
+  }
+
   protected override trustedAllowedPaths(
     policy: IntentAdmissionPolicy,
     current: RawRequestRevisionRecord,
@@ -962,7 +987,7 @@ export class M251TrustedIntentProjectionCompiler extends M251IntentProjectionCom
     return Object.freeze([...scope.allowedPaths]);
   }
 
-  protected override canonicalProfileVersion(): typeof IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4 {
-    return M251_TRUSTED_SCOPE_PROJECTION_PROFILE_VERSION;
+  protected override canonicalProfileVersion(): typeof IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5 {
+    return M251_POLICY_OWNED_SCOPE_PROJECTION_PROFILE_VERSION;
   }
 }

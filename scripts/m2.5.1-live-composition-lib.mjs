@@ -16,9 +16,8 @@ export const M251_LIVE_COMPOSITION_REVIEW_EXCLUSION =
   'docs/reviews/m2.5.1-slice4-real-user-path-and-failure-closure.md';
 export const M251_LIVE_COMPOSITION_SCENARIO = Object.freeze({
   id: 'PAYMENT_IDEMPOTENCY_LINKED_PATH',
-  request: 'Objective: Prevent duplicate payment callbacks in src/payment.js.',
-  clarificationAnswer:
-    'Required criterion: a duplicate callback for one order is ignored, exactly one charge is retained for that order, and different orders remain independent.',
+  request: 'Objective: Prevent duplicate payment callbacks.',
+  clarificationAnswer: `Required criterion: ${slice0Contract.demonstration.expectedResult}`,
 });
 
 export const M251_LIVE_COMPOSITION_STAGE_IDS = Object.freeze([
@@ -988,19 +987,19 @@ export function projectM251LiveCompositionEvidence(input, candidate, verificatio
     evidenceSet.candidateDigest !== freezeEvidence.candidateDigest ||
     evidenceSet.candidateDigest !== verificationEvidence.candidateDigest ||
     evidenceSet.candidateDigest !== candidate.firstSourceDigest ||
-    retainedEntries.size !== 2 ||
-    retainedEntries.get(freezeEvidence.id) !== freezeEvidence.recordDigest ||
+    retainedEntries.size !== 1 ||
+    retainedEntries.has(freezeEvidence.id) ||
     retainedEntries.get(verificationEvidence.id) !== verificationEvidence.recordDigest
   ) {
-    fail('Live composition Evidence Set is not the exact retained two-record authority');
+    fail('Live composition Candidate-freeze and Acceptance Evidence authorities are not separated');
   }
   const projected = Object.freeze({
-    evidenceCount: retainedEntries.size,
-    freezeEvidenceRefDigest: m251LiveCompositionReferenceDigest(
+    acceptanceEvidenceCount: retainedEntries.size,
+    candidateFreezeEvidenceRefDigest: m251LiveCompositionReferenceDigest(
       'candidate-freeze-evidence',
       freezeEvidence.id,
     ),
-    freezeEvidenceDigest: freezeEvidence.recordDigest,
+    candidateFreezeEvidenceDigest: freezeEvidence.recordDigest,
     verificationEvidenceRefDigest: m251LiveCompositionReferenceDigest(
       'protected-verification-evidence',
       verificationEvidence.id,
@@ -1602,9 +1601,9 @@ function validateEvidence(value, candidate, verification) {
   exactKeys(
     value,
     [
-      'evidenceCount',
-      'freezeEvidenceRefDigest',
-      'freezeEvidenceDigest',
+      'acceptanceEvidenceCount',
+      'candidateFreezeEvidenceRefDigest',
+      'candidateFreezeEvidenceDigest',
       'verificationEvidenceRefDigest',
       'verificationEvidenceDigest',
       'evidenceSetDigest',
@@ -1614,8 +1613,8 @@ function validateEvidence(value, candidate, verification) {
     'Live composition Evidence projection',
   );
   for (const field of [
-    'freezeEvidenceRefDigest',
-    'freezeEvidenceDigest',
+    'candidateFreezeEvidenceRefDigest',
+    'candidateFreezeEvidenceDigest',
     'verificationEvidenceRefDigest',
     'verificationEvidenceDigest',
     'evidenceSetDigest',
@@ -1623,12 +1622,12 @@ function validateEvidence(value, candidate, verification) {
     digest(value[field], `Evidence ${field}`);
   }
   if (
-    value.evidenceCount !== 2 ||
-    value.freezeEvidenceRefDigest === value.verificationEvidenceRefDigest ||
+    value.acceptanceEvidenceCount !== 1 ||
+    value.candidateFreezeEvidenceRefDigest === value.verificationEvidenceRefDigest ||
     value.candidateGenerationRefDigest !== candidate.generationRefDigest ||
     value.verificationCheckRefDigest !== verification.checkRefDigest
   ) {
-    fail('Live composition Evidence set is incomplete or incorrectly bound');
+    fail('Live composition Evidence authorities are incomplete or incorrectly bound');
   }
 }
 

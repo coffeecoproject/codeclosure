@@ -547,13 +547,13 @@ function receipt(options = {}) {
     candidateDigest: candidate.firstSourceDigest,
     digest: digest('evidence-set'),
     evidenceRefs: [
-      { evidenceId: freezeEvidence.id, evidenceRecordDigest: freezeEvidence.recordDigest },
       {
         evidenceId: verificationEvidence.id,
         evidenceRecordDigest: verificationEvidence.recordDigest,
       },
     ],
   };
+  options.mutateEvidenceAuthorities?.({ evidenceSet, freezeEvidence, verificationEvidence });
   const evidence = projectM251LiveCompositionEvidence(
     { evidenceSet, freezeEvidence, verificationEvidence },
     candidate,
@@ -717,15 +717,45 @@ test('M2.5.1 Live composition receipt accepts one complete metadata-only linked 
   assert.doesNotMatch(JSON.stringify(value), /src\/payment\.js/u);
 });
 
+test('M2.5.1 Live composition keeps Candidate freeze outside the Acceptance Evidence Set', () => {
+  assert.throws(
+    () =>
+      receipt({
+        mutateEvidenceAuthorities({ evidenceSet, freezeEvidence }) {
+          evidenceSet.evidenceRefs.push({
+            evidenceId: freezeEvidence.id,
+            evidenceRecordDigest: freezeEvidence.recordDigest,
+          });
+        },
+      }),
+    /Candidate-freeze and Acceptance Evidence authorities are not separated/u,
+  );
+
+  assert.throws(
+    () =>
+      receipt({
+        mutateEvidenceAuthorities({ evidenceSet, freezeEvidence }) {
+          evidenceSet.evidenceRefs.splice(0, 1, {
+            evidenceId: freezeEvidence.id,
+            evidenceRecordDigest: freezeEvidence.recordDigest,
+          });
+        },
+      }),
+    /Candidate-freeze and Acceptance Evidence authorities are not separated/u,
+  );
+});
+
 test('M2.5.1 Live composition scenario leaves formal scope to the trusted Policy', () => {
   assert.equal(
     M251_LIVE_COMPOSITION_SCENARIO.request,
-    'Objective: Prevent duplicate payment callbacks in src/payment.js.',
+    'Objective: Prevent duplicate payment callbacks.',
   );
   assert.doesNotMatch(M251_LIVE_COMPOSITION_SCENARIO.request, /(?:^|\n)Scope:/u);
-  assert.match(
+  assert.doesNotMatch(M251_LIVE_COMPOSITION_SCENARIO.request, /src\/payment\.js/u);
+  assert.match(M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer, /^Required criterion: /u);
+  assert.equal(
     M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer,
-    /^Required criterion: /u,
+    `Required criterion: ${contract.demonstration.expectedResult}`,
   );
 });
 

@@ -20,6 +20,8 @@ import {
   AttemptFailureClass,
   AttemptStatus,
   CandidateGenerationState,
+  EvidenceEligibilityState,
+  EvidenceKind,
   ExternalBackendCapability,
   ExternalBackendCapabilityClassification,
   ExternalExecutionState,
@@ -2424,11 +2426,29 @@ void test('[M251-B4] trusted production composition closes the deterministic Int
   assert.ok(inspectedGoal?.closeout);
   assert.ok(inspectedGoal.policyBinding);
   assert.ok(composition.inspection.getProcessedCommand(startCommandIdentifier));
-  assert.ok(
-    composition.inspection.getAcceptanceAuthority(
-      inspectedGoal.workflow.id,
-      inspectedGoal.policyBinding.policyBundleId,
-    ),
+  const inspectedAcceptance = composition.inspection.getAcceptanceAuthority(
+    inspectedGoal.workflow.id,
+    inspectedGoal.policyBinding.policyBundleId,
+  );
+  assert.ok(inspectedAcceptance);
+  assert.deepEqual(
+    inspectedAcceptance.currentEvidence.map(({ record }) => record.kind),
+    [EvidenceKind.LOCAL_COMMAND_TEST_RESULT],
+  );
+  const inspectedFreeze = composition.inspection.getCurrentCandidateFreezeEvidence(
+    inspectedGoal.workflow.id,
+  );
+  assert.ok(inspectedFreeze);
+  assert.equal(inspectedFreeze.record.kind, EvidenceKind.CANDIDATE_FREEZE);
+  assert.equal(inspectedFreeze.record.schemaVersion, 2);
+  assert.equal(inspectedFreeze.eligibility.state, EvidenceEligibilityState.ELIGIBLE);
+  assert.equal(
+    inspectedFreeze.record.candidateGenerationId,
+    inspectedGoal.candidateAuthority?.generation.id,
+  );
+  assert.equal(
+    inspectedFreeze.record.candidateDigest,
+    inspectedGoal.candidateAuthority?.generation.frozenDigest,
   );
 
   const observed = fixture.observation();

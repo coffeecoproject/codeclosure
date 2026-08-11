@@ -68,6 +68,7 @@ import {
   digestCanonical,
   evaluateCodexWorkerActivityV1,
   type CandidateWorkspaceLease,
+  type CodexAdapterDiagnosticEvent,
   type CodexWorkerDirectiveV3,
   type CodexWorkerPhaseDirectiveV1,
   type CodexWorkerPhaseIsolationInputV1,
@@ -695,6 +696,7 @@ function integrationHarness(
   boundEffectiveConfig: typeof effectiveConfig | typeof unsafeEffectiveConfig = effectiveConfig,
 ): Readonly<{
   adapter: CodexWorkerAdapter;
+  diagnostics: readonly CodexAdapterDiagnosticEvent[];
   directive: CodexWorkerDirectiveV3;
   request: WorkerRequest;
 }> {
@@ -814,14 +816,17 @@ function integrationHarness(
       authorityRecord,
     }),
   });
+  const diagnostics: CodexAdapterDiagnosticEvent[] = [];
   return Object.freeze({
     adapter: new CodexWorkerAdapter({
       clientLimits: fixtureClientLimits,
       directive: selectedDirective,
       launch,
+      onDiagnosticEvent: (event) => diagnostics.push(event),
       onLifecycleEvent: () => undefined,
       observedAt: () => fixedObservedAt,
     }),
+    diagnostics,
     directive: selectedDirective,
     request: selectedRequest,
   });
@@ -1113,8 +1118,21 @@ void test('[I-023][M251-C10][M251-X11] worker-activity-policy-refinement admits 
     evaluateCodexWorkerActivityV1(
       { ...commandItem(policy.cwd, 'src/payment.js'), commandActions: [] },
       policy,
+      'STARTED',
     ),
-    { disposition: 'REJECTED_DISCARDED', rejectionCode: 'COMMAND_ACTIONS' },
+    { disposition: 'PENDING' },
+  );
+  assert.deepEqual(
+    evaluateCodexWorkerActivityV1(
+      { ...commandItem(policy.cwd, 'src/payment.js'), commandActions: [] },
+      policy,
+      'COMPLETED',
+    ),
+    {
+      disposition: 'REJECTED_DISCARDED',
+      rejectionCode: 'COMMAND_ACTIONS',
+      diagnosticDetail: 'EMPTY_COMMAND_ACTIONS',
+    },
   );
   assert.deepEqual(
     evaluateCodexWorkerActivityV1(commandItem('/source/project', 'src/payment.js'), policy),
@@ -1122,11 +1140,27 @@ void test('[I-023][M251-C10][M251-X11] worker-activity-policy-refinement admits 
   );
   assert.deepEqual(
     evaluateCodexWorkerActivityV1(commandItem(policy.cwd, '/source/project/secret'), policy),
-    { disposition: 'REJECTED_DISCARDED', rejectionCode: 'COMMAND_ACTIONS' },
+    {
+      disposition: 'REJECTED_DISCARDED',
+      rejectionCode: 'COMMAND_ACTIONS',
+      diagnosticDetail: 'COMMAND_ACTION_PATH_OUTSIDE_CWD',
+    },
   );
   assert.deepEqual(
     evaluateCodexWorkerActivityV1(commandItem(policy.cwd, 'src/payment.js', 'unknown'), policy),
-    { disposition: 'REJECTED_DISCARDED', rejectionCode: 'COMMAND_ACTIONS' },
+    {
+      disposition: 'REJECTED_DISCARDED',
+      rejectionCode: 'COMMAND_ACTIONS',
+      diagnosticDetail: 'UNKNOWN_COMMAND_ACTION',
+    },
+  );
+  assert.deepEqual(
+    evaluateCodexWorkerActivityV1(
+      commandItem(policy.cwd, 'src/payment.js', 'unknown'),
+      policy,
+      'STARTED',
+    ),
+    { disposition: 'PENDING' },
   );
   assert.deepEqual(
     evaluateCodexWorkerActivityV1(
@@ -1228,6 +1262,43 @@ void test('[I-004][I-023][M251-C10] candidate-free Adapter emits only bounded pr
     snapshotCwdIdentity: authority.snapshotLeafRealpath,
   });
   assert.equal(Reflect.has(observation, 'candidateWorkspaceLeaseId'), false);
+});
+
+void test('[I-023][M251-C10] candidate-free Adapter defers a progressive read command until completion', async (t) => {
+  const harness = integrationHarness(t, 'plan-read-command');
+  const events = await collect(harness.adapter, harness.request);
+  assert.equal(events.length, 1, JSON.stringify(harness.adapter.observation()));
+  const observation = harness.adapter.observation();
+  assert.equal(observation.schemaVersion, 2);
+  assert.equal(observation.state, 'COMPLETED');
+  assert.equal(observation.activityDisposition, 'ADMITTED');
+});
+
+void test('[I-023][M251-X11] an unclosed progressive command cannot pass terminal summary binding', async (t) => {
+  const harness = integrationHarness(t, 'plan-read-command-missing-completed');
+  const events = await collect(harness.adapter, harness.request);
+  assert.deepEqual(events, []);
+  const observation = harness.adapter.observation();
+  assert.equal(observation.schemaVersion, 2);
+  assert.equal(observation.state, 'FAILED');
+  assert.equal(observation.failureCode, 'UNSUPPORTED_BACKEND_ACTIVITY');
+  assert.equal(observation.activityDisposition, 'REJECTED_DISCARDED');
+});
+
+void test('[I-023][M251-X11] rejected completed command reports only its bounded activity category', async (t) => {
+  const harness = integrationHarness(t, 'plan-unknown-command');
+  const events = await collect(harness.adapter, harness.request);
+  assert.deepEqual(events, []);
+  assert.deepEqual(harness.diagnostics, [
+    {
+      schemaVersion: 1,
+      kind: 'UNSUPPORTED_ITEM',
+      itemType: 'commandExecution',
+      location: 'COMPLETED',
+      reasonCode: 'COMMAND_ACTIONS',
+      activityDetail: 'UNKNOWN_COMMAND_ACTION',
+    },
+  ]);
 });
 
 void test('[I-023][I-027][M251-C10] bound unsafe effective configuration still fails closed', async (t) => {

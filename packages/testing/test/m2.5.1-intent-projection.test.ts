@@ -6,8 +6,10 @@ import {
   IntentProjectionCanonicalProfileVersion,
   IntentProjectionField,
   SourceAuthorityClass,
+  decodeIntentProjectionRevision,
   intakeRunId,
   intentAnalysisProposalId,
+  intentProjectionRevisionProjection,
   intentProjectionId,
   isoTimestamp,
   materialAmbiguityId,
@@ -196,11 +198,16 @@ void test('[M251-B4] trusted Projection derives exact allowed paths only from it
     ...input('codeclosure-m2-5-1-intake-adapter-v3'),
     admissionPolicy: trustedPolicy,
     rawRequestRevisions: [trustedRaw],
+    response: Object.freeze({
+      ...response,
+      proposedScope: 'Only src/payment.js may change.',
+    }),
   });
   assert.equal(
     projected.projection.canonicalProfileVersion,
-    IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4,
+    IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5,
   );
+  assert.equal(projected.proposal.proposedScope, 'Only src/payment.js may change.');
   assert.deepEqual(projected.projection.scope, { projectPath, allowedPaths });
   assert.deepEqual(
     projected.projection.sourceBindings.flatMap((binding) =>
@@ -210,6 +217,85 @@ void test('[M251-B4] trusted Projection derives exact allowed paths only from it
         : [],
     ),
     ['/trustedProjectScope/allowedPaths/0', '/trustedProjectScope/allowedPaths/1'],
+  );
+  assert.equal(
+    projected.projection.sourceBindings.some(
+      (binding) =>
+        binding.projectionFieldRef === IntentProjectionField.SCOPE &&
+        binding.authorityClass !== SourceAuthorityClass.POLICY_DERIVED,
+    ),
+    false,
+  );
+  assert.equal(
+    projected.ambiguitySet.ambiguities.some(({ affectedFields }) =>
+      affectedFields.includes(IntentProjectionField.SCOPE),
+    ),
+    false,
+  );
+  const historicalV4Base = Object.freeze({
+    ...projected.projection,
+    canonicalProfileVersion: IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4,
+  });
+  const historicalV4 = decodeIntentProjectionRevision(
+    {
+      ...historicalV4Base,
+      projectionDigest: digests.digest(intentProjectionRevisionProjection(historicalV4Base)),
+    },
+    digests,
+  );
+  assert.equal(
+    historicalV4.canonicalProfileVersion,
+    IntentProjectionCanonicalProfileVersion.M251_TRUSTED_SCOPE_V4,
+  );
+});
+
+void test('M2.5.1 policy-owned scope keeps an exact user scope materially ambiguous', () => {
+  const projectPath = '/fixture/m251-b4-explicit-scope';
+  const explicitScope = 'Only src/payment.js may change.';
+  const admittedContent = `${content}\nScope: ${explicitScope}`;
+  const explicitBase = {
+    ...rawBase,
+    admittedUserContent: admittedContent,
+    admittedContentDigest: digests.digestUtf8(admittedContent),
+    declaredProjectRef: Object.freeze({
+      schemaVersion: 1 as const,
+      normalizedPath: projectPath,
+      identityDigest: digests.digest({ normalizedPath: projectPath }),
+    }),
+  } satisfies RawRequestRevisionProjectionInput;
+  const explicitRaw = Object.freeze({
+    ...explicitBase,
+    rawRequestDigest: digests.digest(rawRequestRevisionProjection(explicitBase)),
+  });
+  const projected = new M251TrustedIntentProjectionCompiler({ canonicalizer, digests }).project({
+    ...input('codeclosure-m2-5-1-intake-adapter-v3'),
+    admissionPolicy: createM25AdmissionPolicy(
+      createM251ProductionAdmissionPolicyDefinition({
+        projectPath,
+        allowedPaths: Object.freeze(['src/payment.js']),
+      }),
+      digests,
+    ),
+    rawRequestRevisions: [explicitRaw],
+    response: Object.freeze({ ...response, proposedScope: explicitScope }),
+  });
+  assert.equal(
+    projected.projection.canonicalProfileVersion,
+    IntentProjectionCanonicalProfileVersion.M251_POLICY_OWNED_SCOPE_V5,
+  );
+  assert.equal(
+    projected.projection.sourceBindings.some(
+      (binding) =>
+        binding.projectionFieldRef === IntentProjectionField.SCOPE &&
+        binding.authorityClass === SourceAuthorityClass.USER_STATED,
+    ),
+    true,
+  );
+  assert.equal(
+    projected.ambiguitySet.ambiguities.some(({ affectedFields }) =>
+      affectedFields.includes(IntentProjectionField.SCOPE),
+    ),
+    true,
   );
 });
 
