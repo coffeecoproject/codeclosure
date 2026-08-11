@@ -48,6 +48,20 @@ export const M251_LIVE_COMPOSITION_PHASES = Object.freeze([
   }),
 ]);
 
+const M251_LIVE_COMPOSITION_CLEANUP_CHECKS = Object.freeze([
+  Object.freeze({ field: 'ownedProcessesShutdownClean', code: 'OWNED_PROCESSES' }),
+  Object.freeze({ field: 'intakeExecutionRootRemoved', code: 'INTAKE_EXECUTION_ROOT' }),
+  Object.freeze({ field: 'workerControlledRootsRemoved', code: 'WORKER_CONTROLLED_ROOTS' }),
+  Object.freeze({ field: 'projectReadSnapshotsRemoved', code: 'PROJECT_READ_SNAPSHOTS' }),
+  Object.freeze({ field: 'candidateWorkspaceRemoved', code: 'CANDIDATE_WORKSPACE' }),
+  Object.freeze({ field: 'verificationRunRootRemoved', code: 'VERIFICATION_RUN_ROOT' }),
+  Object.freeze({ field: 'authorityHomeRemoved', code: 'AUTHORITY_HOME' }),
+  Object.freeze({ field: 'assessmentRootRemoved', code: 'ASSESSMENT_ROOT' }),
+  Object.freeze({ field: 'credentialRootUnchanged', code: 'CREDENTIAL_ROOT' }),
+  Object.freeze({ field: 'protectedAssetRootUnchanged', code: 'PROTECTED_ASSET_ROOT' }),
+  Object.freeze({ field: 'sourceUnchanged', code: 'SOURCE' }),
+]);
+
 export const M251_LIVE_COMPOSITION_ROOT_KINDS = Object.freeze(
   [
     'AUTHORITY_HOME',
@@ -1162,6 +1176,18 @@ export function projectM251LiveCompositionCleanup(observation) {
   return projected;
 }
 
+export function m251LiveCompositionCleanupFailureReasonCode(observation) {
+  exactKeys(
+    observation,
+    M251_LIVE_COMPOSITION_CLEANUP_CHECKS.map(({ field }) => field),
+    'Live composition cleanup observation',
+  );
+  const failedChecks = M251_LIVE_COMPOSITION_CLEANUP_CHECKS.filter(
+    ({ field }) => observation[field] !== true,
+  ).map(({ code }) => code);
+  return failedChecks.length === 0 ? undefined : `CLEANUP_INCOMPLETE_${failedChecks.join('+')}`;
+}
+
 function validateStages(value) {
   if (!Array.isArray(value) || value.length !== M251_LIVE_COMPOSITION_STAGE_IDS.length) {
     fail('Live composition stage set is incomplete');
@@ -1782,24 +1808,7 @@ function validateReopen(value, goal, phases, closeout) {
 }
 
 function validateCleanup(value) {
-  exactKeys(
-    value,
-    [
-      'ownedProcessesShutdownClean',
-      'intakeExecutionRootRemoved',
-      'workerControlledRootsRemoved',
-      'projectReadSnapshotsRemoved',
-      'candidateWorkspaceRemoved',
-      'verificationRunRootRemoved',
-      'authorityHomeRemoved',
-      'assessmentRootRemoved',
-      'credentialRootUnchanged',
-      'protectedAssetRootUnchanged',
-      'sourceUnchanged',
-    ],
-    'Live composition cleanup projection',
-  );
-  if (Object.values(value).some((selected) => selected !== true)) {
+  if (m251LiveCompositionCleanupFailureReasonCode(value) !== undefined) {
     fail('Live composition cleanup is incomplete');
   }
 }

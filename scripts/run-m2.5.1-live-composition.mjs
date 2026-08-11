@@ -21,6 +21,7 @@ import {
   assertM251LiveCompositionProjectClosure,
   assertM251LiveCompositionSourceClosure,
   m251LiveCompositionScenarioDigest,
+  m251LiveCompositionCleanupFailureReasonCode,
   projectM251LiveCompositionAcceptance,
   projectM251LiveCompositionCandidate,
   projectM251LiveCompositionCleanup,
@@ -807,7 +808,7 @@ async function main() {
       M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
     );
     assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosing);
-    const cleanup = projectM251LiveCompositionCleanup({
+    const cleanupObservation = Object.freeze({
       ownedProcessesShutdownClean:
         adapterObservations.every(({ state }) => state === 'COMPLETED') &&
         reopenedAdapterObservations.length === 0,
@@ -822,6 +823,11 @@ async function main() {
       protectedAssetRootUnchanged: protectedCheckUnchanged,
       sourceUnchanged: JSON.stringify(projectOpening) === JSON.stringify(projectClosing),
     });
+    const cleanupFailure = m251LiveCompositionCleanupFailureReasonCode(cleanupObservation);
+    if (cleanupFailure !== undefined) {
+      failWithReason(cleanupFailure, 'M2.5.1 cleanup observations are incomplete');
+    }
+    const cleanup = projectM251LiveCompositionCleanup(cleanupObservation);
     receipt = Object.freeze({
       schemaVersion: 1,
       kind: M251_LIVE_COMPOSITION_RECEIPT_KIND,

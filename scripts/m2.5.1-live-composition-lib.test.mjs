@@ -18,6 +18,7 @@ import {
   assertM251LiveCompositionMetadataOnly,
   assertM251LiveCompositionProjectClosure,
   assertM251LiveCompositionRootIdentity,
+  m251LiveCompositionCleanupFailureReasonCode,
   m251LiveCompositionReferenceDigest,
   m251LiveCompositionScenarioDigest,
   projectM251LiveCompositionAcceptance,
@@ -697,6 +698,27 @@ function receipt(options = {}) {
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
+
+void test('[M251-S4-B5] cleanup diagnostics name only failed metadata checks', () => {
+  const cleanup = receipt().cleanup;
+  assert.equal(m251LiveCompositionCleanupFailureReasonCode(cleanup), undefined);
+  assert.equal(
+    m251LiveCompositionCleanupFailureReasonCode({
+      ...cleanup,
+      intakeExecutionRootRemoved: false,
+      projectReadSnapshotsRemoved: false,
+    }),
+    'CLEANUP_INCOMPLETE_INTAKE_EXECUTION_ROOT+PROJECT_READ_SNAPSHOTS',
+  );
+  assert.throws(
+    () =>
+      m251LiveCompositionCleanupFailureReasonCode({
+        ...cleanup,
+        unexpectedPath: '/private/sensitive/path',
+      }),
+    /cleanup observation has unknown or missing fields/u,
+  );
+});
 
 function strictValidate(value) {
   const baseline = receipt();
