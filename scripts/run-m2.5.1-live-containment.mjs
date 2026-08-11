@@ -47,8 +47,8 @@ import {
 } from './m2.5.1-live-environment-lib.mjs';
 import {
   m251LiveContainmentFailureReasonCode,
-  runM251LiveContainmentTurn,
-} from './m2.5.1-live-containment-turn.mjs';
+  runM251LiveContainmentProbe,
+} from './m2.5.1-live-containment-probe.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const contractPath = join(repositoryRoot, 'scripts', 'fixtures', 'm2.5.1', 'slice0-contract.json');
@@ -82,18 +82,22 @@ function openDeniedStatement(path, exitCode) {
 }
 
 function candidateFreeCommand(input) {
-  return `/bin/sh -c ${shellQuote(
+  return Object.freeze([
+    '/bin/sh',
+    '-c',
     [
       `/usr/bin/head -c 1 ${shellQuote(input.selectedReadPath)} >/dev/null 2>&1 || exit 40`,
       `if /usr/bin/printf x 2>/dev/null >> ${shellQuote(input.selectedReadPath)}; then exit 41; fi`,
       ...input.deniedPaths.map(({ path }, index) => openDeniedStatement(path, 50 + index)),
       'exit 0',
     ].join('; '),
-  )}`;
+  ]);
 }
 
 function implementCommand(input) {
-  return `/bin/sh -c ${shellQuote(
+  return Object.freeze([
+    '/bin/sh',
+    '-c',
     [
       `/usr/bin/printf %s ${shellQuote(input.marker)} 2>/dev/null >> ${shellQuote(
         input.allowedWritePath,
@@ -101,7 +105,7 @@ function implementCommand(input) {
       ...input.deniedPaths.map(({ path }, index) => openDeniedStatement(path, 50 + index)),
       'exit 0',
     ].join('; '),
-  )}`;
+  ]);
 }
 
 function exactRealFile(path, label) {
@@ -471,7 +475,7 @@ async function main() {
         deniedPaths: candidateFreeDenied,
       });
       candidateFreeCommands.push(command);
-      const observation = await runM251LiveContainmentTurn({
+      const observation = await runM251LiveContainmentProbe({
         assertM251EffectiveConfiguration: adapter.assertM251EffectiveConfiguration,
         command,
         cwd: snapshot,
@@ -521,7 +525,7 @@ async function main() {
       deniedPaths: implementDenied,
       marker: candidateMarker,
     });
-    const implementRun = await runM251LiveContainmentTurn({
+    const implementRun = await runM251LiveContainmentProbe({
       assertM251EffectiveConfiguration: adapter.assertM251EffectiveConfiguration,
       command: candidateCommand,
       cwd: candidateWorkspace,
@@ -649,8 +653,8 @@ async function main() {
     assertM251LiveContainmentMetadataOnly(receipt, [
       authSource,
       candidateMarker,
-      ...candidateFreeCommands,
-      candidateCommand,
+      ...candidateFreeCommands.map((command) => JSON.stringify(command)),
+      JSON.stringify(candidateCommand),
       ...candidateFreeDenied.map(({ path }) => path),
       ...implementDenied.map(({ path }) => path),
     ]);

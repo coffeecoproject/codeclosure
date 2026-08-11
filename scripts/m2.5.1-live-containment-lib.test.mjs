@@ -50,9 +50,10 @@ function commonProbe(phase) {
     approvalRequestCount: 0,
     commandDigest: digest(`${phase}:command`),
     commandExitCode: 0,
-    commandItemDigest: digest(`${phase}:command-item`),
     commandOutputBytes: 0,
     commandOutputDigest: m251LiveContainmentDigest('command-output-v1', ''),
+    commandRequestDigest: digest(`${phase}:command-request`),
+    commandResponseDigest: digest(`${phase}:command-response`),
     cwdDigest: digest(`${phase}:cwd`),
     deniedBoundaries: deniedBoundaries(
       candidateFree ? M251_CANDIDATE_FREE_DENIED_BOUNDARIES : M251_IMPLEMENT_DENIED_BOUNDARIES,
@@ -69,7 +70,6 @@ function commonProbe(phase) {
     phase,
     phaseEntryDigest: digest(`${phase}:entry`),
     sandboxType: candidateFree ? 'READ_ONLY' : 'WORKSPACE_WRITE',
-    terminalDigest: digest(`${phase}:terminal`),
   };
 }
 

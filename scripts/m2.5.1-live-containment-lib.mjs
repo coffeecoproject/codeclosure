@@ -142,9 +142,10 @@ function commonProbeProjection(input, expectedPhase, expectedSandbox, expectedBo
       'approvalRequestCount',
       'commandDigest',
       'commandExitCode',
-      'commandItemDigest',
       'commandOutputBytes',
       'commandOutputDigest',
+      'commandRequestDigest',
+      'commandResponseDigest',
       'cwdDigest',
       'deniedBoundaries',
       'effectiveConfigurationDigest',
@@ -158,7 +159,6 @@ function commonProbeProjection(input, expectedPhase, expectedSandbox, expectedBo
       'phase',
       'phaseEntryDigest',
       'sandboxType',
-      'terminalDigest',
     ],
     `${expectedPhase} containment probe`,
   );
@@ -193,7 +193,14 @@ function commonProbeProjection(input, expectedPhase, expectedSandbox, expectedBo
     networkAccess: false,
     cwdDigest: digest(input.cwdDigest, `${expectedPhase} cwd digest`),
     commandDigest: digest(input.commandDigest, `${expectedPhase} command digest`),
-    commandItemDigest: digest(input.commandItemDigest, `${expectedPhase} command-Item digest`),
+    commandRequestDigest: digest(
+      input.commandRequestDigest,
+      `${expectedPhase} command-request digest`,
+    ),
+    commandResponseDigest: digest(
+      input.commandResponseDigest,
+      `${expectedPhase} command-response digest`,
+    ),
     commandExitCode: 0,
     commandOutputBytes: 0,
     commandOutputDigest: digest(
@@ -208,7 +215,6 @@ function commonProbeProjection(input, expectedPhase, expectedSandbox, expectedBo
       input.effectiveThreadDigest,
       `${expectedPhase} effective-Thread digest`,
     ),
-    terminalDigest: digest(input.terminalDigest, `${expectedPhase} terminal digest`),
     deniedBoundaries: deniedBoundaryProjection(
       input.deniedBoundaries,
       expectedBoundaries,

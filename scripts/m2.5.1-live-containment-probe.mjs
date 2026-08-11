@@ -1,19 +1,19 @@
 import { m251LiveContainmentDigest } from './m2.5.1-live-containment-lib.mjs';
 
-class M251LiveContainmentTurnError extends TypeError {
+class M251LiveContainmentProbeError extends TypeError {
   constructor(reasonCode, message) {
     super(message);
-    this.name = 'M251LiveContainmentTurnError';
+    this.name = 'M251LiveContainmentProbeError';
     this.reasonCode = reasonCode;
   }
 }
 
 function fail(reasonCode, message) {
-  throw new M251LiveContainmentTurnError(reasonCode, message);
+  throw new M251LiveContainmentProbeError(reasonCode, message);
 }
 
 export function m251LiveContainmentFailureReasonCode(error) {
-  return error instanceof M251LiveContainmentTurnError ? error.reasonCode : 'UNCLASSIFIED_FAILURE';
+  return error instanceof M251LiveContainmentProbeError ? error.reasonCode : 'UNCLASSIFIED_FAILURE';
 }
 
 function jsonObject(value, label) {
@@ -96,69 +96,32 @@ function effectiveThread(value, input) {
   });
 }
 
-function startedTurn(value) {
-  const response = jsonObject(value, 'Started Turn response');
-  const turn = jsonObject(response.turn, 'Started Turn identity');
-  if (typeof turn.id !== 'string') {
-    fail('TURN_IDENTITY_INVALID', 'Started Turn lacks one exact identity');
+function commandFailureReasonCode(exitCode, phase, deniedBoundaries) {
+  const deniedBoundary = deniedBoundaries[exitCode - 50];
+  if (exitCode === 40) {
+    return phase === 'IMPLEMENT' ? 'CANDIDATE_WRITE_FAILED' : 'SELECTED_SOURCE_READ_FAILED';
   }
-  return turn.id;
+  if (exitCode === 41 && phase !== 'IMPLEMENT') {
+    return 'READ_ONLY_SNAPSHOT_WRITE_SUCCEEDED';
+  }
+  return deniedBoundary === undefined
+    ? 'COMMAND_EXIT_NON_ZERO'
+    : `DENIED_BOUNDARY_READ_SUCCEEDED_${deniedBoundary.kind}`;
 }
 
-function terminalFromNotification(notification) {
-  if (notification.method !== 'turn/completed') {
-    return undefined;
-  }
-  const params = jsonObject(notification.params, 'Terminal notification');
-  const turn = jsonObject(params.turn, 'Terminal Turn');
-  if (typeof turn.id !== 'string' || typeof params.threadId !== 'string') {
-    fail('TERMINAL_IDENTITY_INVALID', 'Terminal Turn lacks exact Thread/Turn identity');
-  }
-  return Object.freeze({
-    errorIsNull: turn.error === null,
-    id: turn.id,
-    status: turn.status,
-    threadId: params.threadId,
-  });
-}
-
-export async function runM251LiveContainmentTurn(input) {
-  const commandItems = [];
-  const terminalNotifications = [];
+export async function runM251LiveContainmentProbe(input) {
   const forbiddenEffects = new Set();
   let approvalRequestCount = 0;
   let client;
   let shutdownClean = false;
   const recordNotification = (notification) => {
-    if (notification.method === 'item/started' || notification.method === 'item/completed') {
-      const item = notification.params.item;
-      if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
-        if (item.type === 'commandExecution' && notification.method === 'item/completed') {
-          commandItems.push(
-            Object.freeze({
-              item,
-              threadId: notification.params.threadId,
-              turnId: notification.params.turnId,
-            }),
-          );
-        } else if (
-          !['agentMessage', 'commandExecution', 'plan', 'reasoning', 'userMessage'].includes(
-            item.type,
-          )
-        ) {
-          forbiddenEffects.add(
-            typeof item.id === 'string'
-              ? `${String(item.type)}:${item.id}`
-              : `${notification.method}:${String(item.type)}`,
-          );
-        }
-      } else {
-        forbiddenEffects.add(`${notification.method}:MALFORMED_ITEM`);
-      }
-    }
-    const terminal = terminalFromNotification(notification);
-    if (terminal !== undefined) {
-      terminalNotifications.push(terminal);
+    if (
+      notification.method === 'item/started' ||
+      notification.method === 'item/completed' ||
+      notification.method === 'turn/completed' ||
+      notification.method === 'command/exec/outputDelta'
+    ) {
+      forbiddenEffects.add(notification.method);
     }
   };
   const approvalHandler = input.serverRequestHandler({
@@ -241,8 +204,7 @@ export async function runM251LiveContainmentTurn(input) {
         approvalsReviewer: 'user',
         config: { projects: { [input.cwd]: { trust_level: 'untrusted' } } },
         cwd: input.cwd,
-        developerInstructions:
-          'Run only the exact containment command supplied by the user, once, then return the required JSON.',
+        developerInstructions: 'This Thread exists only to inspect effective phase isolation.',
         ephemeral: false,
         model: input.sharedProfile.model,
         modelProvider: input.sharedProfile.modelProvider,
@@ -270,131 +232,57 @@ export async function runM251LiveContainmentTurn(input) {
       permissionProfileId: input.phaseEntry.permissionProfileId,
       reasoningEffort: input.sharedProfile.reasoningEffort,
     });
-    const turnValue = await client.request(
-      'turn/start',
-      {
-        approvalPolicy: 'never',
-        approvalsReviewer: 'user',
-        cwd: input.cwd,
-        effort: input.sharedProfile.reasoningEffort,
-        input: [
-          {
-            text: `Execute this as the entire shell command with no additions or retries:\n${input.command}\nThen return the required JSON.`,
-            text_elements: [],
-            type: 'text',
-          },
-        ],
-        model: input.sharedProfile.model,
-        outputSchema: {
-          additionalProperties: false,
-          properties: { probe: { const: 'completed', type: 'string' } },
-          required: ['probe'],
-          type: 'object',
-        },
-        sandboxPolicy:
-          input.expectedSandboxType === 'readOnly'
-            ? { networkAccess: false, type: 'readOnly' }
-            : {
-                excludeSlashTmp: true,
-                excludeTmpdirEnvVar: true,
-                networkAccess: false,
-                type: 'workspaceWrite',
-                writableRoots: [input.cwd],
-              },
-        serviceTier: input.sharedProfile.serviceTier,
-        threadId: thread.threadId,
-      },
-      (value) => value,
-      requestOptions,
-    );
-    const turnId = startedTurn(turnValue);
-    const deadline = Date.now() + input.terminalTimeoutMilliseconds;
-    while (terminalNotifications.length === 0) {
-      if (Date.now() >= deadline) {
-        fail('TERMINAL_TIMEOUT', 'Containment probe did not reach one terminal Turn');
-      }
-      await new Promise((resolveWait) => globalThis.setTimeout(resolveWait, 25));
-    }
-    const terminals = terminalNotifications.filter(
-      (terminal) => terminal.id === turnId && terminal.threadId === thread.threadId,
+    const sandboxPolicy =
+      input.expectedSandboxType === 'readOnly'
+        ? Object.freeze({ networkAccess: false, type: 'readOnly' })
+        : Object.freeze({
+            excludeSlashTmp: true,
+            excludeTmpdirEnvVar: true,
+            networkAccess: false,
+            type: 'workspaceWrite',
+            writableRoots: Object.freeze([input.cwd]),
+          });
+    const commandRequest = Object.freeze({
+      command: input.command,
+      cwd: input.cwd,
+      outputBytesCap: 1_024,
+      sandboxPolicy,
+      timeoutMs: input.terminalTimeoutMilliseconds,
+    });
+    const commandResponse = jsonObject(
+      await client.request('command/exec', commandRequest, (value) => value, requestOptions),
+      'Command response',
     );
     if (
-      terminalNotifications.length !== 1 ||
-      terminals.length !== 1 ||
-      terminals[0].status !== 'completed' ||
-      terminals[0].errorIsNull !== true ||
-      commandItems.length !== 1
+      JSON.stringify(Object.keys(commandResponse).toSorted()) !==
+        JSON.stringify(['exitCode', 'stderr', 'stdout']) ||
+      !Number.isSafeInteger(commandResponse.exitCode) ||
+      typeof commandResponse.stdout !== 'string' ||
+      typeof commandResponse.stderr !== 'string'
     ) {
+      fail('COMMAND_RESPONSE_INVALID', 'Containment command response is malformed');
+    }
+    if (commandResponse.exitCode !== 0) {
       fail(
-        'TERMINAL_COMMAND_CARDINALITY_MISMATCH',
-        'Containment probe did not produce one completed command and terminal Turn',
+        commandFailureReasonCode(
+          commandResponse.exitCode,
+          input.phaseEntry.phase,
+          input.deniedBoundaries,
+        ),
+        'Containment command failed under the selected isolation',
       );
     }
-    const commandRecord = commandItems[0];
-    const commandItem = commandRecord.item;
-    const output = commandItem.aggregatedOutput;
-    if (commandRecord.threadId !== thread.threadId || commandRecord.turnId !== turnId) {
-      fail(
-        'COMMAND_TURN_IDENTITY_MISMATCH',
-        'Containment probe command was substituted, failed, or retained output',
-      );
-    }
-    if (commandItem.command !== input.command) {
-      fail(
-        'COMMAND_SUBSTITUTED',
-        'Containment probe command was substituted, failed, or retained output',
-      );
-    }
-    if (commandItem.cwd !== input.cwd) {
-      fail(
-        'COMMAND_CWD_MISMATCH',
-        'Containment probe command was substituted, failed, or retained output',
-      );
-    }
-    if (commandItem.status !== 'completed') {
-      fail(
-        'COMMAND_NOT_COMPLETED',
-        'Containment probe command was substituted, failed, or retained output',
-      );
-    }
-    if (commandItem.exitCode !== 0) {
-      const deniedBoundary = input.deniedBoundaries[commandItem.exitCode - 50];
-      const reasonCode =
-        commandItem.exitCode === 40
-          ? input.phaseEntry.phase === 'IMPLEMENT'
-            ? 'CANDIDATE_WRITE_FAILED'
-            : 'SELECTED_SOURCE_READ_FAILED'
-          : commandItem.exitCode === 41 && input.phaseEntry.phase !== 'IMPLEMENT'
-            ? 'READ_ONLY_SNAPSHOT_WRITE_SUCCEEDED'
-            : deniedBoundary === undefined
-              ? 'COMMAND_EXIT_NON_ZERO'
-              : `DENIED_BOUNDARY_READ_SUCCEEDED_${deniedBoundary.kind}`;
-      fail(reasonCode, 'Containment probe command was substituted, failed, or retained output');
-    }
-    if (
-      commandItem.pluginId !== null ||
-      commandItem.scriptPath !== null ||
-      !['agent', 'unifiedExecStartup'].includes(commandItem.source) ||
-      !Array.isArray(commandItem.commandActions)
-    ) {
-      fail(
-        'COMMAND_METADATA_INVALID',
-        'Containment probe command was substituted, failed, or retained output',
-      );
-    }
-    if (output !== '' && output !== null) {
-      fail(
-        'COMMAND_OUTPUT_RETAINED',
-        'Containment probe command was substituted, failed, or retained output',
-      );
+    if (commandResponse.stdout !== '' || commandResponse.stderr !== '') {
+      fail('COMMAND_OUTPUT_RETAINED', 'Containment command retained output');
     }
     return Object.freeze({
       approvalRequestCount,
       commandDigest: m251LiveContainmentDigest('containment-command-v1', input.command),
       commandExitCode: 0,
-      commandItemDigest: input.digestCanonical(commandItem),
+      commandRequestDigest: input.digestCanonical(commandRequest),
       commandOutputBytes: 0,
       commandOutputDigest: m251LiveContainmentDigest('command-output-v1', ''),
+      commandResponseDigest: input.digestCanonical(commandResponse),
       cwdDigest: m251LiveContainmentDigest('containment-cwd-v1', input.cwd),
       deniedBoundaries: input.deniedBoundaries,
       effectiveConfigurationDigest: input.phaseEntry.executionConfigDigest,
@@ -408,7 +296,6 @@ export async function runM251LiveContainmentTurn(input) {
       phase: input.phaseEntry.phase,
       phaseEntryDigest: input.phaseEntryDigest,
       sandboxType: input.receiptSandboxType,
-      terminalDigest: input.digestCanonical(terminals[0]),
     });
   } finally {
     if (client !== undefined) {

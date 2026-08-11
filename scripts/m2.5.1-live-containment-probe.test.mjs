@@ -8,12 +8,12 @@ import {
 } from './m2.5.1-live-containment-lib.mjs';
 import {
   m251LiveContainmentFailureReasonCode,
-  runM251LiveContainmentTurn,
-} from './m2.5.1-live-containment-turn.mjs';
+  runM251LiveContainmentProbe,
+} from './m2.5.1-live-containment-probe.mjs';
 
 function fixture(overrides = {}) {
   const cwd = '/assessment/project-read/snapshot';
-  const command = "/bin/sh -c 'exit 0'";
+  const command = Object.freeze(['/bin/sh', '-c', 'exit 0']);
   const phase = overrides.phase ?? 'DISCOVERY';
   const permissionProfile = Object.freeze({ allowed: true, id: 'permission_read_only_v1' });
   const requirements = Object.freeze({ allowed: Object.freeze(['bounded']) });
@@ -93,62 +93,18 @@ function fixture(overrides = {}) {
             thread: { id: 'thread_fixture' },
           };
         }
-        if (method === 'turn/start') {
-          clientInput.onNotification({
-            method: 'item/completed',
-            params: {
-              item: {
-                aggregatedOutput: '',
-                command: overrides.observedCommand ?? command,
-                commandActions: [],
-                cwd,
-                exitCode: overrides.commandExitCode ?? 0,
-                id: 'item_fixture',
-                pluginId: null,
-                scriptPath: null,
-                source: 'agent',
-                status: 'completed',
-                type: 'commandExecution',
-              },
-              threadId: overrides.observedThreadId ?? 'thread_fixture',
-              turnId: 'turn_fixture',
-            },
-          });
+        if (method === 'command/exec') {
           if (overrides.forbiddenEffect === true) {
             clientInput.onNotification({
-              method: overrides.forbiddenEffectMethod ?? 'item/completed',
-              params: {
-                item: {
-                  id: 'effect_fixture',
-                  type: overrides.forbiddenEffectType ?? 'fileChange',
-                },
-                threadId: 'thread_fixture',
-                turnId: 'turn_fixture',
-              },
+              method: overrides.forbiddenEffectMethod ?? 'item/started',
+              params: {},
             });
           }
-          clientInput.onNotification({
-            method: 'turn/completed',
-            params: {
-              ...(overrides.omitTerminalThreadId === true
-                ? {}
-                : { threadId: overrides.terminalThreadId ?? 'thread_fixture' }),
-              turn: {
-                completedAt: 2,
-                durationMs: 1_000,
-                error: null,
-                id: 'turn_fixture',
-                items: [],
-                itemsView: 'full',
-                ...(overrides.legacyNestedTerminalThreadId === true
-                  ? { threadId: 'thread_fixture' }
-                  : {}),
-                startedAt: 1,
-                status: 'completed',
-              },
-            },
-          });
-          return { turn: { id: 'turn_fixture' } };
+          return {
+            exitCode: overrides.commandExitCode ?? 0,
+            stderr: overrides.commandStderr ?? '',
+            stdout: overrides.commandStdout ?? '',
+          };
         }
         throw new TypeError(`Unexpected fixture request: ${method}`);
       },
@@ -159,9 +115,9 @@ function fixture(overrides = {}) {
   return { input, state };
 }
 
-test('projects one exact completed lower-client Turn into containment metadata', async () => {
+test('projects one exact direct sandbox command into containment metadata', async () => {
   const { input, state } = fixture();
-  const result = await runM251LiveContainmentTurn(input);
+  const result = await runM251LiveContainmentProbe(input);
 
   assert.equal(result.phase, 'DISCOVERY');
   assert.equal(result.commandExitCode, 0);
@@ -178,14 +134,21 @@ test('projects one exact completed lower-client Turn into containment metadata',
       'permissionProfile/list',
       'thread/start',
       'config/read',
-      'turn/start',
+      'command/exec',
     ],
   );
+  assert.deepEqual(state.requests.at(-1)?.params, {
+    command: input.command,
+    cwd: input.cwd,
+    outputBytesCap: 1_024,
+    sandboxPolicy: { networkAccess: false, type: 'readOnly' },
+    timeoutMs: input.terminalTimeoutMilliseconds,
+  });
 });
 
 test('binds the same lower-client proof path to the distinct PLAN phase entry', async () => {
   const { input, state } = fixture({ phase: 'PLAN' });
-  const result = await runM251LiveContainmentTurn(input);
+  const result = await runM251LiveContainmentProbe(input);
 
   assert.equal(result.phase, 'PLAN');
   assert.equal(result.phaseEntryDigest, input.phaseEntryDigest);
@@ -194,20 +157,10 @@ test('binds the same lower-client proof path to the distinct PLAN phase entry', 
   assert.equal(state.shutdownObserved, true);
 });
 
-test('rejects a substituted command and still shuts down the controlled client', async () => {
-  const { input, state } = fixture({ observedCommand: "/bin/sh -c 'true'" });
-
-  await assert.rejects(
-    runM251LiveContainmentTurn(input),
-    /command was substituted, failed, or retained output/u,
-  );
-  assert.equal(state.shutdownObserved, true);
-});
-
 test('classifies a successful denied-boundary open without retaining its path', async () => {
   const { input, state } = fixture({ commandExitCode: 50 });
 
-  await assert.rejects(runM251LiveContainmentTurn(input), (error) => {
+  await assert.rejects(runM251LiveContainmentProbe(input), (error) => {
     assert.equal(
       m251LiveContainmentFailureReasonCode(error),
       `DENIED_BOUNDARY_READ_SUCCEEDED_${M251_CANDIDATE_FREE_DENIED_BOUNDARIES[0]}`,
@@ -218,46 +171,13 @@ test('classifies a successful denied-boundary open without retaining its path', 
   assert.equal(state.shutdownObserved, true);
 });
 
-test('rejects a command Item that is not bound to the started Thread', async () => {
-  const { input, state } = fixture({ observedThreadId: 'thread_substituted' });
-
-  await assert.rejects(
-    runM251LiveContainmentTurn(input),
-    /command was substituted, failed, or retained output/u,
-  );
-  assert.equal(state.shutdownObserved, true);
-});
-
-test('rejects a terminal notification bound to another Thread', async () => {
-  const { input, state } = fixture({ terminalThreadId: 'thread_substituted' });
-
-  await assert.rejects(
-    runM251LiveContainmentTurn(input),
-    /did not produce one completed command and terminal Turn/u,
-  );
-  assert.equal(state.shutdownObserved, true);
-});
-
-test('rejects the legacy nested terminal Thread ID when the protocol field is absent', async () => {
-  const { input, state } = fixture({
-    legacyNestedTerminalThreadId: true,
-    omitTerminalThreadId: true,
-  });
-
-  await assert.rejects(
-    runM251LiveContainmentTurn(input),
-    /Terminal Turn lacks exact Thread\/Turn identity/u,
-  );
-  assert.equal(state.shutdownObserved, true);
-});
-
 test('rejects substitution of the exact permission profile', async () => {
   const { input, state } = fixture({
     permissionProfile: { allowed: true, id: 'permission_read_only_v1', substituted: true },
   });
 
   await assert.rejects(
-    runM251LiveContainmentTurn(input),
+    runM251LiveContainmentProbe(input),
     /exact phase permission profile is unavailable/u,
   );
   assert.equal(state.shutdownObserved, true);
@@ -274,19 +194,17 @@ test('rejects widening of the effective Thread sandbox', async () => {
   });
 
   await assert.rejects(
-    runM251LiveContainmentTurn(input),
+    runM251LiveContainmentProbe(input),
     /Effective Thread differs from the exact phase isolation input/u,
   );
   assert.equal(state.shutdownObserved, true);
 });
 
-test('retains a started unknown effect so the policy projection fails closed', async () => {
+test('retains an unexpected direct-command item so the policy projection fails closed', async () => {
   const { input } = fixture({
     forbiddenEffect: true,
-    forbiddenEffectMethod: 'item/started',
-    forbiddenEffectType: 'futureExternalEffect',
   });
-  const result = await runM251LiveContainmentTurn(input);
+  const result = await runM251LiveContainmentProbe(input);
 
   assert.equal(result.forbiddenEffectCount, 1);
   assert.throws(
@@ -303,9 +221,20 @@ test('retains a started unknown effect so the policy projection fails closed', a
   );
 });
 
-test('reports an unclean controlled-process shutdown without changing Turn evidence', async () => {
+test('rejects retained direct-command output without exposing it', async () => {
+  const { input, state } = fixture({ commandStdout: 'non-sensitive fixture output' });
+
+  await assert.rejects(runM251LiveContainmentProbe(input), (error) => {
+    assert.equal(m251LiveContainmentFailureReasonCode(error), 'COMMAND_OUTPUT_RETAINED');
+    assert.equal(error.message.includes('fixture output'), false);
+    return true;
+  });
+  assert.equal(state.shutdownObserved, true);
+});
+
+test('reports an unclean controlled-process shutdown without changing probe evidence', async () => {
   const { input, state } = fixture({ shutdown: { code: 1, failureCode: 'EXITED_NON_ZERO' } });
-  const result = await runM251LiveContainmentTurn(input);
+  const result = await runM251LiveContainmentProbe(input);
 
   assert.equal(result.phase, 'DISCOVERY');
   assert.equal(state.shutdownObserved, false);
