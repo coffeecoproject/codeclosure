@@ -27,7 +27,6 @@ import {
   createM251ProductionAdmissionPolicyDefinition,
   reconcileProjectReadSnapshots,
   type CodeClosureApplication,
-  type IntakeAssistantPort,
   type IntakeStartCompositionPort,
   type M25IntakeStartupRecoverySummary,
   type StartupRecoverySummary,
@@ -71,6 +70,10 @@ import {
   createM251TrustedCodexInvocation,
   type M251TrustedCodexProfileAuthority,
 } from './m251-codex-worker-invocation.js';
+import type {
+  PreparedIntakeExecutionRootDescriptor,
+  ProductionIntakeAssistantResource,
+} from './intake-assistant-invocation.js';
 
 export const M251_PAYMENT_DEMO_EXPECTED_RESULT =
   'duplicate callback is ignored, one charge is retained for one order, and different orders remain independent';
@@ -154,7 +157,7 @@ export interface CreateM251TrustedProductionCompositionOptions extends Omit<
   'dataHomePath' | 'protectedPaths' | 'allowedProjectPaths'
 > {
   readonly activation: M251ProductionActivation;
-  readonly assistant: IntakeAssistantPort;
+  readonly intakeAssistant: ProductionIntakeAssistantResource;
   readonly candidateSourceFixture?: Parameters<
     typeof createM251RuntimeProfileRegistry
   >[1]['candidateSource'];
@@ -233,6 +236,33 @@ function exactRealDirectory(path: string, field: string): string {
     throw new TypeError(`${field} must be one exact real directory`);
   }
   return real;
+}
+
+function validatePreparedIntakeExecutionRoot(
+  descriptor: PreparedIntakeExecutionRootDescriptor,
+): PreparedIntakeExecutionRootDescriptor {
+  const root = exactExistingRealDirectory(descriptor.root, 'M2.5.1 Intake execution root');
+  const members = Object.freeze({
+    codexHome: exactExistingRealDirectory(descriptor.codexHome, 'M2.5.1 Intake Codex home'),
+    operationCwd: exactExistingRealDirectory(
+      descriptor.operationCwd,
+      'M2.5.1 Intake operation cwd',
+    ),
+    processHome: exactExistingRealDirectory(descriptor.processHome, 'M2.5.1 Intake process home'),
+    processTemporaryDirectory: exactExistingRealDirectory(
+      descriptor.processTemporaryDirectory,
+      'M2.5.1 Intake process temporary directory',
+    ),
+  });
+  const memberPaths = Object.freeze(Object.values(members));
+  if (memberPaths.some((path) => path === root || !sameOrWithin(path, root))) {
+    throw new TypeError('M2.5.1 Intake execution-root members must be exact descendants');
+  }
+  assertSeparated(memberPaths, 'M2.5.1 Intake execution-root members must be pairwise separated');
+  return Object.freeze({
+    root,
+    ...members,
+  });
 }
 
 function validateRoots(
@@ -353,7 +383,7 @@ function validateGoal(
  * accepted only when the activation is the named explicit protocol-fixture
  * seam used by deterministic composition tests.
  */
-export function createM251TrustedProductionComposition(
+function createM251TrustedProductionCompositionWithOwnedAssistant(
   options: CreateM251TrustedProductionCompositionOptions,
 ): M251TrustedProductionComposition {
   const usingFixture = options.activation.kind === 'EXPLICIT_PROTOCOL_FIXTURE';
@@ -412,6 +442,13 @@ export function createM251TrustedProductionComposition(
   assertSeparated(
     separatedRoots,
     'M2.5.1 source, authority, and operation roots must be separated',
+  );
+  const intakeExecutionRoot = validatePreparedIntakeExecutionRoot(
+    options.intakeAssistant.prepare(),
+  );
+  assertSeparated(
+    [...separatedRoots, intakeExecutionRoot.root],
+    'M2.5.1 Intake, source, authority, and operation roots must be separated',
   );
   if (
     options.activation.sharedProfile.codexVersion !== 'codex-cli 0.146.1' ||
@@ -776,7 +813,7 @@ export function createM251TrustedProductionComposition(
     });
     const coordinator = new M25IntakeCoordinator({
       store,
-      assistant: options.assistant,
+      assistant: options.intakeAssistant.assistant,
       packageCompiler: new M251IntakePackageCompiler({ canonicalizer, digests }),
       projectionCompiler: new M251TrustedIntentProjectionCompiler({ canonicalizer, digests }),
       admissionEngine: new M25IntentAdmissionEngine(digests, {
@@ -843,8 +880,27 @@ export function createM251TrustedProductionComposition(
       }),
       close: (): void => {
         if (!closed) {
-          store.close();
           closed = true;
+          const closeErrors: unknown[] = [];
+          try {
+            store.close();
+          } catch (error) {
+            closeErrors.push(error);
+          }
+          try {
+            options.intakeAssistant.close();
+          } catch (error) {
+            closeErrors.push(error);
+          }
+          if (closeErrors.length === 1) {
+            throw closeErrors[0];
+          }
+          if (closeErrors.length > 1) {
+            throw new AggregateError(
+              closeErrors,
+              'M2.5.1 production composition resources could not close',
+            );
+          }
         }
       },
     });
@@ -855,6 +911,25 @@ export function createM251TrustedProductionComposition(
       throw new AggregateError(
         [error, closeError],
         'M2.5.1 production composition failed and its authority could not close',
+        { cause: closeError },
+      );
+    }
+    throw error;
+  }
+}
+
+export function createM251TrustedProductionComposition(
+  options: CreateM251TrustedProductionCompositionOptions,
+): M251TrustedProductionComposition {
+  try {
+    return createM251TrustedProductionCompositionWithOwnedAssistant(options);
+  } catch (error) {
+    try {
+      options.intakeAssistant.close();
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        'M2.5.1 production composition failed and its Intake resource could not close',
         { cause: closeError },
       );
     }

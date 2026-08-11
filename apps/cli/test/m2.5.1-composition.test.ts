@@ -138,6 +138,11 @@ import {
   type CreateM251TrustedProductionCompositionOptions,
   type M251ProductionProjectContract,
 } from '../dist/composition/m251-trusted-production-composition.js';
+import {
+  createProductionIntakeAssistant,
+  type PreparedIntakeExecutionRootDescriptor,
+  type ProductionIntakeAssistantResource,
+} from '../dist/composition/intake-assistant-invocation.js';
 import { createM251ProductionProtocolFixtureActivation } from './fixtures/m251-production-protocol-fixture.ts';
 
 const digests = new CanonicalJsonSha256DigestProvider();
@@ -2120,6 +2125,107 @@ function m251B4Clock(
   });
 }
 
+function createPreparedIntakeAssistantFixture(
+  declaredRoot: string,
+  assistant: IntakeAssistantPort,
+): Readonly<{
+  descriptor: PreparedIntakeExecutionRootDescriptor;
+  observation(): Readonly<{ closeCount: number; prepareCount: number }>;
+  resource: ProductionIntakeAssistantResource;
+}> {
+  mkdirSync(declaredRoot, { mode: 0o700, recursive: true });
+  const root = realpathSync(declaredRoot);
+  const declaredMembers = Object.freeze({
+    codexHome: join(root, 'codex-home'),
+    operationCwd: join(root, 'operation'),
+    processHome: join(root, 'process-home'),
+    processTemporaryDirectory: join(root, 'process-tmp'),
+  });
+  for (const path of Object.values(declaredMembers)) {
+    mkdirSync(path, { mode: 0o700 });
+  }
+  const descriptor: PreparedIntakeExecutionRootDescriptor = Object.freeze({
+    root,
+    codexHome: realpathSync(declaredMembers.codexHome),
+    operationCwd: realpathSync(declaredMembers.operationCwd),
+    processHome: realpathSync(declaredMembers.processHome),
+    processTemporaryDirectory: realpathSync(declaredMembers.processTemporaryDirectory),
+  });
+  let closeCount = 0;
+  let prepareCount = 0;
+  let closed = false;
+  const resource: ProductionIntakeAssistantResource = Object.freeze({
+    assistant,
+    prepare: () => {
+      if (closed) {
+        throw new TypeError('Fixture Intake assistant resource is closed');
+      }
+      prepareCount += 1;
+      return descriptor;
+    },
+    close: () => {
+      if (!closed) {
+        closed = true;
+        closeCount += 1;
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  });
+  return Object.freeze({
+    descriptor,
+    observation: () => Object.freeze({ closeCount, prepareCount }),
+    resource,
+  });
+}
+
+void test('[M251-S4-B1] production Intake resource prepares one content-free execution-root descriptor without an Assistant call', (t) => {
+  const fixtureRoot = realpathSync(
+    mkdtempSync(join(tmpdir(), 'codeclosure-m251-s4-intake-resource-')),
+  );
+  t.after(() => removeProjectReadFixtureRoot(fixtureRoot));
+  const authSource = join(fixtureRoot, 'auth.json');
+  writeFileSync(authSource, '{}\n', { mode: 0o600 });
+  const resource = createProductionIntakeAssistant({
+    environment: Object.freeze({
+      CODECLOSURE_M2_AUTH_SOURCE: authSource,
+      PATH: process.env['PATH'],
+    }),
+    forbiddenRoots: Object.freeze([fixtureRoot]),
+  });
+  t.after(() => resource.close());
+
+  const descriptor = resource.prepare();
+  assert.equal(Object.isFrozen(descriptor), true);
+  assert.deepEqual(Reflect.ownKeys(descriptor).toSorted(), [
+    'codexHome',
+    'operationCwd',
+    'processHome',
+    'processTemporaryDirectory',
+    'root',
+  ]);
+  assert.equal(resource.prepare(), descriptor);
+  for (const path of [
+    descriptor.root,
+    descriptor.codexHome,
+    descriptor.operationCwd,
+    descriptor.processHome,
+    descriptor.processTemporaryDirectory,
+  ]) {
+    assert.equal(realpathSync(path), path);
+    assert.equal(lstatSync(path).isDirectory(), true);
+    assert.equal(lstatSync(path).isSymbolicLink(), false);
+  }
+  assert.equal(dirname(descriptor.codexHome), descriptor.root);
+  assert.equal(dirname(descriptor.operationCwd), descriptor.root);
+  assert.equal(dirname(descriptor.processHome), descriptor.root);
+  assert.equal(dirname(descriptor.processTemporaryDirectory), descriptor.root);
+
+  resource.close();
+  assert.equal(existsSync(descriptor.root), false);
+  resource.close();
+  assert.throws(() => resource.prepare(), /resource is closed/);
+});
+
 function createM251B4CompositionScenario(
   t: TestContext,
   namespace: string,
@@ -2127,7 +2233,9 @@ function createM251B4CompositionScenario(
 ): Readonly<{
   admittedUserContent: string;
   compositionOptions: CreateM251TrustedProductionCompositionOptions;
+  createIntakeAssistantResource(suffix: string): ProductionIntakeAssistantResource;
   fixture: ReturnType<typeof createM251ProductionProtocolFixtureActivation>;
+  intakeAssistantFixture: ReturnType<typeof createPreparedIntakeAssistantFixture>;
   initialSource: ReturnType<typeof observeLocalCandidateSourceIdentity>;
   sourceRoot: string;
 }> {
@@ -2210,11 +2318,17 @@ function createM251B4CompositionScenario(
       }),
     answer: () => Promise.reject(new Error('B4 full-chain fixture must not answer-only')),
   });
+  const createIntakeAssistantResource = (suffix: string): ProductionIntakeAssistantResource =>
+    createPreparedIntakeAssistantFixture(join(testRoot, `intake-${suffix}`), assistant).resource;
+  const intakeAssistantFixture = createPreparedIntakeAssistantFixture(
+    join(testRoot, 'intake-primary'),
+    assistant,
+  );
   return Object.freeze({
     admittedUserContent,
     compositionOptions: Object.freeze({
       activation: fixture.activation,
-      assistant,
+      intakeAssistant: intakeAssistantFixture.resource,
       clock: m251B4Clock(),
       ids: new DeterministicIds(namespace),
       projectContract,
@@ -2222,7 +2336,9 @@ function createM251B4CompositionScenario(
       protectedCheckPath,
       roots,
     }),
+    createIntakeAssistantResource,
     fixture,
+    intakeAssistantFixture,
     initialSource,
     sourceRoot,
   });
@@ -2233,6 +2349,11 @@ void test('[M251-B4] trusted production composition closes the deterministic Int
   const { admittedUserContent, fixture, initialSource, sourceRoot } = scenario;
   const composition = createM251TrustedProductionComposition(scenario.compositionOptions);
   t.after(() => composition.close());
+  assert.deepEqual(scenario.intakeAssistantFixture.observation(), {
+    closeCount: 0,
+    prepareCount: 1,
+  });
+  assert.equal(existsSync(scenario.intakeAssistantFixture.descriptor.root), true);
   const submitCommandId = commandId('command_m251-b4-production-submit');
   const result = await composition.intakeApplication.submit({
     commandId: submitCommandId,
@@ -2323,10 +2444,18 @@ void test('[M251-B4] trusted production composition closes the deterministic Int
   assert.deepEqual(readdirSync(join(projectReadRoot, '.codeclosure-project-read', 'markers')), []);
 
   composition.close();
+  assert.deepEqual(scenario.intakeAssistantFixture.observation(), {
+    closeCount: 1,
+    prepareCount: 1,
+  });
+  assert.equal(existsSync(scenario.intakeAssistantFixture.descriptor.root), false);
+  composition.close();
+  assert.equal(scenario.intakeAssistantFixture.observation().closeCount, 1);
   const reopened = createM251TrustedProductionComposition({
     ...scenario.compositionOptions,
     clock: m251B4Clock('2026-08-12T01:00:00.000Z'),
     ids: new DeterministicIds('m251-b4-production-reopen'),
+    intakeAssistant: scenario.createIntakeAssistantResource('reopen'),
   });
   t.after(() => reopened.close());
   const reopenedStatus = reopened.application.getGoalStatus(goalIdentifier);
@@ -2473,6 +2602,53 @@ void test('[M251-B4] formal composition preserves PLAN_SOURCE_NOT_CURRENT withou
 });
 
 void test('[M251-B4] substituted activation, phase roots, and protected asset fail before publication', (t) => {
+  const intakeScenario = createM251B4CompositionScenario(t, 'm251-b4-intake-root-substitution');
+  const overlappingIntake = createPreparedIntakeAssistantFixture(
+    join(intakeScenario.sourceRoot, 'overlapping-intake-root'),
+    intakeScenario.compositionOptions.intakeAssistant.assistant,
+  );
+  assert.throws(
+    () =>
+      createM251TrustedProductionComposition({
+        ...intakeScenario.compositionOptions,
+        intakeAssistant: overlappingIntake.resource,
+      }),
+    /Intake, source, authority, and operation roots must be separated/,
+  );
+  assert.deepEqual(overlappingIntake.observation(), { closeCount: 1, prepareCount: 1 });
+  assert.equal(existsSync(overlappingIntake.descriptor.root), false);
+  assert.equal(intakeScenario.fixture.observation().prepareCount, 0);
+  assert.deepEqual(
+    observeLocalCandidateSourceIdentity(intakeScenario.sourceRoot),
+    intakeScenario.initialSource,
+  );
+  intakeScenario.compositionOptions.intakeAssistant.close();
+
+  const memberScenario = createM251B4CompositionScenario(t, 'm251-b4-intake-member-substitution');
+  const memberDelegate = memberScenario.intakeAssistantFixture.resource;
+  assert.throws(
+    () =>
+      createM251TrustedProductionComposition({
+        ...memberScenario.compositionOptions,
+        intakeAssistant: Object.freeze({
+          assistant: memberDelegate.assistant,
+          prepare: () =>
+            Object.freeze({
+              ...memberDelegate.prepare(),
+              operationCwd: memberScenario.compositionOptions.roots.candidateWorkspace,
+            }),
+          close: () => memberDelegate.close(),
+        }),
+      }),
+    /execution-root members must be exact descendants/,
+  );
+  assert.deepEqual(memberScenario.intakeAssistantFixture.observation(), {
+    closeCount: 1,
+    prepareCount: 1,
+  });
+  assert.equal(existsSync(memberScenario.intakeAssistantFixture.descriptor.root), false);
+  assert.equal(memberScenario.fixture.observation().prepareCount, 0);
+
   const rootScenario = createM251B4CompositionScenario(t, 'm251-b4-root-substitution');
   const sourceNestedRoot = join(rootScenario.sourceRoot, 'forbidden-authority-root');
   assert.throws(
@@ -2492,6 +2668,10 @@ void test('[M251-B4] substituted activation, phase roots, and protected asset fa
     rootScenario.initialSource,
   );
   assert.equal(rootScenario.fixture.observation().prepareCount, 0);
+  assert.deepEqual(rootScenario.intakeAssistantFixture.observation(), {
+    closeCount: 1,
+    prepareCount: 0,
+  });
 
   const capabilityScenario = createM251B4CompositionScenario(t, 'm251-b4-capability-substitution');
   assert.throws(
@@ -2601,7 +2781,8 @@ void test('[M251-B4] Intake clarification rejects another declared project witho
 
 void test('[M251-B4] production Intake preserves declared constraints and binds them to replay', async (t) => {
   const scenario = createM251B4CompositionScenario(t, 'm251-b4-declared-constraints');
-  const delegate = scenario.compositionOptions.assistant;
+  const delegateResource = scenario.compositionOptions.intakeAssistant;
+  const delegate = delegateResource.assistant;
   let analyzeCount = 0;
   let observedConstraints: readonly string[] | undefined;
   const assistant: IntakeAssistantPort = Object.freeze({
@@ -2620,7 +2801,11 @@ void test('[M251-B4] production Intake preserves declared constraints and binds 
   });
   const composition = createM251TrustedProductionComposition({
     ...scenario.compositionOptions,
-    assistant,
+    intakeAssistant: Object.freeze({
+      assistant,
+      prepare: () => delegateResource.prepare(),
+      close: () => delegateResource.close(),
+    }),
   });
   t.after(() => composition.close());
   const submitCommandId = commandId('command_m251-b4-declared-constraints');

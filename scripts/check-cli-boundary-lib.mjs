@@ -441,6 +441,7 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
       values: new Set(['createProductionIntakeAssistant']),
       types: new Set([
         'CreateProductionIntakeAssistantOptions',
+        'PreparedIntakeExecutionRootDescriptor',
         'ProductionIntakeAssistantResource',
       ]),
     }),
@@ -725,6 +726,17 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
           'ProductionIntakeAssistantResource',
           'createProductionIntakeAssistant',
         ]),
+      ],
+      [
+        'apps/cli/src/composition/m251-trusted-production-composition.ts',
+        Object.freeze({
+          kind: 'IMPORT_DECLARATION',
+          values: new Set(),
+          types: new Set([
+            'PreparedIntakeExecutionRootDescriptor',
+            'ProductionIntakeAssistantResource',
+          ]),
+        }),
       ],
     ]),
   ],

@@ -476,7 +476,7 @@ slice review passed and permitted Slice 2. Slice 2 adds Profile/Adapter v3,
 configuration/protocol projection v2, the strict Intent response, exact-source
 instruction, and Runtime projection policies; it passes the lower-client
 prerequisite and isolated real Answer-only, clear Intent, and ambiguous Intent
-paths with metadata-only receipts. Slice 3 is now in progress through its
+paths with metadata-only receipts. Slice 3 subsequently implemented its
 project-read contracts, local adapter, Context v5 compiler, atomic SQLite
 project-read binding, Store-owned authority-snapshot/consume-once Cleanup
 persistence, trusted Runtime Cleanup coordinator, process-safe same-Grant
@@ -522,8 +522,10 @@ review passed. B4 composes the trusted production graph and deterministic
 Intake-to-closeout chain, including terminal ProjectRead cleanup and no
 production Fake fallback. B5 restored every implemented Slice 3 deterministic
 proof to its frozen owner, completed documentation closure, and issued a
-bounded Slice 3 `PASS` on 2026-08-11. The protocol fixture is not Live evidence;
-mandatory real user-path proof and milestone assessment have not started. The
+bounded Slice 3 `PASS` on 2026-08-11. The protocol fixture is not Live evidence.
+Slice 4 is in progress through B1's prepared, content-free Intake execution-
+root descriptor and trusted pre-publication separation/cleanup boundary.
+Mandatory real user-path proof and milestone assessment have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

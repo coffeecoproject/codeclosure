@@ -42,8 +42,17 @@ export interface CreateProductionIntakeAssistantOptions {
   >;
 }
 
+export interface PreparedIntakeExecutionRootDescriptor {
+  readonly root: string;
+  readonly codexHome: string;
+  readonly operationCwd: string;
+  readonly processHome: string;
+  readonly processTemporaryDirectory: string;
+}
+
 export interface ProductionIntakeAssistantResource {
   readonly assistant: IntakeAssistantPort;
+  prepare(): PreparedIntakeExecutionRootDescriptor;
   close(): void;
 }
 
@@ -138,12 +147,17 @@ function launchNonce(launch: AppServerProcessLaunch, sequence: number): string {
     .digest('hex')}`;
 }
 
+interface PreparedIntakeAssistantExecution {
+  readonly descriptor: PreparedIntakeExecutionRootDescriptor;
+  readonly launch: AppServerProcessLaunch;
+}
+
 class FreshCodexIntakeAssistant implements IntakeAssistantPort {
   readonly #environment: Readonly<Record<string, string | undefined>>;
   readonly #forbiddenRoots: readonly string[];
   readonly #onSafeDiagnostic: CreateProductionIntakeAssistantOptions['onSafeDiagnostic'];
   #root: string | undefined;
-  #launch: AppServerProcessLaunch | undefined;
+  #prepared: PreparedIntakeAssistantExecution | undefined;
   #sequence = 0;
   #closed = false;
 
@@ -151,6 +165,13 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
     this.#environment = options.environment;
     this.#forbiddenRoots = Object.freeze([...options.forbiddenRoots]);
     this.#onSafeDiagnostic = options.onSafeDiagnostic;
+  }
+
+  public prepare(): PreparedIntakeExecutionRootDescriptor {
+    if (this.#closed) {
+      throw new TypeError('Intake assistant resource is closed');
+    }
+    return this.#prepareExecution().descriptor;
   }
 
   public analyze(
@@ -175,10 +196,12 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
       try {
         rmSync(this.#root, { force: true, recursive: true });
       } catch {
-        // Cleanup cannot rewrite a committed Intake disposition.
+        // Cleanup cannot rewrite a committed Intake disposition. Retain the
+        // exact root so a repeated close can retry only that same resource.
+        return;
       }
       this.#root = undefined;
-      this.#launch = undefined;
+      this.#prepared = undefined;
     }
   }
 
@@ -186,7 +209,7 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
     if (this.#closed) {
       throw new TypeError('Intake assistant resource is closed');
     }
-    const launch = this.#prepareLaunch();
+    const launch = this.#prepareExecution().launch;
     this.#sequence += 1;
     return createCodexIntakeAssistantAdapter({
       launch,
@@ -196,35 +219,77 @@ class FreshCodexIntakeAssistant implements IntakeAssistantPort {
     });
   }
 
-  #prepareLaunch(): AppServerProcessLaunch {
-    if (this.#launch !== undefined) {
-      return this.#launch;
+  #prepareExecution(): PreparedIntakeAssistantExecution {
+    if (this.#prepared !== undefined) {
+      return this.#prepared;
     }
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'codeclosure-m2-5-intake-')));
     this.#root = root;
-    const codexHome = join(root, 'codex-home');
-    const operationCwd = join(root, 'operation');
-    const processHome = join(root, 'process-home');
-    const processTemporaryDirectory = join(root, 'process-tmp');
-    for (const path of [codexHome, operationCwd, processHome, processTemporaryDirectory]) {
-      mkdirSync(path, { mode: 0o700 });
+    try {
+      const declaredPaths = [
+        join(root, 'codex-home'),
+        join(root, 'operation'),
+        join(root, 'process-home'),
+        join(root, 'process-tmp'),
+      ];
+      for (const path of declaredPaths) {
+        mkdirSync(path, { mode: 0o700 });
+      }
+      const [codexHome, operationCwd, processHome, processTemporaryDirectory] = declaredPaths.map(
+        (path) => realpathSync(path),
+      );
+      if (
+        codexHome === undefined ||
+        operationCwd === undefined ||
+        processHome === undefined ||
+        processTemporaryDirectory === undefined
+      ) {
+        throw new TypeError('Intake assistant execution-root members are incomplete');
+      }
+      writeFileSync(join(codexHome, 'config.toml'), controlledConfiguration(), { mode: 0o600 });
+      const authSource = optionalAuthSource(this.#environment);
+      if (authSource !== undefined) {
+        copyFileSync(authSource, join(codexHome, 'auth.json'));
+      }
+      const installation = verifyBundledCodexInstallation();
+      const launch = createControlledAppServerLaunch({
+        codexHome,
+        cwd: operationCwd,
+        executableSearchPath:
+          this.#environment['PATH'] ?? `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
+        installation,
+        processHome,
+        temporaryDirectory: processTemporaryDirectory,
+      });
+      const prepared = Object.freeze({
+        descriptor: Object.freeze({
+          root,
+          codexHome,
+          operationCwd,
+          processHome,
+          processTemporaryDirectory,
+        }),
+        launch,
+      });
+      this.#prepared = prepared;
+      return prepared;
+    } catch (error) {
+      try {
+        rmSync(root, { force: true, recursive: true });
+      } catch (cleanupError) {
+        this.#closed = true;
+        throw new AggregateError(
+          [error, cleanupError],
+          'Intake assistant preparation failed and its execution root could not be removed',
+          { cause: cleanupError },
+        );
+      }
+      if (this.#root === root) {
+        this.#root = undefined;
+        this.#prepared = undefined;
+      }
+      throw error;
     }
-    writeFileSync(join(codexHome, 'config.toml'), controlledConfiguration(), { mode: 0o600 });
-    const authSource = optionalAuthSource(this.#environment);
-    if (authSource !== undefined) {
-      copyFileSync(authSource, join(codexHome, 'auth.json'));
-    }
-    const installation = verifyBundledCodexInstallation();
-    this.#launch = createControlledAppServerLaunch({
-      codexHome,
-      cwd: operationCwd,
-      executableSearchPath:
-        this.#environment['PATH'] ?? `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
-      installation,
-      processHome,
-      temporaryDirectory: processTemporaryDirectory,
-    });
-    return this.#launch;
   }
 }
 
@@ -234,6 +299,7 @@ export function createProductionIntakeAssistant(
   const resource = new FreshCodexIntakeAssistant(options);
   return Object.freeze({
     assistant: resource,
+    prepare: (): PreparedIntakeExecutionRootDescriptor => resource.prepare(),
     close: (): void => resource.close(),
   });
 }

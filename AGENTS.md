@@ -148,9 +148,11 @@ protected verification, Evidence, Acceptance, closeout, restart/replay, and
 terminal ProjectRead cleanup without a production Fake fallback. B5 restores
 every implemented Slice 3 deterministic proof to its frozen owner and closes
 the Slice 3 documentation/review boundary. This bounded Slice 3 result is not
-real Codex dispatch or effective live containment evidence. Slice 4 mandatory
-real user-path proof and Slice 5 canonical assessment/milestone review have not
-started. A real
+real Codex dispatch or effective live containment evidence. Slice 4 is now in
+progress through B1's prepared, content-free Intake execution-root descriptor
+and trusted pre-publication separation/cleanup boundary; mandatory real user-
+path proof has not started, and Slice 5 canonical assessment/milestone review
+has not started. A real
 pinned-version integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

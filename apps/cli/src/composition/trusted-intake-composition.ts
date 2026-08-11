@@ -58,7 +58,7 @@ export interface CreateIntakeCliInvocationCompositionOptions {
 interface CreateIntakeCliInvocationCompositionWithAssistantOptions extends CreateIntakeCliInvocationCompositionOptions {
   readonly createAssistant: (
     options: CreateProductionIntakeAssistantOptions,
-  ) => ProductionIntakeAssistantResource;
+  ) => Pick<ProductionIntakeAssistantResource, 'assistant' | 'close'>;
 }
 
 export function createIntakeCliInvocationComposition(

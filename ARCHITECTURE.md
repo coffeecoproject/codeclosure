@@ -180,8 +180,10 @@ deterministic Runtime source-currency enforcement and Driver Profile v3 phase
 dispatch; B4 adds the trusted deterministic production composition; B5 closes
 its exact proof owners and documentation. The C11 implementation and
 protocol-fixture full chain have deterministic coverage but no mandatory Live
-or milestone acceptance verdict. M2.5.1 Slice 4 and assessment have not
-started.
+or milestone acceptance verdict. M2.5.1 Slice 4 is in progress through its
+prepared, content-free Intake execution-root descriptor and trusted pre-
+publication separation/cleanup boundary; mandatory real user-path proof and
+assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
