@@ -225,6 +225,7 @@ const M251_EXECUTION_RUNTIME_COMPOSITION_IMPORTS = new Set([
 const M251_CODEX_ADAPTER_IMPORTS = new Set([
   'CODEX_M251_WORKER_DISABLED_FEATURES',
   'CodexAdapterDiagnosticEvent',
+  'CodexAdapterObservationV2',
   'CodexWorkerPhaseDirectiveV1',
   'CodexWorkerRequestBindingV3',
   'CodexWorkerSharedProfileDirectiveV1',
@@ -268,12 +269,17 @@ const M251_CODEX_DOMAIN_IMPORTS = new Set([
 ]);
 
 const M251_PRODUCTION_DOMAIN_IMPORTS = new Set([
+  'CommandId',
   'Goal',
   'GoalId',
+  'PolicyBundleId',
   'ProtectedAssetReadLeasePolicy',
   'Sha256Digest',
+  'WorkflowId',
   'WorkflowPhase',
+  'attemptId',
   'sha256Digest',
+  'workerEventId',
 ]);
 
 const M251_PRODUCTION_RUNTIME_COMPOSITION_IMPORTS = new Set([
@@ -403,7 +409,10 @@ const PRIVILEGED_COMPOSITION_PACKAGE_IMPORTS = new Map([
   [
     'apps/cli/src/composition/m251-trusted-production-composition.ts',
     new Map([
-      ['@codeclosure/adapter-codex', new Set(['createCodexExternalProcessReconciler'])],
+      [
+        '@codeclosure/adapter-codex',
+        new Set(['CodexAdapterObservationV2', 'createCodexExternalProcessReconciler']),
+      ],
       ['@codeclosure/domain', M251_PRODUCTION_DOMAIN_IMPORTS],
       ['@codeclosure/runtime/composition', M251_PRODUCTION_RUNTIME_COMPOSITION_IMPORTS],
       ['@codeclosure/verification-local', M251_PRODUCTION_VERIFICATION_IMPORTS],
@@ -618,6 +627,9 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
         'M251ProductionProjectContract',
         'M251TrustedProductionComposition',
         'M251TrustedProductionIdentityGenerator',
+        'M251TrustedProductionInspection',
+        'M251TrustedProductionObservationSink',
+        'M251TrustedProductionPhaseAuthority',
         'M251TrustedProductionRoots',
       ]),
     }),
@@ -845,6 +857,7 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
       [
         'apps/cli/src/composition/m251-trusted-production-composition.ts',
         new Set([
+          'InstalledM251ExecutionAuthority',
           'M251PhaseExecutionAuthorityInput',
           'createM251RuntimeProfileRegistry',
           'installM251ExecutionAuthority',

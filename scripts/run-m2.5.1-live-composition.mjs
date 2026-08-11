@@ -1,8 +1,5 @@
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 
 import {
   M251_LIVE_COMPOSITION_PHASES,
@@ -40,12 +37,17 @@ import {
   projectM251LiveCompositionVerification,
   validateM251LiveCompositionReceipt,
 } from './m2.5.1-live-composition-lib.mjs';
-import { m251ProjectTreeIdentity } from './m2.5.1-live-intake-lib.mjs';
-import { parseSourceIdentity } from './m2-acceptance-lib.mjs';
+import {
+  m251ExactAuthSource,
+  m251ExactSourceIdentity,
+  m251FileDigest,
+  m251MetadataFingerprint,
+  m251PnpmVersion,
+  m251ProjectObservation,
+} from './m2.5.1-live-environment-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const contractPath = join(repositoryRoot, 'scripts', 'fixtures', 'm2.5.1', 'slice0-contract.json');
-const maximumChildOutputBytes = 16 * 1024 * 1024;
 let stage = 'ENTRY';
 
 function fail(message) {
@@ -57,98 +59,12 @@ function argument(name) {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-function run(executable, arguments_, options = {}) {
-  return spawnSync(executable, arguments_, {
-    cwd: options.cwd ?? repositoryRoot,
-    encoding: 'utf8',
-    env: options.env ?? process.env,
-    maxBuffer: maximumChildOutputBytes,
-    timeout: options.timeoutMilliseconds ?? 30_000,
-  });
-}
-
-function successfulOutput(result, label) {
-  if (result.error !== undefined || result.signal !== null || result.status !== 0) {
-    fail(`${label} failed`);
-  }
-  return result.stdout ?? '';
-}
-
 function jsonFile(path, label) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     fail(`${label} is not one JSON document`);
   }
-}
-
-function exactSourceIdentity() {
-  const result = run(process.execPath, [
-    'scripts/source-identity.mjs',
-    '--review-exclusion',
-    M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
-  ]);
-  return parseSourceIdentity(successfulOutput(result, 'M2.5.1 source-identity preflight'));
-}
-
-function exactAuthSource() {
-  const selected =
-    argument('--auth-source') ??
-    process.env.CODECLOSURE_M2_AUTH_SOURCE ??
-    join(homedir(), '.codex', 'auth.json');
-  const absolute = resolve(selected);
-  if (!existsSync(absolute)) {
-    fail('The trusted Codex authentication source is unavailable');
-  }
-  const stat = lstatSync(absolute);
-  if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(absolute) !== absolute) {
-    fail('The trusted Codex authentication source must be one exact regular file');
-  }
-  return absolute;
-}
-
-function fileDigest(path) {
-  return `sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`;
-}
-
-function metadataFingerprint(path) {
-  const stat = lstatSync(path);
-  return Object.freeze({
-    device: stat.dev,
-    inode: stat.ino,
-    mode: stat.mode,
-    size: stat.size,
-    modifiedMilliseconds: stat.mtimeMs,
-  });
-}
-
-function git(projectPath, arguments_) {
-  return successfulOutput(
-    run('git', arguments_, {
-      cwd: projectPath,
-      env: {
-        GIT_CONFIG_GLOBAL: '/dev/null',
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_OPTIONAL_LOCKS: '0',
-        LC_ALL: 'C',
-        PATH: process.env.PATH ?? '/usr/bin:/bin',
-      },
-    }),
-    'M2.5.1 demonstration Git preflight',
-  ).trim();
-}
-
-function projectObservation(projectPath, observeLocalCandidateSourceIdentity) {
-  const source = observeLocalCandidateSourceIdentity(projectPath);
-  return Object.freeze({
-    gitCommit: git(projectPath, ['rev-parse', 'HEAD']),
-    gitTree: git(projectPath, ['rev-parse', 'HEAD^{tree}']),
-    sourceTreeDigest: source.sourceTreeDigest,
-    sourceGitMetadataDigest: source.sourceGitMetadataDigest,
-    workingTreeState:
-      git(projectPath, ['status', '--porcelain=v2']).length === 0 ? 'clean' : 'modified',
-    projectTree: m251ProjectTreeIdentity(projectPath),
-  });
 }
 
 function createOwnedRoots(assessmentRoot, authSource, protectedCheckPath) {
@@ -264,10 +180,7 @@ function profileProjection(inspection, phaseDispatchEntryProjection, digests, co
 }
 
 function exactToolchain(profileAuthority, runtime) {
-  const pnpmVersion = successfulOutput(
-    run('corepack', ['pnpm', '--version']),
-    'M2.5.1 pnpm preflight',
-  ).trim();
+  const pnpmVersion = m251PnpmVersion(repositoryRoot);
   const installation = profileAuthority.installation.profile;
   return Object.freeze({
     nodeVersion: process.version,
@@ -363,10 +276,13 @@ async function main() {
   const protectedCheckPath = realpathSync(
     join(repositoryRoot, contract.demonstration.protectedCheck.assetPath),
   );
-  const authSource = exactAuthSource();
-  const authOpening = metadataFingerprint(authSource);
-  const protectedCheckOpening = fileDigest(protectedCheckPath);
-  const sourceOpening = exactSourceIdentity();
+  const authSource = m251ExactAuthSource(argument('--auth-source'));
+  const authOpening = m251MetadataFingerprint(authSource);
+  const protectedCheckOpening = m251FileDigest(protectedCheckPath);
+  const sourceOpening = m251ExactSourceIdentity(
+    repositoryRoot,
+    M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+  );
   const assessmentRoot = realpathSync(
     mkdtempSync(join(tmpdir(), 'codeclosure-m2-5-1-live-composition-')),
   );
@@ -394,7 +310,7 @@ async function main() {
         import('../apps/cli/dist/composition/m251-trusted-production-composition.js'),
       ]);
     const { createCliCommandId } = await import('../apps/cli/dist/composition/index.js');
-    const projectOpening = projectObservation(
+    const projectOpening = m251ProjectObservation(
       projectPath,
       workspace.observeLocalCandidateSourceIdentity,
     );
@@ -747,19 +663,25 @@ async function main() {
     reopenedComposition = undefined;
     const intakeRootsRemoved =
       !existsSync(intakeDescriptor.root) && !existsSync(reopenedDescriptor.root);
-    const projectClosing = projectObservation(
+    const projectClosing = m251ProjectObservation(
       projectPath,
       workspace.observeLocalCandidateSourceIdentity,
     );
     assertM251LiveCompositionProjectClosure(projectOpening, projectClosing);
-    const sourceClosingBeforeCleanup = exactSourceIdentity();
+    const sourceClosingBeforeCleanup = m251ExactSourceIdentity(
+      repositoryRoot,
+      M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+    );
     assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosingBeforeCleanup);
     const credentialUnchanged =
-      JSON.stringify(authOpening) === JSON.stringify(metadataFingerprint(authSource));
-    const protectedCheckUnchanged = protectedCheckOpening === fileDigest(protectedCheckPath);
+      JSON.stringify(authOpening) === JSON.stringify(m251MetadataFingerprint(authSource));
+    const protectedCheckUnchanged = protectedCheckOpening === m251FileDigest(protectedCheckPath);
     rmSync(assessmentRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
     const assessmentRootRemoved = !existsSync(assessmentRoot);
-    const sourceClosing = exactSourceIdentity();
+    const sourceClosing = m251ExactSourceIdentity(
+      repositoryRoot,
+      M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+    );
     assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosing);
     const cleanup = projectM251LiveCompositionCleanup({
       ownedProcessesShutdownClean:

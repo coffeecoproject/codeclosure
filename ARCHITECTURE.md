@@ -183,14 +183,21 @@ protocol-fixture full chain have deterministic coverage but no mandatory Live
 or milestone acceptance verdict. M2.5.1 Slice 4 is in progress through its
 prepared, content-free Intake execution-root descriptor and trusted pre-
 publication separation/cleanup boundary, focused non-authoritative metadata-
-only composition Receipt and strict expected-identity/privacy contract, and
-explicitly authorized real linked-path command. The command obtains retained
+only composition Receipt and strict expected-identity/privacy contract,
+explicitly authorized real linked-path command, and separately authorized
+metadata-only effective-containment probe. The linked command obtains retained
 authority through a narrow trusted-composition inspection boundary and
 receives Adapter-v2 and ordinary-Start metadata through non-authoritative in-
 memory observation callbacks; neither enters Domain, Runtime, Store, Audit,
-Evidence, or Acceptance authority. The command and deterministic observation-
-failure coverage are implemented, but the command has not been run Live;
-mandatory real user-path proof and assessment have not started.
+Evidence, or Acceptance authority. The containment probe independently binds
+the formal Profile inputs, separately validates the distinct `DISCOVERY` and
+`PLAN` App Server isolation entries, binds exact command observation, content-
+free denied-boundary opens, opening/closing filesystem identities, and cleanup.
+It is assessment evidence only and does not replace the linked chain or
+Candidate Manager-owned freeze-v2 authority. Both commands
+and their deterministic failure coverage are implemented, but neither command
+has been run Live; mandatory real user-path and effective-containment proof and
+assessment have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice

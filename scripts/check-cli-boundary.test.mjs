@@ -399,6 +399,45 @@ void test('M2.5.1 execution authority and B4 production consumers have exact nam
     ),
     [],
   );
+  assert.deepEqual(
+    violations(
+      "import type { CodexAdapterObservationV2 } from '@codeclosure/adapter-codex';",
+      m251CodexInvocationFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      "import { attemptId, workerEventId, type CommandId, type PolicyBundleId, type WorkflowId } from '@codeclosure/domain';",
+      m251ProductionCompositionFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      "import type { InstalledM251ExecutionAuthority } from './m251-execution-authority.js';",
+      m251ProductionCompositionFixturePath,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    violations(
+      [
+        'export interface M251TrustedProductionObservationSink {}',
+        'export interface M251TrustedProductionPhaseAuthority {}',
+        'export interface M251TrustedProductionInspection {}',
+      ].join('\n'),
+      m251ProductionCompositionFixturePath,
+    ),
+    [],
+  );
+  assert.equal(
+    violations(
+      "import type { CodexAdapterObservationV2 } from '@codeclosure/adapter-codex';",
+      compositionFixturePath,
+    ).length,
+    1,
+  );
   assert.equal(
     violations(
       "import { createM251TrustedCodexInvocation } from './m251-codex-worker-invocation.js';",

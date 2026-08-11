@@ -526,11 +526,18 @@ bounded Slice 3 `PASS` on 2026-08-11. The protocol fixture is not Live evidence.
 Slice 4 is in progress through B1's prepared, content-free Intake execution-
 root descriptor and trusted pre-publication separation/cleanup boundary, B2's
 focused non-authoritative metadata-only composition Receipt and strict
-expected-identity/privacy contract, and B3's explicitly authorized real linked-
+expected-identity/privacy contract, B3's explicitly authorized real linked-
 path command with composition-local metadata observation and narrow retained-
-authority inspection. B3 is implemented and deterministically tested but has
-not been run Live, so it is not mandatory real user-path evidence. Mandatory
-real user-path proof and milestone assessment have not started. The
+authority inspection, and B4's separately authorized metadata-only effective-
+containment probe. The probe binds the exact formal Profile, validated App
+Server isolation for the distinct `DISCOVERY` and `PLAN` phase entries, exact
+command observation, content-free denied-boundary opens, independent opening/
+closing filesystem identities, and cleanup without becoming product authority
+or replacing the formal linked chain or Candidate Manager-owned freeze-v2
+record. B3 and B4 are implemented and deterministically tested but neither has
+been run Live, so they are not mandatory real user-path or effective-
+containment evidence. Mandatory real user-path proof and milestone assessment
+have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and
