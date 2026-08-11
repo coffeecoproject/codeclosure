@@ -150,9 +150,11 @@ every implemented Slice 3 deterministic proof to its frozen owner and closes
 the Slice 3 documentation/review boundary. This bounded Slice 3 result is not
 real Codex dispatch or effective live containment evidence. Slice 4 is now in
 progress through B1's prepared, content-free Intake execution-root descriptor
-and trusted pre-publication separation/cleanup boundary; mandatory real user-
-path proof has not started, and Slice 5 canonical assessment/milestone review
-has not started. A real
+and trusted pre-publication separation/cleanup boundary plus B2's focused,
+non-authoritative metadata-only composition Receipt and strict identity/privacy
+contract. B2 performs no facade orchestration or Live operation. Mandatory real
+user-path proof has not started, and Slice 5 canonical assessment/milestone
+review has not started. A real
 pinned-version integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

@@ -524,8 +524,11 @@ production Fake fallback. B5 restored every implemented Slice 3 deterministic
 proof to its frozen owner, completed documentation closure, and issued a
 bounded Slice 3 `PASS` on 2026-08-11. The protocol fixture is not Live evidence.
 Slice 4 is in progress through B1's prepared, content-free Intake execution-
-root descriptor and trusted pre-publication separation/cleanup boundary.
-Mandatory real user-path proof and milestone assessment have not started. The
+root descriptor and trusted pre-publication separation/cleanup boundary plus
+B2's focused, non-authoritative metadata-only composition Receipt, expected-
+identity, and privacy contract. B2 performs no facade orchestration or Live
+operation. Mandatory real user-path proof and milestone assessment have not
+started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and
