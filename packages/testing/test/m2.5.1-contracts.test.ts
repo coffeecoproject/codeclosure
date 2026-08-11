@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { registerM251PhaseDispatchV3Proof } from './m2.5.1-phase-dispatch-v3.proof.ts';
+
+registerM251PhaseDispatchV3Proof('phase-dispatch-v3');
+
 import {
   intakeManifestId,
   intakeRunId,

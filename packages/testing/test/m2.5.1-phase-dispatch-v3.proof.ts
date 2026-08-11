@@ -122,34 +122,36 @@ function definition(): ExternalExecutionProfileDefinitionV3 {
   });
 }
 
-void test('[I-006][I-023] external Profile v3 decodes one exact canonical phase authority map', () => {
-  const decoded = decodeExternalExecutionProfileDefinition(definition());
-  assert.equal(decoded.schemaVersion, 3);
-  assert.deepEqual(decoded.workerPhases, workerPhases);
-  assert.deepEqual(
-    decoded.phaseDispatch.map((entry) => entry.phase),
-    workerPhases,
-  );
-  const projection = externalExecutionProfileDefinitionProjection(decoded);
-  assert.equal(Reflect.has(projection as object, 'configurationProfileDigest'), false);
-  assert.equal(Reflect.has(projection as object, 'permissionProfileId'), false);
+export function registerM251PhaseDispatchV3Proof(marker: 'phase-dispatch-v3'): void {
+  void test(`[I-006][I-023][M251-C09] ${marker} decodes one exact canonical phase authority map`, () => {
+    const decoded = decodeExternalExecutionProfileDefinition(definition());
+    assert.equal(decoded.schemaVersion, 3);
+    assert.deepEqual(decoded.workerPhases, workerPhases);
+    assert.deepEqual(
+      decoded.phaseDispatch.map((entry) => entry.phase),
+      workerPhases,
+    );
+    const projection = externalExecutionProfileDefinitionProjection(decoded);
+    assert.equal(Reflect.has(projection as object, 'configurationProfileDigest'), false);
+    assert.equal(Reflect.has(projection as object, 'permissionProfileId'), false);
 
-  const topLevel = decodeExecutionProfileDefinition({
-    id: executionProfileId('profile_m2-5-1-v3-contract'),
-    schemaVersion: 2,
-    version: 'codeclosure-m2-5-1-real-codex-profile-v1',
-    workerAdapter: 'trusted-external-worker',
-    workerAdapterVersion: 'v1',
-    candidateSource: 'controlled-copy-candidate',
-    candidateSourceVersion: 'v1',
-    verificationRunner: 'protected-local-verification',
-    verificationRunnerVersion: 'v1',
-    driverVersion: 'm2-5-1-driver-v1',
-    externalExecution: decoded,
+    const topLevel = decodeExecutionProfileDefinition({
+      id: executionProfileId('profile_m2-5-1-v3-contract'),
+      schemaVersion: 2,
+      version: 'codeclosure-m2-5-1-real-codex-profile-v1',
+      workerAdapter: 'trusted-external-worker',
+      workerAdapterVersion: 'v1',
+      candidateSource: 'controlled-copy-candidate',
+      candidateSourceVersion: 'v1',
+      verificationRunner: 'protected-local-verification',
+      verificationRunnerVersion: 'v1',
+      driverVersion: 'm2-5-1-driver-v1',
+      externalExecution: decoded,
+    });
+    assert.equal(topLevel.schemaVersion, 2);
+    assert.equal(topLevel.externalExecution.schemaVersion, 3);
   });
-  assert.equal(topLevel.schemaVersion, 2);
-  assert.equal(topLevel.externalExecution.schemaVersion, 3);
-});
+}
 
 void test('[I-023][I-027] external Profile v3 rejects reordered, missing, or incompatible phases', () => {
   const valid = definition();

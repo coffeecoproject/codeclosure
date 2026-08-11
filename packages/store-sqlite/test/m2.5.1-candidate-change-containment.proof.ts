@@ -887,265 +887,278 @@ function runToFreeze(
   });
 }
 
-void test('[I-005][I-006][I-008][I-009] C11 Profile freeze-v2 authority closes and strictly reopens without Fake evidence', (t) => {
-  const harness = runToFreeze(t, 'm251-freeze-v2-success', 'IN_SCOPE');
-  if (harness.kind !== 'FROZEN') {
-    assert.fail('Freeze-v2 success fixture stopped at PLAN source mismatch');
-  }
-  const generation = harness.store.getCandidateGeneration(harness.generationId);
-  assert.equal(generation?.state, CandidateGenerationState.FROZEN);
-  const evidence = harness.store.listEvidenceForGeneration(harness.generationId);
-  assert.equal(evidence.length, 1);
-  const freeze = evidence[0]?.record;
-  assert.equal(freeze?.kind, EvidenceKind.CANDIDATE_FREEZE);
-  assert.equal(freeze.schemaVersion, 2);
-  assert.equal(freeze.observation.schemaVersion, 2);
-  assert.deepEqual(
-    freeze.observation.changes.map((change) => change.path),
-    ['src/payment.ts'],
-  );
-  assert.equal(freeze.observation.baseSourceDigest, generation.baseDigest);
-  assert.equal(freeze.observation.firstSourceDigest, generation.frozenDigest);
-  assert.equal(freeze.observation.secondSourceDigest, generation.frozenDigest);
-  assert.equal(harness.store.listVerificationObligations(harness.goalIdentifier).length, 0);
-
-  harness.store.close();
-  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
-  t.after(() => reopened.close());
-  assert.equal(
-    reopened.getCandidateGeneration(harness.generationId)?.state,
-    CandidateGenerationState.FROZEN,
-  );
-  const reopenedEvidence = reopened.listEvidenceForGeneration(harness.generationId);
-  assert.equal(reopenedEvidence.length, 1);
-  const [reopenedFreeze] = reopenedEvidence;
-  assert.ok(reopenedFreeze);
-  assert.deepEqual(reopenedFreeze.record, freeze);
-});
-
-void test('[I-005][I-006][I-008][I-009][M251-F08][M251-X09] PLAN source mismatch closes atomically without Candidate authority', (t) => {
-  const harness = runToFreeze(t, 'm251-plan-source-not-current', 'PLAN_SOURCE_NOT_CURRENT');
-  if (harness.kind !== 'PLAN_SOURCE_MISMATCH') {
-    assert.fail('PLAN source mismatch fixture created Candidate authority');
-  }
-
-  const assertClosed = (store: typeof harness.store): void => {
-    const owner = store.getGoalWithWorkflow(harness.goalIdentifier);
-    assert.ok(owner);
-    assert.equal(owner.goal.status, GoalStatus.BLOCKED);
-    assert.equal(owner.workflow.phase, WorkflowPhase.PLAN);
-    assert.equal(owner.workflow.runStatus, RunStatus.FAILED);
-    assert.equal(
-      owner.workflow.suspendedReason,
-      WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT,
+export function registerM251CandidateFreezeSuccessProof(
+  marker: 'freeze-v2-runtime-store-evidence-closure',
+): void {
+  void test(`[I-005][I-006][I-008][I-009][M251-C11] ${marker} strictly reopens without Fake evidence`, (t) => {
+    const harness = runToFreeze(t, 'm251-freeze-v2-success', 'IN_SCOPE');
+    if (harness.kind !== 'FROZEN') {
+      assert.fail('Freeze-v2 success fixture stopped at PLAN source mismatch');
+    }
+    const generation = harness.store.getCandidateGeneration(harness.generationId);
+    assert.equal(generation?.state, CandidateGenerationState.FROZEN);
+    const evidence = harness.store.listEvidenceForGeneration(harness.generationId);
+    assert.equal(evidence.length, 1);
+    const freeze = evidence[0]?.record;
+    assert.equal(freeze?.kind, EvidenceKind.CANDIDATE_FREEZE);
+    assert.equal(freeze.schemaVersion, 2);
+    assert.equal(freeze.observation.schemaVersion, 2);
+    assert.deepEqual(
+      freeze.observation.changes.map((change) => change.path),
+      ['src/payment.ts'],
     );
-    assert.equal(owner.workflow.activeAttemptId, undefined);
-    assert.equal(owner.workflow.activeCandidateGenerationId, undefined);
-    const planAttempt = store.getAttempt(harness.planAttemptId);
-    assert.equal(planAttempt?.phase, WorkflowPhase.PLAN);
-    assert.equal(planAttempt.status, AttemptStatus.RESULT_RECORDED);
-    assert.equal(planAttempt.terminationReason, 'WORKER_RESULT:PROPOSALS');
-    assert.equal(store.getCandidateForGoal(harness.goalIdentifier), undefined);
-    assert.equal(store.listCheckSpecifications().length, 0);
-    assert.equal(store.listVerificationObligations(harness.goalIdentifier).length, 0);
+    assert.equal(freeze.observation.baseSourceDigest, generation.baseDigest);
+    assert.equal(freeze.observation.firstSourceDigest, generation.frozenDigest);
+    assert.equal(freeze.observation.secondSourceDigest, generation.frozenDigest);
+    assert.equal(harness.store.listVerificationObligations(harness.goalIdentifier).length, 0);
+
+    harness.store.close();
+    const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+    t.after(() => reopened.close());
     assert.equal(
-      store.getGoalStatusAuthority(harness.goalIdentifier)?.latestRecoveryReconciliation,
-      undefined,
+      reopened.getCandidateGeneration(harness.generationId)?.state,
+      CandidateGenerationState.FROZEN,
     );
-    const processed = store.getProcessedCommand(harness.transitionCommandId);
-    assert.ok(processed);
-    const outcome = decodeStoredCommandOutcome(processed.outcome);
-    assert.equal(outcome.disposition, StoredCommandDisposition.APPLIED);
-    assert.equal(outcome.output.ok, true);
-    assert.deepEqual(outcome.workflow, {
-      id: owner.workflow.id,
-      version: owner.workflow.version,
-      phase: WorkflowPhase.PLAN,
-      runStatus: RunStatus.FAILED,
+    const reopenedEvidence = reopened.listEvidenceForGeneration(harness.generationId);
+    assert.equal(reopenedEvidence.length, 1);
+    const [reopenedFreeze] = reopenedEvidence;
+    assert.ok(reopenedFreeze);
+    assert.deepEqual(reopenedFreeze.record, freeze);
+  });
+}
+
+export function registerM251PlanSourceGuardProof(
+  markers: Readonly<{
+    sourceCurrencyMarker: 'source-currency-and-plan-candidate-guard';
+    planMismatchMarker: 'plan-source-not-current';
+  }>,
+): void {
+  void test(`[I-005][I-006][I-008][I-009][M251-F08][M251-X09] ${markers.sourceCurrencyMarker} retains ${markers.planMismatchMarker} atomically`, (t) => {
+    const harness = runToFreeze(t, 'm251-plan-source-not-current', 'PLAN_SOURCE_NOT_CURRENT');
+    if (harness.kind !== 'PLAN_SOURCE_MISMATCH') {
+      assert.fail('PLAN source mismatch fixture created Candidate authority');
+    }
+
+    const assertClosed = (store: typeof harness.store): void => {
+      const owner = store.getGoalWithWorkflow(harness.goalIdentifier);
+      assert.ok(owner);
+      assert.equal(owner.goal.status, GoalStatus.BLOCKED);
+      assert.equal(owner.workflow.phase, WorkflowPhase.PLAN);
+      assert.equal(owner.workflow.runStatus, RunStatus.FAILED);
+      assert.equal(
+        owner.workflow.suspendedReason,
+        WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT,
+      );
+      assert.equal(owner.workflow.activeAttemptId, undefined);
+      assert.equal(owner.workflow.activeCandidateGenerationId, undefined);
+      const planAttempt = store.getAttempt(harness.planAttemptId);
+      assert.equal(planAttempt?.phase, WorkflowPhase.PLAN);
+      assert.equal(planAttempt.status, AttemptStatus.RESULT_RECORDED);
+      assert.equal(planAttempt.terminationReason, 'WORKER_RESULT:PROPOSALS');
+      assert.equal(store.getCandidateForGoal(harness.goalIdentifier), undefined);
+      assert.equal(store.listCheckSpecifications().length, 0);
+      assert.equal(store.listVerificationObligations(harness.goalIdentifier).length, 0);
+      assert.equal(
+        store.getGoalStatusAuthority(harness.goalIdentifier)?.latestRecoveryReconciliation,
+        undefined,
+      );
+      const processed = store.getProcessedCommand(harness.transitionCommandId);
+      assert.ok(processed);
+      const outcome = decodeStoredCommandOutcome(processed.outcome);
+      assert.equal(outcome.disposition, StoredCommandDisposition.APPLIED);
+      assert.equal(outcome.output.ok, true);
+      assert.deepEqual(outcome.workflow, {
+        id: owner.workflow.id,
+        version: owner.workflow.version,
+        phase: WorkflowPhase.PLAN,
+        runStatus: RunStatus.FAILED,
+      });
+
+      const publicApplication = createCodeClosureApplication({
+        store,
+        clock: Object.freeze({ now: () => createdAt }),
+        creationIds: new DeterministicIds('m251-plan-source-status'),
+        digests,
+        projectPaths: Object.freeze({ parseNormalizedAbsolute: (path: string) => path }),
+        execution: Object.freeze({
+          startGoal: () => Promise.reject(new Error('Status-only fixture cannot Start')),
+          resumeGoal: () => Promise.reject(new Error('Status-only fixture cannot Resume')),
+          cancelGoal: () => {
+            throw new Error('Status-only fixture cannot Cancel');
+          },
+        }),
+      });
+      const status = publicApplication.getGoalStatus(harness.goalIdentifier);
+      assert.equal(status.status, 'FOUND');
+      assert.equal(status.view.runStatus, RunStatus.FAILED);
+      const blocker = status.view.dominantBlocker;
+      assert.ok(blocker);
+      assert.equal(blocker.code, GoalDominantBlockerCode.WORKFLOW_FAILED);
+      assert.equal(blocker.detailCode, WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT);
+      assert.equal(status.view.nextSafeAction, GoalNextSafeAction.INSPECT_BLOCKER);
+    };
+
+    assertClosed(harness.store);
+    const replay = harness.runtime.requestPhaseTransition({
+      commandId: harness.transitionCommandId,
+      workflowId: harness.workflowIdentifier,
+      expectedWorkflowVersion: harness.expectedPlanWorkflowVersion,
+      requestedPhase: WorkflowPhase.IMPLEMENT,
+      reason: 'plan completed',
     });
+    assert.equal(replay.status, 'REPLAYED');
+    assertClosed(harness.store);
 
-    const publicApplication = createCodeClosureApplication({
+    harness.store.close();
+    const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
+    t.after(() => reopened.close());
+    assertClosed(reopened);
+  });
+}
+
+export function registerM251CandidateContainmentFailureProofs(): void {
+  void test('[I-006][I-009][I-027] reserved M2.5.1 Profile identity fails closed instead of selecting historical authority', (t) => {
+    const filename = temporaryDatabase(t, 'm251-profile-mismatch');
+    const store = openSqliteControlStore({ filename, now: () => createdAt });
+    const ids = new DeterministicIds('m251-profile-mismatch');
+    const authority = m251CandidateFreezeV2ProfileFixture(
+      'm251-profile-mismatch',
+      digests,
+      createdAt,
+    );
+    assert.equal(
+      store.installExternalBackendCapabilityRecord({
+        record: authority.capability,
+        auditEventId: ids.nextAuditEventId(),
+        payloadDigest: authority.capability.recordDigest,
+      }).status,
+      'INSTALLED',
+    );
+    const installer = createExecutionProfileInstaller({
       store,
       clock: Object.freeze({ now: () => createdAt }),
-      creationIds: new DeterministicIds('m251-plan-source-status'),
+      ids,
       digests,
-      projectPaths: Object.freeze({ parseNormalizedAbsolute: (path: string) => path }),
-      execution: Object.freeze({
-        startGoal: () => Promise.reject(new Error('Status-only fixture cannot Start')),
-        resumeGoal: () => Promise.reject(new Error('Status-only fixture cannot Resume')),
-        cancelGoal: () => {
-          throw new Error('Status-only fixture cannot Cancel');
-        },
-      }),
     });
-    const status = publicApplication.getGoalStatus(harness.goalIdentifier);
-    assert.equal(status.status, 'FOUND');
-    assert.equal(status.view.runStatus, RunStatus.FAILED);
-    const blocker = status.view.dominantBlocker;
-    assert.ok(blocker);
-    assert.equal(blocker.code, GoalDominantBlockerCode.WORKFLOW_FAILED);
-    assert.equal(blocker.detailCode, WorkflowIntegrityFailureReasonCode.PLAN_SOURCE_NOT_CURRENT);
-    assert.equal(status.view.nextSafeAction, GoalNextSafeAction.INSPECT_BLOCKER);
-  };
+    const incompatibleDefinition = Object.freeze({
+      ...authority.profile,
+      candidateSourceVersion: 'candidate-freeze-v1',
+    });
+    const rejected = installer.installExecutionProfile(incompatibleDefinition);
+    assert.equal(rejected.status, 'PROFILE_CONFLICT');
+    assert.match(rejected.message, /reserved M2\.5\.1 identity/u);
+    assert.equal(store.getExecutionProfile(authority.profile.id), undefined);
 
-  assertClosed(harness.store);
-  const replay = harness.runtime.requestPhaseTransition({
-    commandId: harness.transitionCommandId,
-    workflowId: harness.workflowIdentifier,
-    expectedWorkflowVersion: harness.expectedPlanWorkflowVersion,
-    requestedPhase: WorkflowPhase.IMPLEMENT,
-    reason: 'plan completed',
-  });
-  assert.equal(replay.status, 'REPLAYED');
-  assertClosed(harness.store);
+    const installed = installer.installExecutionProfile(authority.profile);
+    assert.equal(installed.status, 'INSTALLED');
+    store.close();
 
-  harness.store.close();
-  const reopened = openSqliteControlStore({ filename: harness.filename, now: () => createdAt });
-  t.after(() => reopened.close());
-  assertClosed(reopened);
-});
-
-void test('[I-006][I-009][I-027] reserved M2.5.1 Profile identity fails closed instead of selecting historical authority', (t) => {
-  const filename = temporaryDatabase(t, 'm251-profile-mismatch');
-  const store = openSqliteControlStore({ filename, now: () => createdAt });
-  const ids = new DeterministicIds('m251-profile-mismatch');
-  const authority = m251CandidateFreezeV2ProfileFixture(
-    'm251-profile-mismatch',
-    digests,
-    createdAt,
-  );
-  assert.equal(
-    store.installExternalBackendCapabilityRecord({
-      record: authority.capability,
-      auditEventId: ids.nextAuditEventId(),
-      payloadDigest: authority.capability.recordDigest,
-    }).status,
-    'INSTALLED',
-  );
-  const installer = createExecutionProfileInstaller({
-    store,
-    clock: Object.freeze({ now: () => createdAt }),
-    ids,
-    digests,
-  });
-  const incompatibleDefinition = Object.freeze({
-    ...authority.profile,
-    candidateSourceVersion: 'candidate-freeze-v1',
-  });
-  const rejected = installer.installExecutionProfile(incompatibleDefinition);
-  assert.equal(rejected.status, 'PROFILE_CONFLICT');
-  assert.match(rejected.message, /reserved M2\.5\.1 identity/u);
-  assert.equal(store.getExecutionProfile(authority.profile.id), undefined);
-
-  const installed = installer.installExecutionProfile(authority.profile);
-  assert.equal(installed.status, 'INSTALLED');
-  store.close();
-
-  const incompatibleDigest = digests.digest(executionProfileProjection(incompatibleDefinition));
-  const database = new Database(filename, { fileMustExist: true });
-  try {
-    database.exec('DROP TRIGGER execution_profiles_no_update');
-    database.exec('DROP TRIGGER audit_events_no_update');
-    const row = database
-      .prepare('SELECT canonical_content_json FROM execution_profiles WHERE id = ?')
-      .get(authority.profile.id) as { canonical_content_json: string } | undefined;
-    assert.ok(row !== undefined);
-    const canonicalContent = JSON.parse(row.canonical_content_json) as Record<string, unknown>;
-    canonicalContent['candidateSourceVersion'] = incompatibleDefinition.candidateSourceVersion;
-    database
-      .prepare(
-        `UPDATE execution_profiles
+    const incompatibleDigest = digests.digest(executionProfileProjection(incompatibleDefinition));
+    const database = new Database(filename, { fileMustExist: true });
+    try {
+      database.exec('DROP TRIGGER execution_profiles_no_update');
+      database.exec('DROP TRIGGER audit_events_no_update');
+      const row = database
+        .prepare('SELECT canonical_content_json FROM execution_profiles WHERE id = ?')
+        .get(authority.profile.id) as { canonical_content_json: string } | undefined;
+      assert.ok(row !== undefined);
+      const canonicalContent = JSON.parse(row.canonical_content_json) as Record<string, unknown>;
+      canonicalContent['candidateSourceVersion'] = incompatibleDefinition.candidateSourceVersion;
+      database
+        .prepare(
+          `UPDATE execution_profiles
             SET canonical_content_json = ?, profile_digest = ?
           WHERE id = ?`,
-      )
-      .run(JSON.stringify(canonicalContent), incompatibleDigest, authority.profile.id);
-    database
-      .prepare(
-        `UPDATE audit_events
+        )
+        .run(JSON.stringify(canonicalContent), incompatibleDigest, authority.profile.id);
+      database
+        .prepare(
+          `UPDATE audit_events
             SET payload_digest = ?
           WHERE aggregate_type = 'EXECUTION_PROFILE'
             AND aggregate_id = ?
             AND event_type = 'EXECUTION_PROFILE_INSTALLED'`,
-      )
-      .run(incompatibleDigest, authority.profile.id);
-  } finally {
-    database.close();
-  }
-  assert.throws(
-    () => openSqliteControlStore({ filename, now: () => createdAt }),
-    /reserved M2\.5\.1 identity/u,
-  );
-});
+        )
+        .run(incompatibleDigest, authority.profile.id);
+    } finally {
+      database.close();
+    }
+    assert.throws(
+      () => openSqliteControlStore({ filename, now: () => createdAt }),
+      /reserved M2\.5\.1 identity/u,
+    );
+  });
 
-void test('[I-005][I-008][I-009] freeze-v2 failures close atomically and strictly reopen', async (t) => {
-  const cases = [
-    {
-      fixture: 'OUT_OF_SCOPE',
-      failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
-      reason: 'CANDIDATE_CHANGE_OUTSIDE_ALLOWED_PATHS',
-    },
-    {
-      fixture: 'BASE_NOT_CURRENT',
-      failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
-      reason: 'CANDIDATE_FREEZE_BASE_NOT_CURRENT',
-    },
-    {
-      fixture: 'UNSTABLE',
-      failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
-      reason: 'SOURCE_CHANGED_DURING_FREEZE',
-    },
-    {
-      fixture: 'EMPTY',
-      failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
-      reason: 'CANDIDATE_CHANGE_SET_EMPTY',
-    },
-    {
-      fixture: 'DIGEST_SUBSTITUTION',
-      failureClass: AttemptFailureClass.PROTOCOL_ERROR,
-      reason: CandidateSourceFailureCode.FREEZE_OUTPUT_MALFORMED,
-    },
-    {
-      fixture: 'BINDING_MISMATCH',
-      failureClass: AttemptFailureClass.PROTOCOL_ERROR,
-      reason: CandidateSourceFailureCode.FREEZE_BINDING_MISMATCH,
-    },
-  ] as const satisfies readonly {
-    readonly fixture: Exclude<FreezeFixture, 'IN_SCOPE' | 'PLAN_SOURCE_NOT_CURRENT'>;
-    readonly failureClass: AttemptFailureClass;
-    readonly reason: string;
-  }[];
+  void test('[I-005][I-008][I-009] freeze-v2 failures close atomically and strictly reopen', async (t) => {
+    const cases = [
+      {
+        fixture: 'OUT_OF_SCOPE',
+        failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+        reason: 'CANDIDATE_CHANGE_OUTSIDE_ALLOWED_PATHS',
+      },
+      {
+        fixture: 'BASE_NOT_CURRENT',
+        failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+        reason: 'CANDIDATE_FREEZE_BASE_NOT_CURRENT',
+      },
+      {
+        fixture: 'UNSTABLE',
+        failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+        reason: 'SOURCE_CHANGED_DURING_FREEZE',
+      },
+      {
+        fixture: 'EMPTY',
+        failureClass: AttemptFailureClass.INTEGRITY_VIOLATION,
+        reason: 'CANDIDATE_CHANGE_SET_EMPTY',
+      },
+      {
+        fixture: 'DIGEST_SUBSTITUTION',
+        failureClass: AttemptFailureClass.PROTOCOL_ERROR,
+        reason: CandidateSourceFailureCode.FREEZE_OUTPUT_MALFORMED,
+      },
+      {
+        fixture: 'BINDING_MISMATCH',
+        failureClass: AttemptFailureClass.PROTOCOL_ERROR,
+        reason: CandidateSourceFailureCode.FREEZE_BINDING_MISMATCH,
+      },
+    ] as const satisfies readonly {
+      readonly fixture: Exclude<FreezeFixture, 'IN_SCOPE' | 'PLAN_SOURCE_NOT_CURRENT'>;
+      readonly failureClass: AttemptFailureClass;
+      readonly reason: string;
+    }[];
 
-  for (const entry of cases) {
-    await t.test(entry.fixture, (fixtureTest) => {
-      const namespace = `m251-freeze-v2-${entry.fixture.toLowerCase().replaceAll('_', '-')}`;
-      const harness = runToFreeze(fixtureTest, namespace, entry.fixture);
-      if (harness.kind !== 'FROZEN') {
-        assert.fail('Freeze failure fixture stopped at PLAN source mismatch');
-      }
-      const assertClosed = (store: typeof harness.store): void => {
-        const generation = store.getCandidateGeneration(harness.generationId);
-        assert.equal(generation?.state, CandidateGenerationState.INVALIDATED);
-        assert.equal(generation.invalidationReason, entry.reason);
-        const attempt = store.getAttempt(harness.freezeAttemptId);
-        assert.equal(attempt?.status, AttemptStatus.FAILED);
-        assert.equal(attempt.failureClass, entry.failureClass);
-        assert.equal(attempt.terminationReason, entry.reason);
-        const workflow = store.getWorkflow(harness.workflowIdentifier);
-        assert.equal(workflow?.phase, WorkflowPhase.SOURCE_FREEZE);
-        assert.equal(workflow.runStatus, RunStatus.FAILED);
-        assert.equal(workflow.activeAttemptId, undefined);
-        assert.equal(store.listEvidenceForGeneration(harness.generationId).length, 0);
-        assert.equal(store.listVerificationObligations(harness.goalIdentifier).length, 0);
-      };
+    for (const entry of cases) {
+      await t.test(entry.fixture, (fixtureTest) => {
+        const namespace = `m251-freeze-v2-${entry.fixture.toLowerCase().replaceAll('_', '-')}`;
+        const harness = runToFreeze(fixtureTest, namespace, entry.fixture);
+        if (harness.kind !== 'FROZEN') {
+          assert.fail('Freeze failure fixture stopped at PLAN source mismatch');
+        }
+        const assertClosed = (store: typeof harness.store): void => {
+          const generation = store.getCandidateGeneration(harness.generationId);
+          assert.equal(generation?.state, CandidateGenerationState.INVALIDATED);
+          assert.equal(generation.invalidationReason, entry.reason);
+          const attempt = store.getAttempt(harness.freezeAttemptId);
+          assert.equal(attempt?.status, AttemptStatus.FAILED);
+          assert.equal(attempt.failureClass, entry.failureClass);
+          assert.equal(attempt.terminationReason, entry.reason);
+          const workflow = store.getWorkflow(harness.workflowIdentifier);
+          assert.equal(workflow?.phase, WorkflowPhase.SOURCE_FREEZE);
+          assert.equal(workflow.runStatus, RunStatus.FAILED);
+          assert.equal(workflow.activeAttemptId, undefined);
+          assert.equal(store.listEvidenceForGeneration(harness.generationId).length, 0);
+          assert.equal(store.listVerificationObligations(harness.goalIdentifier).length, 0);
+        };
 
-      assertClosed(harness.store);
-      harness.store.close();
-      const reopened = openSqliteControlStore({
-        filename: harness.filename,
-        now: () => createdAt,
+        assertClosed(harness.store);
+        harness.store.close();
+        const reopened = openSqliteControlStore({
+          filename: harness.filename,
+          now: () => createdAt,
+        });
+        fixtureTest.after(() => reopened.close());
+        assertClosed(reopened);
       });
-      fixtureTest.after(() => reopened.close());
-      assertClosed(reopened);
-    });
-  }
-});
+    }
+  });
+}

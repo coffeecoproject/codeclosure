@@ -82,8 +82,10 @@ source snapshots for those two phases, real Candidate-bound Codex for
 at the governed `PLAN -> IMPLEMENT` boundary. The source checkout remains
 unreadable to candidate-free Codex.
 Accepted [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md)
-now binds the narrow project-source Context authority before that phase
-mapping is implemented.
+binds the narrow project-source Context authority used by the implemented
+Slice 3 phase mapping and trusted production composition. Its bounded review
+uses an explicit protocol fixture and does not prove the mandatory real Codex
+user path.
 Proposed M2.6 Frontstage handoff may begin only after that closure passes. It
 uses exactly one current user message through the existing public Intake
 facade; it does not concatenate chat, synthesize `USER_STATED` provenance, or
@@ -1747,8 +1749,10 @@ and Verification components remain explicit deterministic test infrastructure
 only. Accepted
 [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) closes the
 candidate-free project-read snapshot, Context, isolation, source-currency,
-configuration/instruction, cleanup, and recovery authority before production
-implementation.
+configuration/instruction, cleanup, and recovery authority. Slice 3 implements
+the deterministic trusted production composition under that boundary and
+passes its bounded protocol-fixture review; real Codex execution and the
+M2.5.1 milestone verdict remain pending.
 
 ### M2.6
 

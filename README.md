@@ -25,21 +25,18 @@ One later real pinned-version Intake test exposed a post-completion Adapter
 compatibility defect and confirmed that ordinary M2.5 governed Start still
 selects the M1 FakeWorker Profile rather than the real M2 Codex Profile.
 M2.5.1 Real Intake-to-Codex Composition Closure is therefore the current
-pre-M2.6 boundary. It will correct the versioned Intake profile and
-Adapter through an internal typed protocol projection, preserve the historical
-M2.5 verdict, and require real Answer-only, Intent-analysis, Materialization,
-ordinary Start, isolated-Candidate Codex Worker, protected-verification, and
-regression evidence. Its decision contract and candidate-free project-read ADR
-are accepted. The current contract selects the exact reviewed Codex `0.146.1`
-binary and protocol snapshot while preserving historical `0.146.0` authority;
-contract validation and the versioned Intake Adapter correction have passed
-offline closure review. The separate bounded real Intake compatibility slice
-now also passes its lower-client prerequisite plus real Answer-only, clear
-Intent, and ambiguous Intent paths with metadata-only evidence. The closure
-work remains in progress: deterministic phase dispatch has passed bounded
-review, and the trusted production graph plus deterministic full chain are
-implemented under bounded review without a Live claim. Proof/document closure,
-mandatory real user-path proof, and milestone assessment have not started.
+pre-M2.6 boundary. It has corrected the versioned Intake Profile and Adapter
+through an internal typed protocol projection while preserving the historical
+M2.5 verdict. Its decision contract and candidate-free project-read ADR are
+accepted, and the exact reviewed Codex `0.146.1` binary and protocol snapshot
+remain selected without reinterpreting historical `0.146.0` authority. The
+bounded real Intake compatibility path passes its lower-client prerequisite
+plus real Answer-only, clear Intent, and ambiguous Intent calls with metadata-
+only evidence. The deterministic trusted-composition boundary also passed a
+bounded review on 2026-08-11 using protocol fixtures, not Live evidence. The
+mandatory real Materialization-to-Start-to-isolated-Candidate Codex user path,
+protected verification and regression evidence, canonical assessment, and
+milestone review have not started.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

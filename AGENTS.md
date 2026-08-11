@@ -32,6 +32,40 @@ When repository documents disagree, use this order:
 Do not silently resolve a conflict by choosing the easier implementation.
 Record a new ADR when a durable architectural decision changes.
 
+## Change Scope and Engineering Quality
+
+- Optimize for the smallest coherent solution, not the smallest possible diff.
+  A coherent solution resolves the root cause, preserves the relevant
+  architectural boundaries, updates directly affected contracts and consumers,
+  and includes evidence that the requested outcome works.
+- “Minimal and focused” means avoiding unrelated work. It MUST NOT be used to
+  justify a partial fix, a surface-level workaround, duplicated policy,
+  bypassed abstractions, inconsistent state ownership, or known follow-up work
+  required to make the solution correct.
+- Before changing non-trivial behavior, identify the owning layer, root cause,
+  affected invariants or contracts, direct consumers, and the evidence needed
+  to prove completion.
+- If the current architecture is insufficient for a durable solution, make the
+  smallest structural improvement required by the requested outcome. Do not
+  preserve a deficient structure merely to reduce the number of changed files.
+- Prefer existing abstractions when they correctly represent the
+  responsibility. Introduce or refactor an abstraction only when the current
+  change would otherwise create duplicated logic, conflicting sources of
+  truth, leaky boundaries, or a known maintenance burden.
+- Do not add speculative abstractions, generalized frameworks, unrelated
+  cleanup, or flexibility for hypothetical future requirements. Improvements
+  that are useful but not required for the current outcome should be reported
+  separately.
+- Match validation scope to change scope. A narrow test can prove a narrow
+  behavior, but it cannot by itself prove a cross-layer or system-wide change.
+- Before finishing, verify that the root cause is addressed, directly affected
+  paths remain consistent, relevant tests or checks pass, and no temporary
+  workaround or unresolved structural debt has been introduced.
+- If the correct solution requires a materially broader product or architecture
+  decision beyond the user's requested outcome, explain the boundary and ask
+  for direction. Necessary structural work already implied by the requested
+  outcome does not require separate permission.
+
 ## Current Milestone Boundary
 
 The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
@@ -70,8 +104,9 @@ Slice 2 now adds a v3 Profile/Adapter identity, preserves Slice 1 v2 records
 without silent recall, and passes the explicitly authorized real Answer-only,
 clear Intent, and ambiguous Intent compatibility paths with metadata-only
 receipts, versioned strict structured-output and exact-source instruction
-contracts, and Runtime-owned exact retained-value matching. Slice 3 may begin,
-and is now in progress through its project-read/Cleanup foundation, nested
+contracts, and Runtime-owned exact retained-value matching. Slice 3 passed its
+bounded review on 2026-08-11. It implements the project-read/Cleanup authority,
+nested
 external-execution Profile v3, additive Intent/Record v2 authority with strict
 SQLite authorization/persistence/reopen, and the Adapter-boundary
 `CodexWorkerDirectiveV3`, `CodexAdapterObservationV2`, and versioned phase
@@ -100,15 +135,21 @@ local policy may admit the pinned best-effort `unknown` command action only for
 `IMPLEMENT`; that observation is not containment proof, and the later freeze-
 v2 result must succeed before Evidence can exist. This foundation has offline
 coverage but no `M251-C11` acceptance verdict.
-Fixture isolation selection is not effective live containment proof. B3 now
+Fixture isolation selection is not effective live containment proof. B3
 implements deterministic Driver Profile v3 dispatch for all selected Worker
 phases, Runtime-owned candidate-free pre/post-Turn source and snapshot currency,
 Intent/Record v2 authorization, and exact integrity-failure closure without a
-FakeWorker fallback; its bounded review has not yet issued a verdict. The
-Candidate-creation source-currency guard binds exact PLAN ProjectRead authority
-through preparation v2 and the Store commit; mismatch atomically retains
-`PLAN_SOURCE_NOT_CURRENT` without creating a Candidate. Trusted production
-composition, effective live containment, and milestone assessment have not
+FakeWorker fallback. The Candidate-creation source-currency guard binds exact
+PLAN ProjectRead authority through preparation v2 and the Store commit;
+mismatch atomically retains `PLAN_SOURCE_NOT_CURRENT` without creating a
+Candidate. B4 composes the trusted production graph and deterministic
+Intake-to-closeout chain through an explicit protocol fixture, ordinary Start,
+protected verification, Evidence, Acceptance, closeout, restart/replay, and
+terminal ProjectRead cleanup without a production Fake fallback. B5 restores
+every implemented Slice 3 deterministic proof to its frozen owner and closes
+the Slice 3 documentation/review boundary. This bounded Slice 3 result is not
+real Codex dispatch or effective live containment evidence. Slice 4 mandatory
+real user-path proof and Slice 5 canonical assessment/milestone review have not
 started. A real
 pinned-version integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
@@ -156,7 +197,8 @@ Goal to non-resumable `BLOCKED / INSPECT_BLOCKER`, and MUST NOT trigger
 automatic replan, phase rewind, or `goal resume` continuation. Accepted ADR
 0043 binds the candidate-free project-read snapshot, Context, isolation,
 source-currency, configuration/instruction, cleanup, and execution-record
-boundary before that composition is implemented. M2.5.1 MUST NOT
+boundary for the implemented deterministic Slice 3 composition; it does not by
+itself establish real Codex or effective live-containment proof. M2.5.1 MUST NOT
 rewrite the historical M2.5 review or add Frontstage, scheduling, Host,
 arbitrary-project verification, promotion, release, or deployment scope.
 

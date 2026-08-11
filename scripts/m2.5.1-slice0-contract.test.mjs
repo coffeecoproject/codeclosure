@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
 
@@ -23,6 +31,22 @@ function sortedUnique(values, name) {
 
 function assertStringSorted(values, name) {
   assert.deepEqual(values, [...values].sort(), `${name} must be string-sorted`);
+}
+
+function executableProofMarkerLine(sourceText, marker) {
+  return sourceText.split('\n').find((line) => {
+    const trimmed = line.trimStart();
+    if (
+      trimmed.startsWith('//') ||
+      trimmed.startsWith('/*') ||
+      trimmed.startsWith('*') ||
+      trimmed.startsWith('import ')
+    ) {
+      return false;
+    }
+    const markerIndex = line.indexOf(marker);
+    return markerIndex >= 0 && /['"`]/u.test(line.slice(0, markerIndex));
+  });
 }
 
 function notificationMethods() {
@@ -330,6 +354,62 @@ test('M251-S0-03 every acceptance row has one exact proof owner', () => {
     assert.equal(typeof owner, 'string');
     assert.notEqual(owner.trim(), '');
     assert.match(owner, /#/u);
+  }
+});
+
+test('M251-S3-01 implemented deterministic Slice 3 proof owners resolve exactly', () => {
+  assert.equal(
+    executableProofMarkerLine("// register('phase-dispatch-v3')", 'phase-dispatch-v3'),
+    undefined,
+  );
+  assert.equal(
+    executableProofMarkerLine("import './m2.5.1-phase-dispatch-v3.proof.ts'", 'phase-dispatch-v3'),
+    undefined,
+  );
+  assert.notEqual(
+    executableProofMarkerLine(
+      "registerM251PhaseDispatchV3Proof('phase-dispatch-v3')",
+      'phase-dispatch-v3',
+    ),
+    undefined,
+  );
+  const implementedRows = [
+    'M251-V06',
+    ...Array.from({ length: 11 }, (_, index) => `M251-C${String(index + 1).padStart(2, '0')}`),
+    'M251-X03',
+    'M251-X09',
+    'M251-X10',
+    'M251-X11',
+    ...Array.from({ length: 8 }, (_, index) => `M251-F${String(index + 4).padStart(2, '0')}`),
+  ];
+  for (const rowId of implementedRows) {
+    const owner = contract.proofOwners[rowId];
+    assert.equal(typeof owner, 'string', `${rowId} must retain its frozen proof owner`);
+    const separator = owner.indexOf('#');
+    const ownerPath = owner.slice(0, separator);
+    const marker = owner.slice(separator + 1);
+    assert.match(ownerPath, /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/u);
+    assert.match(marker, /^[a-z0-9.-]+$/u);
+    const resolvedOwner = resolve(repositoryRoot, ownerPath);
+    assert.equal(
+      resolvedOwner.startsWith(`${repositoryRoot}${sep}`),
+      true,
+      `${rowId} owner must stay inside the repository`,
+    );
+    const stat = lstatSync(resolvedOwner);
+    assert.equal(stat.isFile(), true, `${rowId} owner must be a regular file`);
+    assert.equal(stat.isSymbolicLink(), false, `${rowId} owner must not be a symbolic link`);
+    assert.equal(
+      realpathSync(resolvedOwner),
+      resolvedOwner,
+      `${rowId} owner must use its real path`,
+    );
+    const executableMarkerLine = executableProofMarkerLine(source(ownerPath), marker);
+    assert.notEqual(
+      executableMarkerLine,
+      undefined,
+      `${rowId} marker must participate in executable owner registration`,
+    );
   }
 });
 

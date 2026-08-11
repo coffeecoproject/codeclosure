@@ -80,8 +80,8 @@ disabled remote-control and rate-limit projections and applies completed-text
 requirements to an empty progressive message start, while the closed profile
 requests two deprecated Web Search feature keys. The
 [diagnostic](docs/reviews/m2.5-live-intake-compatibility-diagnostic.md) also
-confirms that ordinary Intake composition currently binds its governed Start
-preflight to the M1 FakeWorker Profile. The proposed
+confirms that ordinary M2.5 Intake composition binds its governed Start
+preflight to the M1 FakeWorker Profile. The
 [M2.5.1 implementation
 plan](docs/plans/m2.5.1-real-intake-codex-composition-closure.md) and
 [acceptance plan](docs/plans/m2.5.1-acceptance-plan.md) define the versioned
@@ -94,7 +94,7 @@ Audit, Evidence, or Acceptance authority. The correction does not change the
 historical M2.5 verdict or any authority owner. The formal composition target
 is not the existing mixed protected-demo assembly: that assembly selects
 external Codex only for `IMPLEMENT` and delegates candidate-free
-`DISCOVERY`/`PLAN` to `FakeWorker`. M2.5.1 instead proposes real candidate-free
+`DISCOVERY`/`PLAN` to `FakeWorker`. M2.5.1 instead selects real candidate-free
 Codex execution over exact Runtime-owned read-only selected-source snapshots
 for `DISCOVERY`/`PLAN`, real Candidate-bound Codex execution for `IMPLEMENT`, no
 production fake fallback, no source-checkout visibility, and no Candidate before
@@ -110,7 +110,7 @@ Outcome, and suppresses later filesystem work through exact Outcome replay.
 [ADR 0043](docs/adr/0043-candidate-free-codex-project-read-authority.md) is
 accepted and binds the project-read snapshot, Context, isolation, source-
 currency, configuration/instruction, cleanup, and execution-record boundary
-before that composition is implemented. The Slice 0 executable contract and
+for the implemented Slice 3 composition. The Slice 0 executable contract and
 proof-owner freeze now select the exact reviewed Codex `0.146.1` binary and
 protocol snapshot. Retained `0.146.0` M2/M2.5 authority remains historical and
 cross-version substitution fails closed. The Slice 0 closure review passed.
@@ -123,8 +123,8 @@ new wire contract, and lets a versioned Runtime projection policy derive only
 byte-identical retained-value matches as `USER_STATED`; non-matches remain
 model proposals and cannot satisfy Admission. Its explicit live command passes
 the lower-client prerequisite plus isolated Answer-only, clear Intent, and
-ambiguous Intent paths with metadata-only receipts. Slice 3 incrementally
-implements the project-read authority, read-only local Workspace,
+ambiguous Intent paths with metadata-only receipts. Slice 3 implements the
+project-read authority, read-only local Workspace,
 Context/Attempt binding, Store cleanup authority, Runtime cleanup coordination,
 the nested external-execution v3 phase-dispatch contract, and additive external
 Intent/Record v2 authority with strict SQLite authorization, persistence, and
@@ -147,8 +147,12 @@ Candidate creation, while mismatch atomically fails the Workflow with
 implementation now deterministically selects Profile v3 for all three Worker
 phases, authors Intent/Record v2, consumes the existing Adapter boundary, and
 closes candidate-free pre/post-Turn currency failures without a FakeWorker
-fallback. Its bounded review, trusted production composition, effective live
-containment, and mandatory live proof remain pending.
+fallback. B4 composes that Driver through the trusted production graph,
+ordinary Start, protected verification, Evidence, Acceptance, closeout,
+restart/replay, and terminal ProjectRead cleanup using only an explicit
+protocol fixture. B5 closed the frozen deterministic proof owners and issued a
+bounded Slice 3 `PASS` on 2026-08-11. Effective live containment and mandatory
+real user-path proof remain pending.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -167,14 +171,17 @@ The proposed [M2.7 Local Runtime Host contract](docs/runtime-host.md),
 and [acceptance plan](docs/plans/m2.7-acceptance-plan.md) separately define a
 post-M2.6 candidate for Host-owned detach/reconnect, one project controller
 plus read-only observers, and one started non-terminal Goal per exact project.
-M2.5.1 Slices 1 and 2 are complete, and Slice 3 has implemented its bounded
+M2.5.1 Slices 1 and 2 are complete, and Slice 3 passed its bounded review after
+implementing its
 project-read/cleanup, versioned external-execution, and Adapter-boundary
 foundation plus ADR 0044's additive Candidate freeze-v2 Domain/Runtime/Store/
-SQLite authority path with atomic Evidence and strict reopen. B3 now adds
+SQLite authority path with atomic Evidence and strict reopen. B3 adds
 deterministic Runtime source-currency enforcement and Driver Profile v3 phase
-dispatch, but its bounded review has not issued a verdict. The C11
-implementation has offline coverage but no acceptance verdict; trusted
-production composition and M2.5.1 assessment have not started.
+dispatch; B4 adds the trusted deterministic production composition; B5 closes
+its exact proof owners and documentation. The C11 implementation and
+protocol-fixture full chain have deterministic coverage but no mandatory Live
+or milestone acceptance verdict. M2.5.1 Slice 4 and assessment have not
+started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -803,8 +810,9 @@ identity-conflicting requests before the port, invokes only the exact unresolved
 Store Grant, strictly validates the Adapter observation, and returns the Store
 winner after an Outcome race. The local Adapter uses deterministic Grant-bound
 coordination and atomic exact-leaf effects across processes; incomplete or
-unclassifiable work leaves the same Grant unresolved. Real phase composition
-through the ordinary production assembly remains pending. The nested external-
+unclassifiable work leaves the same Grant unresolved. Deterministic phase
+composition through the ordinary production assembly is implemented; real
+Codex execution of that assembly remains pending. The nested external-
 execution v3 definition now records the
 exact canonical phase set, `ALL_SELECTED_ATTEMPTS`, and shared-versus-phase
 authority without duplication; strict installation/reopen rejects
@@ -813,9 +821,10 @@ source-kind substitution. The B3 Driver now selects that exact phase authority,
 authors Intent/Record v2 with one discriminated ProjectRead or Candidate source,
 and invokes the existing Adapter boundary without a FakeWorker fallback. The
 Runtime owns both candidate-free currency checkpoints and terminalizes exact
-drift or invalid-authority failures before stale results can be admitted. These
-deterministic paths remain under bounded review; the versioned contracts alone
-still do not authorize trusted production publication. The C11 Profile sub-contract now
+drift or invalid-authority failures before stale results can be admitted. B4
+publishes these deterministic paths only after trusted activation and startup
+reconciliation; passing its explicit protocol fixture does not authorize a
+Live claim. The C11 Profile sub-contract now
 selects a freeze-v2-only Candidate Check family without Fake Verification.
 Candidate Manager derives the stable base-to-current change set, Runtime owns
 the current Goal allowed-path disposition, Store recomputes the canonical
@@ -864,8 +873,9 @@ preparation carries the same exact PLAN authority and observed source
 projections into the Store-owned compound commit. This implements only the
 Candidate-creation source-currency boundary accepted under ADR 0043. B3 also
 implements deterministic candidate-free pre/post-Turn currency checkpoints and
-phase-specific external dispatch, but trusted production composition and live
-containment proof are not yet implemented.
+phase-specific external dispatch. B4 composes that path through the trusted
+production graph; B5 closes its frozen deterministic owners. Live containment
+proof is not yet implemented.
 
 ### Evidence Store
 

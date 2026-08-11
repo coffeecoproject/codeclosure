@@ -112,6 +112,13 @@ import {
 } from '@codeclosure/store-sqlite';
 import { DeterministicIds, testExecutionProfileDefinition } from '@codeclosure/testing';
 
+import { registerM251PlanSourceGuardProof } from './m2.5.1-candidate-change-containment.proof.ts';
+
+registerM251PlanSourceGuardProof({
+  sourceCurrencyMarker: 'source-currency-and-plan-candidate-guard',
+  planMismatchMarker: 'plan-source-not-current',
+});
+
 const digests = new CanonicalJsonSha256DigestProvider();
 const createdAt = isoTimestamp('2026-08-08T00:00:00.000Z');
 const startedAt = isoTimestamp('2026-08-08T00:00:01.000Z');
@@ -690,7 +697,7 @@ function createStartFixture(
   });
 }
 
-void test('project-read authority, protected Plan, Context v5, and Attempt Start commit and replay atomically', (t) => {
+void test('[M251-C08] atomic-attempt-context-read-authority commits and replays the exact project-read chain', (t) => {
   const fixture = createStartFixture(t, 'happy');
   const applied = fixture.store.commitContextBoundAttemptStart(fixture.input);
   assert.equal(applied.status, 'APPLIED');
@@ -961,7 +968,7 @@ void test('[I-006][I-008][I-009][I-023] external execution Intent/Record v2 bind
   assert.throws(() => openSqliteControlStore({ filename: fixture.filename, now: () => createdAt }));
 });
 
-void test('[I-006][I-008][I-009] active consumer history reopens and terminal authority issues one cleanup Grant', (t) => {
+void test('[I-006][I-008][I-009][M251-F09] snapshot-dispatch-crash-windows reopen consumed history before terminal cleanup', (t) => {
   const migrationsDirectory = migrationsThrough(t, '0032_external_execution_profile_v3.sql');
   const fixture = createStartFixture(t, 'terminal-cleanup', undefined, 1, migrationsDirectory);
   assert.equal(fixture.store.commitContextBoundAttemptStart(fixture.input).status, 'APPLIED');
@@ -1346,7 +1353,7 @@ for (const { step, namespace } of [
     namespace: 'rollback-record',
   },
 ] as const) {
-  void test(`failure at ${step} rolls back project-read, Plan, bindings, Context, Attempt, and command`, (t) => {
+  void test(`[M251-F09] snapshot-dispatch-crash-windows failure at ${step} rolls back project-read, Plan, bindings, Context, Attempt, and command`, (t) => {
     const fixture = createStartFixture(t, namespace, (observed) => {
       if (observed === step) {
         throw new Error(`injected ${step}`);
@@ -1370,7 +1377,7 @@ for (const { step, namespace } of [
   });
 }
 
-void test('reopen fails closed when retained project-read canonical JSON is rewritten', (t) => {
+void test('[M251-F06] strict-reopen-full-authority-chain rejects rewritten project-read authority', (t) => {
   const fixture = createStartFixture(t, 'corrupt');
   assert.equal(fixture.store.commitContextBoundAttemptStart(fixture.input).status, 'APPLIED');
   fixture.store.close();

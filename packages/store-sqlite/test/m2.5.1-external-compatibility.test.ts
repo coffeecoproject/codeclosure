@@ -218,7 +218,7 @@ function installAuthority(
   return Object.freeze({ profile: value.profile, profileDigest });
 }
 
-void test('[I-006][I-008] external Profile v3 installs, replays, and strictly reopens', (t) => {
+void test('[I-006][I-008][M251-V06] external-schema-compatibility installs, replays, and strictly reopens Profile v3', (t) => {
   const filename = temporaryDatabase(t, 'roundtrip');
   const installed = installAuthority(filename, 'external-v3-roundtrip');
 

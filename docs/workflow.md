@@ -85,8 +85,10 @@ existing M2 protected demo's FakeWorker delegation for the first two phases
 remains test composition and is not a permitted production fallback. Accepted
 [ADR 0043](adr/0043-candidate-free-codex-project-read-authority.md) now binds
 the project-source Context authority. The Candidate-creation guard and its
-failure closure are implemented; candidate-free pre/post-Turn currency and
-real phase dispatch remain pending.
+failure closure, candidate-free pre/post-Turn currency checks, and
+phase-specific external dispatch are implemented. Slice 3's trusted production
+composition passed its bounded deterministic review using an explicit protocol
+fixture; real Codex execution of that composition remains pending.
 
 Proposed M2.6 Frontstage work adds no Workflow phase or
 writer: authorized actions would invoke only existing public Runtime commands,

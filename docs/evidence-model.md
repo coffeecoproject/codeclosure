@@ -48,8 +48,11 @@ Candidate, digest, path, Check, and Attempt relationships; SQLite guards their
 retained shape, cross-record bindings, audit, and atomicity; and the existing
 source-freeze transaction persists Candidate/Attempt/Workflow state, Evidence,
 eligibility, audits, and command Outcome atomically. Strict reopen repeats the
-Store validation. This adds no Evidence kind, does not reinterpret
-historical freeze schema version 1, and has no M2.5.1 acceptance verdict.
+Store validation. This adds no Evidence kind, does not reinterpret historical
+freeze schema version 1, and grants no new Evidence authority. The Slice 3
+trusted deterministic composition carries this Evidence through the existing
+Acceptance path with an explicit protocol fixture; it has no real-Codex or
+M2.5.1 milestone acceptance verdict.
 Proposed M2.6 Frontstage messages, routes, answers, focus,
 pending actions, Goal summaries, and notifications add no Evidence kind or
 eligibility path.

@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AttemptFailureClass,
   AttemptStatus,
+  CandidateGenerationState,
   ExternalBackendCapability,
   ExternalBackendCapabilityClassification,
   ExternalExecutionState,
@@ -2122,7 +2123,7 @@ function m251B4Clock(
 function createM251B4CompositionScenario(
   t: TestContext,
   namespace: string,
-  implementationResult: 'CORRECT' | 'VERIFICATION_REJECTED' = 'CORRECT',
+  implementationResult: 'CONTAINMENT_FAILURE' | 'CORRECT' | 'VERIFICATION_REJECTED' = 'CORRECT',
 ): Readonly<{
   admittedUserContent: string;
   compositionOptions: CreateM251TrustedProductionCompositionOptions;
@@ -2342,7 +2343,7 @@ void test('[M251-B4] trusted production composition closes the deterministic Int
   assert.equal(fixture.observation().prepareCount, 3);
 });
 
-void test('[M251-B4] protected verification rejection remains repair-required without fallback', async (t) => {
+void test('[M251-B4][M251-F05] protected-verification-rejection remains repair-required without fallback', async (t) => {
   const scenario = createM251B4CompositionScenario(
     t,
     'm251-b4-verification-rejected',
@@ -2380,6 +2381,60 @@ void test('[M251-B4] protected verification rejection remains repair-required wi
     observeLocalCandidateSourceIdentity(scenario.sourceRoot),
     scenario.initialSource,
   );
+});
+
+void test('[M251-B5][M251-F04] real-worker-containment-failure invalidates the Candidate without fallback or Acceptance', async (t) => {
+  const scenario = createM251B4CompositionScenario(
+    t,
+    'm251-b5-containment-failure',
+    'CONTAINMENT_FAILURE',
+  );
+  const composition = createM251TrustedProductionComposition(scenario.compositionOptions);
+  t.after(() => composition.close());
+  const result = await composition.intakeApplication.submit({
+    commandId: commandId('command_m251-b5-containment-failure-submit'),
+    interactionAction: IntakeInteractionAction.MATERIALIZE_ONLY,
+    admittedUserContent: scenario.admittedUserContent,
+    declaredProjectPath: scenario.sourceRoot,
+  });
+  assert.equal(result.kind, 'OUTCOME');
+  assert.equal(result.outcome.result.kind, 'MATERIALIZED');
+  const started = await composition.application.startGoal({
+    commandId: commandId('command_m251-b5-containment-failure-start'),
+    goalId: result.outcome.result.materializedGoalRef.goalId,
+    expectedGoalRevision: result.outcome.result.materializedGoalRef.goalRevision,
+    expectedWorkflowVersion: result.outcome.result.materializedGoalRef.workflowVersion,
+  });
+  assert.equal(started.command.status, 'APPLIED');
+  assert.equal(started.drive?.stopReason, WorkflowDriveStopReason.FAILED);
+  assert.equal(started.drive.detailCode, 'CANDIDATE_CHANGE_OUTSIDE_ALLOWED_PATHS');
+  const status = composition.application.getGoalStatus(
+    result.outcome.result.materializedGoalRef.goalId,
+  );
+  assert.equal(status.status, 'FOUND');
+  assert.ok(status.view.activeCandidateRef);
+  assert.equal(status.view.activeCandidateRef.state, CandidateGenerationState.INVALIDATED);
+  assert.equal(status.view.technicalCloseout, false);
+  assert.equal(status.view.acceptanceSummary, undefined);
+  assert.equal(status.view.closeoutRef, undefined);
+  assert.equal(scenario.fixture.observation().prepareCount, 3);
+  assert.equal(scenario.fixture.observation().releaseCount, 3);
+  assert.deepEqual(
+    observeLocalCandidateSourceIdentity(scenario.sourceRoot),
+    scenario.initialSource,
+  );
+  const invalidatedGenerationId = status.view.activeCandidateRef.generationId;
+  composition.close();
+  const reopened = openSqliteControlStore({
+    filename: join(scenario.compositionOptions.roots.authorityHome, 'state.sqlite'),
+    now: () => fixedTime,
+  });
+  t.after(() => reopened.close());
+  assert.equal(
+    reopened.getCandidateGeneration(invalidatedGenerationId)?.state,
+    CandidateGenerationState.INVALIDATED,
+  );
+  assert.equal(reopened.listEvidenceForGeneration(invalidatedGenerationId).length, 0);
 });
 
 void test('[M251-B4] formal composition preserves PLAN_SOURCE_NOT_CURRENT without Candidate or fallback', async (t) => {

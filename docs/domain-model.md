@@ -128,8 +128,12 @@ M1/M2 meaning. The Adapter-local policy may admit the pinned best-effort
 not the activity observation, decides containment and fails without Evidence
 on mismatch. B3 now implements deterministic external phase dispatch and
 Runtime-owned candidate-free pre/post-Turn source/snapshot currency closure.
-Its bounded review, trusted production composition, real Codex dispatch, and
-`M251-C11` acceptance verdict remain pending.
+B4 publishes that Driver through the trusted production composition, ordinary
+Start, protected verification, Evidence, Acceptance, and closeout path; B5
+closes the exact frozen deterministic proof owners. The bounded Slice 3 review
+passed on 2026-08-11 using an explicit protocol fixture. Real Codex dispatch
+through this composition and the milestone-level `M251-C11` verdict remain
+pending.
 The implemented Candidate-creation source-currency path uses the existing
 Workflow integrity event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
@@ -1134,8 +1138,10 @@ implemented Adapter-boundary v3 directive/v2 observation/activity policy do
 not themselves authorize real dispatch. The B3 Driver implementation now
 selects the exact Profile v3 phase entry and Intent/Record v2 source member for
 deterministic dispatch, with Runtime-owned pre/post-Turn currency closure and
-no FakeWorker fallback. That implementation remains under bounded review and
-does not establish trusted production composition or live containment.
+no FakeWorker fallback. B4 composes that path through the trusted production
+graph, and B5 closes its deterministic proof owners. The bounded Slice 3
+`PASS` proves only the explicit protocol-fixture path; it does not establish
+live Codex execution or effective live containment.
 
 Accepted ADR 0044 additively assigns M2.5.1 actual-change containment to
 Candidate Manager's existing `SOURCE_FREEZE` boundary. The implemented schema-
@@ -1746,7 +1752,7 @@ describes.
 | Candidate source | worker | Candidate integrity policy | Candidate Manager / permitted worker path |
 | Candidate workspace lease, reconciliation snapshot, and cleanup grant — local adapter implemented in M2 Slice 3; persistence/composition planned | trusted workspace composition over persisted Candidate/Workflow authority | Workflow Runtime, Candidate Manager, containment and cleanup policy | Runtime-coordinated workspace adapter; immutable lease/snapshot versions and one-time cleanup grants |
 | Candidate stable change set — implemented M2.5.1 Slice 3 foundation; acceptance pending | Candidate Manager comparison of the persisted base manifest with equal stable source-freeze manifests | Workflow Runtime derives exact current Goal allowed-path disposition; Store recomputes canonical Profile/Candidate/digest/path/Check/Attempt relationships; SQLite guards retained shape, cross-record bindings, audit, and atomicity | Additive schema-version-2 freeze observation/Evidence in the existing atomic source-freeze transaction with Store-validated strict reopen; historical v1 remains separate and no Adapter or Worker gains containment, Evidence, or completion authority |
-| Project-source read and Cleanup authority — implemented M2.5.1 Slice 3 foundation plus B3 deterministic dispatch; production publication pending | Goal scope, Candidate Manager observation, strict persisted project-read authority, Store-derived authority snapshot, exact cleanup records, and exact unresolved-Grant request | Workflow Runtime for project-read/Context/Attempt composition and the two exact currency checkpoints; trusted Runtime Cleanup coordinator for exact cleanup-request admission; Candidate Manager, Store canonical/relationship backstops, and Adapter-local physical classification | Store atomically persists the Runtime-authored project-read record plus Context/Attempt/Workflow/command/audits and exact integrity failure; the Store also persists the monotonic snapshot and consume-once Grant; the trusted Runtime Cleanup coordinator alone invokes the exact admitted port request; Store atomically closes Observation/Outcome/audit/consumption, and strict reopen/replay suppresses later filesystem work |
+| Project-source read and Cleanup authority — implemented M2.5.1 Slice 3, including deterministic trusted composition; live proof pending | Goal scope, Candidate Manager observation, strict persisted project-read authority, Store-derived authority snapshot, exact cleanup records, and exact unresolved-Grant request | Workflow Runtime for project-read/Context/Attempt composition and the two exact currency checkpoints; trusted Runtime Cleanup coordinator for exact cleanup-request admission; Candidate Manager, Store canonical/relationship backstops, and Adapter-local physical classification | Store atomically persists the Runtime-authored project-read record plus Context/Attempt/Workflow/command/audits and exact integrity failure; the Store also persists the monotonic snapshot and consume-once Grant; the trusted Runtime Cleanup coordinator alone invokes the exact admitted port request; Store atomically closes Observation/Outcome/audit/consumption, and strict reopen/replay suppresses later filesystem work |
 | Acceptance-critical Verification Plan and protected-asset manifest — implemented M2 Slice 7 | trusted composition before first Worker dispatch | Workflow Runtime, Policy, and Store canonical binding checks | Runtime-coordinated immutable Store transaction; never Worker-writable |
 | Evidence observation | runner / adapter | Evidence validator | Evidence Store, immutable after validation |
 | Evidence payload — implemented in M2 Slice 4 | bounded verifier byte observation | Runtime digest/content validation plus Store backstop | Runtime-coordinated immutable SQLite payload transaction |

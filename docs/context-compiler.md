@@ -57,8 +57,10 @@ at the project-read audit and record boundaries. Adapter-boundary phase-
 specific directive/observation handling now consumes the complete strictly
 decoded retained record, recomputes its canonical digest, cross-binds it to the
 Context, and projects only ID/digest/cwd into its receipt. Cleanup persistence
-is implemented separately; Runtime phase dispatch, pre/post-dispatch source/
-snapshot checks, and real composition remain pending. The
+is implemented separately. Runtime phase dispatch, pre/post-dispatch source/
+snapshot checks, and trusted production composition are implemented and passed
+the bounded Slice 3 review with an explicit protocol fixture; real Codex
+execution of that composition remains pending. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.

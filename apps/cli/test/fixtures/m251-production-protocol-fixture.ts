@@ -165,7 +165,7 @@ function rejectedPaymentSource(): string {
 export function createM251ProductionProtocolFixtureActivation(
   input: Readonly<{
     candidateWorkspaceRoot: string;
-    implementationResult?: 'CORRECT' | 'VERIFICATION_REJECTED';
+    implementationResult?: 'CONTAINMENT_FAILURE' | 'CORRECT' | 'VERIFICATION_REJECTED';
     operationRoots: readonly string[];
     phaseForbiddenRoots: Readonly<
       Record<
@@ -419,6 +419,12 @@ export function createM251ProductionProtocolFixtureActivation(
                         ? rejectedPaymentSource()
                         : correctedPaymentSource(),
                     );
+                    if (input.implementationResult === 'CONTAINMENT_FAILURE') {
+                      writeFileSync(
+                        `${lease.root}/src/outside.js`,
+                        'export const outsideGoalScope = true;\n',
+                      );
+                    }
                   }
                   const event = eventFor(workerRequest);
                   phaseRuns.push(workerRequest.contextPackage.phase);

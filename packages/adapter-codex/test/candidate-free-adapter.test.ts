@@ -1047,7 +1047,7 @@ void test('[I-023][I-027][M251-C10] v3 IMPLEMENT rejects a lease missing a phase
   );
 });
 
-void test('[I-023][M251-C10] v3 disabled-feature contract preserves only bounded command execution', () => {
+void test('[I-023][M251-C10][M251-X10] configuration-instruction-containment preserves only bounded command execution', () => {
   assert.equal(CODEX_M251_WORKER_DISABLED_FEATURES.includes('shell_tool'), false);
   assert.equal(CODEX_M251_WORKER_DISABLED_FEATURES.includes('unified_exec'), false);
   assert.equal(CODEX_M251_WORKER_DISABLED_FEATURES.includes('search_tool'), false);
@@ -1102,7 +1102,7 @@ void test('[I-023][M251-C10][M251-C11] activity-policy digest binds the Slice 0 
   );
 });
 
-void test('[I-023][M251-C10][M251-X11] candidate-free policy admits only snapshot-read command activity', () => {
+void test('[I-023][M251-C10][M251-X11] worker-activity-policy-refinement admits only snapshot-read phase activity', () => {
   const selected = directive().directive;
   const policy = codexWorkerActivityPolicyV1(selected);
   assert.deepEqual(
@@ -1148,7 +1148,7 @@ void test('[I-023][M251-C10][M251-X11] candidate-free policy admits only snapsho
   );
 });
 
-void test('[I-023][M251-C10][M251-X11] Candidate policy confines file changes to Goal allowed paths', () => {
+void test('[I-023][M251-C10][M251-X11] phase-item-effect-containment confines Candidate file changes to Goal allowed paths', () => {
   const policy = Object.freeze({
     schemaVersion: 1 as const,
     id: CODEX_M251_WORKER_ACTIVITY_POLICY_ID,

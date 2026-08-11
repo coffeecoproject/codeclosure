@@ -518,11 +518,12 @@ processed-command replay, strict reopen, and `BLOCKED / INSPECT_BLOCKER`
 projection. B3 implements deterministic Driver Profile v3 dispatch,
 Intent/Record v2 authorization, and Runtime-owned candidate-free pre/post-Turn
 source and snapshot currency with no FakeWorker fallback, and its bounded
-review passed. B4 now composes the trusted production graph and deterministic
-Intake-to-closeout chain under bounded review, including terminal ProjectRead
-cleanup and no production Fake fallback; its protocol fixture is not Live
-evidence. B5 closure, mandatory real user-path proof, and milestone assessment
-have not started. The
+review passed. B4 composes the trusted production graph and deterministic
+Intake-to-closeout chain, including terminal ProjectRead cleanup and no
+production Fake fallback. B5 restored every implemented Slice 3 deterministic
+proof to its frozen owner, completed documentation closure, and issued a
+bounded Slice 3 `PASS` on 2026-08-11. The protocol fixture is not Live evidence;
+mandatory real user-path proof and milestone assessment have not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and
