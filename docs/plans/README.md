@@ -28,6 +28,7 @@ and proposed ADRs are not binding.
 - [M2.5 milestone acceptance plan](m2.5-acceptance-plan.md)
 - [M2.5.1 Real Intake-to-Codex Composition Closure](m2.5.1-real-intake-codex-composition-closure.md)
 - [M2.5.1 Slice 0 contract and proof-owner freeze](m2.5.1-slice0-contract.md)
+- [M2.5.1 Slice 4 effective read-containment closure plan](m2.5.1-slice4-effective-read-containment-closure.md)
 - [M2.5.1 milestone acceptance plan](m2.5.1-acceptance-plan.md)
 - [M2.6 Unified Frontstage Interaction and Control](m2.6-unified-frontstage-interaction.md)
 - [M2.6 milestone acceptance plan](m2.6-acceptance-plan.md)

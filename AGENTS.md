@@ -160,10 +160,17 @@ phase-entry isolation, binds exact command observation, content-free denied-
 boundary opens, independent filesystem identities, and cleanup; it is
 assessment evidence only and cannot replace B3's formal chain or Candidate
 Manager-owned freeze-v2 authority. B3 and B4 are implemented and
-deterministically tested but neither has been run Live; they are not real user-
-path or effective-containment evidence. Mandatory real user-path proof has not
-started, and Slice 5 canonical assessment/milestone review has not started. A
-real pinned-version integration test found that
+deterministically tested. An explicitly authorized initial B5 diagnostic later
+ran, but the corrected direct pinned App Server `command/exec` probe failed
+closed because candidate-free `readOnly` could read a content-free Authority
+Home sentinel. The earlier Intake and linked-composition diagnostics are not
+final evidence after source changes, effective read containment is unproven,
+and the failed ADR 0043 containment requirement blocks B5. The Slice 4
+effective read-containment closure plan sequences the resolution but supplies
+no route-selection or execution authority.
+Mandatory passing real user-path proof remains unestablished, and Slice 5
+canonical assessment/milestone review has not started. A real pinned-version
+integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
 configuration itself requests two deprecated Web Search feature keys. The same

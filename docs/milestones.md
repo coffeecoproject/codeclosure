@@ -534,10 +534,16 @@ Server isolation for the distinct `DISCOVERY` and `PLAN` phase entries, exact
 command observation, content-free denied-boundary opens, independent opening/
 closing filesystem identities, and cleanup without becoming product authority
 or replacing the formal linked chain or Candidate Manager-owned freeze-v2
-record. B3 and B4 are implemented and deterministically tested but neither has
-been run Live, so they are not mandatory real user-path or effective-
-containment evidence. Mandatory real user-path proof and milestone assessment
-have not started. The
+record. B3 and B4 are implemented and deterministically tested. An explicitly
+authorized initial B5 diagnostic later ran, but the corrected direct pinned App
+Server `command/exec` probe failed closed because candidate-free `readOnly`
+could read a content-free Authority Home sentinel. Earlier Intake and linked-
+composition diagnostics are not final evidence after source changes. Effective
+read containment and mandatory passing real user-path proof remain
+unestablished, and the failed ADR 0043 containment requirement blocks B5. The
+[Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
+sequences the resolution but supplies no route-selection authority. Milestone
+assessment has not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

@@ -151,8 +151,12 @@ fallback. B4 composes that Driver through the trusted production graph,
 ordinary Start, protected verification, Evidence, Acceptance, closeout,
 restart/replay, and terminal ProjectRead cleanup using only an explicit
 protocol fixture. B5 closed the frozen deterministic proof owners and issued a
-bounded Slice 3 `PASS` on 2026-08-11. Effective live containment and mandatory
-real user-path proof remain pending.
+bounded Slice 3 `PASS` on 2026-08-11. An explicitly authorized initial Slice 4
+B5 diagnostic later failed closed because the pinned App Server candidate-free
+`readOnly` sandbox could read a content-free Authority Home sentinel. Effective
+read containment and mandatory passing real user-path proof remain pending
+under the
+[Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -194,10 +198,13 @@ the formal Profile inputs, separately validates the distinct `DISCOVERY` and
 `PLAN` App Server isolation entries, binds exact command observation, content-
 free denied-boundary opens, opening/closing filesystem identities, and cleanup.
 It is assessment evidence only and does not replace the linked chain or
-Candidate Manager-owned freeze-v2 authority. Both commands
-and their deterministic failure coverage are implemented, but neither command
-has been run Live; mandatory real user-path and effective-containment proof and
-assessment have not started.
+Candidate Manager-owned freeze-v2 authority. Both commands and their
+deterministic failure coverage are implemented. An explicitly authorized
+initial B5 diagnostic ran, but the corrected direct pinned App Server probe
+failed closed after reading a content-free Authority Home sentinel; earlier
+Intake and linked-composition diagnostics are not final evidence after source
+changes. Mandatory passing real user-path and effective-containment proof
+remain unestablished, B5 is blocked, and milestone assessment has not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -891,7 +898,9 @@ Candidate-creation source-currency boundary accepted under ADR 0043. B3 also
 implements deterministic candidate-free pre/post-Turn currency checkpoints and
 phase-specific external dispatch. B4 composes that path through the trusted
 production graph; B5 closes its frozen deterministic owners. Live containment
-proof is not yet implemented.
+proof is not yet implemented: the initial direct pinned App Server probe failed
+closed after reading a content-free Authority Home sentinel, so B5 remains
+blocked pending an enforceable read boundary.
 
 ### Evidence Store
 
