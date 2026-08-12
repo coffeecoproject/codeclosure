@@ -39,15 +39,16 @@ Candidate permission profiles are implemented and deterministically tested on
 the retained Codex `0.146.1` baseline. Their explicitly authorized complete
 Live containment matrix passed on exact source `7621c8b`, proving the bounded
 phase read/write perimeter without creating product authority. After a focused
-Live assessment-consumer identity correction, the restarted initial B5 real
-Intake, linked Materialization-to-Start-to-isolated-Candidate Codex path, and
-effective-containment diagnostics all passed on exact clean source `1b43dfc`.
-Those runs establish readiness only: the prepared-source quality gate, final
-unchanged-source command triad, bounded closure review, canonical assessment,
-and milestone review remain pending. Two later prepared-source linked attempts
-correctly stopped at protected verification. The executable demonstration
-contract now compatibly states the exact public result already enforced by the
-unchanged protected Check; the restarted Live sequence has not yet run.
+Live assessment-consumer identity correction, an initial B5 real Intake,
+linked Materialization-to-Start-to-isolated-Candidate Codex path, and effective-
+containment diagnostic triad passed on exact clean source `1b43dfc`. Two later
+prepared-source linked attempts on `aa2f29e` correctly stopped at protected
+verification. Executable demonstration contract v7 then compatibly added the
+exact public `duplicate_ignored` result already enforced by the unchanged
+protected Check, and the complete restarted v7 diagnostic triad passed on exact
+clean source `a3a5e9b`. These runs establish readiness only: the prepared-source
+quality gate, final unchanged-source command triad, bounded closure review,
+canonical assessment, and milestone review remain pending.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

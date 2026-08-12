@@ -552,14 +552,15 @@ authorized real containment matrix on exact source `7621c8b`; all three phase
 probes, denied-boundary checks, source and credential closure, cleanup, and
 privacy checks passed. The failed ADR 0043 production-containment requirement
 is therefore closed. After a focused Live composition assessment-consumer
-identity correction, the restarted initial B5 real Intake, causally linked
-composition, and effective-containment diagnostics all passed on exact clean
-source `1b43dfc`. They establish readiness only; the prepared-source quality
-gate, final unchanged-source command triad, and bounded Slice 4 review remain
-pending. Two later prepared-source linked paths on `aa2f29e` correctly failed
-closed at protected verification. Executable Slice 0 contract v7 now compatibly
-aligns the demonstration criterion with the unchanged protected Check's exact
-public `duplicate_ignored` result; B5 must restart from the beginning. The
+identity correction, an initial B5 real Intake, causally linked composition,
+and effective-containment diagnostic triad passed on exact clean source
+`1b43dfc`. Two later prepared-source linked paths on `aa2f29e` correctly failed
+closed at protected verification. Executable Slice 0 contract v7 then
+compatibly aligned the demonstration criterion with the unchanged protected
+Check's exact public `duplicate_ignored` result, and the complete restarted v7
+diagnostic triad passed on exact clean source `a3a5e9b`. These runs establish
+readiness only; the prepared-source quality gate, final unchanged-source
+command triad, and bounded Slice 4 review remain pending. The
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
 records that bounded result but supplies no execution authority. Passing linked
 real user-path proof remains unestablished as final Slice 4 evidence and

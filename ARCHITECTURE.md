@@ -167,14 +167,15 @@ is implemented and deterministically tested. Its explicitly authorized
 complete Live containment matrix passed on exact source `7621c8b`, so the
 failed production-containment requirement is closed and B5 may restart under the
 [Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
-After a focused correction to the Live composition assessment consumer, the
-restarted initial B5 real Intake, linked composition, and effective-containment
-diagnostics all passed on exact clean source `1b43dfc`. These diagnostics do not
-complete Slice 4: the prepared-source gate, final unchanged-source Live triad,
-and bounded review remain pending. Two later prepared-source linked paths
-correctly failed closed at protected verification. Executable demonstration
-contract v7 now aligns the user-stated criterion with the unchanged protected
-Check's exact public result; B5 must restart from the beginning.
+After a focused correction to the Live composition assessment consumer, an
+initial B5 real Intake, linked composition, and effective-containment diagnostic
+triad passed on exact clean source `1b43dfc`. Two later prepared-source linked
+paths on `aa2f29e` correctly failed closed at protected verification. Executable
+demonstration contract v7 then aligned the user-stated criterion with the
+unchanged protected Check's exact public result, and the complete restarted v7
+diagnostic triad passed on exact clean source `a3a5e9b`. These diagnostics do
+not complete Slice 4: the prepared-source gate, final unchanged-source Live
+triad, and bounded review remain pending.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation

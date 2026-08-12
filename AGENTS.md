@@ -179,17 +179,18 @@ credential, protected-asset, process, temporary-root, and privacy closure. The
 failed ADR 0043 production-containment requirement is therefore closed and B5
 may restart from the beginning; the Receipt remains assessment evidence and
 supplies no execution, Candidate, Evidence, Acceptance, or closeout authority.
-After a focused Live composition assessment-consumer identity correction, the
-restarted initial B5 real Intake, causally linked composition, and effective-
-containment diagnostics all passed on exact clean source `1b43dfc`. They are
-readiness diagnostics only; the prepared-source quality gate, final unchanged-
-source command triad, bounded Slice 4 review, and Slice 5 canonical assessment/
-milestone review have not started or completed. Two later prepared-source
-linked paths on `aa2f29e` correctly failed closed at protected verification.
-Executable Slice 0 contract v7 now compatibly adds the exact public
-`duplicate_ignored` result already required by the unchanged protected Check;
-v6 keeps its historical review meaning, B5 must restart from the beginning,
-and no final evidence is established. A real pinned-version
+After a focused Live composition assessment-consumer identity correction, an
+initial B5 real Intake, causally linked composition, and effective-containment
+diagnostic triad passed on exact clean source `1b43dfc`. Two later prepared-
+source linked paths on `aa2f29e` correctly failed closed at protected
+verification. Executable Slice 0 contract v7 then compatibly added the exact
+public `duplicate_ignored` result already required by the unchanged protected
+Check; v6 keeps its historical review meaning. The complete restarted v7
+diagnostic triad passed on exact clean source `a3a5e9b`. These are readiness
+diagnostics only; the prepared-source quality gate, final unchanged-source
+command triad, bounded Slice 4 review, and Slice 5 canonical assessment/
+milestone review have not started or completed, and no final evidence is
+established. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

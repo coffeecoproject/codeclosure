@@ -1743,12 +1743,13 @@ v2 the trusted new-operation selection. Historical Profile v1 remains exactly
 reopenable and is not silently recalled into v2; neither user text nor model
 output can select between them. The standalone complete Live containment
 matrix passed on source `7621c8b`; this is not passing linked Intake-to-closeout
-user-path evidence. The restarted initial B5 real Intake, linked composition,
-and containment diagnostics later passed on clean source `1b43dfc`; they remain
-readiness diagnostics until the final unchanged-source triad and bounded Slice
-4 review close. Two later prepared-source linked paths failed closed at the
-unchanged protected Check. Executable demonstration contract v7 now completes
-the exact user-stated observable criterion and requires a full B5 restart.
+user-path evidence. An initial B5 real Intake, linked composition, and
+containment diagnostic triad later passed on clean source `1b43dfc`. Two later
+prepared-source linked paths failed closed at the unchanged protected Check.
+Executable demonstration contract v7 then completed the exact user-stated
+observable criterion, and the complete restarted v7 diagnostic triad passed on
+exact clean source `a3a5e9b`. These runs remain readiness diagnostics until the
+final unchanged-source triad and bounded Slice 4 review close.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge
