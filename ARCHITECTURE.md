@@ -154,8 +154,13 @@ protocol fixture. B5 closed the frozen deterministic proof owners and issued a
 bounded Slice 3 `PASS` on 2026-08-11. An explicitly authorized initial Slice 4
 B5 diagnostic later failed closed because the pinned App Server candidate-free
 `readOnly` sandbox could read a content-free Authority Home sentinel. Effective
-read containment and mandatory passing real user-path proof remain pending
-under the
+production read containment and mandatory passing real user-path proof remain
+pending. A subsequent bounded, no-model capability matrix proved that retained
+Codex `0.146.1` enforces the required boundary through exact configured phase
+permission profiles; the defect is the current production mapping's generic
+Thread/Turn/command sandbox overrides and shared writable profile, not a
+missing backend capability. The additive Profile/Client/Adapter correction
+remains governed by the
 [Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
 
 The proposed [M2.6 Frontstage Interaction

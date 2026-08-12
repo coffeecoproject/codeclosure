@@ -164,10 +164,15 @@ deterministically tested. An explicitly authorized initial B5 diagnostic later
 ran, but the corrected direct pinned App Server `command/exec` probe failed
 closed because candidate-free `readOnly` could read a content-free Authority
 Home sentinel. The earlier Intake and linked-composition diagnostics are not
-final evidence after source changes, effective read containment is unproven,
-and the failed ADR 0043 containment requirement blocks B5. The Slice 4
-effective read-containment closure plan sequences the resolution but supplies
-no route-selection or execution authority.
+final evidence after source changes. A subsequent bounded, no-model capability
+investigation proved that retained Codex `0.146.1` enforces the required
+read/write matrix when exact configured ProjectRead and Candidate permission
+profiles are inherited instead of being replaced by generic request-level
+sandboxes. The production Profile/Client/Adapter mapping has not yet been
+corrected or formally re-proved, so the failed ADR 0043 production-containment
+requirement still blocks B5. The Slice 4 effective read-containment closure
+plan sequences that additive retained-version correction but supplies no
+execution authority.
 Mandatory passing real user-path proof remains unestablished, and Slice 5
 canonical assessment/milestone review has not started. A real pinned-version
 integration test found that

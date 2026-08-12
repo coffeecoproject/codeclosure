@@ -539,10 +539,16 @@ authorized initial B5 diagnostic later ran, but the corrected direct pinned App
 Server `command/exec` probe failed closed because candidate-free `readOnly`
 could read a content-free Authority Home sentinel. Earlier Intake and linked-
 composition diagnostics are not final evidence after source changes. Effective
-read containment and mandatory passing real user-path proof remain
-unestablished, and the failed ADR 0043 containment requirement blocks B5. The
+production read containment and mandatory passing real user-path proof remain
+unestablished. A subsequent bounded, no-model capability matrix proved that
+retained Codex `0.146.1` enforces the required boundary through exact
+configured phase permission profiles; the current production mapping instead
+uses generic Thread/Turn/command sandbox overrides and one shared writable
+profile. The failed ADR 0043 production-containment requirement therefore
+continues to block B5 until the additive Profile/Client/Adapter correction is
+implemented and formally re-proved. The
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
-sequences the resolution but supplies no route-selection authority. Milestone
+sequences the resolution but supplies no execution authority. Milestone
 assessment has not started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
