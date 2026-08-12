@@ -186,11 +186,11 @@ source linked paths on `aa2f29e` correctly failed closed at protected
 verification. Executable Slice 0 contract v7 then compatibly added the exact
 public `duplicate_ignored` result already required by the unchanged protected
 Check; v6 keeps its historical review meaning. The complete restarted v7
-diagnostic triad passed on exact clean source `a3a5e9b`. These are readiness
-diagnostics only; the prepared-source quality gate, final unchanged-source
-command triad, bounded Slice 4 review, and Slice 5 canonical assessment/
-milestone review have not started or completed, and no final evidence is
-established. A real pinned-version
+diagnostic triad passed on exact clean source `a3a5e9b`. The final prepared-
+source quality gate and ordered unchanged-source Live triad then passed on exact
+source `01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 may
+begin, but its canonical assessment and milestone review have not started;
+M2.5.1 is not complete and M2.6 remains blocked. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

@@ -46,9 +46,11 @@ prepared-source linked attempts on `aa2f29e` correctly stopped at protected
 verification. Executable demonstration contract v7 then compatibly added the
 exact public `duplicate_ignored` result already enforced by the unchanged
 protected Check, and the complete restarted v7 diagnostic triad passed on exact
-clean source `a3a5e9b`. These runs establish readiness only: the prepared-source
-quality gate, final unchanged-source command triad, bounded closure review,
-canonical assessment, and milestone review remain pending.
+clean source `a3a5e9b`. The final prepared-source quality gate and ordered
+unchanged-source Live triad then passed on exact source `01fd537`, and the
+bounded real user-path and failure-closure review issued `PASS`. The canonical
+M2.5.1 assessment and milestone review have not started; M2.5.1 is not complete
+and M2.6 remains blocked.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

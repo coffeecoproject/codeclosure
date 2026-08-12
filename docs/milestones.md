@@ -523,8 +523,9 @@ Intake-to-closeout chain, including terminal ProjectRead cleanup and no
 production Fake fallback. B5 restored every implemented Slice 3 deterministic
 proof to its frozen owner, completed documentation closure, and issued a
 bounded Slice 3 `PASS` on 2026-08-11. The protocol fixture is not Live evidence.
-Slice 4 is in progress through B1's prepared, content-free Intake execution-
-root descriptor and trusted pre-publication separation/cleanup boundary, B2's
+Slice 4 passed its bounded review on 2026-08-12. It implements B1's prepared,
+content-free Intake execution-root descriptor and trusted pre-publication
+separation/cleanup boundary, B2's
 focused non-authoritative metadata-only composition Receipt and strict
 expected-identity/privacy contract, B3's explicitly authorized real linked-
 path command with composition-local metadata observation and narrow retained-
@@ -539,8 +540,8 @@ authorized initial B5 diagnostic later ran, but the corrected direct pinned App
 Server `command/exec` probe failed closed because candidate-free `readOnly`
 could read a content-free Authority Home sentinel. Earlier Intake and linked-
 composition diagnostics are not final evidence after source changes. Effective
-production read containment and mandatory passing real user-path proof remain
-unestablished. A subsequent bounded, no-model capability matrix proved that
+production read containment and mandatory passing real user-path proof were
+unestablished at that point. A subsequent bounded, no-model capability matrix proved that
 retained Codex `0.146.1` enforces the required boundary through exact
 configured phase permission profiles; the pre-correction production mapping
 used generic Thread/Turn/command sandbox overrides and one shared writable
@@ -558,13 +559,15 @@ and effective-containment diagnostic triad passed on exact clean source
 closed at protected verification. Executable Slice 0 contract v7 then
 compatibly aligned the demonstration criterion with the unchanged protected
 Check's exact public `duplicate_ignored` result, and the complete restarted v7
-diagnostic triad passed on exact clean source `a3a5e9b`. These runs establish
-readiness only; the prepared-source quality gate, final unchanged-source
-command triad, and bounded Slice 4 review remain pending. The
+diagnostic triad passed on exact clean source `a3a5e9b`. The final prepared-
+source gate and ordered unchanged-source Live triad then passed on exact source
+`01fd537`, and the bounded Slice 4 review issued `PASS`. The
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
 records that bounded result but supplies no execution authority. Passing linked
-real user-path proof remains unestablished as final Slice 4 evidence and
-milestone assessment has not started. The
+real user-path and effective-containment proof is now established only as
+bounded Slice 4 evidence. Slice 5 may begin, but canonical milestone assessment
+and independent milestone review have not started; M2.5.1 remains incomplete.
+The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

@@ -154,8 +154,8 @@ protocol fixture. B5 closed the frozen deterministic proof owners and issued a
 bounded Slice 3 `PASS` on 2026-08-11. An explicitly authorized initial Slice 4
 B5 diagnostic later failed closed because the pinned App Server candidate-free
 `readOnly` sandbox could read a content-free Authority Home sentinel. Effective
-production read containment and mandatory passing real user-path proof remain
-pending. A subsequent bounded, no-model capability matrix proved that retained
+production read containment and mandatory passing real user-path proof were
+pending at that point. A subsequent bounded, no-model capability matrix proved that retained
 Codex `0.146.1` enforces the required boundary through exact configured phase
 permission profiles; the defect was the production mapping's generic Thread/
 Turn/command sandbox overrides and shared writable profile, not a missing
@@ -165,7 +165,7 @@ selector; its lower-Client command and Adapter Thread/Turn requests inherit
 that exact selected profile, while retained v1 remains unchanged. This mapping
 is implemented and deterministically tested. Its explicitly authorized
 complete Live containment matrix passed on exact source `7621c8b`, so the
-failed production-containment requirement is closed and B5 may restart under the
+failed production-containment requirement closed and permitted B5 to restart under the
 [Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
 After a focused correction to the Live composition assessment consumer, an
 initial B5 real Intake, linked composition, and effective-containment diagnostic
@@ -173,9 +173,11 @@ triad passed on exact clean source `1b43dfc`. Two later prepared-source linked
 paths on `aa2f29e` correctly failed closed at protected verification. Executable
 demonstration contract v7 then aligned the user-stated criterion with the
 unchanged protected Check's exact public result, and the complete restarted v7
-diagnostic triad passed on exact clean source `a3a5e9b`. These diagnostics do
-not complete Slice 4: the prepared-source gate, final unchanged-source Live
-triad, and bounded review remain pending.
+diagnostic triad passed on exact clean source `a3a5e9b`. The final prepared-
+source gate and ordered unchanged-source Live triad then passed on exact source
+`01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 may begin but
+its canonical assessment and milestone review have not started; M2.5.1 remains
+incomplete.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -203,7 +205,7 @@ deterministic Runtime source-currency enforcement and Driver Profile v3 phase
 dispatch; B4 adds the trusted deterministic production composition; B5 closes
 its exact proof owners and documentation. The C11 implementation and
 protocol-fixture full chain have deterministic coverage but no mandatory Live
-or milestone acceptance verdict. M2.5.1 Slice 4 is in progress through its
+or milestone acceptance verdict. M2.5.1 Slice 4 subsequently added its
 prepared, content-free Intake execution-root descriptor and trusted pre-
 publication separation/cleanup boundary, focused non-authoritative metadata-
 only composition Receipt and strict expected-identity/privacy contract,
@@ -227,12 +229,13 @@ deterministically tested across trusted composition, retained-v1 coexistence,
 lower Client, Adapter, SQLite/reopen, and the metadata-only containment probe.
 The corrected Profile then passed the complete explicitly authorized real
 containment matrix on exact source `7621c8b`, including source, credential,
-protected-asset, process, cleanup, and privacy closure. The restarted initial
-B5 real Intake, linked composition, and containment diagnostics then passed on
-exact clean source `1b43dfc`; they are readiness diagnostics only. Mandatory
-passing linked real user-path proof remains unestablished by final evidence,
-and the prepared-source gate, final unchanged-source triad, bounded Slice 4
-review, and milestone assessment have not completed.
+protected-asset, process, cleanup, and privacy closure. An initial B5 real
+Intake, linked composition, and containment diagnostic triad then passed on
+exact clean source `1b43dfc`; it remained readiness evidence only. After the
+prepared-source failures and executable demonstration-contract v7 correction,
+the final prepared-source gate and ordered unchanged-source Live triad passed
+on exact source `01fd537`. The bounded Slice 4 review issued `PASS`; Slice 5
+may begin, but canonical assessment and milestone review have not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -863,7 +866,8 @@ winner after an Outcome race. The local Adapter uses deterministic Grant-bound
 coordination and atomic exact-leaf effects across processes; incomplete or
 unclassifiable work leaves the same Grant unresolved. Deterministic phase
 composition through the ordinary production assembly is implemented; real
-Codex execution of that assembly remains pending. The nested external-
+Codex execution of that assembly remained pending at Slice 3 closure and was
+proved by the bounded Slice 4 path. The nested external-
 execution v3 definition now records the
 exact canonical phase set, `ALL_SELECTED_ATTEMPTS`, and shared-versus-phase
 authority without duplication; strict installation/reopen rejects
@@ -898,8 +902,8 @@ Context, and enforces the phase/source forbidden-root union without introducing
 a second persisted authority. Candidate directives bind the exact lease and
 use the same union rule. Adapter fixture proof selects candidate-free
 `readOnly` and Candidate-bound `workspaceWrite`, accepts only their respective
-proposal/completion result forms, and discards forbidden file-change results,
-but the mandatory live black-box containment proof remains pending. Accepted
+proposal/completion result forms, and discards forbidden file-change results.
+The mandatory live black-box containment proof later passed in Slice 4. Accepted
 [ADR 0044](docs/adr/0044-source-freeze-owned-candidate-change-containment.md)
 now permits the Adapter-local best-effort `unknown` command disposition only
 for Candidate-bound `IMPLEMENT`. Its additive schema-version-2 contract and
@@ -911,7 +915,8 @@ shape, cross-record bindings, audit, and atomicity; and the source-freeze
 transaction atomically retains Evidence before strict reopen repeats the Store
 checks. The notification is not containment proof, and a later freeze
 failure invalidates the Candidate without Evidence. Historical M1/M2 freeze
-schema version 1 remains unchanged. Full live black-box proof remains pending.
+schema version 1 remains unchanged. Full live black-box proof is established as
+bounded Slice 4 evidence, not as the M2.5.1 milestone verdict.
 The source
 checkout, `.git`,
 ignored/projection-excluded paths, authority, credentials, Candidate roots,

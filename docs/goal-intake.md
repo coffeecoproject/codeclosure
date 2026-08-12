@@ -1748,8 +1748,10 @@ containment diagnostic triad later passed on clean source `1b43dfc`. Two later
 prepared-source linked paths failed closed at the unchanged protected Check.
 Executable demonstration contract v7 then completed the exact user-stated
 observable criterion, and the complete restarted v7 diagnostic triad passed on
-exact clean source `a3a5e9b`. These runs remain readiness diagnostics until the
-final unchanged-source triad and bounded Slice 4 review close.
+exact clean source `a3a5e9b`. The final prepared-source gate and ordered
+unchanged-source Live triad then passed on exact source `01fd537`, and the
+bounded Slice 4 review issued `PASS`. Slice 5 may begin, but canonical
+assessment and milestone review have not started; M2.5.1 remains incomplete.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge
@@ -1764,9 +1766,10 @@ only. Accepted
 candidate-free project-read snapshot, Context, isolation, source-currency,
 configuration/instruction, cleanup, and recovery authority. Slice 3 implements
 the deterministic trusted production composition under that boundary and
-passes its bounded protocol-fixture review; real Codex execution and the
-M2.5.1 milestone verdict remain pending as final evidence. The passing initial
-B5 diagnostics do not replace the required final same-source proof.
+passes its bounded protocol-fixture review. Slice 4 now supplies the bounded
+real Codex execution and final same-source proof; it does not supply the
+M2.5.1 milestone verdict. Slice 5 canonical assessment and independent
+milestone review remain pending.
 
 ### M2.6
 
