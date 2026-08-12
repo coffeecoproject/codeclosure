@@ -62,7 +62,9 @@ import type { CandidateLeasedWorkerAuthorityReader } from '@codeclosure/runtime/
 import type { M251PhaseExecutionAuthorityInput } from './m251-execution-authority.js';
 
 export const M251_CODEX_PERMISSION_PROFILE_ID = 'codeclosure-m2-5-1-worker';
-export const M251_CODEX_CONFIGURATION_PROFILE_ID = 'codeclosure-m2-5-1-controlled-worker-config-v1';
+const M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID = 'codeclosure-m2-5-1-project-read-v2';
+const M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID = 'codeclosure-m2-5-1-candidate-v2';
+export const M251_CODEX_CONFIGURATION_PROFILE_ID = 'codeclosure-m2-5-1-controlled-worker-config-v2';
 export const M251_CODEX_INSTRUCTION_MANIFEST_ID =
   'codeclosure-m2-5-1-automatic-instructions-empty-v1';
 
@@ -199,7 +201,7 @@ model_provider = "openai"
 model_reasoning_effort = "low"
 approval_policy = "never"
 approvals_reviewer = "user"
-default_permissions = "${M251_CODEX_PERMISSION_PROFILE_ID}"
+default_permissions = "${M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID}"
 web_search = "disabled"
 check_for_update_on_startup = false
 allow_login_shell = false
@@ -244,34 +246,53 @@ enabled = false
 inherit = "none"
 experimental_use_profile = false
 
-[permissions.${M251_CODEX_PERMISSION_PROFILE_ID}]
-description = "CodeClosure M2.5.1 phase-bound worker"
+[permissions.${M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID}]
+description = "CodeClosure M2.5.1 ProjectRead worker"
 
-[permissions.${M251_CODEX_PERMISSION_PROFILE_ID}.filesystem]
+[permissions.${M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID}.filesystem]
 ":root" = "deny"
 ":minimal" = "read"
 ":tmpdir" = "deny"
 ":slash_tmp" = "deny"
 
-[permissions.${M251_CODEX_PERMISSION_PROFILE_ID}.filesystem.":workspace_roots"]
+[permissions.${M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID}.filesystem.":workspace_roots"]
+"." = "read"
+".codex" = "deny"
+".git" = "deny"
+".agents" = "deny"
+"AGENTS.md" = "deny"
+
+[permissions.${M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID}.network]
+enabled = false
+
+[permissions.${M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID}]
+description = "CodeClosure M2.5.1 Candidate worker"
+
+[permissions.${M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID}.filesystem]
+":root" = "deny"
+":minimal" = "read"
+":tmpdir" = "deny"
+":slash_tmp" = "deny"
+
+[permissions.${M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID}.filesystem.":workspace_roots"]
 "." = "write"
 ".codex" = "deny"
 ".git" = "deny"
 ".agents" = "deny"
 "AGENTS.md" = "deny"
 
-[permissions.${M251_CODEX_PERMISSION_PROFILE_ID}.network]
+[permissions.${M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID}.network]
 enabled = false
 `;
 }
 
-function selectedPermissionProfile(value: JsonValue): JsonValue {
+function selectedPermissionProfile(value: JsonValue, permissionProfileId: string): JsonValue {
   if (!isJsonObject(value) || !isJsonArray(value['data'])) {
     throw new TypeError('M2.5.1 Codex permission-profile response is malformed');
   }
   const selected = value['data'].filter(
     (entry): entry is Readonly<Record<string, JsonValue>> =>
-      isJsonObject(entry) && entry['id'] === M251_CODEX_PERMISSION_PROFILE_ID,
+      isJsonObject(entry) && entry['id'] === permissionProfileId,
   );
   if (
     selected.length !== 1 ||
@@ -363,71 +384,99 @@ export async function prepareM251TrustedCodexProfile(
   ) {
     throw new TypeError('M2.5.1 selected Codex installation does not match the frozen baseline');
   }
-  const launch = createControlledAppServerLaunch({
-    codexHome: roots.codexHome,
-    cwd: roots.probeWorkspace,
-    executableSearchPath:
-      input.executableSearchPath ?? `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
-    installation,
-    processHome: roots.processHome,
-    temporaryDirectory: roots.temporaryDirectory,
-  });
-  const client = await startAppServerClient({
-    initialize: {
-      capabilities: {
-        experimentalApi: false,
-        mcpServerOpenaiFormElicitation: false,
-        requestAttestation: false,
+  const executableSearchPath =
+    input.executableSearchPath ?? `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
+  const probePermissionProfile = async (permissionProfileId: string) => {
+    const launch = createControlledAppServerLaunch({
+      codexHome: roots.codexHome,
+      cwd: roots.probeWorkspace,
+      defaultPermissionProfileId: permissionProfileId,
+      executableSearchPath,
+      installation,
+      processHome: roots.processHome,
+      temporaryDirectory: roots.temporaryDirectory,
+    });
+    const client = await startAppServerClient({
+      initialize: {
+        capabilities: {
+          experimentalApi: false,
+          mcpServerOpenaiFormElicitation: false,
+          requestAttestation: false,
+        },
+        clientInfo: {
+          name: 'codeclosure_m251_profile_probe',
+          title: 'CodeClosure M2.5.1 Profile Probe',
+          version: '0.0.0',
+        },
       },
-      clientInfo: {
-        name: 'codeclosure_m251_profile_probe',
-        title: 'CodeClosure M2.5.1 Profile Probe',
-        version: '0.0.0',
-      },
-    },
-    launch,
-    launchNonce: digestCanonical({ profile: M251_CODEX_CONFIGURATION_PROFILE_ID }),
-  });
-  let observation:
-    | Readonly<{ requirements: JsonValue; config: JsonValue; permissionProfile: JsonValue }>
-    | undefined;
-  let requestFailure: Readonly<{ cause: unknown }> | undefined;
-  try {
-    const requirements = await client.request(
-      'configRequirements/read',
-      undefined,
-      (value) => value,
-    );
-    const config = await client.request(
-      'config/read',
-      { cwd: roots.probeWorkspace, includeLayers: true },
-      (value) => value,
-    );
-    const permissionProfile = selectedPermissionProfile(
-      await client.request(
-        'permissionProfile/list',
-        { cwd: roots.probeWorkspace },
+      launch,
+      launchNonce: digestCanonical({
+        profile: M251_CODEX_CONFIGURATION_PROFILE_ID,
+        permissionProfileId,
+      }),
+    });
+    let observation:
+      | Readonly<{
+          config: JsonValue;
+          launch: AppServerProcessLaunch;
+          permissionProfile: JsonValue;
+          requirements: JsonValue;
+        }>
+      | undefined;
+    let requestFailure: Readonly<{ cause: unknown }> | undefined;
+    try {
+      const requirements = await client.request(
+        'configRequirements/read',
+        undefined,
         (value) => value,
-      ),
-    );
-    observation = Object.freeze({ requirements, config, permissionProfile });
-  } catch (cause) {
-    requestFailure = Object.freeze({ cause });
-  }
-  let close: Awaited<ReturnType<typeof client.shutdown>>;
-  try {
-    close = await client.shutdown();
-  } catch (cause) {
+      );
+      const config = await client.request(
+        'config/read',
+        { cwd: roots.probeWorkspace, includeLayers: true },
+        (value) => value,
+      );
+      const permissionProfile = selectedPermissionProfile(
+        await client.request(
+          'permissionProfile/list',
+          { cwd: roots.probeWorkspace },
+          (value) => value,
+        ),
+        permissionProfileId,
+      );
+      observation = Object.freeze({ config, launch, permissionProfile, requirements });
+    } catch (cause) {
+      requestFailure = Object.freeze({ cause });
+    }
+    let close: Awaited<ReturnType<typeof client.shutdown>>;
+    try {
+      close = await client.shutdown();
+    } catch (cause) {
+      if (requestFailure !== undefined) {
+        throw requestFailure.cause;
+      }
+      throw cause;
+    }
     if (requestFailure !== undefined) {
       throw requestFailure.cause;
     }
-    throw cause;
-  }
-  if (requestFailure !== undefined) {
-    throw requestFailure.cause;
-  }
-  if (close.code !== 0 || close.failureCode !== undefined || observation === undefined) {
-    throw new TypeError('M2.5.1 Codex profile probe did not close cleanly');
+    if (close.code !== 0 || close.failureCode !== undefined || observation === undefined) {
+      throw new TypeError('M2.5.1 Codex profile probe did not close cleanly');
+    }
+    return observation;
+  };
+  const projectReadObservation = await probePermissionProfile(
+    M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID,
+  );
+  const candidateObservation = await probePermissionProfile(
+    M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID,
+  );
+  if (
+    digestCanonical(projectReadObservation.requirements) !==
+      digestCanonical(candidateObservation.requirements) ||
+    digestCanonical(projectReadObservation.launch.summary.nonSecretEnvironment) !==
+      digestCanonical(candidateObservation.launch.summary.nonSecretEnvironment)
+  ) {
+    throw new TypeError('M2.5.1 phase profile probes do not share one controlled host identity');
   }
 
   const configurationProfileDigest = sha256Digest(
@@ -441,25 +490,42 @@ export async function prepareM251TrustedCodexProfile(
     }),
   );
   const instructionSources = Object.freeze([]);
-  const executionConfigDigest = sha256Digest(digestCanonical(observation.config));
-  assertM251EffectiveConfiguration(observation.config, {
-    executionConfigDigest,
-    model: input.model,
-    modelProvider: 'openai',
-    permissionProfileId: M251_CODEX_PERMISSION_PROFILE_ID,
-    reasoningEffort: 'low',
-  });
-  const permissionProfileDigest = sha256Digest(digestCanonical(observation.permissionProfile));
+  const phaseProfileObservation = (
+    phase:
+      typeof WorkflowPhase.DISCOVERY | typeof WorkflowPhase.IMPLEMENT | typeof WorkflowPhase.PLAN,
+  ) =>
+    phase === WorkflowPhase.IMPLEMENT
+      ? Object.freeze({
+          observation: candidateObservation,
+          permissionProfileId: M251_CODEX_CANDIDATE_PERMISSION_PROFILE_ID,
+        })
+      : Object.freeze({
+          observation: projectReadObservation,
+          permissionProfileId: M251_CODEX_PROJECT_READ_PERMISSION_PROFILE_ID,
+        });
+  for (const phase of [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT, WorkflowPhase.PLAN]) {
+    const selected = phaseProfileObservation(phase);
+    assertM251EffectiveConfiguration(selected.observation.config, {
+      executionConfigDigest: sha256Digest(digestCanonical(selected.observation.config)),
+      model: input.model,
+      modelProvider: 'openai',
+      permissionProfileId: selected.permissionProfileId,
+      reasoningEffort: 'low',
+    });
+  }
   const forbiddenRoots = Object.freeze(
     [...input.forbiddenRoots, ...codexRootPaths(roots)].toSorted(),
   );
   const phaseAuthorities = Object.freeze(
-    [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT, WorkflowPhase.PLAN].map((phase) =>
-      Object.freeze({
+    [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT, WorkflowPhase.PLAN].map((phase) => {
+      const selected = phaseProfileObservation(phase);
+      return Object.freeze({
         phase,
-        permissionProfileId: M251_CODEX_PERMISSION_PROFILE_ID,
-        permissionProfileDigest,
-        executionConfigDigest,
+        permissionProfileId: selected.permissionProfileId,
+        permissionProfileDigest: sha256Digest(
+          digestCanonical(selected.observation.permissionProfile),
+        ),
+        executionConfigDigest: sha256Digest(digestCanonical(selected.observation.config)),
         instructionSourceManifestId: M251_CODEX_INSTRUCTION_MANIFEST_ID,
         instructionSources,
         allowedRoots: Object.freeze([
@@ -471,9 +537,10 @@ export async function prepareM251TrustedCodexProfile(
             phase === WorkflowPhase.IMPLEMENT ? projectReadWorkspaceRoot : candidateWorkspaceRoot,
           ].toSorted(),
         ),
-      }),
-    ),
+      });
+    }),
   );
+  const launch = projectReadObservation.launch;
   return Object.freeze({
     capabilityRecord: capabilityRecord(installation, configurationProfileDigest),
     configurationProfileDigest,
@@ -486,7 +553,7 @@ export async function prepareM251TrustedCodexProfile(
       delegatedExecutableDigest: launch.summary.delegatedExecutableDigest,
       environmentNames: launch.summary.environmentNames,
       launcherDigest: launch.summary.launcherDigest,
-      managedRequirementsDigest: digestCanonical(observation.requirements),
+      managedRequirementsDigest: digestCanonical(projectReadObservation.requirements),
       maximumPromptBytes: 256 * 1024,
       model: input.model,
       modelProvider: 'openai',
@@ -751,6 +818,7 @@ class M251TrustedCodexInvocation implements ExternalWorkerInvocationPort {
         const launch: AppServerProcessLaunch = createControlledAppServerLaunch({
           codexHome: this.#input.profile.roots.codexHome,
           cwd,
+          defaultPermissionProfileId: selectedPhase.permissionProfileId,
           executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
           installation: this.#input.profile.installation,
           processHome: this.#input.profile.roots.processHome,

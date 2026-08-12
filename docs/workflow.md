@@ -73,7 +73,11 @@ source snapshots, creates Candidate/Generation authority only at the existing
 The checkout remains unreadable to candidate-free Codex. An Adapter-local
 phase activity policy admits only bounded snapshot-read commands in the first
 two phases and exact Candidate-bound command/file-change activity in
-`IMPLEMENT`; it grants no Workflow authority. A Plan/source mismatch
+`IMPLEMENT`; it grants no Workflow authority. The additive contained Profile
+v2 now maps these same Workflow phases to separate inherited ProjectRead and
+Candidate permission profiles without changing phase transitions, Candidate
+timing, or Workflow mutation authority. Its complete Live proof remains
+pending. A Plan/source mismatch
 preserves the completed Plan Attempt, creates no Candidate, and atomically
 moves the Workflow from `PLAN / READY` to `PLAN / FAILED` through existing
 Workflow integrity-failure authority. The exact `PLAN_SOURCE_NOT_CURRENT` code

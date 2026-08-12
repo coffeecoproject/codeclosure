@@ -2,9 +2,9 @@ import {
   CODEX_M251_WORKER_ACTIVITY_POLICY_DIGEST,
   CODEX_M251_WORKER_ACTIVITY_POLICY_ID,
   CODEX_M251_WORKER_ADAPTER_ID,
-  CODEX_M251_WORKER_ADAPTER_VERSION,
+  CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION,
   CODEX_M251_WORKER_DISABLED_INTEGRATIONS_DIGEST,
-  CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
+  CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID,
   codexM251WorkerIsolationProfileDigest,
   type CodexWorkerPhaseIsolationInputV1,
 } from '@codeclosure/adapter-codex';
@@ -44,10 +44,10 @@ import {
 import {
   M251_CANDIDATE_SOURCE_ID,
   M251_CANDIDATE_SOURCE_VERSION,
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID,
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION,
   M251_POLICY_BUNDLE_ID,
   M251_POLICY_BUNDLE_VERSION,
-  M251_REAL_CODEX_EXECUTION_PROFILE_ID,
-  M251_REAL_CODEX_EXECUTION_PROFILE_VERSION,
   M251_VERIFICATION_RUNNER_ID,
   M251_VERIFICATION_RUNNER_VERSION,
   canonicalizeJson,
@@ -181,7 +181,7 @@ function phaseDispatchEntry(
   const isolationInput = Object.freeze({
     phase: input.phase,
     workerAdapter: CODEX_M251_WORKER_ADAPTER_ID,
-    workerAdapterVersion: CODEX_M251_WORKER_ADAPTER_VERSION,
+    workerAdapterVersion: CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION,
     cwdKind: candidateFree
       ? ExternalPhaseCwdKind.PROJECT_READ_SNAPSHOT
       : ExternalPhaseCwdKind.CANDIDATE_WORKSPACE,
@@ -220,7 +220,7 @@ function phaseDispatchEntry(
   }) satisfies CodexWorkerPhaseIsolationInputV1;
   return Object.freeze({
     ...isolationInput,
-    isolationProfileId: CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
+    isolationProfileId: CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID,
     isolationProfileDigest: sha256Digest(codexM251WorkerIsolationProfileDigest(isolationInput)),
   });
 }
@@ -263,11 +263,11 @@ export function createM251FormalExecutionProfileDefinition(
     phaseDispatch,
   });
   return decodeExecutionProfileDefinition({
-    id: executionProfileId(M251_REAL_CODEX_EXECUTION_PROFILE_ID),
+    id: executionProfileId(M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID),
     schemaVersion: 2,
-    version: M251_REAL_CODEX_EXECUTION_PROFILE_VERSION,
+    version: M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION,
     workerAdapter: CODEX_M251_WORKER_ADAPTER_ID,
-    workerAdapterVersion: CODEX_M251_WORKER_ADAPTER_VERSION,
+    workerAdapterVersion: CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION,
     candidateSource: M251_CANDIDATE_SOURCE_ID,
     candidateSourceVersion: M251_CANDIDATE_SOURCE_VERSION,
     verificationRunner: M251_VERIFICATION_RUNNER_ID,
@@ -298,8 +298,8 @@ function governedExecutionPreflight(
   if (
     policy.bundle.id !== M251_POLICY_BUNDLE_ID ||
     policy.bundle.version !== M251_POLICY_BUNDLE_VERSION ||
-    profile.profile.id !== M251_REAL_CODEX_EXECUTION_PROFILE_ID ||
-    profile.profile.version !== M251_REAL_CODEX_EXECUTION_PROFILE_VERSION
+    profile.profile.id !== M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID ||
+    profile.profile.version !== M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION
   ) {
     throw new TypeError('M2.5.1 governed preflight authority was substituted');
   }
@@ -348,7 +348,7 @@ export function installM251ExecutionAuthority(
   const policy = input.store.getPolicyBundle(M251_POLICY_BUNDLE_ID);
   const capability = input.store.getExternalBackendCapabilityRecord(capabilityRecord.recordDigest);
   const profile = input.store.getExecutionProfile(
-    executionProfileId(M251_REAL_CODEX_EXECUTION_PROFILE_ID),
+    executionProfileId(M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID),
   );
   if (
     policy?.bundle.digest !== policyResult.value.bundle.digest ||
@@ -395,8 +395,8 @@ export function createM251RuntimeProfileRegistry(
 ): M251RuntimeProfileRegistry {
   const profile = installed.profile;
   if (
-    profile.id !== M251_REAL_CODEX_EXECUTION_PROFILE_ID ||
-    profile.version !== M251_REAL_CODEX_EXECUTION_PROFILE_VERSION ||
+    profile.id !== M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID ||
+    profile.version !== M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION ||
     profile.schemaVersion !== 2 ||
     profile.externalExecution.schemaVersion !== 3 ||
     profile.digest !== sha256Digest(digests.digest(executionProfileProjection(profile)))

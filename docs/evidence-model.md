@@ -53,6 +53,10 @@ freeze schema version 1, and grants no new Evidence authority. The Slice 3
 trusted deterministic composition carries this Evidence through the existing
 Acceptance path with an explicit protocol fixture; it has no real-Codex or
 M2.5.1 milestone acceptance verdict.
+Slice 4's additive contained Profile v2 reuses the same Candidate Manager-owned
+freeze-v2 Evidence contract. Store and SQLite now admit only the exact retained
+v1 or contained v2 Profile tuple at that boundary; no Worker observation or
+containment Receipt becomes Evidence, and complete Live proof remains pending.
 Proposed M2.6 Frontstage messages, routes, answers, focus,
 pending actions, Goal summaries, and notifications add no Evidence kind or
 eligibility path.

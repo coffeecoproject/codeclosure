@@ -49,10 +49,12 @@ import {
   CODEX_M251_WORKER_ACTIVITY_POLICY_VERSION,
   CODEX_M251_WORKER_ADAPTER_ID,
   CODEX_M251_WORKER_ADAPTER_VERSION,
+  CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION,
   CODEX_M251_WORKER_DISABLED_FEATURES,
   CODEX_M251_WORKER_DISABLED_INTEGRATIONS_DIGEST,
   CODEX_M251_WORKER_EFFECTIVE_FEATURES,
   CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
+  CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID,
   CodexWorkerAdapter,
   assertM251EffectiveConfiguration,
   assertDirectiveV3BindsWorkerRequest,
@@ -100,7 +102,10 @@ const hash = (value: string): string => `sha256:${value.padEnd(64, value.slice(-
 function phaseWithIsolation(phase: CodexWorkerPhaseIsolationInputV1): CodexWorkerPhaseDirectiveV1 {
   return Object.freeze({
     ...phase,
-    isolationProfileId: CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
+    isolationProfileId:
+      phase.workerAdapterVersion === CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION
+        ? CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID
+        : CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
     isolationProfileDigest: codexM251WorkerIsolationProfileDigest(phase),
   });
 }
@@ -434,6 +439,7 @@ function directive(phase: 'DISCOVERY' | 'PLAN' = 'DISCOVERY'): Readonly<{
 function candidateDirective(
   t: TestContext,
   scenario = 'happy',
+  contained = false,
 ): Readonly<{
   directive: CodexWorkerDirectiveV3;
   launch: ReturnType<typeof createFixtureAppServerLaunch>;
@@ -458,9 +464,24 @@ function candidateDirective(
     mkdirSync(path);
   }
   mkdirSync(join(candidate, 'src'));
+  const permissionProfileId = contained ? 'codeclosure-m2-5-1-candidate-v2' : 'codeclosure-m2';
+  const selectedPermissionProfile = Object.freeze({
+    ...permissionProfile,
+    id: permissionProfileId,
+  });
+  const selectedEffectiveConfig = contained
+    ? Object.freeze({
+        ...effectiveConfig,
+        config: Object.freeze({
+          ...effectiveConfig.config,
+          default_permissions: permissionProfileId,
+        }),
+      })
+    : effectiveConfig;
   const launch = createFixtureAppServerLaunch({
     codexHome: codexState,
     cwd: candidate,
+    ...(contained ? { defaultPermissionProfileId: permissionProfileId } : {}),
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome,
     scenario: `m251:${scenario}`,
@@ -519,14 +540,16 @@ function candidateDirective(
     Object.freeze({
       phase: 'IMPLEMENT',
       workerAdapter: CODEX_M251_WORKER_ADAPTER_ID,
-      workerAdapterVersion: CODEX_M251_WORKER_ADAPTER_VERSION,
+      workerAdapterVersion: contained
+        ? CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION
+        : CODEX_M251_WORKER_ADAPTER_VERSION,
       cwdKind: 'CANDIDATE_WORKSPACE',
       sourceAuthorityKind: 'CANDIDATE',
-      permissionProfileId: 'codeclosure-m2',
-      permissionProfileDigest: digestCanonical(permissionProfile),
+      permissionProfileId,
+      permissionProfileDigest: digestCanonical(selectedPermissionProfile),
       projectConfigurationPolicy: 'DISABLED',
       configurationProfileDigest: hash('3'),
-      executionConfigDigest: digestCanonical(effectiveConfig),
+      executionConfigDigest: digestCanonical(selectedEffectiveConfig),
       disabledIntegrationsDigest: CODEX_M251_WORKER_DISABLED_INTEGRATIONS_DIGEST,
       instructionSourceManifestId: 'instructions-implement-v1',
       instructionSourceManifestDigest: digestCanonical({ instructionSources }),
@@ -694,6 +717,7 @@ function integrationHarness(
   t: TestContext,
   scenario: string,
   boundEffectiveConfig: typeof effectiveConfig | typeof unsafeEffectiveConfig = effectiveConfig,
+  contained = false,
 ): Readonly<{
   adapter: CodexWorkerAdapter;
   diagnostics: readonly CodexAdapterDiagnosticEvent[];
@@ -720,9 +744,24 @@ function integrationHarness(
     mkdirSync(path);
   }
   chmodSync(snapshot, 0o555);
+  const permissionProfileId = contained ? 'codeclosure-m2-5-1-project-read-v2' : 'codeclosure-m2';
+  const selectedPermissionProfile = Object.freeze({
+    ...permissionProfile,
+    id: permissionProfileId,
+  });
+  const selectedEffectiveConfig = contained
+    ? Object.freeze({
+        ...boundEffectiveConfig,
+        config: Object.freeze({
+          ...boundEffectiveConfig.config,
+          default_permissions: permissionProfileId,
+        }),
+      })
+    : boundEffectiveConfig;
   const launch = createFixtureAppServerLaunch({
     codexHome,
     cwd: snapshot,
+    ...(contained ? { defaultPermissionProfileId: permissionProfileId } : {}),
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     processHome,
     scenario: `m251:${scenario}`,
@@ -735,14 +774,16 @@ function integrationHarness(
     Object.freeze({
       phase: 'DISCOVERY',
       workerAdapter: CODEX_M251_WORKER_ADAPTER_ID,
-      workerAdapterVersion: CODEX_M251_WORKER_ADAPTER_VERSION,
+      workerAdapterVersion: contained
+        ? CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION
+        : CODEX_M251_WORKER_ADAPTER_VERSION,
       cwdKind: 'PROJECT_READ_SNAPSHOT',
       sourceAuthorityKind: 'PROJECT_READ',
-      permissionProfileId: 'codeclosure-m2',
-      permissionProfileDigest: digestCanonical(permissionProfile),
+      permissionProfileId,
+      permissionProfileDigest: digestCanonical(selectedPermissionProfile),
       projectConfigurationPolicy: 'DISABLED',
       configurationProfileDigest: hash('e'),
-      executionConfigDigest: digestCanonical(boundEffectiveConfig),
+      executionConfigDigest: digestCanonical(selectedEffectiveConfig),
       disabledIntegrationsDigest: CODEX_M251_WORKER_DISABLED_INTEGRATIONS_DIGEST,
       instructionSourceManifestId: 'instructions-discovery-v1',
       instructionSourceManifestDigest: digestCanonical({ instructionSources }),
@@ -1264,6 +1305,22 @@ void test('[I-004][I-023][M251-C10] candidate-free Adapter emits only bounded pr
   assert.equal(Reflect.has(observation, 'candidateWorkspaceLeaseId'), false);
 });
 
+void test('[I-004][I-023][M251-C10] contained Adapter inherits the exact launch permission profile', async (t) => {
+  const harness = integrationHarness(t, 'happy', effectiveConfig, true);
+  const events = await collect(harness.adapter, harness.request);
+
+  assert.equal(events.length, 1, JSON.stringify(harness.adapter.observation()));
+  assert.equal(
+    harness.directive.profile.phase.workerAdapterVersion,
+    CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION,
+  );
+  assert.equal(
+    harness.directive.profile.phase.isolationProfileId,
+    CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID,
+  );
+  assert.equal(harness.adapter.observation().state, 'COMPLETED');
+});
+
 void test('[I-023][M251-C10] candidate-free Adapter defers a progressive read command until completion', async (t) => {
   const harness = integrationHarness(t, 'plan-read-command');
   const events = await collect(harness.adapter, harness.request);
@@ -1344,6 +1401,32 @@ void test('[I-004][I-023][M251-C10] v3 IMPLEMENT Adapter binds workspaceWrite an
     observation.sourceAuthority,
     codexWorkerSourceAuthorityReceiptV1(fixture.directive.sourceAuthority),
   );
+});
+
+void test('[I-004][I-023][M251-C10] contained IMPLEMENT Adapter inherits the Candidate permission profile', async (t) => {
+  const fixture = candidateDirective(t, 'candidate-change', true);
+  const adapter = new CodexWorkerAdapter({
+    clientLimits: fixtureClientLimits,
+    directive: fixture.directive,
+    launch: fixture.launch,
+    onLifecycleEvent: () => undefined,
+    observedAt: () => fixedObservedAt,
+  });
+  const events = await collect(adapter, fixture.request);
+
+  assert.equal(events.length, 1, JSON.stringify(adapter.observation()));
+  assert.equal(
+    fixture.directive.profile.phase.workerAdapterVersion,
+    CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION,
+  );
+  assert.equal(
+    fixture.directive.profile.phase.isolationProfileId,
+    CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID,
+  );
+  const observation = adapter.observation();
+  assert.equal(observation.schemaVersion, 2);
+  assert.equal(observation.state, 'COMPLETED');
+  assert.equal(observation.phase, 'IMPLEMENT');
 });
 
 void test('[I-023][I-027][M251-X11] v3 IMPLEMENT discards an out-of-scope Candidate file change', async (t) => {

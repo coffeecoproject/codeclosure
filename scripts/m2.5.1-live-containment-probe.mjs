@@ -61,8 +61,8 @@ function effectiveThread(value, input) {
     response.reasoningEffort !== input.sharedProfile.reasoningEffort ||
     sandbox.type !== input.expectedSandboxType ||
     sandbox.networkAccess !== false ||
-    (sandbox.excludeSlashTmp ?? false) !== false ||
-    (sandbox.excludeTmpdirEnvVar ?? false) !== false ||
+    (sandbox.excludeSlashTmp ?? false) !== (input.expectedSandboxType === 'workspaceWrite') ||
+    (sandbox.excludeTmpdirEnvVar ?? false) !== (input.expectedSandboxType === 'workspaceWrite') ||
     !Array.isArray(sandbox.writableRoots ?? []) ||
     (sandbox.writableRoots ?? []).length !== 0 ||
     !Array.isArray(instructionSources) ||
@@ -84,8 +84,8 @@ function effectiveThread(value, input) {
       modelProvider: response.modelProvider,
       reasoningEffort: response.reasoningEffort,
       sandbox: Object.freeze({
-        excludeSlashTmp: false,
-        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: input.expectedSandboxType === 'workspaceWrite',
+        excludeTmpdirEnvVar: input.expectedSandboxType === 'workspaceWrite',
         networkAccess: false,
         type: sandbox.type,
         writableRoots: Object.freeze([]),
@@ -149,6 +149,12 @@ export async function runM251LiveContainmentProbe(input) {
       forbiddenEffects.add(notification.method);
     }
   };
+  if (input.launch.summary?.defaultPermissionProfileId !== input.phaseEntry.permissionProfileId) {
+    fail(
+      'LAUNCH_PERMISSION_PROFILE_MISMATCH',
+      'Controlled launch does not select the exact phase permission profile',
+    );
+  }
   const approvalHandler = input.serverRequestHandler({
     decodeParams: (value) => value,
     handle: () => {
@@ -233,7 +239,6 @@ export async function runM251LiveContainmentProbe(input) {
         ephemeral: false,
         model: input.sharedProfile.model,
         modelProvider: input.sharedProfile.modelProvider,
-        sandbox: input.expectedSandboxType === 'readOnly' ? 'read-only' : 'workspace-write',
         serviceTier: input.sharedProfile.serviceTier,
       },
       (value) => value,
@@ -259,11 +264,11 @@ export async function runM251LiveContainmentProbe(input) {
     });
     let commandExecution;
     try {
-      commandExecution = await client.executeBufferedSandboxCommand(
+      commandExecution = await client.executeProfileBoundSandboxCommand(
         {
           command: input.command,
           cwd: input.cwd,
-          sandboxKind: input.receiptSandboxType,
+          permissionProfileId: input.phaseEntry.permissionProfileId,
           timeoutMilliseconds: input.terminalTimeoutMilliseconds,
         },
         { signal: requestOptions.signal },
@@ -280,16 +285,6 @@ export async function runM251LiveContainmentProbe(input) {
       command: input.command,
       cwd: input.cwd,
       outputBytesCap: 1_024,
-      sandboxPolicy:
-        input.receiptSandboxType === 'READ_ONLY'
-          ? Object.freeze({ networkAccess: false, type: 'readOnly' })
-          : Object.freeze({
-              excludeSlashTmp: true,
-              excludeTmpdirEnvVar: true,
-              networkAccess: false,
-              type: 'workspaceWrite',
-              writableRoots: Object.freeze([input.cwd]),
-            }),
       timeoutMs: input.terminalTimeoutMilliseconds,
     });
     if (input.digestCanonical(commandRequest) !== input.digestCanonical(expectedCommandRequest)) {

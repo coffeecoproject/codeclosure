@@ -65,6 +65,7 @@ import {
   M25IntakePackageCompiler,
   M25IntentAdmissionEngine,
   M25IntentProjectionCompiler,
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID,
   M251_REAL_CODEX_EXECUTION_PROFILE_ID,
   MinimalContextCompiler,
   CandidatePreparationDisposition,
@@ -73,6 +74,7 @@ import {
   WorkflowDriveStopReason,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
+  createExecutionProfileInstaller,
   decodeCandidatePreparationV2,
   decodeWorkerEvent,
   goalAndWorkflowCreationPayloadProjection,
@@ -112,6 +114,7 @@ import {
   FakeVerificationRunner,
   FakeWorker,
   FakeWorkerFixture,
+  m251CandidateFreezeV2ProfileFixture,
 } from '@codeclosure/testing';
 import {
   createLocalProjectReadWorkspace,
@@ -1115,7 +1118,7 @@ void test('[M251-B1] trusted-real-profile-installation installs and strictly reo
   const store = openSqliteControlStore({ filename });
   const installed = installM251ExecutionAuthority(authorityInput(store, 'm251-b1-install'));
   assert.equal(installed.profile.profile.schemaVersion, 2);
-  assert.equal(installed.profile.profile.id, M251_REAL_CODEX_EXECUTION_PROFILE_ID);
+  assert.equal(installed.profile.profile.id, M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID);
   assert.equal(installed.profile.profile.externalExecution.schemaVersion, 3);
   assert.deepEqual(installed.profile.profile.externalExecution.workerPhases, [
     WorkflowPhase.DISCOVERY,
@@ -1134,6 +1137,53 @@ void test('[M251-B1] trusted-real-profile-installation installs and strictly reo
   assert.equal(replayed.policy.bundle.digest, installed.policy.bundle.digest);
   assert.equal(replayed.capability.recordDigest, installed.capability.recordDigest);
   assert.equal(replayed.profile.profile.digest, installed.profile.profile.digest);
+});
+
+void test('[M251-C09] retained Profile v1 and contained Profile v2 coexist and strictly reopen', (t) => {
+  const filename = temporaryDatabase(t);
+  const store = openSqliteControlStore({ filename });
+  const retained = m251CandidateFreezeV2ProfileFixture('m251-c15-retained', digests, fixedTime);
+  const retainedIds = new DeterministicIds('m251-c15-retained');
+  assert.equal(
+    store.installExternalBackendCapabilityRecord({
+      auditEventId: retainedIds.nextAuditEventId(),
+      payloadDigest: retained.capability.recordDigest,
+      record: retained.capability,
+    }).status,
+    'INSTALLED',
+  );
+  assert.equal(
+    createExecutionProfileInstaller({
+      clock: Object.freeze({ now: () => fixedTime }),
+      digests,
+      ids: retainedIds,
+      store,
+    }).installExecutionProfile(retained.profile).status,
+    'INSTALLED',
+  );
+  const contained = installM251ExecutionAuthority(authorityInput(store, 'm251-c15-contained'));
+  assert.ok(
+    store.getExecutionProfile(executionProfileId(M251_REAL_CODEX_EXECUTION_PROFILE_ID)) !==
+      undefined,
+  );
+  assert.equal(
+    store.getExecutionProfile(executionProfileId(M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID))
+      ?.profile.digest,
+    contained.profile.profile.digest,
+  );
+  store.close();
+
+  const reopened = openSqliteControlStore({ filename });
+  assert.ok(
+    reopened.getExecutionProfile(executionProfileId(M251_REAL_CODEX_EXECUTION_PROFILE_ID)) !==
+      undefined,
+  );
+  assert.equal(
+    reopened.getExecutionProfile(executionProfileId(M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID))
+      ?.profile.digest,
+    contained.profile.profile.digest,
+  );
+  reopened.close();
 });
 
 void test('[M251-B1] formal-profile-materialization-binding carries the production installer tuple into Start Authorization', async (t) => {

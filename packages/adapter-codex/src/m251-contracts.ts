@@ -21,12 +21,21 @@ const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 
 export const CODEX_M251_WORKER_ADAPTER_ID = 'codex-app-server-worker';
 export const CODEX_M251_WORKER_ADAPTER_VERSION = 'codeclosure-m2-5-1-worker-v1';
+export const CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION = 'codeclosure-m2-5-1-worker-v2';
 export const CODEX_M251_WORKER_ACTIVITY_POLICY_ID =
   'codex-worker-activity-policy_codeclosure-m2-5-1-real';
 export const CODEX_M251_WORKER_ACTIVITY_POLICY_VERSION = 'codeclosure-m2-5-1-worker-activity-v1';
 export const CODEX_M251_WORKER_ISOLATION_PROFILE_ID = 'codeclosure-m2-5-1-codex-phase-isolation';
 export const CODEX_M251_WORKER_ISOLATION_PROFILE_VERSION =
   'codeclosure-m2-5-1-codex-phase-isolation-v1';
+export const CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID =
+  'codeclosure-m2-5-1-codex-contained-phase-isolation';
+export const CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_VERSION =
+  'codeclosure-m2-5-1-codex-contained-phase-isolation-v2';
+
+export function isM251ContainedWorkerAdapterVersion(value: string): boolean {
+  return value === CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION;
+}
 
 /**
  * Exact 0.146.1 Worker feature-denial set. The command execution features used
@@ -253,10 +262,15 @@ export function codexM251WorkerIsolationProfileProjection(
   phase: CodexWorkerPhaseIsolationInputV1,
 ): unknown {
   const candidateFree = phase.phase !== 'IMPLEMENT';
+  const contained = isM251ContainedWorkerAdapterVersion(phase.workerAdapterVersion);
   return Object.freeze({
     schemaVersion: 1,
-    id: CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
-    version: CODEX_M251_WORKER_ISOLATION_PROFILE_VERSION,
+    id: contained
+      ? CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID
+      : CODEX_M251_WORKER_ISOLATION_PROFILE_ID,
+    version: contained
+      ? CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_VERSION
+      : CODEX_M251_WORKER_ISOLATION_PROFILE_VERSION,
     phase: phase.phase,
     cwdKind: phase.cwdKind,
     sourceAuthorityKind: phase.sourceAuthorityKind,
@@ -271,13 +285,20 @@ export function codexM251WorkerIsolationProfileProjection(
     instructionSourceManifestDigest: phase.instructionSourceManifestDigest,
     commandNetworkPolicy: phase.commandNetworkPolicy,
     approvalPolicy: phase.approvalPolicy,
-    sandboxPolicy: candidateFree
-      ? Object.freeze({ type: 'READ_ONLY', networkAccess: false })
-      : Object.freeze({
-          type: 'WORKSPACE_WRITE',
+    sandboxPolicy: contained
+      ? Object.freeze({
+          type: 'INHERIT_EXACT_PERMISSION_PROFILE',
+          expectedEffectiveType: candidateFree ? 'READ_ONLY' : 'WORKSPACE_WRITE',
           networkAccess: false,
-          writableRootPolicy: 'EXACT_SOURCE_CWD',
-        }),
+          writableRootPolicy: candidateFree ? 'NONE' : 'EXACT_SOURCE_CWD',
+        })
+      : candidateFree
+        ? Object.freeze({ type: 'READ_ONLY', networkAccess: false })
+        : Object.freeze({
+            type: 'WORKSPACE_WRITE',
+            networkAccess: false,
+            writableRootPolicy: 'EXACT_SOURCE_CWD',
+          }),
     allowedRoots: phase.allowedRoots,
     forbiddenRoots: phase.forbiddenRoots,
   });
@@ -677,9 +698,14 @@ function decodePhase(value: unknown): CodexWorkerPhaseDirectiveV1 {
     input['workerActivityPolicyDigest'],
     'phase Worker activity-policy digest',
   );
+  const workerAdapterVersion = nonBlankString(
+    input['workerAdapterVersion'],
+    'phase Worker Adapter version',
+  );
   if (
     input['workerAdapter'] !== CODEX_M251_WORKER_ADAPTER_ID ||
-    input['workerAdapterVersion'] !== CODEX_M251_WORKER_ADAPTER_VERSION ||
+    (workerAdapterVersion !== CODEX_M251_WORKER_ADAPTER_VERSION &&
+      workerAdapterVersion !== CODEX_M251_CONTAINED_WORKER_ADAPTER_VERSION) ||
     workerActivityPolicyId !== CODEX_M251_WORKER_ACTIVITY_POLICY_ID ||
     workerActivityPolicyDigest !== CODEX_M251_WORKER_ACTIVITY_POLICY_DIGEST
   ) {
@@ -695,7 +721,7 @@ function decodePhase(value: unknown): CodexWorkerPhaseDirectiveV1 {
   const withoutIsolation: CodexWorkerPhaseIsolationInputV1 = Object.freeze({
     phase,
     workerAdapter: CODEX_M251_WORKER_ADAPTER_ID,
-    workerAdapterVersion: CODEX_M251_WORKER_ADAPTER_VERSION,
+    workerAdapterVersion,
     cwdKind,
     sourceAuthorityKind,
     permissionProfileId: nonBlankString(
@@ -755,8 +781,11 @@ function decodePhase(value: unknown): CodexWorkerPhaseDirectiveV1 {
     input['isolationProfileDigest'],
     'phase isolation profile digest',
   );
+  const expectedIsolationProfileId = isM251ContainedWorkerAdapterVersion(workerAdapterVersion)
+    ? CODEX_M251_CONTAINED_WORKER_ISOLATION_PROFILE_ID
+    : CODEX_M251_WORKER_ISOLATION_PROFILE_ID;
   if (
-    isolationProfileId !== CODEX_M251_WORKER_ISOLATION_PROFILE_ID ||
+    isolationProfileId !== expectedIsolationProfileId ||
     isolationProfileDigest !== codexM251WorkerIsolationProfileDigest(withoutIsolation)
   ) {
     throw new TypeError('Codex Worker v3 phase selected an unsupported isolation profile');
@@ -1127,6 +1156,7 @@ export function assertLaunchBindsDirectiveV3(
       readonly codexHome: string;
       readonly codexVersion: string;
       readonly cwd: string;
+      readonly defaultPermissionProfileId?: string;
       readonly delegatedExecutableDigest: string;
       readonly environmentNames: readonly string[];
       readonly launcherDigest: string;
@@ -1147,8 +1177,14 @@ export function assertLaunchBindsDirectiveV3(
   const expectedNonSecretEnvironmentNames = summary.environmentNames.filter(
     (name) => !summary.secretEnvironmentNames.includes(name),
   );
+  const contained = isM251ContainedWorkerAdapterVersion(
+    directive.profile.phase.workerAdapterVersion,
+  );
   if (
     summary.cwd !== cwd ||
+    (contained
+      ? summary.defaultPermissionProfileId !== directive.profile.phase.permissionProfileId
+      : summary.defaultPermissionProfileId !== undefined) ||
     summary.codexHome !== profile.controlledStateRootIdentity ||
     summary.codexVersion !== profile.codexVersion ||
     summary.delegatedExecutableDigest !== profile.delegatedExecutableDigest ||

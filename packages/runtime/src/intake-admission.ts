@@ -55,6 +55,8 @@ import type { DigestProvider } from './ports.js';
 import { m25IntakeBudgetDefinition } from './intake-assistant.js';
 import { M251_POLICY_BUNDLE_ID, M251_POLICY_BUNDLE_VERSION } from './m251-policy.js';
 import {
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID,
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION,
   M251_REAL_CODEX_EXECUTION_PROFILE_ID,
   M251_REAL_CODEX_EXECUTION_PROFILE_VERSION,
 } from './m251-execution-profile.js';
@@ -445,8 +447,10 @@ function assertSupportedGovernedPreflight(preflight: GovernedExecutionPreflight)
   const m251 =
     preflight.workflowPolicyId === M251_POLICY_BUNDLE_ID &&
     preflight.workflowPolicyVersion === M251_POLICY_BUNDLE_VERSION &&
-    preflight.executionProfileId === M251_REAL_CODEX_EXECUTION_PROFILE_ID &&
-    preflight.executionProfileVersion === M251_REAL_CODEX_EXECUTION_PROFILE_VERSION;
+    ((preflight.executionProfileId === M251_REAL_CODEX_EXECUTION_PROFILE_ID &&
+      preflight.executionProfileVersion === M251_REAL_CODEX_EXECUTION_PROFILE_VERSION) ||
+      (preflight.executionProfileId === M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID &&
+        preflight.executionProfileVersion === M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION));
   if (!historical && !m251) {
     throw new TypeError('Governed execution preflight selects an unsupported authority tuple');
   }

@@ -157,10 +157,14 @@ B5 diagnostic later failed closed because the pinned App Server candidate-free
 production read containment and mandatory passing real user-path proof remain
 pending. A subsequent bounded, no-model capability matrix proved that retained
 Codex `0.146.1` enforces the required boundary through exact configured phase
-permission profiles; the defect is the current production mapping's generic
-Thread/Turn/command sandbox overrides and shared writable profile, not a
-missing backend capability. The additive Profile/Client/Adapter correction
-remains governed by the
+permission profiles; the defect was the production mapping's generic Thread/
+Turn/command sandbox overrides and shared writable profile, not a missing
+backend capability. An additive contained Profile v2 now binds distinct
+ProjectRead and Candidate permission profiles through one narrow launch
+selector; its lower-Client command and Adapter Thread/Turn requests inherit
+that exact selected profile, while retained v1 remains unchanged. This mapping
+is implemented and deterministically tested but has not passed the complete
+Live matrix, so B5 remains blocked under the
 [Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
 
 The proposed [M2.6 Frontstage Interaction
@@ -208,8 +212,11 @@ deterministic failure coverage are implemented. An explicitly authorized
 initial B5 diagnostic ran, but the corrected direct pinned App Server probe
 failed closed after reading a content-free Authority Home sentinel; earlier
 Intake and linked-composition diagnostics are not final evidence after source
-changes. Mandatory passing real user-path and effective-containment proof
-remain unestablished, B5 is blocked, and milestone assessment has not started.
+changes. The additive contained Profile v2 correction is now implemented and
+deterministically tested across trusted composition, retained-v1 coexistence,
+lower Client, Adapter, SQLite/reopen, and the metadata-only containment probe.
+Mandatory passing real user-path and effective-containment proof remain
+unestablished, B5 is blocked, and milestone assessment has not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice

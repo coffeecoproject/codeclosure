@@ -688,6 +688,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0033_external_execution_intent_v2.sql',
       '0034_candidate_freeze_evidence_v2.sql',
       '0035_project_read_currency_failure.sql',
+      '0036_contained_profile_candidate_freeze.sql',
     ],
   );
   store.close();

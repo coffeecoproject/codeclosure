@@ -27,6 +27,8 @@ import {
   createCandidateFreezeEvidenceRecord,
   createM251CandidateFreezeEvidencePolicy,
   digestCandidateWorkspaceValue,
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID,
+  M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION,
   M251CandidateFreezeProfileClassification,
   classifyM251CandidateFreezeProfile,
   validateM251CandidateFreezeEvidencePolicy,
@@ -126,6 +128,16 @@ void test('[I-006][I-023][M251-C11] C11 Profile fixture selects the exact freeze
     M251CandidateFreezeProfileClassification.M251_FREEZE_V2,
   );
 
+  const containedProfile = decodeExecutionProfile({
+    ...profile,
+    id: M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID,
+    version: M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION,
+  });
+  assert.equal(
+    classifyM251CandidateFreezeProfile(containedProfile),
+    M251CandidateFreezeProfileClassification.M251_FREEZE_V2,
+  );
+
   assert.equal(
     classifyM251CandidateFreezeProfile(
       decodeExecutionProfile({ ...profile, id: 'profile_historical-codex' }),
@@ -135,6 +147,11 @@ void test('[I-006][I-023][M251-C11] C11 Profile fixture selects the exact freeze
 
   for (const incompatible of [
     { ...profile, version: 'codeclosure-m2-5-1-real-codex-profile-v2' },
+    { ...profile, id: M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID },
+    {
+      ...containedProfile,
+      version: 'codeclosure-m2-5-1-real-codex-profile-v1',
+    },
     { ...profile, candidateSource: 'fake-candidate-source' },
     { ...profile, candidateSourceVersion: 'v1' },
     { ...profile, verificationRunner: 'fake-verification-runner' },

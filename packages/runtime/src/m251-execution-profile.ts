@@ -2,6 +2,9 @@ import { type ExecutionProfile } from '@codeclosure/domain';
 
 export const M251_REAL_CODEX_EXECUTION_PROFILE_ID = 'profile_m2-5-1-real-codex';
 export const M251_REAL_CODEX_EXECUTION_PROFILE_VERSION = 'codeclosure-m2-5-1-real-codex-profile-v1';
+export const M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID = 'profile_m2-5-1-contained-real-codex';
+export const M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION =
+  'codeclosure-m2-5-1-contained-real-codex-profile-v2';
 export const M251_CANDIDATE_SOURCE_ID = 'controlled-copy-candidate';
 export const M251_CANDIDATE_SOURCE_VERSION = 'candidate-freeze-v2';
 export const M251_VERIFICATION_RUNNER_ID = 'protected-local-verification';
@@ -18,11 +21,19 @@ export type M251CandidateFreezeProfileClassification =
 export function classifyM251CandidateFreezeProfile(
   profile: ExecutionProfile,
 ): M251CandidateFreezeProfileClassification {
-  if (profile.id !== M251_REAL_CODEX_EXECUTION_PROFILE_ID) {
+  if (
+    profile.id !== M251_REAL_CODEX_EXECUTION_PROFILE_ID &&
+    profile.id !== M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID
+  ) {
     return M251CandidateFreezeProfileClassification.HISTORICAL;
   }
+  const supportedProfileTuple =
+    (profile.id === M251_REAL_CODEX_EXECUTION_PROFILE_ID &&
+      profile.version === M251_REAL_CODEX_EXECUTION_PROFILE_VERSION) ||
+    (profile.id === M251_CONTAINED_CODEX_EXECUTION_PROFILE_ID &&
+      profile.version === M251_CONTAINED_CODEX_EXECUTION_PROFILE_VERSION);
   return profile.schemaVersion === 2 &&
-    profile.version === M251_REAL_CODEX_EXECUTION_PROFILE_VERSION &&
+    supportedProfileTuple &&
     profile.candidateSource === M251_CANDIDATE_SOURCE_ID &&
     profile.candidateSourceVersion === M251_CANDIDATE_SOURCE_VERSION &&
     profile.verificationRunner === M251_VERIFICATION_RUNNER_ID &&

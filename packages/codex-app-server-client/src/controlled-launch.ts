@@ -26,6 +26,7 @@ export interface ControlledAppServerLaunchInput {
   readonly codexHome: string;
   readonly credentialEnvironment?: Readonly<Record<string, string>>;
   readonly cwd: string;
+  readonly defaultPermissionProfileId?: string;
   readonly executableSearchPath: string;
   readonly installation: VerifiedCodexInstallation;
   readonly locale?: string;
@@ -38,6 +39,7 @@ export interface AppServerLaunchSummary {
   readonly codexHome: string;
   readonly codexVersion: string;
   readonly cwd: string;
+  readonly defaultPermissionProfileId?: string;
   readonly delegatedExecutableDigest: string;
   readonly environmentNames: readonly string[];
   readonly executablePath: string;
@@ -102,6 +104,34 @@ function credentialEnvironment(
   return Object.freeze(result);
 }
 
+export function isValidDefaultPermissionProfileId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value) &&
+    Buffer.byteLength(value, 'utf8') <= 128
+  );
+}
+
+function appServerArguments(input: ControlledAppServerLaunchInput): readonly string[] {
+  const profileId = input.defaultPermissionProfileId;
+  if (profileId === undefined) {
+    return Object.freeze(['app-server', '--stdio', '--strict-config']);
+  }
+  if (!isValidDefaultPermissionProfileId(profileId)) {
+    throw clientError(
+      AppServerClientErrorCode.INVALID_LAUNCH,
+      'Default permission profile identifier is invalid',
+    );
+  }
+  return Object.freeze([
+    'app-server',
+    '--stdio',
+    '--strict-config',
+    '--config',
+    `default_permissions=${JSON.stringify(profileId)}`,
+  ]);
+}
+
 function makeLaunch(
   executablePath: string,
   arguments_: readonly string[],
@@ -139,6 +169,9 @@ function makeLaunch(
     codexHome,
     codexVersion: input.installation.profile.version,
     cwd,
+    ...(input.defaultPermissionProfileId === undefined
+      ? {}
+      : { defaultPermissionProfileId: input.defaultPermissionProfileId }),
     delegatedExecutableDigest: input.installation.profile.delegatedExecutableDigest,
     environmentNames: Object.freeze(Object.keys(environment).sort()),
     executablePath,
@@ -168,11 +201,7 @@ export function createControlledAppServerLaunch(
       'Verified launcher path no longer matches its supported profile',
     );
   }
-  return makeLaunch(
-    input.installation.delegatedExecutablePath,
-    Object.freeze(['app-server', '--stdio', '--strict-config']),
-    input,
-  );
+  return makeLaunch(input.installation.delegatedExecutablePath, appServerArguments(input), input);
 }
 
 export function assertAppServerProcessLaunch(
@@ -206,7 +235,7 @@ export function createFixtureProcessLaunch(
   }
   return makeLaunch(
     input.installation.launcherPath,
-    Object.freeze([realpathSync(scriptPath), scenario, 'app-server', '--stdio', '--strict-config']),
+    Object.freeze([realpathSync(scriptPath), scenario, ...appServerArguments(input)]),
     input,
   );
 }

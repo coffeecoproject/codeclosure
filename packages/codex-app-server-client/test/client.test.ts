@@ -85,6 +85,7 @@ async function startFixture(
   scenario: string,
   options: Readonly<{
     credentialEnvironment?: Readonly<Record<string, string>>;
+    defaultPermissionProfileId?: string;
     limits?: Partial<AppServerClientLimits>;
     onCompactionEvent?: Parameters<typeof startAppServerClient>[0]['onCompactionEvent'];
     onNotification?: (notification: AppServerNotification) => void;
@@ -97,6 +98,9 @@ async function startFixture(
     ...(options.credentialEnvironment === undefined
       ? {}
       : { credentialEnvironment: options.credentialEnvironment }),
+    ...(options.defaultPermissionProfileId === undefined
+      ? {}
+      : { defaultPermissionProfileId: options.defaultPermissionProfileId }),
     executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin`,
     scenario,
     scriptPath: fixtureScript,
@@ -264,6 +268,34 @@ void test('credential environment names outside the selected allowlist fail befo
     () =>
       startFixture(t, 'happy', {
         credentialEnvironment: { NODE_OPTIONS: '--require=/poisoned/module.cjs' },
+      }),
+    isClientError(AppServerClientErrorCode.INVALID_LAUNCH),
+  );
+});
+
+void test('controlled launch binds one validated default permission profile without arbitrary config', async (t) => {
+  const profileId = 'codeclosure-m2-5-1-project-read';
+  const { client } = await startFixture(t, 'happy', {
+    defaultPermissionProfileId: profileId,
+  });
+  const observation = JSON.parse(client.initialization.userAgent) as {
+    appServerArguments: string[];
+  };
+  assert.deepEqual(observation.appServerArguments, [
+    'app-server',
+    '--stdio',
+    '--strict-config',
+    '--config',
+    `default_permissions=${JSON.stringify(profileId)}`,
+  ]);
+  assert.equal(client.launchSummary.defaultPermissionProfileId, profileId);
+});
+
+void test('controlled launch rejects an invalid default permission profile before spawn', async (t) => {
+  await assert.rejects(
+    () =>
+      startFixture(t, 'happy', {
+        defaultPermissionProfileId: 'profile\n--dangerously-bypass-approvals-and-sandbox',
       }),
     isClientError(AppServerClientErrorCode.INVALID_LAUNCH),
   );
@@ -556,6 +588,65 @@ void test('the narrow buffered sandbox command uses command/exec without widenin
     ),
     isClientError(AppServerClientErrorCode.UNSUPPORTED_METHOD),
   );
+});
+
+void test('the profile-bound sandbox command inherits only the exact controlled launch profile', async (t) => {
+  const permissionProfileId = 'codeclosure-m2-5-1-project-read';
+  const { client, root } = await startFixture(t, 'happy', {
+    defaultPermissionProfileId: permissionProfileId,
+  });
+  const cwd = join(root, 'candidate');
+  const command = Object.freeze(['/bin/sh', '-c', 'exit 0']);
+  const result = await client.executeProfileBoundSandboxCommand({
+    command,
+    cwd,
+    permissionProfileId,
+    timeoutMilliseconds: 1_000,
+  });
+
+  assert.deepEqual(result, {
+    request: {
+      command,
+      cwd,
+      outputBytesCap: 1_024,
+      timeoutMs: 1_000,
+    },
+    response: { exitCode: 0, stderr: '', stdout: '' },
+  });
+  assert.equal(Reflect.has(result.request, 'sandboxPolicy'), false);
+});
+
+void test('the profile-bound sandbox command rejects missing or substituted launch selection', async (t) => {
+  const { client, root } = await startFixture(t, 'happy');
+  await assert.rejects(
+    client.executeProfileBoundSandboxCommand({
+      command: ['/bin/sh', '-c', 'exit 0'],
+      cwd: join(root, 'candidate'),
+      permissionProfileId: 'codeclosure-m2-5-1-project-read',
+      timeoutMilliseconds: 1_000,
+    }),
+    isClientError(AppServerClientErrorCode.INVALID_LAUNCH),
+  );
+  assert.equal(await client.request('thread/start', {}, decodeThread), 'thread-fixture');
+});
+
+void test('the profile-bound sandbox command rejects an explicit sandbox override', async (t) => {
+  const permissionProfileId = 'codeclosure-m2-5-1-project-read';
+  const { client, root } = await startFixture(t, 'happy', {
+    defaultPermissionProfileId: permissionProfileId,
+  });
+  await assert.rejects(
+    client.executeProfileBoundSandboxCommand({
+      command: ['/bin/sh', '-c', 'exit 0'],
+      cwd: join(root, 'candidate'),
+      permissionProfileId,
+      // @ts-expect-error -- the inherited-profile operation has no override surface.
+      sandboxPolicy: { type: 'dangerFullAccess' },
+      timeoutMilliseconds: 1_000,
+    }),
+    isClientError(AppServerClientErrorCode.PROTOCOL_LIMIT),
+  );
+  assert.equal(await client.request('thread/start', {}, decodeThread), 'thread-fixture');
 });
 
 void test('the narrow buffered sandbox command rejects unsafe input before wire traffic', async (t) => {

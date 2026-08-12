@@ -451,10 +451,11 @@ async function main() {
         digest: digests.digest(domain.externalExecutionPhaseDispatchEntryProjection(entry)),
       });
     };
-    const launchFor = (cwd) =>
+    const launchFor = (cwd, permissionProfileId) =>
       client.createControlledAppServerLaunch({
         codexHome: profileAuthority.roots.codexHome,
         cwd,
+        defaultPermissionProfileId: permissionProfileId,
         executableSearchPath: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
         installation: profileAuthority.installation,
         processHome: profileAuthority.roots.processHome,
@@ -489,7 +490,7 @@ async function main() {
         ),
         digestCanonical: adapter.digestCanonical,
         expectedSandboxType: 'readOnly',
-        launch: launchFor(snapshot),
+        launch: launchFor(snapshot, selectedPhase.entry.permissionProfileId),
         launchNonce: m251LiveContainmentDigest('launch-nonce-v1', phase),
         onShutdown: shutdownObservation,
         phaseEntry: selectedPhase.entry,
@@ -539,7 +540,7 @@ async function main() {
       ),
       digestCanonical: adapter.digestCanonical,
       expectedSandboxType: 'workspaceWrite',
-      launch: launchFor(candidateWorkspace),
+      launch: launchFor(candidateWorkspace, implement.entry.permissionProfileId),
       launchNonce: m251LiveContainmentDigest('launch-nonce-v1', 'IMPLEMENT'),
       onShutdown: shutdownObservation,
       phaseEntry: implement.entry,

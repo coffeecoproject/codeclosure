@@ -54,6 +54,7 @@ import {
   codexWorkerOutputSchemaV3,
   decodeCodexWorkerDirectiveV3,
   decodeCodexWorkerResultV3,
+  isM251ContainedWorkerAdapterVersion,
   renderCodexWorkerPromptV3,
   type CodexAdapterObservationV2,
   type CodexM251WorkerPhase,
@@ -185,6 +186,13 @@ function phasePermissionProfile(directive: SelectedCodexWorkerDirective) {
         id: directive.profile.permissionProfileId,
         digest: directive.profile.permissionProfileDigest,
       });
+}
+
+function usesContainedPhaseProfile(directive: SelectedCodexWorkerDirective): boolean {
+  return (
+    isV3Directive(directive) &&
+    isM251ContainedWorkerAdapterVersion(directive.profile.phase.workerAdapterVersion)
+  );
 }
 
 function phaseDisabledFeatures(directive: SelectedCodexWorkerDirective): readonly string[] {
@@ -428,6 +436,7 @@ function assertEffectiveThread(
   const expectedInstructions = phaseInstructionSources(directive).map((source) => source.path);
   const candidateBound =
     !isV3Directive(directive) || directive.sourceAuthority.kind === 'CANDIDATE';
+  const contained = usesContainedPhaseProfile(directive);
   if (
     effective.model !== profile.model ||
     effective.modelProvider !== profile.modelProvider ||
@@ -438,8 +447,8 @@ function assertEffectiveThread(
     effective.reasoningEffort !== profile.reasoningEffort ||
     effective.sandbox.type !== (candidateBound ? 'workspaceWrite' : 'readOnly') ||
     effective.sandbox.networkAccess ||
-    effective.sandbox.excludeSlashTmp ||
-    effective.sandbox.excludeTmpdirEnvVar ||
+    effective.sandbox.excludeSlashTmp !== (contained && candidateBound) ||
+    effective.sandbox.excludeTmpdirEnvVar !== (contained && candidateBound) ||
     effective.sandbox.writableRoots.length !== 0 ||
     JSON.stringify(effective.instructionSources) !== JSON.stringify(expectedInstructions)
   ) {
@@ -1446,7 +1455,9 @@ export class CodexWorkerAdapter implements WorkerPort {
         developerInstructions: selectedDeveloperInstructions(this.#directive),
         model: profile.model,
         modelProvider: profile.modelProvider,
-        sandbox: candidateBound ? ('workspace-write' as const) : ('read-only' as const),
+        ...(usesContainedPhaseProfile(this.#directive)
+          ? {}
+          : { sandbox: candidateBound ? ('workspace-write' as const) : ('read-only' as const) }),
         serviceTier: profile.serviceTier,
       };
       const effective =
@@ -1531,7 +1542,9 @@ export class CodexWorkerAdapter implements WorkerPort {
               ? codexWorkerOutputSchemaV3(this.#directive)
               : codexWorkerOutputSchema(this.#directive),
           ),
-          sandboxPolicy: selectedTurnSandboxPolicy(this.#directive),
+          ...(usesContainedPhaseProfile(this.#directive)
+            ? {}
+            : { sandboxPolicy: selectedTurnSandboxPolicy(this.#directive) }),
           serviceTier: profile.serviceTier,
           threadId: effective.threadId,
         },

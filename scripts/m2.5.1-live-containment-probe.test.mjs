@@ -41,7 +41,12 @@ function fixture(overrides = {}) {
     ),
     digestCanonical,
     expectedSandboxType: 'readOnly',
-    launch: Object.freeze({ executablePath: '/fixture/codex' }),
+    launch: Object.freeze({
+      executablePath: '/fixture/codex',
+      summary: Object.freeze({
+        defaultPermissionProfileId: overrides.launchPermissionProfileId ?? permissionProfile.id,
+      }),
+    }),
     launchNonce: m251LiveContainmentDigest('fixture-launch-nonce-v1', phase),
     onShutdown: (clean) => {
       state.shutdownObserved = clean;
@@ -65,9 +70,9 @@ function fixture(overrides = {}) {
       serviceTier: 'priority',
     }),
     startAppServerClient: async (clientInput) => ({
-      executeBufferedSandboxCommand: async (commandInput) => {
+      executeProfileBoundSandboxCommand: async (commandInput) => {
         state.requests.push(
-          Object.freeze({ method: 'executeBufferedSandboxCommand', params: commandInput }),
+          Object.freeze({ method: 'executeProfileBoundSandboxCommand', params: commandInput }),
         );
         if (overrides.commandRequestError !== undefined) {
           throw overrides.commandRequestError;
@@ -83,16 +88,6 @@ function fixture(overrides = {}) {
             command: commandInput.command,
             cwd: commandInput.cwd,
             outputBytesCap: 1_024,
-            sandboxPolicy:
-              commandInput.sandboxKind === 'READ_ONLY'
-                ? { networkAccess: false, type: 'readOnly' }
-                : {
-                    excludeSlashTmp: true,
-                    excludeTmpdirEnvVar: true,
-                    networkAccess: false,
-                    type: 'workspaceWrite',
-                    writableRoots: [commandInput.cwd],
-                  },
             timeoutMs: commandInput.timeoutMilliseconds,
           },
           response: {
@@ -158,15 +153,26 @@ test('projects one exact direct sandbox command into containment metadata', asyn
       'permissionProfile/list',
       'thread/start',
       'config/read',
-      'executeBufferedSandboxCommand',
+      'executeProfileBoundSandboxCommand',
     ],
   );
   assert.deepEqual(state.requests.at(-1)?.params, {
     command: input.command,
     cwd: input.cwd,
-    sandboxKind: 'READ_ONLY',
+    permissionProfileId: input.phaseEntry.permissionProfileId,
     timeoutMilliseconds: input.terminalTimeoutMilliseconds,
   });
+});
+
+test('rejects a controlled launch bound to another permission profile', async () => {
+  const { input, state } = fixture({ launchPermissionProfileId: 'permission_candidate_v1' });
+
+  await assert.rejects(runM251LiveContainmentProbe(input), (error) => {
+    assert.equal(m251LiveContainmentFailureReasonCode(error), 'LAUNCH_PERMISSION_PROFILE_MISMATCH');
+    return true;
+  });
+  assert.equal(state.requests.length, 0);
+  assert.equal(state.shutdownObserved, undefined);
 });
 
 test('binds the same lower-client proof path to the distinct PLAN phase entry', async () => {
@@ -218,8 +224,8 @@ test('rejects a substituted lower-client command request', async () => {
       command: ['/bin/sh', '-c', 'exit 0'],
       cwd: '/assessment/project-read/snapshot',
       outputBytesCap: 1_024,
-      sandboxPolicy: { type: 'dangerFullAccess' },
       timeoutMs: 100,
+      substituted: true,
     },
   });
 

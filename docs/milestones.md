@@ -542,11 +542,14 @@ composition diagnostics are not final evidence after source changes. Effective
 production read containment and mandatory passing real user-path proof remain
 unestablished. A subsequent bounded, no-model capability matrix proved that
 retained Codex `0.146.1` enforces the required boundary through exact
-configured phase permission profiles; the current production mapping instead
-uses generic Thread/Turn/command sandbox overrides and one shared writable
-profile. The failed ADR 0043 production-containment requirement therefore
-continues to block B5 until the additive Profile/Client/Adapter correction is
-implemented and formally re-proved. The
+configured phase permission profiles; the pre-correction production mapping
+used generic Thread/Turn/command sandbox overrides and one shared writable
+profile. The additive contained Profile v2 correction now implements distinct
+ProjectRead/Candidate profiles, one narrow launch selector, inherited lower-
+Client/Adapter mapping, retained-v1 coexistence, and strict SQLite/reopen
+support. It is deterministically tested but not formally Live re-proved. The
+failed ADR 0043 production-containment requirement therefore continues to
+block B5 until the complete real matrix passes. The
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
 sequences the resolution but supplies no execution authority. Milestone
 assessment has not started. The

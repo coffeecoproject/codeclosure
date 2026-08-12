@@ -1163,6 +1163,14 @@ The Adapter admits a best-effort `unknown` command action only in `IMPLEMENT`,
 where later freeze-v2 success remains mandatory; every other phase and every
 unknown Item/effect still fails closed.
 
+Slice 4 now additively selects contained execution Profile v2 for new formal
+operations while preserving the retained v1 tuple. This adds no Domain record
+shape: the existing Profile v3 phase entries remain the sole permission-
+identity owner. SQLite Check/Evidence guards accept only either complete exact
+Profile tuple for the unchanged freeze-v2 contract; mixed identity/version
+forms still fail install, read, and reopen. Complete Live proof remains
+pending.
+
 ## External Execution — implemented M2 Slice 6
 
 ```text

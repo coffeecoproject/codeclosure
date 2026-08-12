@@ -209,8 +209,6 @@ export function createM251ProductionProtocolFixtureActivation(
       externalBackendCapabilityRecordProjection(withoutCapabilityDigest),
     ),
   });
-  const permissionDigest = digests.digest({ fixture: 'm251-b4', kind: 'permission' });
-  const executionConfigDigest = digests.digest({ fixture: 'm251-b4', kind: 'config-read' });
   const instructionSources = Object.freeze([]);
   const sharedProfile = Object.freeze({
     codexVersion: 'codex-cli 0.146.1',
@@ -232,12 +230,24 @@ export function createM251ProductionProtocolFixtureActivation(
     thread: Object.freeze({ kind: ExternalThreadPolicy.FRESH }),
   });
   const phaseAuthorities = Object.freeze(
-    [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT, WorkflowPhase.PLAN].map((phase) =>
-      Object.freeze({
+    [WorkflowPhase.DISCOVERY, WorkflowPhase.IMPLEMENT, WorkflowPhase.PLAN].map((phase) => {
+      const permissionProfileId =
+        phase === WorkflowPhase.IMPLEMENT
+          ? 'codeclosure-m2-5-1-candidate-v2'
+          : 'codeclosure-m2-5-1-project-read-v2';
+      return Object.freeze({
         phase,
-        permissionProfileId: 'codeclosure-m2-5-1-worker-fixture',
-        permissionProfileDigest: permissionDigest,
-        executionConfigDigest,
+        permissionProfileId,
+        permissionProfileDigest: digests.digest({
+          fixture: 'm251-b4',
+          kind: 'permission',
+          permissionProfileId,
+        }),
+        executionConfigDigest: digests.digest({
+          fixture: 'm251-b4',
+          kind: 'config-read',
+          permissionProfileId,
+        }),
         instructionSourceManifestId: 'codeclosure-m2-5-1-fixture-instructions',
         instructionSources,
         allowedRoots: Object.freeze([
@@ -246,8 +256,8 @@ export function createM251ProductionProtocolFixtureActivation(
             : input.projectReadWorkspaceRoot,
         ]),
         forbiddenRoots: Object.freeze([...input.phaseForbiddenRoots[phase]].toSorted()),
-      }),
-    ),
+      });
+    }),
   );
   const directives: CodexWorkerDirectiveV3[] = [];
   const phaseRuns: string[] = [];

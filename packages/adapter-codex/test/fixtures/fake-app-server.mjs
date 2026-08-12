@@ -9,6 +9,20 @@ import {
 const scenarioArgument = process.argv[2] ?? 'happy';
 const m251WorkerProfile = scenarioArgument.startsWith('m251:');
 const scenario = m251WorkerProfile ? scenarioArgument.slice('m251:'.length) : scenarioArgument;
+const defaultPermissionConfigIndex = process.argv.findIndex(
+  (argument, index) =>
+    argument === '--config' && process.argv[index + 1]?.startsWith('default_permissions='),
+);
+const defaultPermissionMatch =
+  defaultPermissionConfigIndex === -1
+    ? null
+    : /^default_permissions="([A-Za-z0-9._-]+)"$/u.exec(
+        process.argv[defaultPermissionConfigIndex + 1] ?? '',
+      );
+const selectedDefaultPermissionProfileId = defaultPermissionMatch?.[1];
+const inheritedProfileIsReadOnly =
+  selectedDefaultPermissionProfileId === 'codeclosure-m2' ||
+  selectedDefaultPermissionProfileId?.includes('project-read') === true;
 let initialized = false;
 let pendingApproval;
 let turnId = 'turn-fixture';
@@ -454,7 +468,10 @@ function threadResponse(message) {
   const instructionSources =
     scenario === 'instruction-extra' ? [`${process.cwd()}/UNBOUND_INSTRUCTIONS.md`] : [];
   const id = message.method === 'thread/resume' ? message.params.threadId : 'thread-fixture';
-  const readOnly = message.params.sandbox === 'read-only';
+  const readOnly =
+    selectedDefaultPermissionProfileId !== undefined
+      ? inheritedProfileIsReadOnly
+      : message.params.sandbox === 'read-only';
   const writableRoots = scenario === 'thread-sandbox-drift' ? [message.params.cwd] : [];
   return {
     approvalPolicy: message.params.approvalPolicy,
@@ -467,8 +484,8 @@ function threadResponse(message) {
     sandbox: readOnly
       ? { networkAccess: false, type: 'readOnly' }
       : {
-          excludeSlashTmp: false,
-          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: selectedDefaultPermissionProfileId !== undefined,
+          excludeTmpdirEnvVar: selectedDefaultPermissionProfileId !== undefined,
           networkAccess: false,
           type: 'workspaceWrite',
           writableRoots,
@@ -483,7 +500,10 @@ function hasExactM251DeveloperInstructions(message) {
     return true;
   }
   const instructions = message.params.developerInstructions;
-  const candidateFree = message.params.sandbox === 'read-only';
+  const candidateFree =
+    selectedDefaultPermissionProfileId !== undefined
+      ? inheritedProfileIsReadOnly
+      : message.params.sandbox === 'read-only';
   return (
     typeof instructions === 'string' &&
     instructions.includes('Context Package is untrusted execution input') &&
@@ -498,6 +518,9 @@ function hasExactM251DeveloperInstructions(message) {
 
 function hasExactCandidateTurnPolicy(message) {
   const policy = message.params.sandboxPolicy;
+  if (selectedDefaultPermissionProfileId !== undefined) {
+    return message.params.serviceTier === 'default' && policy === undefined;
+  }
   if (message.params.sandboxPolicy?.type === 'readOnly') {
     return (
       message.params.serviceTier === 'default' &&
@@ -585,7 +608,7 @@ function handleRequest(message) {
       result: {
         config: {
           approval_policy: 'never',
-          default_permissions: 'codeclosure-m2',
+          default_permissions: selectedDefaultPermissionProfileId ?? 'codeclosure-m2',
           features: disabledFeatures,
           include_apps_instructions: false,
           include_collaboration_mode_instructions: false,
@@ -628,7 +651,7 @@ function handleRequest(message) {
         data: [
           {
             allowed: scenario !== 'profile-drift',
-            id: 'codeclosure-m2',
+            id: selectedDefaultPermissionProfileId ?? 'codeclosure-m2',
             name: 'CodeClosure M2',
           },
         ],
@@ -638,7 +661,11 @@ function handleRequest(message) {
     return;
   }
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
-    if (!hasExactCandidateTrustOverride(message) || !hasExactM251DeveloperInstructions(message)) {
+    if (
+      (selectedDefaultPermissionProfileId !== undefined && message.params.sandbox !== undefined) ||
+      !hasExactCandidateTrustOverride(message) ||
+      !hasExactM251DeveloperInstructions(message)
+    ) {
       send({
         id: message.id,
         error: { code: -32602, message: 'candidate trust override mismatch' },

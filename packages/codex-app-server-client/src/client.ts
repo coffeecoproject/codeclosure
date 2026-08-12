@@ -6,6 +6,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 
 import {
   assertAppServerProcessLaunch,
+  isValidDefaultPermissionProfileId,
   type AppServerLaunchSummary,
   type AppServerProcessLaunch,
 } from './controlled-launch.js';
@@ -115,6 +116,25 @@ export interface BufferedSandboxCommandResponse {
 
 export interface BufferedSandboxCommandResult {
   readonly request: BufferedSandboxCommandRequest;
+  readonly response: BufferedSandboxCommandResponse;
+}
+
+export interface ProfileBoundSandboxCommandInput {
+  readonly command: readonly string[];
+  readonly cwd: string;
+  readonly permissionProfileId: string;
+  readonly timeoutMilliseconds: number;
+}
+
+export interface ProfileBoundSandboxCommandRequest {
+  readonly command: readonly string[];
+  readonly cwd: string;
+  readonly outputBytesCap: 1_024;
+  readonly timeoutMs: number;
+}
+
+export interface ProfileBoundSandboxCommandResult {
+  readonly request: ProfileBoundSandboxCommandRequest;
   readonly response: BufferedSandboxCommandResponse;
 }
 
@@ -280,19 +300,24 @@ function invalidBufferedSandboxCommandInput(): never {
   );
 }
 
-function bufferedSandboxCommandRequest(input: unknown): BufferedSandboxCommandRequest {
+function boundedCommandInput(
+  input: unknown,
+  expectedKeys: readonly string[],
+): Readonly<{
+  command: readonly string[];
+  cwd: string;
+  timeoutMilliseconds: number;
+}> {
   if (
     typeof input !== 'object' ||
     input === null ||
     Array.isArray(input) ||
-    JSON.stringify(Object.keys(input).toSorted()) !==
-      JSON.stringify(['command', 'cwd', 'sandboxKind', 'timeoutMilliseconds'])
+    JSON.stringify(Object.keys(input).toSorted()) !== JSON.stringify(expectedKeys)
   ) {
     return invalidBufferedSandboxCommandInput();
   }
   const rawCommand: unknown = Reflect.get(input, 'command');
   const cwd: unknown = Reflect.get(input, 'cwd');
-  const sandboxKind: unknown = Reflect.get(input, 'sandboxKind');
   const timeoutMilliseconds: unknown = Reflect.get(input, 'timeoutMilliseconds');
   if (
     !Array.isArray(rawCommand) ||
@@ -302,7 +327,6 @@ function bufferedSandboxCommandRequest(input: unknown): BufferedSandboxCommandRe
     !isAbsolute(cwd) ||
     resolve(cwd) !== cwd ||
     cwd.normalize('NFC') !== cwd ||
-    (sandboxKind !== 'READ_ONLY' && sandboxKind !== 'WORKSPACE_WRITE') ||
     typeof timeoutMilliseconds !== 'number' ||
     !Number.isSafeInteger(timeoutMilliseconds) ||
     timeoutMilliseconds < 1 ||
@@ -320,6 +344,22 @@ function bufferedSandboxCommandRequest(input: unknown): BufferedSandboxCommandRe
     }
     return value;
   });
+  return Object.freeze({
+    command: Object.freeze(command),
+    cwd,
+    timeoutMilliseconds,
+  });
+}
+
+function bufferedSandboxCommandRequest(input: unknown): BufferedSandboxCommandRequest {
+  const bounded = boundedCommandInput(
+    input,
+    Object.freeze(['command', 'cwd', 'sandboxKind', 'timeoutMilliseconds']),
+  );
+  const sandboxKind: unknown = Reflect.get(input as object, 'sandboxKind');
+  if (sandboxKind !== 'READ_ONLY' && sandboxKind !== 'WORKSPACE_WRITE') {
+    return invalidBufferedSandboxCommandInput();
+  }
   const sandboxPolicy =
     sandboxKind === 'READ_ONLY'
       ? Object.freeze({ networkAccess: false, type: 'readOnly' })
@@ -328,14 +368,31 @@ function bufferedSandboxCommandRequest(input: unknown): BufferedSandboxCommandRe
           excludeTmpdirEnvVar: true,
           networkAccess: false,
           type: 'workspaceWrite',
-          writableRoots: Object.freeze([cwd]),
+          writableRoots: Object.freeze([bounded.cwd]),
         });
   return Object.freeze({
-    command: Object.freeze(command),
-    cwd,
+    command: bounded.command,
+    cwd: bounded.cwd,
     outputBytesCap: 1_024,
     sandboxPolicy,
-    timeoutMs: timeoutMilliseconds,
+    timeoutMs: bounded.timeoutMilliseconds,
+  });
+}
+
+function profileBoundSandboxCommandRequest(input: unknown): ProfileBoundSandboxCommandRequest {
+  const bounded = boundedCommandInput(
+    input,
+    Object.freeze(['command', 'cwd', 'permissionProfileId', 'timeoutMilliseconds']),
+  );
+  const permissionProfileId: unknown = Reflect.get(input as object, 'permissionProfileId');
+  if (!isValidDefaultPermissionProfileId(permissionProfileId)) {
+    return invalidBufferedSandboxCommandInput();
+  }
+  return Object.freeze({
+    command: bounded.command,
+    cwd: bounded.cwd,
+    outputBytesCap: 1_024,
+    timeoutMs: bounded.timeoutMilliseconds,
   });
 }
 
@@ -642,6 +699,50 @@ export class AppServerClient {
           error,
           AppServerClientErrorCode.PROTOCOL_LIMIT,
           'Buffered sandbox command input is invalid',
+        ),
+      );
+    }
+    return this.#requestAdmitted(
+      'command/exec',
+      request,
+      decodeBufferedSandboxCommandResponse,
+      {
+        ...options,
+        timeoutMilliseconds: input.timeoutMilliseconds,
+      },
+      false,
+    ).then((response) => Object.freeze({ request, response }));
+  }
+
+  public executeProfileBoundSandboxCommand(
+    input: ProfileBoundSandboxCommandInput,
+    options: Readonly<{ signal?: AbortSignal }> = {},
+  ): Promise<ProfileBoundSandboxCommandResult> {
+    if (!generatedClientMethodSet.has('command/exec')) {
+      return Promise.reject(
+        clientError(
+          AppServerClientErrorCode.VERSION_MISMATCH,
+          'The pinned protocol does not contain buffered sandbox execution',
+        ),
+      );
+    }
+    let request: ProfileBoundSandboxCommandRequest;
+    try {
+      request = profileBoundSandboxCommandRequest(input);
+      if (this.#launch.summary.defaultPermissionProfileId !== input.permissionProfileId) {
+        return Promise.reject(
+          clientError(
+            AppServerClientErrorCode.INVALID_LAUNCH,
+            'Profile-bound command does not match the controlled launch profile',
+          ),
+        );
+      }
+    } catch (error) {
+      return Promise.reject(
+        errorFromUnknown(
+          error,
+          AppServerClientErrorCode.PROTOCOL_LIMIT,
+          'Profile-bound sandbox command input is invalid',
         ),
       );
     }
