@@ -188,8 +188,13 @@ public `duplicate_ignored` result already required by the unchanged protected
 Check; v6 keeps its historical review meaning. The complete restarted v7
 diagnostic triad passed on exact clean source `a3a5e9b`. The final prepared-
 source quality gate and ordered unchanged-source Live triad then passed on exact
-source `01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 may
-begin, but its canonical assessment and milestone review have not started;
+source `01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 has
+begun. Its non-verdict assessment foundation now freezes the exact 13-stage,
+68-row proof-owner and ordered source-manifest contract. The canonical runner,
+package command, explicit sole future-review exclusion, and authorization-
+absent/invalid fail-closed paths are implemented and tested. The runner has not
+been executed with aggregate Live authorization; its mandatory Live stages,
+current-source regressions, and independent milestone review have not run.
 M2.5.1 is not complete and M2.6 remains blocked. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit

@@ -170,7 +170,7 @@ function m2RegressionFixture(source) {
     requestedModel: 'gpt-5.6-sol',
     requestedProvider: 'openai',
     liveAuthorization: 'EXPLICIT',
-    reviewExclusion: M25_REVIEW_EXCLUSION,
+    reviewExclusion: source.reviewExclusion,
   };
   const protocol = {
     codex: {
@@ -576,6 +576,29 @@ void test('source identity detects drift and permits only the one M2.5 review ex
   );
   assert.throws(
     () => parseM25SourceIdentity(sourceIdentityOutput('docs/reviews/another-review.md')),
+    /unauthorized review-file exclusion/u,
+  );
+});
+
+void test('enclosing M2.5.1 regression may select only its exact future review exclusion', () => {
+  const reviewExclusion = 'docs/reviews/m2.5.1-completion-review.md';
+  const source = parseM25SourceIdentity(sourceIdentityOutput(reviewExclusion), reviewExclusion);
+  const baseline = m2RegressionFixture(source);
+  const result = {
+    ...baseline,
+    environment: { ...baseline.environment, reviewExclusion },
+    stages: baseline.stages.map((stage) =>
+      stage.id === 'entry'
+        ? {
+            ...stage,
+            evidence: { ...baseline.environment, reviewExclusion },
+          }
+        : stage,
+    ),
+  };
+  assert.doesNotThrow(() => validateM2CurrentSourceRegressionResult(result, source));
+  assert.throws(
+    () => parseM25SourceIdentity(sourceIdentityOutput(reviewExclusion)),
     /unauthorized review-file exclusion/u,
   );
 });

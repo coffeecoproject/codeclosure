@@ -210,7 +210,7 @@ function fixtureAdapter(t: TestContext, scenario: string) {
       diagnostics.push(`${category}/${location}/${token}`),
     clientLimits: {
       initializationTimeoutMilliseconds: 5_000,
-      requestTimeoutMilliseconds: 5_000,
+      requestTimeoutMilliseconds: scenario === 'v2-request-timeout' ? 100 : 5_000,
       shutdownGraceMilliseconds: 2_000,
       shutdownKillMilliseconds: 2_000,
     },
@@ -259,7 +259,7 @@ function rawResponseItemNotification(sequence: number, item: JsonObject): AppSer
   };
 }
 
-void test('v2 closed configuration removes deprecated Web Search keys and disables 0.146.1 features', () => {
+void test('closed-configuration-v2 removes deprecated Web Search keys and disables 0.146.1 features', () => {
   assert.equal(m251LiveIntakeClosedConfig.web_search, 'disabled');
   assert.equal(M251_LIVE_INTAKE_DISABLED_FEATURES.includes('web_search_cached'), false);
   assert.equal(M251_LIVE_INTAKE_DISABLED_FEATURES.includes('web_search_request'), false);
@@ -445,7 +445,7 @@ void test('retained Slice 1 v2 input closes before process launch instead of rec
   ]);
 });
 
-void test('the formerly failing decoded sequence completes through the current v3 Adapter', async (t) => {
+void test('observed-sequence-fixture and original-sequence-regression complete through the current v3 Adapter', async (t) => {
   const fixture = fixtureAdapter(t, 'v2-observed-sequence');
   const input = answerInput();
   assert.equal(input.package.assistantProfile.codexVersion, '0.146.1');
@@ -542,7 +542,7 @@ void test('the current governed assumption scenario uses the version-3 Intake Ad
   }
 });
 
-void test('remote-control projection admits only the exact disabled state', () => {
+void test('remote-control-matrix admits only the exact disabled state', () => {
   for (const [sequence, status] of ['disabled', 'connecting', 'connected', 'errored'].entries()) {
     const harness = projectionHarness();
     harness.projection.record({
@@ -569,7 +569,7 @@ void test('remote-control projection admits only the exact disabled state', () =
   });
 });
 
-void test('rate-limit projection validates then discards all account values', () => {
+void test('rate-limit-content-minimization validates then discards all account values', () => {
   const harness = projectionHarness();
   harness.projection.record({
     method: 'account/rateLimits/updated',
@@ -621,7 +621,7 @@ void test('Turn error projection retains only the fixed error class and retry di
   assert.equal(JSON.stringify(harness.events).includes('sensitive'), false);
 });
 
-void test('raw Response Items have one exhaustive content-free effect disposition', () => {
+void test('notification-and-item-disposition-matrix gives raw Response Items one exhaustive content-free effect disposition', () => {
   const cases: readonly Readonly<{
     item: JsonObject;
     kind:
@@ -820,7 +820,7 @@ void test('raw Response messages admit only the closed assistant role and phase'
   });
 });
 
-void test('message projection is lifecycle-stage aware and content remains terminal-bound', () => {
+void test('message-stage-matrix is lifecycle-stage aware and keeps content terminal-bound', () => {
   const started = projectionHarness();
   started.projection.record(
     itemNotification(
@@ -1002,7 +1002,7 @@ const terminalScenarioDiagnostics = Object.freeze({
 });
 
 for (const [scenario, expectedDiagnostic] of Object.entries(terminalScenarioDiagnostics)) {
-  void test(`${scenario} rejects the v2 terminal response and discards output`, async (t) => {
+  void test(`terminal-response-matrix ${scenario} rejects the v2 terminal response and discards output`, async (t) => {
     const fixture = fixtureAdapter(t, scenario);
     const result = await fixture.assistant.answer(answerInput(), new AbortController().signal);
     assert.equal(result.kind, 'FAILED');
@@ -1052,4 +1052,36 @@ void test('mixed v1 Adapter identity is rejected before process launch', async (
   assert.equal(result.kind, 'FAILED');
   assert.equal(result.failureReasonCode, 'ASSISTANT_PROTOCOL_ERROR');
   assert.equal(result.observation.processLaunchCount, 0);
+});
+
+void test('process-timeout-interruption-closure returns typed v3 failures without output or recall', async (t) => {
+  const timedOut = await fixtureAdapter(t, 'v2-request-timeout').assistant.analyze(
+    intentInput(),
+    new AbortController().signal,
+  );
+  assert.equal(timedOut.kind, 'FAILED');
+  assert.equal(timedOut.failureReasonCode, 'ASSISTANT_TIMEOUT');
+  assert.equal('response' in timedOut, false);
+
+  const exited = await fixtureAdapter(t, 'v2-process-failure').assistant.analyze(
+    intentInput(),
+    new AbortController().signal,
+  );
+  assert.equal(exited.kind, 'FAILED');
+  assert.equal(exited.failureReasonCode, 'ASSISTANT_UNAVAILABLE');
+  assert.equal('response' in exited, false);
+
+  const controller = new AbortController();
+  const running = fixtureAdapter(t, 'v2-running-turn').assistant.analyze(
+    intentInput(),
+    controller.signal,
+  );
+  const abortTimer = setTimeout(() => controller.abort(), 100);
+  const interrupted = await running;
+  clearTimeout(abortTimer);
+  assert.equal(interrupted.kind, 'FAILED');
+  assert.equal(interrupted.failureReasonCode, 'ASSISTANT_UNAVAILABLE');
+  assert.equal(interrupted.observation.turnStartCount, 1);
+  assert.equal(interrupted.observation.turnInterruptCount, 1);
+  assert.equal('response' in interrupted, false);
 });

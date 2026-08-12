@@ -78,9 +78,11 @@ v2 now maps these same Workflow phases to separate inherited ProjectRead and
 Candidate permission profiles without changing phase transitions, Candidate
 timing, or Workflow mutation authority. Its standalone complete Live
 containment matrix passed on source `7621c8b`, while linked real user-path proof
-remains pending as final evidence. The restarted initial B5 linked composition
-and containment diagnostics passed on clean source `1b43dfc`; they do not change
-the phase graph or complete the required final unchanged-source proof. A
+was then completed by the final prepared-source gate and ordered unchanged-
+source Live triad on source `01fd537`; the bounded Slice 4 review issued `PASS`.
+Those receipts do not change the phase graph or add a Workflow writer. Slice 5's
+non-verdict canonical runner and offline fail-closed tests are implemented but
+unrun with aggregate Live authorization; they add no Workflow writer. A
 Plan/source mismatch
 preserves the completed Plan Attempt, creates no Candidate, and atomically
 moves the Workflow from `PLAN / READY` to `PLAN / FAILED` through existing
@@ -96,7 +98,9 @@ the project-source Context authority. The Candidate-creation guard and its
 failure closure, candidate-free pre/post-Turn currency checks, and
 phase-specific external dispatch are implemented. Slice 3's trusted production
 composition passed its bounded deterministic review using an explicit protocol
-fixture; real Codex execution of that composition remains pending.
+fixture; the bounded Slice 4 Live evidence now proves real Codex execution of
+that composition, while Slice 5 canonical assessment and milestone review
+remain unrun.
 
 Proposed M2.6 Frontstage work adds no Workflow phase or
 writer: authorized actions would invoke only existing public Runtime commands,

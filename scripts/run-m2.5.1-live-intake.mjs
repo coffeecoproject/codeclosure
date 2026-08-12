@@ -29,6 +29,7 @@ import {
   validateM251ScenarioReceipt,
 } from './m2.5.1-live-intake-lib.mjs';
 import { parseSourceIdentity, sourceIdentitiesMatch } from './m2-acceptance-lib.mjs';
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const maximumChildOutputBytes = 16 * 1024 * 1024;
@@ -37,6 +38,15 @@ let internalObservation;
 let internalAuthorityDiagnostic;
 let internalReceiptDiagnostic;
 const internalSafeDiagnostics = [];
+const liveProofPlan = Object.freeze({
+  prerequisite: 'live-lower-client-prerequisite',
+  scenarios: Object.freeze({
+    AMBIGUOUS_INTENT: 'live-ambiguous-intent-analysis',
+    ANSWER_ONLY: 'live-answer-only',
+    CLEAR_INTENT: 'live-clear-intent-analysis',
+  }),
+  aggregate: Object.freeze(['live-intake-effect-trace', 'live-intake-privacy']),
+});
 
 function fail(message) {
   throw new TypeError(message);
@@ -80,10 +90,18 @@ function requireSuccessfulChild(result, label) {
   return result.stdout ?? '';
 }
 
-function exactSourceIdentity() {
+function selectedReviewExclusion() {
+  const selected = argument('--review-exclusion') ?? M251_LIVE_INTAKE_REVIEW_EXCLUSION;
+  if (![M251_LIVE_INTAKE_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(selected)) {
+    fail('Live Intake uses an unsupported review exclusion');
+  }
+  return selected;
+}
+
+function exactSourceIdentity(reviewExclusion) {
   const result = run(
     process.execPath,
-    ['scripts/source-identity.mjs', '--review-exclusion', M251_LIVE_INTAKE_REVIEW_EXCLUSION],
+    ['scripts/source-identity.mjs', '--review-exclusion', reviewExclusion],
     { timeoutMilliseconds: 30_000 },
   );
   return parseSourceIdentity(requireSuccessfulChild(result, 'Exact source-identity check'));
@@ -140,6 +158,11 @@ function questionFields(authority) {
 async function runInternalScenario() {
   internalStage = 'INPUT';
   const scenario = m251ScenarioById(requiredEnvironment('CODECLOSURE_M251_SCENARIO_ID'));
+  if (
+    requiredEnvironment('CODECLOSURE_M251_PROOF_MARKER') !== liveProofPlan.scenarios[scenario.id]
+  ) {
+    fail('Live Intake scenario differs from its frozen proof owner');
+  }
   const dataHomePath = realpathSync(requiredEnvironment('CODECLOSURE_M251_DATA_HOME'));
   const temporaryRoot = realpathSync(requiredEnvironment('CODECLOSURE_M251_TEMP_ROOT'));
   const projectPath = scenario.requiresProject
@@ -346,7 +369,10 @@ function internalFailureReceipt() {
   });
 }
 
-function lowerClientPrerequisite(selectedAuthSource) {
+function lowerClientPrerequisite(selectedAuthSource, proofMarker) {
+  if (proofMarker !== liveProofPlan.prerequisite) {
+    fail('Lower-client prerequisite differs from its frozen proof owner');
+  }
   const result = run(
     process.execPath,
     [
@@ -405,7 +431,7 @@ async function currentIntakeToolchain() {
   });
 }
 
-function runScenarioChild(scenario, root, selectedAuthSource) {
+function runScenarioChild(scenario, root, selectedAuthSource, proofMarker) {
   const scenarioRoot = join(root, scenario.id.toLowerCase().replaceAll('_', '-'));
   const dataHomePath = join(scenarioRoot, 'authority');
   const temporaryRoot = join(scenarioRoot, 'temporary');
@@ -421,6 +447,7 @@ function runScenarioChild(scenario, root, selectedAuthSource) {
     env: {
       ...process.env,
       CODECLOSURE_M251_SCENARIO_ID: scenario.id,
+      CODECLOSURE_M251_PROOF_MARKER: proofMarker,
       CODECLOSURE_M251_DATA_HOME: realpathSync(dataHomePath),
       CODECLOSURE_M251_TEMP_ROOT: realpathSync(temporaryRoot),
       ...(scenario.requiresProject
@@ -468,7 +495,8 @@ async function runParent() {
   if (process.env.CODECLOSURE_M251_LIVE_AUTHORIZED !== '1') {
     fail('CODECLOSURE_M251_LIVE_AUTHORIZED must be exactly 1 for live Intake execution');
   }
-  const sourceOpening = exactSourceIdentity();
+  const reviewExclusion = selectedReviewExclusion();
+  const sourceOpening = exactSourceIdentity(reviewExclusion);
   const selectedAuthSource = authSource();
   const contract = parseJson(
     readFileSync(
@@ -493,7 +521,15 @@ async function runParent() {
   if (JSON.stringify(actualToolchain) !== JSON.stringify(frozenToolchain)) {
     fail('Current Intake toolchain differs from the frozen M2.5.1 identity');
   }
-  const lower = lowerClientPrerequisite(selectedAuthSource);
+  if (
+    JSON.stringify(Object.keys(liveProofPlan.scenarios).sort()) !==
+      JSON.stringify(M251_LIVE_INTAKE_SCENARIOS.map(({ id }) => id).sort()) ||
+    JSON.stringify([...liveProofPlan.aggregate].sort()) !==
+      JSON.stringify(['live-intake-effect-trace', 'live-intake-privacy'])
+  ) {
+    fail('Live Intake proof plan differs from its frozen mandatory paths');
+  }
+  const lower = lowerClientPrerequisite(selectedAuthSource, liveProofPlan.prerequisite);
   if (
     lower.version !== actualToolchain.codexVersion ||
     lower.snapshotDigest !== actualToolchain.protocolSnapshotDigest
@@ -506,7 +542,7 @@ async function runParent() {
   let sourceClosing;
   try {
     scenarios = M251_LIVE_INTAKE_SCENARIOS.map((scenario) =>
-      runScenarioChild(scenario, root, selectedAuthSource),
+      runScenarioChild(scenario, root, selectedAuthSource, liveProofPlan.scenarios[scenario.id]),
     );
   } catch (error) {
     failure = error;
@@ -517,7 +553,7 @@ async function runParent() {
       failure ??= error;
     }
     try {
-      sourceClosing = exactSourceIdentity();
+      sourceClosing = exactSourceIdentity(reviewExclusion);
     } catch (error) {
       failure ??= error;
     }
@@ -578,7 +614,7 @@ async function runParent() {
       scenarioAuthorityRootsRemoved: true,
     }),
   });
-  validateM251LiveReceipt(receipt);
+  validateM251LiveReceipt(receipt, reviewExclusion);
   assertM251MetadataOnly(receipt, [
     selectedAuthSource,
     ...M251_LIVE_INTAKE_SCENARIOS.map(({ request }) => request),

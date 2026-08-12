@@ -1750,8 +1750,11 @@ Executable demonstration contract v7 then completed the exact user-stated
 observable criterion, and the complete restarted v7 diagnostic triad passed on
 exact clean source `a3a5e9b`. The final prepared-source gate and ordered
 unchanged-source Live triad then passed on exact source `01fd537`, and the
-bounded Slice 4 review issued `PASS`. Slice 5 may begin, but canonical
-assessment and milestone review have not started; M2.5.1 remains incomplete.
+bounded Slice 4 review issued `PASS`. Slice 5's non-verdict canonical runner,
+13-stage/68-row proof-owner and ordered source-manifest contract, package entry,
+sole future-review exclusion, and offline fail-closed tests are implemented.
+The canonical mandatory Live/regression execution and milestone review have
+not run; M2.5.1 remains incomplete.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge

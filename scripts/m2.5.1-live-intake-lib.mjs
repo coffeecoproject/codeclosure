@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 import { lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -455,7 +456,7 @@ function validateProjectTreeIdentity(value, label) {
   digest(value.digest, `${label} digest`);
 }
 
-function validateSourceIdentity(value, label) {
+function validateSourceIdentity(value, label, expectedReviewExclusion) {
   exactKeys(
     value,
     [
@@ -482,7 +483,7 @@ function validateSourceIdentity(value, label) {
     fail(`${label} path count must be positive`);
   }
   digest(value.digest, `${label} manifest digest`);
-  if (value.reviewExclusion !== M251_LIVE_INTAKE_REVIEW_EXCLUSION) {
+  if (value.reviewExclusion !== expectedReviewExclusion) {
     fail(`${label} review exclusion is invalid`);
   }
 }
@@ -516,7 +517,15 @@ export function assertM251MetadataOnly(value, forbiddenStrings = []) {
   return value;
 }
 
-export function validateM251LiveReceipt(value) {
+export function validateM251LiveReceipt(
+  value,
+  expectedReviewExclusion = M251_LIVE_INTAKE_REVIEW_EXCLUSION,
+) {
+  if (
+    ![M251_LIVE_INTAKE_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(expectedReviewExclusion)
+  ) {
+    fail('M2.5.1 live Intake receipt uses an unsupported review exclusion');
+  }
   exactKeys(
     value,
     [
@@ -541,8 +550,16 @@ export function validateM251LiveReceipt(value) {
     fail('M2.5.1 live Intake receipt identity is invalid');
   }
   exactKeys(value.source, ['opening', 'closing'], 'Live source identity');
-  validateSourceIdentity(value.source.opening, 'Opening live source identity');
-  validateSourceIdentity(value.source.closing, 'Closing live source identity');
+  validateSourceIdentity(
+    value.source.opening,
+    'Opening live source identity',
+    expectedReviewExclusion,
+  );
+  validateSourceIdentity(
+    value.source.closing,
+    'Closing live source identity',
+    expectedReviewExclusion,
+  );
   if (JSON.stringify(value.source.opening) !== JSON.stringify(value.source.closing)) {
     fail('Live source identity drifted during Intake execution');
   }

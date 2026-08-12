@@ -165,7 +165,7 @@ const failureRequest = {
   admittedUserContent: 'Explain the retained failed topic.',
 } as const;
 
-void test('retained completed v1 success and failure reopen without reinterpretation', async (t) => {
+void test('v1-strict-reopen retains completed success and failure without reinterpretation', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);
@@ -201,7 +201,7 @@ void test('retained completed v1 success and failure reopen without reinterpreta
   }
 });
 
-void test('completed v1 failure replays without another assistant effect', async (t) => {
+void test('v1-completed-replay returns failure without another assistant effect', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);
@@ -239,7 +239,7 @@ void test('completed v1 failure replays without another assistant effect', async
   }
 });
 
-void test('incomplete v1 operations reconcile closed and never resume through the current version', async (t) => {
+void test('v1-incomplete-recovery reconciles closed and never resumes through the current version', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);
@@ -364,7 +364,7 @@ void test('new v3 operation persists one exact Manifest, reservation, and respon
   }
 });
 
-void test('stored v1/current Adapter substitution fails strict reopen', async (t) => {
+void test('mixed-intake-version-rejection fails strict reopen on stored v1/current Adapter substitution', async (t) => {
   const filename = databasePath(t);
   const initial = SqliteControlStore.open({ filename });
   const policy = installPolicy(initial);

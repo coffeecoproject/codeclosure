@@ -574,7 +574,7 @@ function handleRequest(message) {
       send({ id: message.id, error: { code: -32602, message: 'closed Turn policy mismatch' } });
       return;
     }
-    if (scenario === 'request-timeout') {
+    if (scenario === 'request-timeout' || scenario === 'v2-request-timeout') {
       return;
     }
     send({ id: message.id, result: { turn: turn('inProgress', []) } });
@@ -622,7 +622,7 @@ function handleRequest(message) {
       });
       return;
     }
-    if (scenario === 'process-failure') {
+    if (scenario === 'process-failure' || scenario === 'v2-process-failure') {
       process.exit(42);
     }
     if (scenario === 'compact') {
@@ -648,7 +648,7 @@ function handleRequest(message) {
       });
       return;
     }
-    if (scenario === 'running-turn') {
+    if (scenario === 'running-turn' || scenario === 'v2-running-turn') {
       return;
     }
     if (isM251Scenario) {

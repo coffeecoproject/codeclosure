@@ -46,6 +46,7 @@ import {
   m251ProjectObservation,
   m251RemoveOwnedAssessmentRoot,
 } from './m2.5.1-live-environment-lib.mjs';
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const contractPath = join(repositoryRoot, 'scripts', 'fixtures', 'm2.5.1', 'slice0-contract.json');
@@ -105,6 +106,14 @@ function linkedExecutionFailureMetadata(inspection, authority) {
 function argument(name) {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
+}
+
+function selectedReviewExclusion() {
+  const selected = argument('--review-exclusion') ?? M251_LIVE_COMPOSITION_REVIEW_EXCLUSION;
+  if (![M251_LIVE_COMPOSITION_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(selected)) {
+    fail('Live composition uses an unsupported review exclusion');
+  }
+  return selected;
 }
 
 function jsonFile(path, label) {
@@ -319,6 +328,7 @@ function snapshotsRemoved(projectReadRoot) {
 
 async function main() {
   const authorization = admitM251LiveCompositionAuthorization(process.env);
+  const reviewExclusion = selectedReviewExclusion();
   const contract = jsonFile(contractPath, 'M2.5.1 Slice 0 contract');
   const projectPath = realpathSync(
     resolve(
@@ -333,10 +343,7 @@ async function main() {
   const authSource = m251ExactAuthSource(argument('--auth-source'));
   const authOpening = m251MetadataFingerprint(authSource);
   const protectedCheckOpening = m251FileDigest(protectedCheckPath);
-  const sourceOpening = m251ExactSourceIdentity(
-    repositoryRoot,
-    M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
-  );
+  const sourceOpening = m251ExactSourceIdentity(repositoryRoot, reviewExclusion);
   const assessmentRoot = realpathSync(
     mkdtempSync(join(tmpdir(), 'codeclosure-m2-5-1-live-composition-')),
   );
@@ -840,10 +847,14 @@ async function main() {
     );
     const sourceClosingBeforeCleanup = cleanupStep(
       'CLEANUP_SOURCE_OBSERVATION_BEFORE_ROOT_REMOVAL_FAILED',
-      () => m251ExactSourceIdentity(repositoryRoot, M251_LIVE_COMPOSITION_REVIEW_EXCLUSION),
+      () => m251ExactSourceIdentity(repositoryRoot, reviewExclusion),
     );
     cleanupStep('CLEANUP_SOURCE_CLOSURE_BEFORE_ROOT_REMOVAL_FAILED', () =>
-      assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosingBeforeCleanup),
+      assertM251LiveCompositionSourceClosure(
+        sourceOpening,
+        sourceClosingBeforeCleanup,
+        reviewExclusion,
+      ),
     );
     const credentialUnchanged = cleanupStep(
       'CLEANUP_CREDENTIAL_ROOT_INSPECTION_FAILED',
@@ -858,10 +869,10 @@ async function main() {
     );
     const assessmentRootRemoved = !existsSync(assessmentRoot);
     const sourceClosing = cleanupStep('CLEANUP_SOURCE_OBSERVATION_FAILED', () =>
-      m251ExactSourceIdentity(repositoryRoot, M251_LIVE_COMPOSITION_REVIEW_EXCLUSION),
+      m251ExactSourceIdentity(repositoryRoot, reviewExclusion),
     );
     cleanupStep('CLEANUP_SOURCE_CLOSURE_FAILED', () =>
-      assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosing),
+      assertM251LiveCompositionSourceClosure(sourceOpening, sourceClosing, reviewExclusion),
     );
     const cleanupObservation = Object.freeze({
       ownedProcessesShutdownClean:
@@ -935,7 +946,7 @@ async function main() {
       roots: rootIdentity,
       profile,
     });
-    validateM251LiveCompositionReceipt(receipt, expectedIdentity);
+    validateM251LiveCompositionReceipt(receipt, expectedIdentity, reviewExclusion);
     assertM251LiveCompositionMetadataOnly(receipt, [
       authSource,
       projectPath,

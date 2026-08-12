@@ -36,6 +36,7 @@ const acceptancePlanPath = join(repositoryRoot, 'docs', 'plans', 'm2-acceptance-
 const cliEntryPoint = join(repositoryRoot, 'apps', 'cli', 'dist', 'index.js');
 const defaultReviewExclusion = 'docs/reviews/m2-completion-review.md';
 const currentMilestoneReviewExclusion = 'docs/reviews/m2.5-completion-review.md';
+const m251MilestoneReviewExclusion = 'docs/reviews/m2.5.1-completion-review.md';
 const invocationArguments = process.argv.slice(2);
 if (
   invocationArguments.length > 1 ||
@@ -218,9 +219,12 @@ function selectedReviewExclusion() {
   if (!/^docs\/reviews\/[a-z0-9][a-z0-9.-]*\.md$/u.test(value)) {
     throw new TypeError('CODECLOSURE_M2_REVIEW_EXCLUSION is not a portable review path');
   }
-  if (currentSourceRegression && value !== currentMilestoneReviewExclusion) {
+  if (
+    currentSourceRegression &&
+    ![currentMilestoneReviewExclusion, m251MilestoneReviewExclusion].includes(value)
+  ) {
     throw new TypeError(
-      'M2 current-source regression requires the canonical M2.5 review exclusion',
+      'M2 current-source regression requires a closed enclosing-milestone review exclusion',
     );
   }
   return value;

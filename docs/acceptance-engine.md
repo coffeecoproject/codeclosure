@@ -32,8 +32,12 @@ acceptance verdict. Slice 4's contained Profile correction changes no
 Acceptance rule or issuer; its containment Receipt remains assessment evidence
 even though the standalone complete Live containment matrix passed on source
 `7621c8b`; the restarted initial B5 linked composition and containment
-diagnostics passed on clean source `1b43dfc`, but they create no additional
-Acceptance issuer and final linked user-path and milestone proof remain pending.
+diagnostics passed on clean source `1b43dfc`, and the later final prepared-source
+gate plus ordered unchanged-source Live triad passed on source `01fd537`; the
+bounded Slice 4 review issued `PASS`. None creates another Acceptance issuer.
+Slice 5's non-verdict canonical runner and offline fail-closed tests are
+implemented; the runner and its future independent review remain outside
+technical Acceptance, and its mandatory Live/regression execution is unrun.
 Proposed M2.6 Frontstage routes,
 answers, Goal summaries, focus, pending actions, and notifications remain
 outside technical Acceptance and cannot issue `ACCEPT` or closeout.

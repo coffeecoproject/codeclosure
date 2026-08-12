@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 
 export const M251_LIVE_CONTAINMENT_AUTHORIZATION_ENV =
   'CODECLOSURE_M251_CONTAINMENT_LIVE_AUTHORIZED';
@@ -365,7 +366,7 @@ export function projectM251ImplementContainmentProbe(input) {
   });
 }
 
-function validateSourceIdentity(value, label) {
+function validateSourceIdentity(value, label, expectedReviewExclusion) {
   exactKeys(
     value,
     [
@@ -380,7 +381,7 @@ function validateSourceIdentity(value, label) {
     label,
   );
   digest(value.digest, `${label} digest`);
-  if (value.reviewExclusion !== M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION) {
+  if (value.reviewExclusion !== expectedReviewExclusion) {
     fail(`${label} uses the wrong review exclusion`);
   }
 }
@@ -425,7 +426,18 @@ function validatePrivacy(value) {
   }
 }
 
-export function validateM251LiveContainmentReceipt(value, expectedIdentity) {
+export function validateM251LiveContainmentReceipt(
+  value,
+  expectedIdentity,
+  expectedReviewExclusion = M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION,
+) {
+  if (
+    ![M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(
+      expectedReviewExclusion,
+    )
+  ) {
+    fail('Live containment receipt uses an unsupported review exclusion');
+  }
   exactKeys(
     value,
     [
@@ -465,8 +477,8 @@ export function validateM251LiveContainmentReceipt(value, expectedIdentity) {
     fail('M2.5.1 Live containment stage did not pass');
   }
   exactKeys(value.source, ['closing', 'opening'], 'Live containment source closure');
-  validateSourceIdentity(value.source.opening, 'Opening source identity');
-  validateSourceIdentity(value.source.closing, 'Closing source identity');
+  validateSourceIdentity(value.source.opening, 'Opening source identity', expectedReviewExclusion);
+  validateSourceIdentity(value.source.closing, 'Closing source identity', expectedReviewExclusion);
   exactIdentity(value.source.opening, value.source.closing, 'Live containment source identity');
   for (const field of [
     'source',

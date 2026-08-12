@@ -565,8 +565,11 @@ source gate and ordered unchanged-source Live triad then passed on exact source
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
 records that bounded result but supplies no execution authority. Passing linked
 real user-path and effective-containment proof is now established only as
-bounded Slice 4 evidence. Slice 5 may begin, but canonical milestone assessment
-and independent milestone review have not started; M2.5.1 remains incomplete.
+bounded Slice 4 evidence. Slice 5's non-verdict canonical runner, package entry,
+13-stage/68-row proof-owner, ordered source-manifest/evidence-manifest contract,
+sole future-review exclusion, and offline authorization fail-closed tests are
+implemented. The canonical mandatory Live/regression execution and independent
+milestone review have not run; M2.5.1 remains incomplete.
 The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),

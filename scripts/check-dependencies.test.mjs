@@ -72,7 +72,7 @@ packages:
   });
 });
 
-void test('the current manifest, lockfile, and actual source dependency graph are closed', () => {
+void test('m2.5.1-authority-non-regression keeps the current manifest, lockfile, and actual source dependency graph closed', () => {
   const audit = auditPackageDependencies(repositoryRoot);
   assert.equal(audit.packageCount, 10);
   assert.deepEqual(audit.violations, []);
@@ -218,7 +218,7 @@ void test('the M2.5.1 Codex contract owns one public Domain authority edge', () 
   assert.deepEqual(domainImportOwners, ['m251-contracts.ts']);
 });
 
-void test('the Codex Intake adapter has one closed package edge and production capability set', () => {
+void test('m2.5.1-intake-adapter-boundary keeps one closed package edge and production capability set', () => {
   assert.deepEqual(m25CodexIntakeAdapterDependencyExpectation, {
     path: 'packages/adapter-codex-intake',
     name: '@codeclosure/adapter-codex-intake',
@@ -297,7 +297,7 @@ void test('the Codex Intake adapter has one closed package edge and production c
   }
 });
 
-void test('m2.5.1-normalized-observer-only', () => {
+void test('m2.5.1-protocol-projection-boundary and m2.5.1-normalized-observer-only', () => {
   const packageRoot = resolve(repositoryRoot, 'packages/adapter-codex-intake');
   const adapterSource = readFileSync(resolve(packageRoot, 'src/adapter.ts'), 'utf8');
   const projectionSource = readFileSync(resolve(packageRoot, 'src/projection.ts'), 'utf8');
@@ -338,7 +338,7 @@ void test('m2.5.1-fake-test-seam-only', () => {
   assert.equal(authoritySource.includes('startAppServerClient'), false);
 });
 
-void test('the local workspace adapter depends only on public Runtime Candidate contracts', () => {
+void test('m2.5.1-project-read-port-boundary keeps the local workspace adapter on public Runtime contracts', () => {
   const packageRoot = resolve(repositoryRoot, 'packages/workspace-local');
   const sourcePaths = [
     resolve(packageRoot, 'src/contracts.ts'),

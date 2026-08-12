@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
 
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
+
 import {
   M251_LIVE_INTAKE_RECEIPT_KIND,
   M251_LIVE_INTAKE_REVIEW_EXCLUSION,
@@ -153,6 +155,14 @@ test('M2.5.1 live Intake receipt accepts only the complete metadata proof', () =
   receipt.scenarios.forEach((scenario) =>
     assert.equal(validateM251ScenarioReceipt(scenario), scenario),
   );
+});
+
+test('M2.5.1 live Intake receipt can bind the sole canonical completion-review exclusion', () => {
+  const receipt = liveReceipt();
+  receipt.source.opening.reviewExclusion = M251_REVIEW_EXCLUSION;
+  receipt.source.closing.reviewExclusion = M251_REVIEW_EXCLUSION;
+  assert.equal(validateM251LiveReceipt(receipt, M251_REVIEW_EXCLUSION), receipt);
+  assert.throws(() => validateM251LiveReceipt(receipt), /review exclusion is invalid/u);
 });
 
 test('M2.5.1 live Intake receipt rejects content-bearing diagnostics', () => {

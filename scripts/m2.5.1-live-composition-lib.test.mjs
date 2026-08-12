@@ -16,6 +16,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
+
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 import { URL, fileURLToPath } from 'node:url';
 
 import {
@@ -791,6 +793,26 @@ test('M2.5.1 Live composition receipt accepts one complete metadata-only linked 
   assert.doesNotMatch(JSON.stringify(value), /Prevent duplicate payment callbacks/u);
   assert.doesNotMatch(JSON.stringify(value), /duplicate callback for one order/u);
   assert.doesNotMatch(JSON.stringify(value), /src\/payment\.js/u);
+});
+
+test('M2.5.1 Live composition Receipt can bind the canonical assessment source identity', () => {
+  const value = receipt();
+  value.source.opening.reviewExclusion = M251_REVIEW_EXCLUSION;
+  value.source.closing.reviewExclusion = M251_REVIEW_EXCLUSION;
+  assert.equal(
+    validateM251LiveCompositionReceipt(
+      value,
+      {
+        source: value.source.opening,
+        project: value.projectClosure.opening,
+        roots: value.roots,
+        profile: value.profile,
+      },
+      M251_REVIEW_EXCLUSION,
+    ),
+    value,
+  );
+  assert.throws(() => strictValidate(value), /contract identity is invalid/u);
 });
 
 test('M2.5.1 Live composition keeps Candidate freeze outside the Acceptance Evidence Set', () => {

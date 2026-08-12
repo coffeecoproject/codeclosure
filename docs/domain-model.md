@@ -131,9 +131,12 @@ Runtime-owned candidate-free pre/post-Turn source/snapshot currency closure.
 B4 publishes that Driver through the trusted production composition, ordinary
 Start, protected verification, Evidence, Acceptance, and closeout path; B5
 closes the exact frozen deterministic proof owners. The bounded Slice 3 review
-passed on 2026-08-11 using an explicit protocol fixture. Real Codex dispatch
-through this composition and the milestone-level `M251-C11` verdict remain
-pending.
+passed on 2026-08-11 using an explicit protocol fixture. Slice 4's final
+prepared-source gate and ordered unchanged-source Live triad later proved real
+Codex dispatch through this composition on source `01fd537`, and its bounded
+review issued `PASS`. Slice 5's non-verdict canonical runner and offline fail-
+closed tests are implemented; its Live/regression execution is unrun and the
+milestone-level verdict remains pending.
 The implemented Candidate-creation source-currency path uses the existing
 Workflow integrity event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the
@@ -1169,12 +1172,12 @@ shape: the existing Profile v3 phase entries remain the sole permission-
 identity owner. SQLite Check/Evidence guards accept only either complete exact
 Profile tuple for the unchanged freeze-v2 contract; mixed identity/version
 forms still fail install, read, and reopen. The standalone complete Live
-containment matrix passed on source `7621c8b`; linked real user-path and
-milestone proof remain pending. The restarted initial B5 linked composition and
-containment diagnostics passed on clean source `1b43dfc`, but their root-bound
-Profile digests remain internally exact per operation and are not equal across
-the two distinct assessment roots; the final unchanged-source triad and Slice 4
-review remain pending.
+containment matrix passed on source `7621c8b`. The restarted initial B5 linked
+composition and containment diagnostics passed on clean source `1b43dfc`, and
+the final prepared-source gate plus ordered unchanged-source Live triad passed
+on source `01fd537`; the bounded Slice 4 review issued `PASS`. Their root-bound
+Profile digests remain internally exact per operation and are not substituted
+across assessment roots. Slice 5's assessment contract adds no Domain record.
 
 ## External Execution — implemented M2 Slice 6
 

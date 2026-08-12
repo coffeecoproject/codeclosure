@@ -21,12 +21,10 @@ import {
   M25IntentAdmissionEngine,
   M25IntentProjectionCompiler,
   Rfc8785Canonicalizer,
-  createExecutionProfileInstaller,
   createM1PolicyBundleDefinition,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
   createM251PolicyBundleDefinition,
-  createPolicyInstaller,
   type GovernedExecutionPreflight,
   type IntakeAssistantPort,
   type IntakeStartCompositionPort,
@@ -122,19 +120,9 @@ function startComposition(
   });
 }
 
-function installM251Authority(
-  store: SqliteControlStore,
-  namespace: string,
-): GovernedExecutionPreflight {
+function m251StartAuthority(store: SqliteControlStore, namespace: string) {
   const clock = Object.freeze({ now: () => isoTimestamp('2026-08-10T08:10:00.000Z') });
-  const ids = new DeterministicIds(namespace);
-  const policy = createPolicyInstaller({ store, clock, ids, digests }).installPolicyBundle(
-    createM251PolicyBundleDefinition(digests),
-  );
-  assert.notEqual(policy.status, 'POLICY_CONFLICT');
-  if (policy.status === 'POLICY_CONFLICT') {
-    throw new Error(policy.message);
-  }
+  const capabilityIds = new DeterministicIds(`${namespace}-capability`);
   const fixture = m251CandidateFreezeV2ProfileFixture(
     namespace,
     digests,
@@ -142,32 +130,37 @@ function installM251Authority(
   );
   const capability = store.installExternalBackendCapabilityRecord({
     record: fixture.capability,
-    auditEventId: auditEventId(ids.nextAuditEventId()),
+    auditEventId: auditEventId(capabilityIds.nextAuditEventId()),
     payloadDigest: fixture.capability.recordDigest,
   });
   assert.notEqual(capability.status, 'CAPABILITY_CONFLICT');
   if (capability.status === 'CAPABILITY_CONFLICT') {
     throw new Error(capability.message);
   }
-  const profile = createExecutionProfileInstaller({
+  const authority = createWorkflowStartAuthorityRuntime({
     store,
     clock,
-    ids,
-    digests,
-  }).installExecutionProfile(fixture.profile);
-  assert.notEqual(profile.status, 'PROFILE_CONFLICT');
-  if (profile.status === 'PROFILE_CONFLICT') {
-    throw new Error(profile.message);
-  }
-  return Object.freeze({
-    schemaVersion: 1,
-    workflowPolicyId: policy.value.bundle.id,
-    workflowPolicyVersion: policy.value.bundle.version,
-    workflowPolicyDigest: policy.value.bundle.digest,
-    executionProfileId: profile.value.profile.id,
-    executionProfileVersion: profile.value.profile.version,
-    executionProfileDigest: profile.value.profile.digest,
+    namespace,
+    policyDefinition: createM251PolicyBundleDefinition(digests),
+    executionProfileDefinition: fixture.profile,
   });
+  const preflight: GovernedExecutionPreflight = Object.freeze({
+    schemaVersion: 1,
+    workflowPolicyId: authority.policy.id,
+    workflowPolicyVersion: authority.policy.version,
+    workflowPolicyDigest: authority.policy.digest,
+    executionProfileId: authority.profile.id,
+    executionProfileVersion: authority.profile.version,
+    executionProfileDigest: authority.profile.digest,
+  });
+  return Object.freeze({ authority, preflight });
+}
+
+function installM251Authority(
+  store: SqliteControlStore,
+  namespace: string,
+): GovernedExecutionPreflight {
+  return m251StartAuthority(store, namespace).preflight;
 }
 
 function installAdmissionPolicy(store: SqliteControlStore, namespace: string): string {
@@ -209,7 +202,7 @@ function coordinator(
   });
 }
 
-void test('[M251-C03] authorization-profile-binding retains the exact formal Start Authorization before disabled Driver v3 dispatch', async (t) => {
+void test('[M251-C03][M251-F02] authorization-profile-binding and materialization-start-crash-window retain the exact formal Start Authorization before dispatch', async (t) => {
   const filename = temporaryDatabase(t);
   const store = SqliteControlStore.open({ filename });
   const preflight = installM251Authority(store, 'm251-c03-authority');
@@ -251,6 +244,12 @@ void test('[M251-C03] authorization-profile-binding retains the exact formal Sta
   assert.equal(store.nextAttemptSequence(authority.materialization.workflowId), 1);
   assert.equal(store.getWorkflowPolicyBinding(authority.materialization.workflowId), undefined);
   assert.equal(store.getExecutionProfileBinding(authority.materialization.workflowId), undefined);
+  assert.equal(store.getCandidateForGoal(authority.materialization.goalId), undefined);
+  assert.equal(
+    store.getCandidateAuthorityForWorkflow(authority.materialization.workflowId),
+    undefined,
+  );
+  assert.deepEqual(store.listVerificationObligations(authority.materialization.goalId), []);
   store.close();
 
   const reopened = SqliteControlStore.open({ filename });
@@ -262,6 +261,105 @@ void test('[M251-C03] authorization-profile-binding retains the exact formal Sta
   );
   assert.equal(reopened.nextAttemptSequence(authority.materialization.workflowId), 1);
 });
+
+void test(
+  '[M251-F03] start-replay-race gives overlapping automatic and manual ordinary Start one retained winner through the explicit deterministic seam',
+  { timeout: 30_000 },
+  async (t) => {
+    const store = SqliteControlStore.open({ filename: temporaryDatabase(t) });
+    t.after(() => store.close());
+    const namespace = 'm251-f03-start-race';
+    const startAuthority = createWorkflowStartAuthorityRuntime({
+      store,
+      namespace: `${namespace}-authority`,
+      clock: Object.freeze({ now: () => isoTimestamp('2026-08-10T08:12:00.000Z') }),
+      policyDefinition: createM1PolicyBundleDefinition(digests),
+      executionProfileDefinition: m1FakeExecutionProfileRecipe(
+        M1FakeExecutionProfileName.HAPPY_PATH,
+      ).definition,
+    });
+    const preflight: GovernedExecutionPreflight = Object.freeze({
+      schemaVersion: 1,
+      workflowPolicyId: startAuthority.policy.id,
+      workflowPolicyVersion: startAuthority.policy.version,
+      workflowPolicyDigest: startAuthority.policy.digest,
+      executionProfileId: startAuthority.profile.id,
+      executionProfileVersion: startAuthority.profile.version,
+      executionProfileDigest: startAuthority.profile.digest,
+    });
+
+    let markAutomaticEntered: (() => void) | undefined;
+    const automaticEntered = new Promise<void>((resolve) => {
+      markAutomaticEntered = resolve;
+    });
+    let releaseAutomaticStart: (() => void) | undefined;
+    const automaticRelease = new Promise<void>((resolve) => {
+      releaseAutomaticStart = resolve;
+    });
+    t.after(() => releaseAutomaticStart?.());
+    let automaticStartCalls = 0;
+    const runtime = coordinator(
+      store,
+      `${namespace}-intake`,
+      preflight,
+      startComposition(store, async (input) => {
+        automaticStartCalls += 1;
+        markAutomaticEntered?.();
+        await automaticRelease;
+        return { command: startAuthority.kernel.startGoal(input) };
+      }),
+    );
+    const input = {
+      commandId: commandId(`command_${namespace}`),
+      interactionAction: IntakeInteractionAction.GOVERNED_EXECUTION,
+      admittedUserContent: 'Ship slice 4',
+      declaredProjectRef: project(`/fixture/${namespace}`),
+    } as const;
+
+    const automaticSubmission = runtime.submit(input);
+    await automaticEntered;
+    const committed = store.getIntakeCommandOutcome(input.commandId);
+    assert.ok(committed);
+    assert.equal(committed.result.kind, 'MATERIALIZED');
+    const intakeAuthority = store.getIntakeAuthority(committed.intakeRunId);
+    assert.ok(intakeAuthority?.materialization);
+    assert.ok(intakeAuthority.startAuthorization);
+    assert.equal(store.getWorkflow(intakeAuthority.materialization.workflowId)?.runStatus, 'READY');
+
+    const manualCommandId = commandId(`command_${namespace}-manual-winner`);
+    const manualStart = startAuthority.kernel.startGoal({
+      commandId: manualCommandId,
+      goalId: intakeAuthority.materialization.goalId,
+      expectedGoalRevision: intakeAuthority.materialization.goalRevision,
+      expectedWorkflowVersion: intakeAuthority.materialization.workflowVersion,
+    });
+    assert.equal(manualStart.status, 'APPLIED');
+    releaseAutomaticStart?.();
+
+    const automaticResult = await automaticSubmission;
+    assert.equal(automaticResult.kind, 'OUTCOME');
+    assert.equal(automaticResult.startDisposition, 'START_COMMAND_REJECTED');
+    const workflow = store.getWorkflow(intakeAuthority.materialization.workflowId);
+    assert.ok(workflow?.activeAttemptId);
+    const retainedAttemptId = workflow.activeAttemptId;
+    assert.equal(store.nextAttemptSequence(workflow.id), 2);
+    assert.equal(store.getWorkflowPolicyBinding(workflow.id)?.startCommandId, manualCommandId);
+    assert.equal(store.getExecutionProfileBinding(workflow.id)?.startCommandId, manualCommandId);
+    assert.ok(store.getAttempt(retainedAttemptId)?.contextManifestId);
+    assert.equal(
+      store.getProcessedCommand(intakeAuthority.startAuthorization.startCommandId)?.commandId,
+      intakeAuthority.startAuthorization.startCommandId,
+    );
+
+    const replay = await runtime.submit(input);
+    assert.equal(replay.kind, 'OUTCOME');
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.startDisposition, 'START_COMMAND_REJECTED');
+    assert.equal(store.getWorkflow(workflow.id)?.activeAttemptId, retainedAttemptId);
+    assert.equal(store.nextAttemptSequence(workflow.id), 2);
+    assert.equal(automaticStartCalls, 2);
+  },
+);
 
 void test('[M251-C06] historical-goal-non-rebinding preserves the original immutable Profile after formal authority installation', async (t) => {
   const filename = temporaryDatabase(t);

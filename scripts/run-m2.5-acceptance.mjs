@@ -32,6 +32,23 @@ import { parseM2CurrentSourceRegressionResult } from './m2-acceptance-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const planPath = join(repositoryRoot, 'docs', 'plans', 'm2.5-acceptance-plan.md');
+const m251ReviewExclusion = 'docs/reviews/m2.5.1-completion-review.md';
+const invocationArguments = process.argv.slice(2);
+if (
+  invocationArguments.length > 1 ||
+  (invocationArguments.length === 1 && invocationArguments[0] !== '--regression')
+) {
+  throw new TypeError('run-m2.5-acceptance accepts only the optional --regression argument');
+}
+const currentSourceRegression = invocationArguments[0] === '--regression';
+const configuredReviewExclusion = process.env.CODECLOSURE_M25_REVIEW_EXCLUSION;
+const reviewExclusion = configuredReviewExclusion ?? M25_REVIEW_EXCLUSION;
+if (
+  ![M25_REVIEW_EXCLUSION, m251ReviewExclusion].includes(reviewExclusion) ||
+  (!currentSourceRegression && reviewExclusion !== M25_REVIEW_EXCLUSION)
+) {
+  throw new TypeError('M2.5 assessment uses an unsupported enclosing review exclusion');
+}
 const evidenceRoot = mkdtempSync(join(tmpdir(), 'codeclosure-m2-5-acceptance-'));
 const artifactsRoot = join(evidenceRoot, 'artifacts');
 const maximumOutputBytes = 128 * 1024 * 1024;
@@ -58,7 +75,7 @@ function sourceIdentityCommand() {
     process.execPath,
     'scripts/source-identity.mjs',
     '--review-exclusion',
-    M25_REVIEW_EXCLUSION,
+    reviewExclusion,
   ]);
 }
 
@@ -67,7 +84,7 @@ function preflightCommand() {
     process.execPath,
     'scripts/m2.5-preflight.mjs',
     '--review-exclusion',
-    M25_REVIEW_EXCLUSION,
+    reviewExclusion,
   ]);
 }
 
@@ -182,6 +199,9 @@ function runStage(definition) {
       FORCE_COLOR: '0',
       NO_COLOR: '1',
       CODECLOSURE_NODE_TEST_EVIDENCE: '1',
+      ...(definition.id === M25AcceptanceStage.M2_REGRESSION
+        ? { CODECLOSURE_M2_REVIEW_EXCLUSION: reviewExclusion }
+        : {}),
       TMPDIR: absoluteIsolatedStateRoot,
       TMP: absoluteIsolatedStateRoot,
       TEMP: absoluteIsolatedStateRoot,
@@ -444,8 +464,8 @@ try {
 let openingSourceIdentity;
 let closingSourceIdentity;
 try {
-  openingSourceIdentity = parseM25SourceIdentity(executions[0].stdout);
-  closingSourceIdentity = parseM25SourceIdentity(executions.at(-1).stdout);
+  openingSourceIdentity = parseM25SourceIdentity(executions[0].stdout, reviewExclusion);
+  closingSourceIdentity = parseM25SourceIdentity(executions.at(-1).stdout, reviewExclusion);
 } catch (error) {
   log(`Source identity rejected: ${error instanceof Error ? error.message : 'unknown failure'}`);
 }
@@ -533,7 +553,7 @@ const manifest = Object.freeze({
     outcome === M25AcceptanceOutcome.PASS
       ? M25AssessmentMeaning.READY
       : M25AssessmentMeaning.NOT_READY,
-  reviewExclusion: M25_REVIEW_EXCLUSION,
+  reviewExclusion,
   environment: environmentIdentity(),
   proofConfiguration:
     proofConfiguration ??
@@ -557,8 +577,10 @@ const manifestPath = join(evidenceRoot, 'evidence-manifest.json');
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 let manifestValid = false;
 try {
-  validateM25EvidenceManifest(manifest, (relativePath) =>
-    readFileSync(join(evidenceRoot, relativePath)),
+  validateM25EvidenceManifest(
+    manifest,
+    (relativePath) => readFileSync(join(evidenceRoot, relativePath)),
+    { reviewExclusion },
   );
   manifestValid = true;
 } catch (error) {
@@ -569,7 +591,9 @@ const finalOutcome = manifestValid ? outcome : M25AcceptanceOutcome.FAIL;
 process.stdout.write(
   `${JSON.stringify({
     schemaVersion: 1,
-    kind: 'M25_EXECUTABLE_ASSESSMENT_RESULT',
+    kind: currentSourceRegression
+      ? 'M25_CURRENT_SOURCE_REGRESSION_RESULT'
+      : 'M25_EXECUTABLE_ASSESSMENT_RESULT',
     outcome: finalOutcome,
     assessmentMeaning:
       finalOutcome === M25AcceptanceOutcome.PASS
@@ -577,9 +601,16 @@ process.stdout.write(
         : M25AssessmentMeaning.NOT_READY,
     evidenceDirectory: evidenceRoot,
     evidenceManifest: manifestPath,
-    reviewExclusion: M25_REVIEW_EXCLUSION,
+    reviewExclusion,
+    claimScope: currentSourceRegression
+      ? 'CURRENT_SOURCE_M2_5_REGRESSION_BASELINE'
+      : 'CANONICAL_EXECUTABLE_PROCEDURE',
+    canonicalCommand: currentSourceRegression
+      ? 'corepack pnpm regress:m2.5'
+      : 'corepack pnpm accept:m2.5',
+    historicalM25MilestoneVerdictReissued: false,
     milestoneStatusMutationAuthorized: false,
-    independentReviewRequired: true,
+    independentReviewRequired: !currentSourceRegression,
     stageOrder: M25_STAGE_ORDER,
   })}\n`,
 );

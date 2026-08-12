@@ -49,6 +49,7 @@ import {
   m251LiveContainmentFailureReasonCode,
   runM251LiveContainmentProbe,
 } from './m2.5.1-live-containment-probe.mjs';
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const contractPath = join(repositoryRoot, 'scripts', 'fixtures', 'm2.5.1', 'slice0-contract.json');
@@ -63,6 +64,14 @@ function fail(message) {
 function argument(name) {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
+}
+
+function selectedReviewExclusion() {
+  const selected = argument('--review-exclusion') ?? M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION;
+  if (![M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(selected)) {
+    fail('Live containment uses an unsupported review exclusion');
+  }
+  return selected;
 }
 
 function jsonFile(path, label) {
@@ -254,6 +263,7 @@ function toolchainIdentity(profileAuthority, profileDefinition, runtime, contrac
 
 async function main() {
   const authorization = admitM251LiveContainmentAuthorization(process.env);
+  const reviewExclusion = selectedReviewExclusion();
   const contract = jsonFile(contractPath, 'M2.5.1 Slice 0 contract');
   const projectPath = realpathSync(
     resolve(
@@ -267,10 +277,7 @@ async function main() {
     join(repositoryRoot, contract.demonstration.protectedCheck.assetPath),
     'Protected Check asset',
   );
-  const sourceOpening = m251ExactSourceIdentity(
-    repositoryRoot,
-    M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION,
-  );
+  const sourceOpening = m251ExactSourceIdentity(repositoryRoot, reviewExclusion);
   const authOpening = m251MetadataFingerprint(authSource);
   const protectedOpening = m251FileDigest(protectedCheckPath);
   const assessmentRoot = realpathSync(
@@ -571,10 +578,7 @@ async function main() {
       workspace.observeLocalCandidateSourceIdentity,
     );
     assertM251LiveCompositionProjectClosure(projectOpening, projectClosing);
-    const sourceBeforeCleanup = m251ExactSourceIdentity(
-      repositoryRoot,
-      M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION,
-    );
+    const sourceBeforeCleanup = m251ExactSourceIdentity(repositoryRoot, reviewExclusion);
     if (JSON.stringify(sourceOpening) !== JSON.stringify(sourceBeforeCleanup)) {
       fail('Live containment changed the CodeClosure source before cleanup');
     }
@@ -596,10 +600,7 @@ async function main() {
       })),
     ]);
     m251RemoveOwnedAssessmentRoot(assessmentRoot);
-    const sourceClosing = m251ExactSourceIdentity(
-      repositoryRoot,
-      M251_LIVE_CONTAINMENT_REVIEW_EXCLUSION,
-    );
+    const sourceClosing = m251ExactSourceIdentity(repositoryRoot, reviewExclusion);
     if (JSON.stringify(sourceOpening) !== JSON.stringify(sourceClosing)) {
       fail('Live containment changed the CodeClosure source');
     }
@@ -650,7 +651,7 @@ async function main() {
       projectIdentity,
       rootIdentity: selectedRootIdentity,
     });
-    validateM251LiveContainmentReceipt(receipt, expectedIdentity);
+    validateM251LiveContainmentReceipt(receipt, expectedIdentity, reviewExclusion);
     assertM251LiveContainmentMetadataOnly(receipt, [
       authSource,
       candidateMarker,

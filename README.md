@@ -49,8 +49,10 @@ protected Check, and the complete restarted v7 diagnostic triad passed on exact
 clean source `a3a5e9b`. The final prepared-source quality gate and ordered
 unchanged-source Live triad then passed on exact source `01fd537`, and the
 bounded real user-path and failure-closure review issued `PASS`. The canonical
-M2.5.1 assessment and milestone review have not started; M2.5.1 is not complete
-and M2.6 remains blocked.
+M2.5.1 non-verdict assessment runner and its offline fail-closed contract are
+implemented, but the aggregate mandatory Live/regression execution and
+independent milestone review have not run. M2.5.1 is not complete and M2.6
+remains blocked.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and
@@ -116,7 +118,11 @@ Current repository commands are:
   it preserves the applicable deterministic/live baseline without reissuing
   the historical M2 Goal-Intake-absence verdict;
 - `pnpm accept:m2.5` — run the non-verdict M2.5 executable assessment and emit
-  evidence that is only an input to the later independent milestone review.
+  evidence that is only an input to the later independent milestone review;
+- `pnpm regress:m2.5` — run the non-verdict current-source M2.5 regression
+  profile without reissuing its historical milestone verdict;
+- `pnpm accept:m2.5.1` — run the non-verdict M2.5.1 executable assessment; real
+  model-service stages require the command's explicit bounded authorization.
 - `pnpm check:m2.5.1:slice0` — validate the frozen M2.5.1 identities, protocol
   dispositions, proof ownership, unchanged-schema causality, and protected
   demonstration checker without claiming production implementation.

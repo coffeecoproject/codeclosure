@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { URL } from 'node:url';
 
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
 import { M251_PROJECT_TREE_MANIFEST_SCHEMA, m251LiveDigest } from './m2.5.1-live-intake-lib.mjs';
 
 const slice0Contract = JSON.parse(
@@ -206,7 +207,7 @@ function assertPairwiseSeparated(paths, label) {
   }
 }
 
-function sourceIdentity(value, label) {
+function sourceIdentity(value, label, expectedReviewExclusion) {
   exactKeys(
     value,
     [
@@ -230,7 +231,7 @@ function sourceIdentity(value, label) {
   }
   if (
     value.manifestSchema !== 'codeclosure-source-manifest-v1' ||
-    value.reviewExclusion !== M251_LIVE_COMPOSITION_REVIEW_EXCLUSION
+    value.reviewExclusion !== expectedReviewExclusion
   ) {
     fail(`${label} contract identity is invalid`);
   }
@@ -465,9 +466,13 @@ export function assertM251LiveCompositionRootIdentity(expected, actual) {
   return actual;
 }
 
-export function assertM251LiveCompositionSourceClosure(opening, closing) {
-  sourceIdentity(opening, 'Opening live composition source identity');
-  sourceIdentity(closing, 'Closing live composition source identity');
+export function assertM251LiveCompositionSourceClosure(
+  opening,
+  closing,
+  expectedReviewExclusion = M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+) {
+  sourceIdentity(opening, 'Opening live composition source identity', expectedReviewExclusion);
+  sourceIdentity(closing, 'Closing live composition source identity', expectedReviewExclusion);
   assertExactIdentity(opening, closing, 'Live composition source identity');
   return closing;
 }
@@ -1872,7 +1877,18 @@ export function assertM251LiveCompositionMetadataOnly(value, forbiddenStrings = 
   return value;
 }
 
-export function validateM251LiveCompositionReceipt(value, expectedIdentity) {
+export function validateM251LiveCompositionReceipt(
+  value,
+  expectedIdentity,
+  expectedReviewExclusion = M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
+) {
+  if (
+    ![M251_LIVE_COMPOSITION_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(
+      expectedReviewExclusion,
+    )
+  ) {
+    fail('Live composition receipt uses an unsupported review exclusion');
+  }
   exactKeys(
     value,
     [
@@ -1918,8 +1934,16 @@ export function validateM251LiveCompositionReceipt(value, expectedIdentity) {
   );
   validateStages(value.stages);
   exactKeys(value.source, ['opening', 'closing'], 'Live composition source closure');
-  assertM251LiveCompositionSourceClosure(value.source.opening, value.source.closing);
-  sourceIdentity(expectedIdentity.source, 'Expected live composition source identity');
+  assertM251LiveCompositionSourceClosure(
+    value.source.opening,
+    value.source.closing,
+    expectedReviewExclusion,
+  );
+  sourceIdentity(
+    expectedIdentity.source,
+    'Expected live composition source identity',
+    expectedReviewExclusion,
+  );
   assertExactIdentity(
     expectedIdentity.source,
     value.source.opening,

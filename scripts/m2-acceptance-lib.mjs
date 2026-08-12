@@ -1148,7 +1148,11 @@ export function acceptanceVerdict(matrixResults) {
   return M2AcceptanceOutcome.PASS;
 }
 
-function validateRegressionSourceIdentity(rawIdentity, name) {
+function validateRegressionSourceIdentity(
+  rawIdentity,
+  name,
+  expectedReviewExclusion = 'docs/reviews/m2.5-completion-review.md',
+) {
   const identity = assertObject(rawIdentity, name);
   assertExactKeys(
     identity,
@@ -1170,9 +1174,9 @@ function validateRegressionSourceIdentity(rawIdentity, name) {
     identity.manifestSchema !== 'codeclosure-source-manifest-v1' ||
     !Number.isSafeInteger(identity.pathCount) ||
     identity.pathCount < 1 ||
-    identity.reviewExclusion !== 'docs/reviews/m2.5-completion-review.md'
+    identity.reviewExclusion !== expectedReviewExclusion
   ) {
-    throw new TypeError(`${name} does not bind the canonical M2.5 source manifest`);
+    throw new TypeError(`${name} does not bind the enclosing source manifest`);
   }
   assertDigest(identity.digest, `${name} digest`);
   return identity;
@@ -1190,7 +1194,7 @@ function sourceIdentityComparable(identity) {
   });
 }
 
-function validateRegressionEnvironment(rawEnvironment, opening, verdict) {
+function validateRegressionEnvironment(rawEnvironment, opening, verdict, expectedReviewExclusion) {
   const environment = assertObject(rawEnvironment, 'M2 regression environment');
   assertExactKeys(
     environment,
@@ -1228,7 +1232,7 @@ function validateRegressionEnvironment(rawEnvironment, opening, verdict) {
     environment.baseGitRevision !== opening.baseGitRevision ||
     environment.requestedProvider !== 'openai' ||
     !['EXPLICIT', 'ABSENT'].includes(environment.liveAuthorization) ||
-    environment.reviewExclusion !== 'docs/reviews/m2.5-completion-review.md' ||
+    environment.reviewExclusion !== expectedReviewExclusion ||
     (verdict === M2AcceptanceOutcome.PASS && environment.liveAuthorization !== 'EXPLICIT')
   ) {
     throw new TypeError('M2 regression environment does not preserve source or live authority');
@@ -1538,13 +1542,25 @@ export function validateM2CurrentSourceRegressionResult(rawResult, expectedSourc
     ['opening', 'closing', 'matched'],
     'M2 regression source identity',
   );
+  const expectedReviewExclusion =
+    expectedSourceIdentity?.reviewExclusion ?? 'docs/reviews/m2.5-completion-review.md';
+  if (
+    ![
+      'docs/reviews/m2.5-completion-review.md',
+      'docs/reviews/m2.5.1-completion-review.md',
+    ].includes(expectedReviewExclusion)
+  ) {
+    throw new TypeError('M2 regression uses an unsupported enclosing review exclusion');
+  }
   const opening = validateRegressionSourceIdentity(
     sourceIdentity.opening,
     'M2 regression opening source identity',
+    expectedReviewExclusion,
   );
   const closing = validateRegressionSourceIdentity(
     sourceIdentity.closing,
     'M2 regression closing source identity',
+    expectedReviewExclusion,
   );
   const matched = sourceIdentitiesMatch(opening, closing);
   if (
@@ -1564,7 +1580,12 @@ export function validateM2CurrentSourceRegressionResult(rawResult, expectedSourc
     }
   }
 
-  const environment = validateRegressionEnvironment(result.environment, opening, result.verdict);
+  const environment = validateRegressionEnvironment(
+    result.environment,
+    opening,
+    result.verdict,
+    expectedReviewExclusion,
+  );
   const protocol = validateRegressionProtocol(result.protocol);
 
   if (!Array.isArray(result.stages)) {

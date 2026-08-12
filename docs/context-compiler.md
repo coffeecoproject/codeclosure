@@ -65,8 +65,11 @@ dispatch, pre/post-dispatch source/
 snapshot checks, and trusted production composition are implemented and passed
 the bounded Slice 3 review with an explicit protocol fixture. Real Codex
 execution of the linked composition passed the restarted initial B5 diagnostic
-on clean source `1b43dfc`, but final unchanged-source Slice 4 evidence remains
-pending. The
+on clean source `1b43dfc`; the final prepared-source gate and ordered unchanged-
+source Live triad later passed on source `01fd537`, and the bounded Slice 4
+review issued `PASS`. Slice 5's non-verdict canonical runner and offline fail-
+closed tests are implemented but unrun with Live authorization; they add no
+Context source or compiler authority. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.

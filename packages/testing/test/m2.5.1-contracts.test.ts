@@ -99,7 +99,7 @@ function compilerInput() {
   };
 }
 
-void test('new M2.5.1 packages use only the additive v3 Intake identity set', () => {
+void test('new-intake-identity uses only the additive v3 Intake identity set', () => {
   const compilation = new M251IntakePackageCompiler({ canonicalizer, digests }).compileAnswerOnly(
     compilerInput(),
   );

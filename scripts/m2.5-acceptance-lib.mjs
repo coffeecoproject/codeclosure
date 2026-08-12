@@ -4,6 +4,7 @@ import { Buffer } from 'node:buffer';
 import { parseM2CurrentSourceRegressionResult } from './m2-acceptance-lib.mjs';
 
 export const M25_REVIEW_EXCLUSION = 'docs/reviews/m2.5-completion-review.md';
+const M251_REVIEW_EXCLUSION = 'docs/reviews/m2.5.1-completion-review.md';
 
 export const M25AcceptanceOutcome = Object.freeze({
   PASS: 'PASS',
@@ -507,7 +508,10 @@ export function parseNodeTestNames(output) {
   return Object.freeze([...names].sort());
 }
 
-export function parseM25SourceIdentity(output) {
+export function parseM25SourceIdentity(output, expectedReviewExclusion = M25_REVIEW_EXCLUSION) {
+  if (![M25_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(expectedReviewExclusion)) {
+    throw new TypeError('M2.5 source identity uses an unsupported enclosing review exclusion');
+  }
   const values = new Map();
   for (const line of output.split(/\r?\n/u)) {
     const match = /^([^:]+): (.*)$/u.exec(line);
@@ -531,7 +535,7 @@ export function parseM25SourceIdentity(output) {
     throw new TypeError('M2.5 source manifest path count is invalid');
   }
   const reviewExclusion = values.get('Self-referential review exclusion');
-  if (reviewExclusion !== M25_REVIEW_EXCLUSION) {
+  if (reviewExclusion !== expectedReviewExclusion) {
     throw new TypeError('M2.5 source identity uses an unauthorized review-file exclusion');
   }
   return Object.freeze({
@@ -553,7 +557,7 @@ export function m25SourceIdentitiesMatch(opening, closing) {
   return JSON.stringify(opening) === JSON.stringify(closing);
 }
 
-function validateSourceIdentityObject(rawIdentity, name) {
+function validateSourceIdentityObject(rawIdentity, name, expectedReviewExclusion) {
   const identity = assertObject(rawIdentity, name);
   if (identity.availability === 'UNAVAILABLE') {
     assertExactKeys(identity, ['availability', 'reasonCode'], name);
@@ -584,7 +588,7 @@ function validateSourceIdentityObject(rawIdentity, name) {
     identity.manifestSchema !== 'codeclosure-source-manifest-v1' ||
     !Number.isSafeInteger(identity.pathCount) ||
     identity.pathCount < 1 ||
-    identity.reviewExclusion !== M25_REVIEW_EXCLUSION
+    identity.reviewExclusion !== expectedReviewExclusion
   ) {
     throw new TypeError(`${name} has invalid source-manifest authority`);
   }
@@ -1200,7 +1204,11 @@ export function m25AssessmentOutcome(matrixResults) {
   return M25AcceptanceOutcome.PASS;
 }
 
-export function validateM25EvidenceManifest(rawManifest, readArtifact) {
+export function validateM25EvidenceManifest(rawManifest, readArtifact, options = {}) {
+  const expectedReviewExclusion = options.reviewExclusion ?? M25_REVIEW_EXCLUSION;
+  if (![M25_REVIEW_EXCLUSION, M251_REVIEW_EXCLUSION].includes(expectedReviewExclusion)) {
+    throw new TypeError('M2.5 manifest uses an unsupported enclosing review exclusion');
+  }
   const manifest = assertObject(rawManifest, 'M2.5 evidence manifest');
   assertExactKeys(
     manifest,
@@ -1225,7 +1233,7 @@ export function validateM25EvidenceManifest(rawManifest, readArtifact) {
   if (
     manifest.schemaVersion !== 1 ||
     manifest.kind !== 'M25_EXECUTABLE_ASSESSMENT' ||
-    manifest.reviewExclusion !== M25_REVIEW_EXCLUSION
+    manifest.reviewExclusion !== expectedReviewExclusion
   ) {
     throw new TypeError('M2.5 evidence manifest identity or non-verdict meaning is invalid');
   }
@@ -1237,10 +1245,12 @@ export function validateM25EvidenceManifest(rawManifest, readArtifact) {
   const openingSourceIdentity = validateSourceIdentityObject(
     manifest.openingSourceIdentity,
     'M2.5 opening source identity',
+    expectedReviewExclusion,
   );
   const closingSourceIdentity = validateSourceIdentityObject(
     manifest.closingSourceIdentity,
     'M2.5 closing source identity',
+    expectedReviewExclusion,
   );
   const stages = manifest.stages;
   if (!Array.isArray(stages)) throw new TypeError('M2.5 evidence stages must be an array');

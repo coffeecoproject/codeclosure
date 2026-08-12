@@ -76,7 +76,7 @@ function sha256(relativePath) {
     .digest('hex')}`;
 }
 
-test('M251-S0-01 identity and schema freeze is exact and excludes Fake composition', () => {
+test('M251-S0-01 identity-and-schema-freeze is exact and excludes Fake composition', () => {
   assert.equal(contract.schemaVersion, 1);
   assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v7');
   const protocolManifest = JSON.parse(
@@ -293,7 +293,7 @@ test('M251-S0-01 identity and schema freeze is exact and excludes Fake compositi
   }
 });
 
-test('M251-S0-02 pinned notification and Item dispositions are exhaustive and disjoint', () => {
+test('M251-S0-02 pinned-notification-exhaustiveness keeps notification and Item dispositions exhaustive and disjoint', () => {
   const methods = notificationMethods();
   assert.equal(methods.length, 72);
   const mappedMethods = Object.values(contract.intake.notificationMethodDispositions).flat();

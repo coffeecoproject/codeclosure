@@ -5,6 +5,8 @@ import process from 'node:process';
 import test from 'node:test';
 import { URL, fileURLToPath } from 'node:url';
 
+import { M251_REVIEW_EXCLUSION } from './m2.5.1-acceptance-lib.mjs';
+
 import {
   M251_CANDIDATE_FREE_DENIED_BOUNDARIES,
   M251_CANDIDATE_FREE_PHASES,
@@ -176,6 +178,20 @@ test('M2.5.1 Live containment Receipt accepts one exact metadata-only proof', ()
   const value = receipt();
   assert.equal(validateM251LiveContainmentReceipt(value, expectedIdentity(value)), value);
   assert.equal(assertM251LiveContainmentMetadataOnly(value), value);
+});
+
+test('M2.5.1 Live containment Receipt can bind the canonical assessment source identity', () => {
+  const value = receipt();
+  value.source.opening.reviewExclusion = M251_REVIEW_EXCLUSION;
+  value.source.closing.reviewExclusion = M251_REVIEW_EXCLUSION;
+  assert.equal(
+    validateM251LiveContainmentReceipt(value, expectedIdentity(value), M251_REVIEW_EXCLUSION),
+    value,
+  );
+  assert.throws(
+    () => validateM251LiveContainmentReceipt(value, expectedIdentity(value)),
+    /wrong review exclusion/u,
+  );
 });
 
 test('M2.5.1 Live containment Receipt rejects denied-boundary omission and duplication', () => {
