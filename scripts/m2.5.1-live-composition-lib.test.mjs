@@ -21,6 +21,7 @@ import { URL, fileURLToPath } from 'node:url';
 import {
   M251_LIVE_COMPOSITION_AUTHORIZATION_ENV,
   M251_LIVE_COMPOSITION_PHASES,
+  M251_LIVE_COMPOSITION_PROFILE_CONTRACT,
   M251_LIVE_COMPOSITION_RECEIPT_KIND,
   M251_LIVE_COMPOSITION_REVIEW_EXCLUSION,
   M251_LIVE_COMPOSITION_ROOT_KINDS,
@@ -114,12 +115,15 @@ function rootEntries(prefix = '/tmp/codeclosure-m251-b2') {
   return M251_LIVE_COMPOSITION_ROOT_KINDS.map((kind) => ({ kind, path: paths[kind] }));
 }
 
-function profile() {
+function profile({
+  executionProfile = M251_LIVE_COMPOSITION_PROFILE_CONTRACT.executionProfile,
+  workerAdapter = M251_LIVE_COMPOSITION_PROFILE_CONTRACT.workerAdapter,
+} = {}) {
   return projectM251LiveCompositionProfile({
     activationKind: 'REAL_CODEX',
     executionProfile: {
-      id: contract.execution.executionProfile.id,
-      version: contract.execution.executionProfile.version,
+      id: executionProfile.id,
+      version: executionProfile.version,
       digest: digest('execution-profile'),
     },
     workflowPolicy: {
@@ -136,8 +140,8 @@ function profile() {
       phase,
       workerKind: 'REAL_CODEX',
       sourceKind,
-      adapterId: 'codex-app-server-worker',
-      adapterVersion: 'codeclosure-m2-5-1-worker-v1',
+      adapterId: workerAdapter.id,
+      adapterVersion: workerAdapter.version,
       phaseEntryDigest: digest(`phase-entry:${phase}`),
     })),
   });
@@ -1095,6 +1099,23 @@ test('M2.5.1 Live composition receipt rejects duplicate phase and FakeWorker sub
   const fake = receipt();
   fake.profile.phaseBindings[0].workerKind = 'FAKE_WORKER';
   assert.throws(() => strictValidate(fake), /fake or substituted component/u);
+});
+
+test('M2.5.1 Live composition projector rejects retained Profile and Adapter v1 substitution', () => {
+  assert.throws(
+    () => profile({ executionProfile: contract.execution.executionProfile }),
+    /Execution Profile identity is invalid/u,
+  );
+  assert.throws(
+    () =>
+      profile({
+        workerAdapter: {
+          id: M251_LIVE_COMPOSITION_PROFILE_CONTRACT.workerAdapter.id,
+          version: 'codeclosure-m2-5-1-worker-v1',
+        },
+      }),
+    /fake or substituted component/u,
+  );
 });
 
 test('M2.5.1 Live composition receipt rejects reopen recall or dispatch replay', () => {

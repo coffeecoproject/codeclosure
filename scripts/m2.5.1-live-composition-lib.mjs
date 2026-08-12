@@ -95,6 +95,16 @@ const expectedToolchain = slice0Contract.toolchain.selected;
 const expectedIntake = slice0Contract.intake;
 const expectedExecution = slice0Contract.execution;
 const expectedProject = slice0Contract.demonstration;
+export const M251_LIVE_COMPOSITION_PROFILE_CONTRACT = Object.freeze({
+  executionProfile: Object.freeze({
+    id: 'profile_m2-5-1-contained-real-codex',
+    version: 'codeclosure-m2-5-1-contained-real-codex-profile-v2',
+  }),
+  workerAdapter: Object.freeze({
+    id: 'codex-app-server-worker',
+    version: 'codeclosure-m2-5-1-worker-v2',
+  }),
+});
 const expectedProjectContract = Object.freeze({
   projectFamily: expectedProject.projectFamily,
   gitCommit: expectedProject.gitCommit,
@@ -1251,8 +1261,8 @@ function validateProfile(value) {
   }
   exactKeys(value.execution, ['id', 'version', 'digest'], 'Execution Profile identity');
   if (
-    value.execution.id !== expectedExecution.executionProfile.id ||
-    value.execution.version !== expectedExecution.executionProfile.version
+    value.execution.id !== M251_LIVE_COMPOSITION_PROFILE_CONTRACT.executionProfile.id ||
+    value.execution.version !== M251_LIVE_COMPOSITION_PROFILE_CONTRACT.executionProfile.version
   ) {
     fail('Live composition Execution Profile identity is invalid');
   }
@@ -1292,8 +1302,8 @@ function validateProfile(value) {
       binding.phase !== expected.phase ||
       binding.workerKind !== 'REAL_CODEX' ||
       binding.sourceKind !== expected.sourceKind ||
-      binding.adapterId !== 'codex-app-server-worker' ||
-      binding.adapterVersion !== 'codeclosure-m2-5-1-worker-v1'
+      binding.adapterId !== M251_LIVE_COMPOSITION_PROFILE_CONTRACT.workerAdapter.id ||
+      binding.adapterVersion !== M251_LIVE_COMPOSITION_PROFILE_CONTRACT.workerAdapter.version
     ) {
       fail('Live composition phase Profile contains a fake or substituted component');
     }
