@@ -821,7 +821,7 @@ test('M2.5.1 Live composition keeps Candidate freeze outside the Acceptance Evid
   );
 });
 
-test('M2.5.1 Live composition scenario leaves formal scope to the trusted Policy', () => {
+test('M2.5.1 Live composition scenario fully states the protected observable result and leaves scope to Policy', () => {
   assert.equal(
     M251_LIVE_COMPOSITION_SCENARIO.request,
     'Objective: Prevent duplicate payment callbacks.',
@@ -831,8 +831,9 @@ test('M2.5.1 Live composition scenario leaves formal scope to the trusted Policy
   assert.match(M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer, /^Required criterion: /u);
   assert.equal(
     M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer,
-    `Required criterion: ${contract.demonstration.expectedResult}`,
+    `Required criterion: ${contract.demonstration.expectedResult}; a duplicate callback for the same order returns status duplicate_ignored.`,
   );
+  assert.match(M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer, /\bduplicate_ignored\b/u);
 });
 
 test('M2.5.1 Live composition authorization is one new exact admission binding', () => {
