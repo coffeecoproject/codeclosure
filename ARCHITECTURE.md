@@ -167,6 +167,11 @@ is implemented and deterministically tested. Its explicitly authorized
 complete Live containment matrix passed on exact source `7621c8b`, so the
 failed production-containment requirement is closed and B5 may restart under the
 [Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
+After a focused correction to the Live composition assessment consumer, the
+restarted initial B5 real Intake, linked composition, and effective-containment
+diagnostics all passed on exact clean source `1b43dfc`. These diagnostics do not
+complete Slice 4: the prepared-source gate, final unchanged-source Live triad,
+and bounded review remain pending.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -218,9 +223,12 @@ deterministically tested across trusted composition, retained-v1 coexistence,
 lower Client, Adapter, SQLite/reopen, and the metadata-only containment probe.
 The corrected Profile then passed the complete explicitly authorized real
 containment matrix on exact source `7621c8b`, including source, credential,
-protected-asset, process, cleanup, and privacy closure. Mandatory passing linked
-real user-path proof remains unestablished, B5 must restart from the beginning,
-and milestone assessment has not started.
+protected-asset, process, cleanup, and privacy closure. The restarted initial
+B5 real Intake, linked composition, and containment diagnostics then passed on
+exact clean source `1b43dfc`; they are readiness diagnostics only. Mandatory
+passing linked real user-path proof remains unestablished by final evidence,
+and the prepared-source gate, final unchanged-source triad, bounded Slice 4
+review, and milestone assessment have not completed.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice

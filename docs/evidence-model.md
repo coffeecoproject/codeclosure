@@ -58,7 +58,9 @@ freeze-v2 Evidence contract. Store and SQLite now admit only the exact retained
 v1 or contained v2 Profile tuple at that boundary; no Worker observation or
 containment Receipt becomes Evidence. The standalone complete Live containment
 matrix passed on source `7621c8b`; linked real user-path and milestone proof
-remain pending.
+remain pending. The restarted initial B5 linked composition and containment
+diagnostics passed on clean source `1b43dfc`, but neither diagnostic Receipt is
+Evidence and the final unchanged-source Slice 4 proof remains pending.
 Proposed M2.6 Frontstage messages, routes, answers, focus,
 pending actions, Goal summaries, and notifications add no Evidence kind or
 eligibility path.

@@ -63,8 +63,10 @@ and does not make its passing standalone Live containment Receipt Context
 authority. Runtime phase
 dispatch, pre/post-dispatch source/
 snapshot checks, and trusted production composition are implemented and passed
-the bounded Slice 3 review with an explicit protocol fixture; real Codex
-execution of the linked composition remains pending. The
+the bounded Slice 3 review with an explicit protocol fixture. Real Codex
+execution of the linked composition passed the restarted initial B5 diagnostic
+on clean source `1b43dfc`, but final unchanged-source Slice 4 evidence remains
+pending. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.

@@ -38,11 +38,13 @@ additive contained execution Profile and its distinct inherited ProjectRead/
 Candidate permission profiles are implemented and deterministically tested on
 the retained Codex `0.146.1` baseline. Their explicitly authorized complete
 Live containment matrix passed on exact source `7621c8b`, proving the bounded
-phase read/write perimeter without creating product authority. The B5 linked
-real Intake-to-closeout validation must now restart from the beginning; the
-mandatory real Materialization-to-Start-to-isolated-Candidate Codex user path,
-protected verification and regression evidence, canonical assessment, and
-milestone review have not passed.
+phase read/write perimeter without creating product authority. After a focused
+Live assessment-consumer identity correction, the restarted initial B5 real
+Intake, linked Materialization-to-Start-to-isolated-Candidate Codex path, and
+effective-containment diagnostics all passed on exact clean source `1b43dfc`.
+Those runs establish readiness only: the prepared-source quality gate, final
+unchanged-source command triad, bounded closure review, canonical assessment,
+and milestone review remain pending.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

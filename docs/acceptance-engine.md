@@ -31,7 +31,10 @@ issuer. That bounded Slice 3 `PASS` is not a real-Codex or M2.5.1 milestone
 acceptance verdict. Slice 4's contained Profile correction changes no
 Acceptance rule or issuer; its containment Receipt remains assessment evidence
 even though the standalone complete Live containment matrix passed on source
-`7621c8b`; linked real user-path and milestone proof remain pending. Proposed M2.6 Frontstage routes,
+`7621c8b`; the restarted initial B5 linked composition and containment
+diagnostics passed on clean source `1b43dfc`, but they create no additional
+Acceptance issuer and final linked user-path and milestone proof remain pending.
+Proposed M2.6 Frontstage routes,
 answers, Goal summaries, focus, pending actions, and notifications remain
 outside technical Acceptance and cannot issue `ACCEPT` or closeout.
 Proposed M2.7 Host, control-lease, and project-slot state likewise cannot become

@@ -1170,7 +1170,11 @@ identity owner. SQLite Check/Evidence guards accept only either complete exact
 Profile tuple for the unchanged freeze-v2 contract; mixed identity/version
 forms still fail install, read, and reopen. The standalone complete Live
 containment matrix passed on source `7621c8b`; linked real user-path and
-milestone proof remain pending.
+milestone proof remain pending. The restarted initial B5 linked composition and
+containment diagnostics passed on clean source `1b43dfc`, but their root-bound
+Profile digests remain internally exact per operation and are not equal across
+the two distinct assessment roots; the final unchanged-source triad and Slice 4
+review remain pending.
 
 ## External Execution — implemented M2 Slice 6
 

@@ -179,8 +179,12 @@ credential, protected-asset, process, temporary-root, and privacy closure. The
 failed ADR 0043 production-containment requirement is therefore closed and B5
 may restart from the beginning; the Receipt remains assessment evidence and
 supplies no execution, Candidate, Evidence, Acceptance, or closeout authority.
-Mandatory passing linked real user-path proof remains unestablished, and Slice 5
-canonical assessment/milestone review has not started. A real pinned-version
+After a focused Live composition assessment-consumer identity correction, the
+restarted initial B5 real Intake, causally linked composition, and effective-
+containment diagnostics all passed on exact clean source `1b43dfc`. They are
+readiness diagnostics only; the prepared-source quality gate, final unchanged-
+source command triad, bounded Slice 4 review, and Slice 5 canonical assessment/
+milestone review have not started or completed. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

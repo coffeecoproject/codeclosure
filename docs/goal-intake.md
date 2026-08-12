@@ -1743,7 +1743,10 @@ v2 the trusted new-operation selection. Historical Profile v1 remains exactly
 reopenable and is not silently recalled into v2; neither user text nor model
 output can select between them. The standalone complete Live containment
 matrix passed on source `7621c8b`; this is not passing linked Intake-to-closeout
-user-path evidence.
+user-path evidence. The restarted initial B5 real Intake, linked composition,
+and containment diagnostics later passed on clean source `1b43dfc`; they remain
+readiness diagnostics until the final unchanged-source triad and bounded Slice
+4 review close.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge
@@ -1759,7 +1762,8 @@ candidate-free project-read snapshot, Context, isolation, source-currency,
 configuration/instruction, cleanup, and recovery authority. Slice 3 implements
 the deterministic trusted production composition under that boundary and
 passes its bounded protocol-fixture review; real Codex execution and the
-M2.5.1 milestone verdict remain pending.
+M2.5.1 milestone verdict remain pending as final evidence. The passing initial
+B5 diagnostics do not replace the required final same-source proof.
 
 ### M2.6
 
