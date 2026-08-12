@@ -414,6 +414,25 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
       operationFailure ??= Object.freeze({ diagnostic, location, reason, token });
       response = undefined;
     };
+    const recordObserverFailure = (): boolean => {
+      const activeObserver = observer;
+      const reason = activeObserver?.failureReason;
+      if (
+        activeObserver === undefined ||
+        reason === undefined ||
+        activeObserver.failureDiagnostic === undefined ||
+        activeObserver.failureToken === undefined
+      ) {
+        return false;
+      }
+      recordFailure(
+        reason,
+        activeObserver.failureDiagnostic,
+        'OBSERVATION',
+        activeObserver.failureToken,
+      );
+      return true;
+    };
     try {
       if (this.#used) {
         throw adapterFailure(IntakeAssistantFailureReasonCode.ASSISTANT_PROTOCOL_ERROR);
@@ -602,12 +621,14 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         throw adapterFailure(IntakeAssistantFailureReasonCode.RESPONSE_REJECTED);
       }
     } catch (error) {
-      recordFailure(
-        mapFailure(error, signal),
-        observer?.failureDiagnostic ?? safeDiagnosticForFailure(error, signal),
-        diagnosticLocation,
-        observer?.failureToken ?? safeDiagnosticTokenForFailure(error),
-      );
+      if (!recordObserverFailure()) {
+        recordFailure(
+          mapFailure(error, signal),
+          safeDiagnosticForFailure(error, signal),
+          diagnosticLocation,
+          safeDiagnosticTokenForFailure(error),
+        );
+      }
     } finally {
       if (client !== undefined) {
         let close: AppServerCloseResult | undefined;
@@ -617,14 +638,7 @@ export class CodexIntakeAssistantAdapter implements IntakeAssistantPort {
         } catch (error) {
           shutdownError = error;
         }
-        if (observer?.failureReason !== undefined) {
-          recordFailure(
-            observer.failureReason,
-            observer.failureDiagnostic ?? 'PROCESS_UNAVAILABLE',
-            'OBSERVATION',
-            observer.failureToken ?? 'UNCLASSIFIED',
-          );
-        }
+        recordObserverFailure();
         if (close !== undefined && (close.code !== 0 || close.failureCode !== undefined)) {
           recordFailure(
             mapClosedClient(close),

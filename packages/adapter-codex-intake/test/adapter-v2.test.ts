@@ -971,8 +971,8 @@ const closedScenarioDiagnostics = Object.freeze({
   'v2-raw-function-call': 'PROJECTED_FORBIDDEN_EFFECT/OBSERVATION/function_call',
   'v2-raw-compaction': 'PROJECTED_UNMAPPED_LIFECYCLE/OBSERVATION/compaction_trigger',
   'v2-context-compaction-item': 'LOWER_CLIENT_CORRELATION/OBSERVATION/PROTOCOL_CORRELATION',
-  'v2-remote-connected': 'PROJECTED_UNMAPPED_LIFECYCLE/THREAD_START/remoteControl/status/changed',
-  'v2-remote-malformed': 'PROJECTED_MALFORMED_PARAMS/THREAD_START/remoteControl/status/changed',
+  'v2-remote-connected': 'PROJECTED_UNMAPPED_LIFECYCLE/OBSERVATION/remoteControl/status/changed',
+  'v2-remote-malformed': 'PROJECTED_MALFORMED_PARAMS/OBSERVATION/remoteControl/status/changed',
   'v2-unsupported-notification':
     'LOWER_CLIENT_UNSUPPORTED_OR_MALFORMED/OBSERVATION/PROTOCOL_MALFORMED',
   'v2-malformed-envelope': 'LOWER_CLIENT_UNSUPPORTED_OR_MALFORMED/OBSERVATION/PROTOCOL_MALFORMED',
@@ -1076,7 +1076,7 @@ void test('process-timeout-interruption-closure returns typed v3 failures withou
     intentInput(),
     controller.signal,
   );
-  const abortTimer = setTimeout(() => controller.abort(), 100);
+  const abortTimer = setTimeout(() => controller.abort(), 1_000);
   const interrupted = await running;
   clearTimeout(abortTimer);
   assert.equal(interrupted.kind, 'FAILED');
