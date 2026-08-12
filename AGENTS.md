@@ -172,12 +172,14 @@ sandboxes. The additive contained Profile v2, separate ProjectRead/Candidate
 permission profiles, narrow controlled-launch selector, profile-bound lower-
 Client command, and inherited Adapter Thread/Turn mapping are now implemented
 and deterministically tested while retained Profile/Adapter v1 keeps its
-historical meaning. That corrected production identity has not yet passed the
-explicitly authorized complete Live matrix, so the failed ADR 0043 production-
-containment requirement still blocks B5. The Slice 4 effective read-
-containment closure plan governs that remaining proof and supplies no execution
-authority.
-Mandatory passing real user-path proof remains unestablished, and Slice 5
+historical meaning. On exact source `7621c8b4e8731232a9d68aa6a744296da1571cd4`,
+that corrected production identity passed the explicitly authorized complete
+Live containment matrix for `DISCOVERY`, `PLAN`, and `IMPLEMENT`, with source,
+credential, protected-asset, process, temporary-root, and privacy closure. The
+failed ADR 0043 production-containment requirement is therefore closed and B5
+may restart from the beginning; the Receipt remains assessment evidence and
+supplies no execution, Candidate, Evidence, Acceptance, or closeout authority.
+Mandatory passing linked real user-path proof remains unestablished, and Slice 5
 canonical assessment/milestone review has not started. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit

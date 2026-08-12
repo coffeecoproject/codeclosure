@@ -547,12 +547,15 @@ used generic Thread/Turn/command sandbox overrides and one shared writable
 profile. The additive contained Profile v2 correction now implements distinct
 ProjectRead/Candidate profiles, one narrow launch selector, inherited lower-
 Client/Adapter mapping, retained-v1 coexistence, and strict SQLite/reopen
-support. It is deterministically tested but not formally Live re-proved. The
-failed ADR 0043 production-containment requirement therefore continues to
-block B5 until the complete real matrix passes. The
+support. It is deterministically tested and passed the complete explicitly
+authorized real containment matrix on exact source `7621c8b`; all three phase
+probes, denied-boundary checks, source and credential closure, cleanup, and
+privacy checks passed. The failed ADR 0043 production-containment requirement
+is therefore closed and B5 may restart from the beginning. The
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
-sequences the resolution but supplies no execution authority. Milestone
-assessment has not started. The
+records that bounded result but supplies no execution authority. Passing linked
+real user-path proof remains unestablished and milestone assessment has not
+started. The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and

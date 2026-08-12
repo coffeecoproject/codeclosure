@@ -1168,8 +1168,9 @@ operations while preserving the retained v1 tuple. This adds no Domain record
 shape: the existing Profile v3 phase entries remain the sole permission-
 identity owner. SQLite Check/Evidence guards accept only either complete exact
 Profile tuple for the unchanged freeze-v2 contract; mixed identity/version
-forms still fail install, read, and reopen. Complete Live proof remains
-pending.
+forms still fail install, read, and reopen. The standalone complete Live
+containment matrix passed on source `7621c8b`; linked real user-path and
+milestone proof remain pending.
 
 ## External Execution — implemented M2 Slice 6
 

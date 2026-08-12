@@ -163,8 +163,9 @@ backend capability. An additive contained Profile v2 now binds distinct
 ProjectRead and Candidate permission profiles through one narrow launch
 selector; its lower-Client command and Adapter Thread/Turn requests inherit
 that exact selected profile, while retained v1 remains unchanged. This mapping
-is implemented and deterministically tested but has not passed the complete
-Live matrix, so B5 remains blocked under the
+is implemented and deterministically tested. Its explicitly authorized
+complete Live containment matrix passed on exact source `7621c8b`, so the
+failed production-containment requirement is closed and B5 may restart under the
 [Slice 4 effective read-containment closure plan](docs/plans/m2.5.1-slice4-effective-read-containment-closure.md).
 
 The proposed [M2.6 Frontstage Interaction
@@ -215,8 +216,11 @@ Intake and linked-composition diagnostics are not final evidence after source
 changes. The additive contained Profile v2 correction is now implemented and
 deterministically tested across trusted composition, retained-v1 coexistence,
 lower Client, Adapter, SQLite/reopen, and the metadata-only containment probe.
-Mandatory passing real user-path and effective-containment proof remain
-unestablished, B5 is blocked, and milestone assessment has not started.
+The corrected Profile then passed the complete explicitly authorized real
+containment matrix on exact source `7621c8b`, including source, credential,
+protected-asset, process, cleanup, and privacy closure. Mandatory passing linked
+real user-path proof remains unestablished, B5 must restart from the beginning,
+and milestone assessment has not started.
 M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
@@ -909,10 +913,11 @@ projections into the Store-owned compound commit. This implements only the
 Candidate-creation source-currency boundary accepted under ADR 0043. B3 also
 implements deterministic candidate-free pre/post-Turn currency checkpoints and
 phase-specific external dispatch. B4 composes that path through the trusted
-production graph; B5 closes its frozen deterministic owners. Live containment
-proof is not yet implemented: the initial direct pinned App Server probe failed
-closed after reading a content-free Authority Home sentinel, so B5 remains
-blocked pending an enforceable read boundary.
+production graph; B5 closes its frozen deterministic owners. The initial direct
+pinned App Server probe exposed the generic read boundary, and the additive
+contained Profile v2 subsequently passed the complete explicitly authorized
+real containment matrix on exact source `7621c8b`. That assessment Receipt does
+not replace the still-pending linked real user path or any product authority.
 
 ### Evidence Store
 

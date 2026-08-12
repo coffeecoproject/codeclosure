@@ -76,8 +76,9 @@ two phases and exact Candidate-bound command/file-change activity in
 `IMPLEMENT`; it grants no Workflow authority. The additive contained Profile
 v2 now maps these same Workflow phases to separate inherited ProjectRead and
 Candidate permission profiles without changing phase transitions, Candidate
-timing, or Workflow mutation authority. Its complete Live proof remains
-pending. A Plan/source mismatch
+timing, or Workflow mutation authority. Its standalone complete Live
+containment matrix passed on source `7621c8b`, while linked real user-path proof
+remains pending. A Plan/source mismatch
 preserves the completed Plan Attempt, creates no Candidate, and atomically
 moves the Workflow from `PLAN / READY` to `PLAN / FAILED` through existing
 Workflow integrity-failure authority. The exact `PLAN_SOURCE_NOT_CURRENT` code

@@ -1741,8 +1741,9 @@ workspace isolation fails preflight and cannot fall back to FakeWorker.
 The Slice 4 containment correction now makes the additive contained Profile
 v2 the trusted new-operation selection. Historical Profile v1 remains exactly
 reopenable and is not silently recalled into v2; neither user text nor model
-output can select between them. This is deterministic implementation status,
-not passing Live user-path evidence.
+output can select between them. The standalone complete Live containment
+matrix passed on source `7621c8b`; this is not passing linked Intake-to-closeout
+user-path evidence.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge

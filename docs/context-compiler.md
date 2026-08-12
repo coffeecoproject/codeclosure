@@ -59,11 +59,12 @@ decoded retained record, recomputes its canonical digest, cross-binds it to the
 Context, and projects only ID/digest/cwd into its receipt. Cleanup persistence
 is implemented separately. The additive contained execution Profile changes
 only the phase permission/Adapter mapping; it adds no Context version or source
-and does not make its pending Live proof Context authority. Runtime phase
+and does not make its passing standalone Live containment Receipt Context
+authority. Runtime phase
 dispatch, pre/post-dispatch source/
 snapshot checks, and trusted production composition are implemented and passed
 the bounded Slice 3 review with an explicit protocol fixture; real Codex
-execution of that composition remains pending. The
+execution of the linked composition remains pending. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.

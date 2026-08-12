@@ -36,11 +36,13 @@ only evidence. The deterministic trusted-composition boundary also passed a
 bounded review on 2026-08-11 using protocol fixtures, not Live evidence. The
 additive contained execution Profile and its distinct inherited ProjectRead/
 Candidate permission profiles are implemented and deterministically tested on
-the retained Codex `0.146.1` baseline, but their complete Live containment
-matrix has not yet passed. The
+the retained Codex `0.146.1` baseline. Their explicitly authorized complete
+Live containment matrix passed on exact source `7621c8b`, proving the bounded
+phase read/write perimeter without creating product authority. The B5 linked
+real Intake-to-closeout validation must now restart from the beginning; the
 mandatory real Materialization-to-Start-to-isolated-Candidate Codex user path,
 protected verification and regression evidence, canonical assessment, and
-milestone review have not started.
+milestone review have not passed.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and
