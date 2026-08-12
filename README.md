@@ -44,7 +44,10 @@ Intake, linked Materialization-to-Start-to-isolated-Candidate Codex path, and
 effective-containment diagnostics all passed on exact clean source `1b43dfc`.
 Those runs establish readiness only: the prepared-source quality gate, final
 unchanged-source command triad, bounded closure review, canonical assessment,
-and milestone review remain pending.
+and milestone review remain pending. Two later prepared-source linked attempts
+correctly stopped at protected verification. The executable demonstration
+contract now compatibly states the exact public result already enforced by the
+unchanged protected Check; the restarted Live sequence has not yet run.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

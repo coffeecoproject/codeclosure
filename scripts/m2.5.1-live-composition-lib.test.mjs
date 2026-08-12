@@ -831,7 +831,7 @@ test('M2.5.1 Live composition scenario fully states the protected observable res
   assert.match(M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer, /^Required criterion: /u);
   assert.equal(
     M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer,
-    `Required criterion: ${contract.demonstration.expectedResult}; a duplicate callback for the same order returns status duplicate_ignored.`,
+    `Required criterion: ${contract.demonstration.expectedResult}`,
   );
   assert.match(M251_LIVE_COMPOSITION_SCENARIO.clarificationAnswer, /\bduplicate_ignored\b/u);
 });

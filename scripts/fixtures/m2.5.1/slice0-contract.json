@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "codeclosure-m2-5-1-slice0-contract",
-  "contractVersion": "codeclosure-m2-5-1-slice0-v6",
+  "contractVersion": "codeclosure-m2-5-1-slice0-v7",
   "toolchain": {
     "selected": {
       "codexVersion": "codex-cli 0.146.1",
@@ -451,7 +451,7 @@
       "assetDigest": "sha256:16a4a1c6c18dddc972cd8e51507f4e22d1c78b172da871687bca1d9d44f604af",
       "acceptedExitCodes": [0]
     },
-    "expectedResult": "duplicate callback is ignored, one charge is retained for one order, and different orders remain independent"
+    "expectedResult": "duplicate callback is ignored and returns status duplicate_ignored, one charge is retained for one order, and different orders remain independent"
   },
   "proofOwners": {
     "M251-E01": "scripts/run-m2.5.1-acceptance.mjs#environment-source-identity-preflight",

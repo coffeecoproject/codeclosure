@@ -1746,7 +1746,9 @@ matrix passed on source `7621c8b`; this is not passing linked Intake-to-closeout
 user-path evidence. The restarted initial B5 real Intake, linked composition,
 and containment diagnostics later passed on clean source `1b43dfc`; they remain
 readiness diagnostics until the final unchanged-source triad and bounded Slice
-4 review close.
+4 review close. Two later prepared-source linked paths failed closed at the
+unchanged protected Check. Executable demonstration contract v7 now completes
+the exact user-stated observable criterion and requires a full B5 restart.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge

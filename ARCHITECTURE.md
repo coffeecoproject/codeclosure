@@ -171,7 +171,10 @@ After a focused correction to the Live composition assessment consumer, the
 restarted initial B5 real Intake, linked composition, and effective-containment
 diagnostics all passed on exact clean source `1b43dfc`. These diagnostics do not
 complete Slice 4: the prepared-source gate, final unchanged-source Live triad,
-and bounded review remain pending.
+and bounded review remain pending. Two later prepared-source linked paths
+correctly failed closed at protected verification. Executable demonstration
+contract v7 now aligns the user-stated criterion with the unchanged protected
+Check's exact public result; B5 must restart from the beginning.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation

@@ -17,7 +17,7 @@ export const M251_LIVE_COMPOSITION_REVIEW_EXCLUSION =
 export const M251_LIVE_COMPOSITION_SCENARIO = Object.freeze({
   id: 'PAYMENT_IDEMPOTENCY_LINKED_PATH',
   request: 'Objective: Prevent duplicate payment callbacks.',
-  clarificationAnswer: `Required criterion: ${slice0Contract.demonstration.expectedResult}; a duplicate callback for the same order returns status duplicate_ignored.`,
+  clarificationAnswer: `Required criterion: ${slice0Contract.demonstration.expectedResult}`,
 });
 
 export const M251_LIVE_COMPOSITION_STAGE_IDS = Object.freeze([

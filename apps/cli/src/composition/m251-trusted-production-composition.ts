@@ -95,7 +95,7 @@ import type {
 } from './intake-assistant-invocation.js';
 
 export const M251_PAYMENT_DEMO_EXPECTED_RESULT =
-  'duplicate callback is ignored, one charge is retained for one order, and different orders remain independent';
+  'duplicate callback is ignored and returns status duplicate_ignored, one charge is retained for one order, and different orders remain independent';
 export const M251_PAYMENT_DEMO_PROTECTED_CHECK_ID = 'check_m2-5-1-payment-idempotency';
 export const M251_PAYMENT_DEMO_PROTECTED_CHECK_VERSION =
   'codeclosure-m2-5-1-payment-idempotency-v1';

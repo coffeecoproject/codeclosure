@@ -78,7 +78,7 @@ function sha256(relativePath) {
 
 test('M251-S0-01 identity and schema freeze is exact and excludes Fake composition', () => {
   assert.equal(contract.schemaVersion, 1);
-  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v6');
+  assert.equal(contract.contractVersion, 'codeclosure-m2-5-1-slice0-v7');
   const protocolManifest = JSON.parse(
     source('packages/codex-app-server-client/protocol/codex-schema-snapshot-v1.json'),
   );
@@ -442,7 +442,19 @@ test('M251-S0-04 unchanged lifecycle and Worker schemas already bind changed aut
 
 test('M251-S0-05 protected payment check is exact, independent, and behavior-bound', (t) => {
   const check = contract.demonstration.protectedCheck;
+  const productionContractSource = source(
+    'apps/cli/src/composition/m251-trusted-production-composition.ts',
+  );
+  const productionExpectedResult =
+    /export const M251_PAYMENT_DEMO_EXPECTED_RESULT =\s*'([^'\n]*)';/u.exec(
+      productionContractSource,
+    )?.[1];
   assert.equal(sha256(check.assetPath), check.assetDigest);
+  assert.equal(
+    contract.demonstration.expectedResult,
+    'duplicate callback is ignored and returns status duplicate_ignored, one charge is retained for one order, and different orders remain independent',
+  );
+  assert.equal(productionExpectedResult, contract.demonstration.expectedResult);
   assert.deepEqual(contract.demonstration.allowedPaths, ['src/payment.js']);
   assert.deepEqual(contract.demonstration.selectedSourcePaths, [
     '.gitignore',

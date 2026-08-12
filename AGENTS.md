@@ -184,7 +184,12 @@ restarted initial B5 real Intake, causally linked composition, and effective-
 containment diagnostics all passed on exact clean source `1b43dfc`. They are
 readiness diagnostics only; the prepared-source quality gate, final unchanged-
 source command triad, bounded Slice 4 review, and Slice 5 canonical assessment/
-milestone review have not started or completed. A real pinned-version
+milestone review have not started or completed. Two later prepared-source
+linked paths on `aa2f29e` correctly failed closed at protected verification.
+Executable Slice 0 contract v7 now compatibly adds the exact public
+`duplicate_ignored` result already required by the unchanged protected Check;
+v6 keeps its historical review meaning, B5 must restart from the beginning,
+and no final evidence is established. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
