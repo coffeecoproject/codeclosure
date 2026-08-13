@@ -16,13 +16,13 @@ function createFixture(t, files = {}) {
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 
 ## Development
 `,
     'docs/milestones.md': '# Milestones\n',
-    'docs/plans/m2-codex-vertical-slice.md': '# M2 Codex vertical slice\n',
+    'docs/plans/m2.6-unified-frontstage-interaction.md': '# M2.6 Frontstage plan\n',
     ...files,
   };
 
@@ -45,7 +45,7 @@ test('accepts structural GFM links, GitHub anchors, and ignored code examples', 
 
 ## Status
 
-See the [M2 plan][plan] and [milestones](docs/milestones.md).
+See the [M2.6 plan][plan] and [milestones](docs/milestones.md).
 
 ## Development
 
@@ -58,7 +58,7 @@ See the [M2 plan][plan] and [milestones](docs/milestones.md).
 Slice 99 is example text only.
 \`\`\`
 
-[plan]: docs/plans/m2-codex-vertical-slice.md
+[plan]: docs/plans/m2.6-unified-frontstage-interaction.md
 `,
     'docs/guide_(copy).md': `# Repeated heading
 
@@ -75,7 +75,7 @@ test('accepts repository-root-relative authority links', (t) => {
 
 ## Status
 
-See the [M2 plan](/docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](/docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](/docs/milestones.md).
 `,
   });
@@ -363,7 +363,7 @@ test('rejects a non-portable symbolic-link segment before traversal could erase 
 
 for (const [description, storedTarget] of [
   ['backslash target', 'milestones\\bad'],
-  ['repeated-separator target', 'plans//m2-codex-vertical-slice.md'],
+  ['repeated-separator target', 'plans//m2.6-unified-frontstage-interaction.md'],
   ['directory-suffixed file target', 'milestones.md/'],
 ]) {
   test(`rejects a symbolic link with a ${description}`, (t) => {
@@ -571,7 +571,10 @@ M2 implementation is in progress.
   });
 
   const errors = errorText(repositoryRoot);
-  assert.match(errors, /Status must link to docs\/plans\/m2-codex-vertical-slice\.md/u);
+  assert.match(
+    errors,
+    /Status must link to docs\/plans\/m2\.6-unified-frontstage-interaction\.md/u,
+  );
   assert.match(errors, /Status must link to docs\/milestones\.md/u);
 });
 
@@ -581,7 +584,7 @@ test('requires README status authority links to have visible text', (t) => {
 
 ## Status
 
-Authorities: [](docs/plans/m2-codex-vertical-slice.md) and [ ][milestones].
+Authorities: [](docs/plans/m2.6-unified-frontstage-interaction.md) and [ ][milestones].
 
 [milestones]: docs/milestones.md
 `,
@@ -592,7 +595,10 @@ Authorities: [](docs/plans/m2-codex-vertical-slice.md) and [ ][milestones].
     errors.match(/README\.md Status authority links must have visible link text\./gu)?.length,
     2,
   );
-  assert.match(errors, /Status must link to docs\/plans\/m2-codex-vertical-slice\.md/u);
+  assert.match(
+    errors,
+    /Status must link to docs\/plans\/m2\.6-unified-frontstage-interaction\.md/u,
+  );
   assert.match(errors, /Status must link to docs\/milestones\.md/u);
 });
 
@@ -610,7 +616,7 @@ for (const [description, defaultIgnorable] of [
 
 ## Status
 
-Authorities: [${defaultIgnorable}](docs/plans/m2-codex-vertical-slice.md) and
+Authorities: [${defaultIgnorable}](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [${defaultIgnorable}](docs/milestones.md).
 `,
     });
@@ -620,7 +626,10 @@ Authorities: [${defaultIgnorable}](docs/plans/m2-codex-vertical-slice.md) and
       errors.match(/README\.md Status authority links must have visible link text\./gu)?.length,
       2,
     );
-    assert.match(errors, /Status must link to docs\/plans\/m2-codex-vertical-slice\.md/u);
+    assert.match(
+      errors,
+      /Status must link to docs\/plans\/m2\.6-unified-frontstage-interaction\.md/u,
+    );
     assert.match(errors, /Status must link to docs\/milestones\.md/u);
   });
 }
@@ -631,7 +640,7 @@ test('requires exactly one README Status section', (t) => {
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 
 ## Status
@@ -649,7 +658,7 @@ test('rejects a README without a Status section', (t) => {
 
 ## Development
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 `,
   });
@@ -670,7 +679,7 @@ test('limits README Status to prose paragraphs', (t) => {
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 
 - Candidate generation is implemented.
@@ -691,7 +700,7 @@ test('recognizes a GFM table as non-prose README Status structure', (t) => {
 | --- | --- |
 | Candidate | Done |
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 `,
   });
@@ -705,7 +714,7 @@ test('rejects a GFM footnote as an indirect README Status source', (t) => {
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md),
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md),
 [milestones](docs/milestones.md), and details[^progress].
 
 ## Notes
@@ -724,7 +733,7 @@ test('rejects an additional README Status link as a competing local source', (t)
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md),
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md),
 [milestones](docs/milestones.md), and [progress](docs/progress.md).
 `,
     'docs/progress.md': '# Progress\n',
@@ -739,7 +748,7 @@ test('rejects a rolling numbered-slice status in README', (t) => {
 
 ## Status
 
-Slice 5 is complete. See the [M2 plan](docs/plans/m2-codex-vertical-slice.md)
+Slice 5 is complete. See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md)
 and [milestones](docs/milestones.md).
 `,
   });
@@ -753,7 +762,7 @@ test('rejects a rolling numbered-slice status outside README Status', (t) => {
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 
 ## Progress
@@ -780,7 +789,7 @@ for (const [description, phrase] of [
 
 ## Status
 
-See the [M2 plan](docs/plans/m2-codex-vertical-slice.md) and
+See the [M2.6 plan](docs/plans/m2.6-unified-frontstage-interaction.md) and
 [milestones](docs/milestones.md).
 
 ## Progress

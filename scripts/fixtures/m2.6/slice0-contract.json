@@ -1,0 +1,307 @@
+{
+  "schemaVersion": 1,
+  "contractId": "codeclosure-m2-6-slice0-contract",
+  "contractVersion": "codeclosure-m2-6-slice0-v1",
+  "decisions": [
+    {
+      "adr": "0036",
+      "path": "docs/adr/0036-trusted-natural-language-interaction-routing.md",
+      "status": "Accepted"
+    },
+    {
+      "adr": "0037",
+      "path": "docs/adr/0037-frontstage-assistant-effect-and-context-boundary.md",
+      "status": "Accepted"
+    },
+    {
+      "adr": "0038",
+      "path": "docs/adr/0038-goal-summary-focus-and-control-boundary.md",
+      "status": "Accepted"
+    },
+    {
+      "adr": "0039",
+      "path": "docs/adr/0039-cli-resident-frontstage-lifecycle-and-concurrency.md",
+      "status": "Accepted"
+    }
+  ],
+  "toolchain": {
+    "codexVersion": "codex-cli 0.146.1",
+    "snapshotProfile": "codex-schema-snapshot-v1",
+    "snapshotDigest": "sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610",
+    "launcherDigest": "sha256:134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477",
+    "delegatedExecutableDigest": "sha256:35d248101b211d6248ad4e6b8c1d441fe81236da87afb9f3e9ea51a049e9f179",
+    "typescriptDigest": "sha256:29042407f5c2130f2996bd6c35dc9939139e43026ea21f279cbd3a86321ff2f4",
+    "typescriptFileCount": 622,
+    "jsonSchemaDigest": "sha256:a219496aedf9ac7da2260d9d44ffd5f96c2511e4abe81ca46d7983eb3bb08bcf",
+    "jsonSchemaFileCount": 275,
+    "feasibilityProbeDate": "2026-08-14",
+    "feasibilityMeaning": "LOWER_CLIENT_ONLY_NOT_FRONTSTAGE_EVIDENCE"
+  },
+  "identities": {
+    "principal": "principal_local-user",
+    "routingPolicy": {
+      "id": "interaction-routing-policy_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-routing-v1"
+    },
+    "directActionGrammar": {
+      "id": "codeclosure-m2-6-zh-cn-direct-action",
+      "version": "codeclosure-m2-6-zh-cn-direct-action-v1"
+    },
+    "confirmationPolicy": {
+      "id": "interaction-confirmation-policy_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-confirmation-v1"
+    },
+    "confirmationGrammar": {
+      "id": "codeclosure-m2-6-zh-cn-confirmation",
+      "version": "codeclosure-m2-6-zh-cn-confirmation-v1"
+    },
+    "goalSummaryPolicy": {
+      "id": "goal-summary-policy_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-goal-summary-v1"
+    },
+    "contextCompiler": {
+      "id": "frontstage-context-compiler_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-context-v1"
+    },
+    "assistantProfile": {
+      "schemaVersion": 1,
+      "id": "frontstage-assistant-profile_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-assistant-v1",
+      "selectedAuthorityCapabilities": [],
+      "effectPolicy": "ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION"
+    },
+    "assistantAdapter": {
+      "id": "frontstage-assistant-adapter_codex-app-server",
+      "version": "codeclosure-m2-6-frontstage-adapter-v1"
+    },
+    "responseContract": {
+      "id": "frontstage-response_codeclosure-m2-6-proposal",
+      "version": "frontstage-response_codeclosure-m2-6-proposal-v1"
+    },
+    "retentionProfile": {
+      "id": "frontstage-retention_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-retention-v1"
+    },
+    "budgetProfile": {
+      "id": "frontstage-budget_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-budget-v1"
+    },
+    "closedConfiguration": {
+      "id": "frontstage-config_codeclosure-m2-6-local",
+      "version": "codeclosure-m2-6-local-config-v1"
+    },
+    "model": {
+      "provider": "openai",
+      "model": "gpt-5.6-sol",
+      "serviceTier": "default",
+      "reasoningEffort": "low"
+    }
+  },
+  "grammar": {
+    "locale": "zh-CN",
+    "normalization": "NONE_EXACT_UNICODE_SCALAR_SEQUENCE",
+    "directActions": [
+      {
+        "messageTemplate": "请执行以下请求：<request>",
+        "result": "SUBMIT_GOVERNED_INTAKE",
+        "target": "CURRENT_FRONTSTAGE_PROJECT",
+        "handoff": "COMPLETE_ORIGINAL_MESSAGE_BYTES"
+      },
+      {
+        "messageTemplate": "请仅创建目标：<request>",
+        "result": "SUBMIT_MATERIALIZE_ONLY_INTAKE",
+        "target": "CURRENT_FRONTSTAGE_PROJECT",
+        "handoff": "COMPLETE_ORIGINAL_MESSAGE_BYTES"
+      },
+      {
+        "messageTemplate": "请开始当前目标",
+        "result": "START_GOAL",
+        "target": "SOLE_CURRENT_GOAL_FOCUS"
+      },
+      {
+        "messageTemplate": "请继续当前目标",
+        "result": "RESUME_GOAL",
+        "target": "SOLE_CURRENT_GOAL_FOCUS"
+      }
+    ],
+    "confirm": ["确认", "确认执行"],
+    "decline": ["不确认", "取消本次操作"],
+    "plainCancelResult": "UNCLEAR"
+  },
+  "contracts": {
+    "recordSchemaVersion": 1,
+    "canonicalization": "RFC8785_JSON",
+    "unknownFields": "REJECT",
+    "sessionStates": ["OPEN", "CLOSING", "CLOSED", "INTERRUPTED"],
+    "operationStates": ["RESERVED", "COMPLETED", "FAILED", "INTERRUPTED"],
+    "operationKinds": [
+      "ROUTE",
+      "FRONTSTAGE_ANSWER",
+      "GOAL_LIST",
+      "GOAL_STATUS",
+      "INTAKE_HANDOFF",
+      "INTAKE_CLARIFICATION",
+      "ACTION_PROPOSAL",
+      "ACTION_CONFIRMATION",
+      "RESULT_PROJECTION"
+    ],
+    "focusKinds": ["NONE", "INTAKE_QUESTION", "GOAL"],
+    "routeDecisionOutcomes": [
+      "ANSWER",
+      "LIST_GOALS",
+      "SHOW_GOAL",
+      "CONTINUE_EXACT_INTAKE_QUESTION",
+      "PROPOSE_INTAKE_ACTION",
+      "PROPOSE_GOAL_CONTROL",
+      "ASK_ROUTE_CLARIFICATION",
+      "NO_ACTION"
+    ],
+    "pendingActionKinds": [
+      "SUBMIT_GOVERNED_INTAKE",
+      "SUBMIT_MATERIALIZE_ONLY_INTAKE",
+      "START_GOAL",
+      "RESUME_GOAL",
+      "CANCEL_GOAL"
+    ],
+    "confirmationRequirements": ["DIRECT_USER_MESSAGE_SUFFICIENT", "SEPARATE_RESPONSE_REQUIRED"],
+    "pendingActionResolutionDispositions": [
+      "DIRECT_USER_AUTHORIZED",
+      "SEPARATE_RESPONSE_CONFIRMED",
+      "DECLINED",
+      "UNCLEAR",
+      "EXPIRED",
+      "STALE_AUTHORITY",
+      "CONFLICT",
+      "INTERRUPTED"
+    ],
+    "proposalVariants": {
+      "ANSWER_PROPOSAL": ["answerContent"],
+      "ROUTE_PROPOSAL": ["candidateRoute", "candidateGoalIds", "ambiguity", "explanationContent?"],
+      "CLARIFICATION_PROPOSAL": ["ambiguity", "questionContent"],
+      "NO_ACTION_PROPOSAL": ["reasonCode"]
+    },
+    "candidateRoutes": [
+      "LIST_GOALS",
+      "SHOW_GOAL",
+      "SUBMIT_GOVERNED_INTAKE",
+      "SUBMIT_MATERIALIZE_ONLY_INTAKE",
+      "START_GOAL",
+      "RESUME_GOAL",
+      "CANCEL_GOAL"
+    ],
+    "proposalAmbiguities": ["NONE", "ACTION_AMBIGUOUS", "TARGET_AMBIGUOUS", "REQUEST_INCOMPLETE"],
+    "noActionReasonCodes": ["UNSUPPORTED", "NO_SAFE_PROPOSAL"]
+  },
+  "budgets": {
+    "maximumUserMessageBytes": 16384,
+    "maximumSessionMessages": 512,
+    "maximumSessionContentBytes": 2097152,
+    "maximumSelectedPriorMessages": 8,
+    "maximumSelectedPriorMessageBytes": 4096,
+    "maximumSelectedPriorMessageContentBytes": 32768,
+    "maximumGoalSummariesPerPackage": 20,
+    "maximumActiveQuestionBytes": 2048,
+    "maximumCanonicalPackageBytes": 65536,
+    "maximumManifestEntries": 64,
+    "maximumProposalResponseBytes": 32768,
+    "maximumRetainedAnswerBytes": 16384,
+    "maximumClarificationOrExplanationBytes": 2048,
+    "maximumCandidateGoalIds": 4,
+    "assistantOperationDeadlineMilliseconds": 120000,
+    "maximumNotificationQueueEntries": 64,
+    "gracefulShutdownDeadlineMilliseconds": 10000,
+    "retentionLimitDisposition": "CLOSED_WITH_RETENTION_LIMIT_REACHED_NO_EVICTION_OR_SUMMARY"
+  },
+  "goalSummary": {
+    "filters": ["OPEN", "ALL"],
+    "defaultFilter": "OPEN",
+    "openGoalStatuses": ["ACTIVE", "WAITING_FOR_INPUT", "BLOCKED"],
+    "defaultPageSize": 20,
+    "maximumPageSize": 50,
+    "objectiveLabelMaximumBytes": 256,
+    "ordering": ["LAST_AUTHORITATIVE_CHANGE_AT_DESC", "GOAL_ID_ASC"],
+    "watermark": "LATEST_GOAL_OWNED_AUDIT_SEQUENCE_FOR_EXACT_PROJECT",
+    "changedWatermarkDisposition": "STALE_CURSOR"
+  },
+  "lifecycle": {
+    "startupSessionSelection": "ALWAYS_NEW_AFTER_RECONCILIATION",
+    "importPriorMessageOrFocusContext": false,
+    "maximumSessionExecutionTasks": 1,
+    "busyStartOrResumeDisposition": "SESSION_EXECUTION_BUSY",
+    "busyGovernedAlternative": "SAME_MESSAGE_MATERIALIZE_ONLY_SEPARATE_RESPONSE_REQUIRED",
+    "busyCancellationTarget": "ACTIVE_SESSION_GOAL_ONLY_SEPARATE_RESPONSE_REQUIRED",
+    "delayedExecutionQueue": false,
+    "projectWideExecutionSlot": false,
+    "shutdownInterruptionCapability": "interruptOwnedExecution",
+    "gracefulExitCode": 0,
+    "deadlineExitCode": 4,
+    "infrastructureExitCode": 5,
+    "deadlineState": "CLOSING"
+  },
+  "persistence": {
+    "firstMigration": "0037_frontstage_interaction.sql",
+    "historicalRewrite": false,
+    "stateAndAuditAtomic": true,
+    "authorizedRecovery": "SAME_PUBLIC_COMMAND_ID_AND_CANONICAL_INPUT_ONLY",
+    "assistantRecovery": "TERMINALIZE_WITHOUT_RECALL"
+  },
+  "proofOwners": {
+    "M26-E01": "scripts/run-m2.6-acceptance.mjs::preflight exact source/toolchain/migration receipt",
+    "M26-E02": "package.json::gate:quality strict command receipt",
+    "M26-E03": "scripts/check-dependencies.mjs::M26-E03 Frontstage authority dependency boundary",
+    "M26-E04": "scripts/check-dependencies.mjs::M26-E04 Codex protocol DTO boundary",
+    "M26-E05": "scripts/check-docs.mjs::M26-E05 M2.6 status-source consistency",
+    "M26-E06": "scripts/m2.6-slice0-contract.test.mjs::M26-S0-01 identity and budget freeze",
+    "M26-D01": "packages/testing/test/interaction-domain.test.ts::[M26-D01] owning codecs and unknown-field fixtures",
+    "M26-D02": "packages/testing/test/interaction-domain.test.ts::[M26-D02] canonical golden vectors",
+    "M26-D03": "packages/store-sqlite/test/interaction-control-store.test.ts::[M26-D03] session and message atomic writes",
+    "M26-D04": "packages/store-sqlite/test/interaction-control-store.test.ts::[M26-D04] operation reservation and outcome replay",
+    "M26-D05": "packages/store-sqlite/test/interaction-control-store.test.ts::[M26-D05] pending-action resolution concurrency",
+    "M26-D06": "packages/store-sqlite/test/interaction-control-store.test.ts::[M26-D06] migration and strict reopen",
+    "M26-D07": "packages/store-sqlite/test/interaction-control-store.test.ts::[M26-D07] public-action crash windows",
+    "M26-R01": "packages/testing/test/interaction-routing.test.ts::[M26-R01] forged proposal and decision authority",
+    "M26-R02": "packages/testing/test/interaction-routing.test.ts::[M26-R02] deterministic route replay",
+    "M26-R03": "packages/testing/test/interaction-routing.test.ts::[M26-R03] read-only route capability set",
+    "M26-R04": "packages/store-sqlite/test/frontstage-routing.test.ts::[M26-R04] exact pending-action authority",
+    "M26-R05": "packages/testing/test/interaction-routing.test.ts::[M26-R05] deterministic direct authorization grammar",
+    "M26-R06": "packages/testing/test/interaction-routing.test.ts::[M26-R06] forbidden direct authorization",
+    "M26-R07": "packages/store-sqlite/test/frontstage-routing.test.ts::[M26-R07] exact separate confirmation",
+    "M26-R08": "packages/store-sqlite/test/frontstage-routing.test.ts::[M26-R08] stale expired and cross-session substitution",
+    "M26-R09": "packages/store-sqlite/test/frontstage-routing.test.ts::[M26-R09] authorization replay",
+    "M26-R10": "packages/store-sqlite/test/frontstage-routing.test.ts::[M26-R10] immutable action chain",
+    "M26-I01": "packages/store-sqlite/test/frontstage-intake-composition.test.ts::[M26-I01] exact one-message submit handoff",
+    "M26-I02": "packages/store-sqlite/test/frontstage-intake-composition.test.ts::[M26-I02] transcript-summary adversary",
+    "M26-I03": "packages/store-sqlite/test/frontstage-intake-composition.test.ts::[M26-I03] focused clarification",
+    "M26-I04": "packages/store-sqlite/test/frontstage-intake-composition.test.ts::[M26-I04] stale ambiguous Intake focus",
+    "M26-I05": "packages/store-sqlite/test/frontstage-intake-composition.test.ts::[M26-I05] Materialization and Start boundary",
+    "M26-I06": "packages/store-sqlite/test/frontstage-intake-composition.test.ts::[M26-I06] ordinary Frontstage answer separation",
+    "M26-A01": "packages/adapter-codex-frontstage/test/adapter.test.ts::[M26-A01] package and Manifest closure",
+    "M26-A02": "packages/adapter-codex-frontstage/test/adapter.test.ts::[M26-A02] isolated roots and configuration",
+    "M26-A03": "packages/adapter-codex-frontstage/test/adapter.test.ts::[M26-A03] observed tool item discard",
+    "M26-A04": "packages/adapter-codex-frontstage/test/adapter.test.ts::[M26-A04] process protocol timeout and output failures",
+    "M26-A05": "packages/adapter-codex-frontstage/test/adapter.test.ts::[M26-A05] operation replay without recall",
+    "M26-A06": "packages/adapter-codex-frontstage/test/adapter.test.ts::[M26-A06] retained transcript budget",
+    "M26-A07": "packages/store-sqlite/test/frontstage-routing.test.ts::[M26-A07] trusted parser ordering and one Assistant call",
+    "M26-G01": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G01] scoped Goal catalog",
+    "M26-G02": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G02] stable pagination and cursor",
+    "M26-G03": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G03] ambiguous natural reference",
+    "M26-G04": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G04] focus write and reopen",
+    "M26-G05": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G05] stale focus",
+    "M26-G06": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G06] public Start Resume Cancel composition",
+    "M26-G07": "packages/store-sqlite/test/goal-summary-frontstage.test.ts::[M26-G07] status and notice non-authority",
+    "M26-C01": "apps/cli/test/frontstage-cli.test.ts::[M26-C01] persistent foreground loop",
+    "M26-C02": "apps/cli/test/frontstage-cli.test.ts::[M26-C02] execution task plus status request",
+    "M26-C03": "apps/cli/test/frontstage-cli.test.ts::[M26-C03] busy-session exact dispositions",
+    "M26-C04": "apps/cli/test/frontstage-process.test.ts::[M26-C04] cross-process Runtime race",
+    "M26-C05": "apps/cli/test/frontstage-process.test.ts::[M26-C05] graceful close deadline",
+    "M26-C06": "apps/cli/test/frontstage-process.test.ts::[M26-C06] abrupt exit and new-session recovery",
+    "M26-C07": "apps/cli/test/frontstage-cli.test.ts::[M26-C07] notification loss and render failure",
+    "M26-C08": "apps/cli/test/frontstage-cli.test.ts::[M26-C08] correct first-pass governed path",
+    "M26-B01": "package.json::accept:m1 strict regression receipt",
+    "M26-B02": "package.json::regress:m2 strict current-source receipt",
+    "M26-B03": "package.json::regress:m2.5 strict current-source receipt",
+    "M26-B04": "package.json::accept:m2.5.1 strict prerequisite regression receipt",
+    "M26-B05": "scripts/run-m2.6-acceptance.mjs::source-closure exact opening and closing manifest",
+    "M26-B06": "scripts/run-m2.6-acceptance.mjs::evidence-manifest validation"
+  }
+}

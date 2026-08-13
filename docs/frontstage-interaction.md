@@ -2,10 +2,11 @@
 
 ## Status
 
-This document defines the proposed M2.6 contract. M2.6 implementation has not
-started, and the proposed ADRs referenced below are not binding until accepted.
-The M2.5.1 milestone prerequisite has passed. The completed M2.5 Goal Intake
-boundary remains unchanged while this proposal is reviewed.
+This document defines the accepted planned M2.6 contract. ADR 0036 through ADR
+0039 are accepted and the executable Slice 0 decision/proof contract passed its
+bounded closure review on 2026-08-14. Slice 1 feature implementation has not
+started. The M2.5.1 milestone prerequisite has passed, and the completed M2.5
+Goal Intake boundary remains unchanged.
 
 ## Purpose
 
@@ -37,7 +38,7 @@ identifier, or switch to a slash-command surface for the supported path.
 
 ## Governing authority
 
-This proposal is subordinate to:
+This planned contract is subordinate to:
 
 1. [`RUNTIME_INVARIANTS.md`](../RUNTIME_INVARIANTS.md);
 2. accepted ADRs, especially the public Runtime boundary in
@@ -53,9 +54,9 @@ This proposal is subordinate to:
 3. [`PRODUCT.md`](../PRODUCT.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md);
 4. [Goal Intake](goal-intake.md), [Domain Model](domain-model.md), and
    [Workflow](workflow.md); and
-5. the [M2.6 milestone proposal](milestones.md#m26--unified-frontstage-interaction-and-control).
+5. the [M2.6 milestone boundary](milestones.md#m26--unified-frontstage-interaction-and-control).
 
-The detailed durable decisions are proposed in
+The detailed durable decisions are accepted in
 [ADR 0036](adr/0036-trusted-natural-language-interaction-routing.md),
 [ADR 0037](adr/0037-frontstage-assistant-effect-and-context-boundary.md),
 [ADR 0038](adr/0038-goal-summary-focus-and-control-boundary.md), and
@@ -96,12 +97,15 @@ reconstructing trusted interaction state from a transcript.
 The initial lifecycle is closed:
 
 - `OPEN` — accepts one new user message at a time;
-- `CLOSING` — accepts no new message while bounded shutdown completes; and
-- `CLOSED` — immutable terminal session.
+- `CLOSING` — accepts no new message while bounded shutdown completes;
+- `CLOSED` — immutable normal terminal session; and
+- `INTERRUPTED` — immutable terminal session closed by startup reconciliation.
 
-A CLI launch MAY resume an `OPEN` session only when trusted startup composition
-selects exactly one session for the same principal and project. Ambiguous
-selection MUST create no implicit binding.
+A CLI launch MUST reconcile retained non-terminal sessions and then create one
+new `OPEN` session for the trusted principal/project. It MUST NOT attach to an
+earlier session or import its messages or Focus. Authorized public work may
+recover only through its retained same-Command-ID boundary under ADR 0039;
+assistant work is never recalled.
 
 ### `InteractionMessage`
 
@@ -345,7 +349,7 @@ a later milestone may add an exact read-only project-observation port.
 
 ## Public Goal query and control surface
 
-M2.6 proposes a narrow `listGoalSummaries` application query. Trusted
+M2.6 plans a narrow `listGoalSummaries` application query. Trusted
 composition binds the fixed local principal to one verified authority home;
 the caller cannot select another principal. Within that authority home the
 query filters by one exact normalized project path. It returns a versioned
@@ -398,8 +402,8 @@ session owns an active execution-bearing task:
 - ordinary answers and read-only Goal/Intake queries remain available;
 - exact cancellation of the active Goal may proceed through its required
   separate confirmation;
-- an explicitly requested `MATERIALIZE_ONLY` Intake may proceed because it
-  creates no Goal execution task; and
+- an explicitly requested `MATERIALIZE_ONLY` Intake may proceed only after its
+  separate confirmation because it creates no Goal execution task; and
 - another `GOVERNED_EXECUTION`, `START_GOAL`, or `RESUME_GOAL` is not retained
   as delayed authority and cannot launch a second task.
 
@@ -463,9 +467,9 @@ M2.6 does not include:
 - technical Acceptance changes; or
 - merge, release, deployment, communication, purchase, or promotion authority.
 
-Deferred items are staged only in the temporary
-[M2.6 deferred-boundary TODO](plans/m2.6-deferred-boundary-todo.md); that file
-is not implementation authority.
+Deferred capabilities belong directly to the named [M3, M4, and M5 milestone
+scopes](milestones.md#m3--full-fact-graph-and-context-compiler), not to an
+M2.6 side backlog.
 
 The proposed [M2.7 Runtime Host contract](runtime-host.md) separately considers
 detached local execution, reconnect, a control lease, read-only secondary CLI,

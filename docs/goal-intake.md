@@ -1776,7 +1776,7 @@ milestone verdict.
 
 ### M2.6
 
-The proposed M2.6 Frontstage may persist one exact current-message handoff and
+The planned M2.6 Frontstage may persist one exact current-message handoff and
 invoke existing public submit or clarification facades. It does not reinterpret
 session history as a Raw Request, let a model select the trusted interaction
 action, change Admission, merge Materialization with Start, or add a second

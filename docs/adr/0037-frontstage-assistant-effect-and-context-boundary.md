@@ -1,6 +1,6 @@
 # ADR 0037: Bound each Frontstage Assistant operation by a fresh manifest
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-06
 
 ## Context
@@ -41,6 +41,34 @@ identity, lifecycle, and profile binding before any response becomes an
 interaction record. The assistant cannot author record IDs, provenance class,
 route decision, pending action, command, Goal summary, or disposition.
 
+The initial response contract is
+`frontstage-response_codeclosure-m2-6-proposal-v1`. Its variants have exactly
+these semantic fields in addition to their common schema/contract bindings:
+
+| Variant | Exact semantic fields |
+| --- | --- |
+| `ANSWER_PROPOSAL` | one `answerContent` string |
+| `ROUTE_PROPOSAL` | one closed `candidateRoute`, zero to four distinct `candidateGoalIds` drawn from the supplied Goal summaries, one closed `ambiguity`, and optional bounded `explanationContent` |
+| `CLARIFICATION_PROPOSAL` | one closed `ambiguity` and one bounded `questionContent` |
+| `NO_ACTION_PROPOSAL` | one closed `reasonCode` |
+
+The `candidateRoute` set is `LIST_GOALS`, `SHOW_GOAL`,
+`SUBMIT_GOVERNED_INTAKE`, `SUBMIT_MATERIALIZE_ONLY_INTAKE`, `START_GOAL`,
+`RESUME_GOAL`, and `CANCEL_GOAL`. Ordinary answers use only the separate
+`ANSWER_PROPOSAL` variant. The `ambiguity` set is `NONE`,
+`ACTION_AMBIGUOUS`, `TARGET_AMBIGUOUS`, and `REQUEST_INCOMPLETE`.
+`NO_ACTION_PROPOSAL.reasonCode` is `UNSUPPORTED` or `NO_SAFE_PROPOSAL`.
+Unknown members, a Goal ID absent from the exact supplied summary set, a Goal
+candidate on a route that cannot target a Goal, `NONE` with an invalid target
+cardinality, or another illegal variant combination rejects the complete
+response.
+
+These fields remain proposals. In particular, a candidate route or Goal ID is
+not copied into Focus, Route Decision, Pending Action, or command authority.
+Runtime resolves it against current public projections and applies ADR 0036
+and ADR 0038; ambiguity or a state-changing assistant-proposed target requires
+clarification or a separately gated exact action.
+
 Trusted handling precedes assistant invocation. The closed confirmation and
 decline parser, exact active-Intake-Question parser, direct-action parser, and
 read-only Goal-query parser run in that order. Only a message not decided by
@@ -80,6 +108,27 @@ Decision, Evidence, Acceptance, or a pending action.
 Each assistant call uses one controlled process, one fresh ephemeral Thread,
 and one bounded Turn through the reusable App Server client. M2.6 does not
 require Thread reuse, Thread recovery, or Compact policy.
+
+The initial identities are
+`frontstage-assistant-profile_codeclosure-m2-6-local /
+codeclosure-m2-6-local-assistant-v1` and
+`frontstage-assistant-adapter_codex-app-server /
+codeclosure-m2-6-frontstage-adapter-v1`. The Profile declares
+`selectedAuthorityCapabilities: []` and
+`effectPolicy: ISOLATED_READ_ONLY_FAIL_ON_TOOL_OBSERVATION`. It is a new
+Frontstage identity and does not reuse or relabel an M2.5 Intake Profile,
+Adapter, response contract, or operation record.
+
+The bounded implementation baseline pins Codex CLI `0.146.1` and protocol
+snapshot
+`sha256:312156edfdf765f134ce5f754419a9509fd34186798a1bdbb0c219ac7c19c610`.
+A 2026-08-14 read-only lower-client probe confirmed that exact installed
+binary can initialize, create a fresh Thread, complete one structured-output
+Turn, and clean its controlled state. That planning probe is feasibility
+evidence only: it does not prove the unimplemented Frontstage Adapter,
+Frontstage isolation, tool containment, semantic response quality, or the
+M2.6 milestone. The final Profile digest and effective-configuration proof
+must be produced from the implemented Frontstage composition.
 
 Trusted composition selects no CodeClosure authority capability and supplies
 an isolated operation cwd/state root outside project, Candidate, authority,
@@ -154,10 +203,17 @@ M2.6 tests must prove:
 - transcript excerpts remain explicitly non-authoritative and bounded;
 - missing, extra, stale, oversized, or digest-mismatched input/output fails
   closed;
+- every exact Proposal variant and closed enum combination decodes, while an
+  unknown, cross-variant, out-of-context Goal, or illegal-cardinality value
+  discards the whole result;
 - trusted exact parsers bypass model invocation, while every unresolved message
   invokes at most one proposal operation;
 - observed tool use interrupts and discards the entire result;
 - cwd/state/forbidden-root overlap fails before Thread creation;
+- the assessed composition binds the exact accepted Frontstage Profile,
+  Adapter, Codex `0.146.1`, and protocol snapshot identities without
+  substituting an Intake identity or treating the Slice 0 probe as Live
+  Frontstage evidence;
 - exact replay returns stored output without a second assistant call; and
 - process, timeout, interruption, and restart failures create no Route Decision,
   Pending Action, Goal, Workflow, Evidence, or Acceptance authority.

@@ -1,6 +1,6 @@
 # ADR 0039: Keep the M2.6 Frontstage resident in the CLI process
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-06
 
 ## Context
@@ -68,6 +68,48 @@ Intake alternative requiring separate user confirmation, but cannot silently
 rewrite the original action or automatically Start it after the local task
 ends.
 
+The exact busy dispositions are:
+
+- another governed Intake request creates no governed Pending Action. The
+  Frontstage may instead construct one
+  `SUBMIT_MATERIALIZE_ONLY_INTAKE / SEPARATE_RESPONSE_REQUIRED` Pending Action
+  over the same complete originating message bytes and must render that changed
+  effect before confirmation;
+- an explicit `MATERIALIZE_ONLY` request may construct that same separately
+  gated action, but cannot receive direct authorization while the task is
+  active;
+- `StartGoal` or `ResumeGoal` returns `SESSION_EXECUTION_BUSY` without a
+  Pending Action, Command ID, delayed reservation, or queue entry; and
+- only cancellation of the exact Goal owned by the active session task may
+  construct `CANCEL_GOAL / SEPARATE_RESPONSE_REQUIRED`. Cancellation of
+  another Goal receives route clarification and no action authority.
+
+The execution-bearing slot is released only when the launched governed Intake,
+Start, or Resume composition promise settles and its last public command/drive
+result has been projected. A notification, assistant statement, or apparent
+backend completion cannot release it early.
+
+### Start every foreground process with a new session
+
+Trusted M2.6 startup always creates a new `InteractionSession` after strict
+reconciliation; it never attaches the new process to an earlier `OPEN` or
+`CLOSING` session. Previous message excerpts, Focus, and unresolved
+non-authorized Pending Actions are not imported into the new session.
+
+Reconciliation closes each structurally valid earlier non-terminal session for
+the same trusted principal/project as `INTERRUPTED`, terminalizes its orphaned
+Assistant operations without recall, and closes unresolved non-authorized
+actions without invoking a capability. An authorized Action Reservation may
+be reconciled only through its retained public Command ID and canonical input
+under ADR 0036. Corrupt or ambiguous retained authority fails startup closed.
+
+This rule deliberately avoids a resumable shared-session owner or control
+lease. Simultaneous M2.6 frontstage processes are outside the bounded user
+experience; if they race, Store uniqueness, freshness, and same-Command-ID
+rules must still prevent duplicate authority, but M2.6 does not promise shared
+conversation continuity. Direct one-shot CLI commands remain legal and use
+their existing concurrency semantics.
+
 ### Preserve Runtime ownership during shutdown and restart
 
 Graceful shutdown proceeds in this order:
@@ -81,9 +123,30 @@ Graceful shutdown proceeds in this order:
 5. flush only already-derived notifications; and
 6. close the Store and process resources.
 
+The exact graceful-shutdown deadline is `10_000` milliseconds from the
+successful `OPEN -> CLOSING` session commit. The Workflow driver exposes one
+narrow trusted lifecycle capability for this composition:
+`interruptOwnedExecution`. It may signal only an active controller owned by
+that same in-process driver instance and exact session task. It cannot allocate
+a command, find or interrupt another Goal, mutate Workflow state, issue
+`CancelGoal`, or claim that an Attempt is terminal. The existing Worker or
+external-execution lifecycle records any observed interruption; the existing
+Runtime drive and startup recovery remain the only owners of resulting
+Workflow state.
+
+If Assistant interruption and the session-owned execution promise settle at a
+persisted Runtime boundary before the deadline, Runtime commits the Session as
+`CLOSED`, flushes already-derived notifications, closes resources, and the CLI
+returns exit `0`. If the deadline expires, the CLI returns exit `4`, leaves the
+durable Session in `CLOSING`, performs no further authority write or implicit
+cancellation, and exits without claiming graceful completion. The next startup
+must reconcile that state before publishing a new Session. Failure to commit
+the initial `CLOSING` transition or inability to trust retained authority is an
+infrastructure exit `5`, not a successful or controlled interruption.
+
 If the process exits before the bounded sequence completes, the next trusted
 startup reconciles incomplete Interaction Operations and then invokes existing
-Goal/Workflow/external-execution recovery before reopening the session.
+Goal/Workflow/external-execution recovery before publishing the new session.
 Recovery never reconstructs authority from display output or model transcript,
 never redispatches a consumed claim, and never allocates a replacement command
 because a notification is absent. An orphaned untrusted Frontstage Assistant
@@ -93,8 +156,9 @@ capability using the same preallocated Command ID and canonical input, so the
 existing idempotent boundary resolves or completes one logical command without
 duplicating authority.
 
-A session may become `OPEN` again only after reconciliation proves a legal
-state. Corrupt or ambiguous authority fails startup closed.
+An earlier session never becomes `OPEN` again. The new session may become
+`OPEN` only after reconciliation proves every retained prerequisite legal.
+Corrupt or ambiguous authority fails startup closed.
 
 ### Keep notification semantics derived and bounded
 

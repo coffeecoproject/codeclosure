@@ -1,6 +1,6 @@
 # ADR 0036: Route natural language through trusted pending actions
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-06
 
 ## Context
@@ -34,7 +34,7 @@ user-authored source required for `USER_STATED` provenance.
 
 ### Separate proposal, route decision, and authorization
 
-The proposed M2.6 frontstage first separates four routing and authorization
+The planned M2.6 frontstage first separates four routing and authorization
 meanings:
 
 1. `RouteProposal` is untrusted assistant output;
@@ -128,6 +128,58 @@ An execution-bearing task is only a governed Intake, `START_GOAL`, or
 `RESUME_GOAL` composition that may drive a Goal. A `MATERIALIZE_ONLY` Intake,
 read/query operation, or cancellation action remains serialized Frontstage
 work and does not occupy a second execution-bearing task.
+
+### Freeze the initial trusted language grammar
+
+The initial direct-action grammar is
+`codeclosure-m2-6-zh-cn-direct-action-v1`. It has one installed definition and
+one canonical digest. Its complete successful forms are:
+
+| Exact message form | Parser result | Target rule |
+| --- | --- | --- |
+| `请执行以下请求：<request>` | `SUBMIT_GOVERNED_INTAKE` | the exact current Frontstage project |
+| `请仅创建目标：<request>` | `SUBMIT_MATERIALIZE_ONLY_INTAKE` | the exact current Frontstage project |
+| `请开始当前目标` | `START_GOAL` | the sole current Goal `FocusBinding` |
+| `请继续当前目标` | `RESUME_GOAL` | the sole current Goal `FocusBinding` |
+
+`<request>` is the non-empty remainder after the exact listed prefix and MUST
+contain at least one non-whitespace Unicode scalar value. The parser does not
+remove the prefix from authoritative content: the complete original message
+bytes, not the remainder or a reconstructed string, become the M2.5
+`admittedUserContent` when the action is authorized and consumed.
+
+The initial separate-confirmation grammar is
+`codeclosure-m2-6-zh-cn-confirmation-v1`. Its complete successful forms are:
+
+| Exact message | Parser result |
+| --- | --- |
+| `确认` | `CONFIRM` |
+| `确认执行` | `CONFIRM` |
+| `不确认` | `DECLINE` |
+| `取消本次操作` | `DECLINE` |
+
+Both grammars compare exact Unicode scalar sequences. They perform no Unicode
+normalization, case folding, punctuation substitution, whitespace collapse,
+or leading/trailing trim. All other messages produce `NO_MATCH` for the
+direct-action parser or `UNCLEAR` for the confirmation parser. In particular,
+plain `取消` is not a decline phrase because it could instead express a
+`CancelGoal` request.
+
+The initial trusted parser locale is exactly `zh-CN`; M2.6 does not infer or
+persist a user locale. A message outside this grammar may still be answered or
+proposed by the Assistant, but it cannot receive direct authorization. A
+separately gated proposal must render the exact accepted confirmation and
+decline phrases so the user can supply a trusted response without learning a
+command family or record identifier.
+
+The direct Goal forms never parse a Goal identifier, objective, ordinal, or
+assistant-selected target from message text. Runtime must resolve the exact
+current Goal focus and reload its current Goal/Workflow versions. Missing,
+non-Goal, ambiguous, or stale focus produces route clarification or a new
+Pending Action from refreshed authority; it cannot receive direct
+authorization. The grammar recognizes syntax only. Confirmation Policy still
+owns whether a recognized result is directly authorizable under current busy,
+effect, target, and freshness state.
 
 ### Keep proposal, authorization, dispatch, and outcome immutable
 
@@ -238,6 +290,14 @@ M2.6 tests must prove:
   and, when authorized, Reservation/Outcome chain;
 - direct authorization passes only for the closed allowed action kinds and
   exact trusted parser/policy inputs, with no model field used as evidence;
+- the exact `zh-CN` grammar forms produce only their listed results; every
+  normalization, punctuation, whitespace, locale, or closed-form Goal-target
+  variant fails direct parsing; and a request-bearing form treats its remaining
+  bytes as the request while the complete unmodified message becomes M2.5
+  admitted content;
+- confirmation recognizes only the four installed phrases against one current
+  separately gated Pending Action, while plain `取消`, parser output outside
+  that context, and assistant-authored confirmation text authorize nothing;
 - cancellation, replacement, destructive, conflicting, ambiguous, and
   separately gated actions cannot receive direct authorization;
 - an active session-owned execution-bearing task blocks another governed Intake,

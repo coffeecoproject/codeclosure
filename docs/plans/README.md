@@ -18,8 +18,11 @@ executable contract and proof-owner freeze select the exact reviewed Codex
 cross-version substitution. The final canonical assessment passed 13/13 stages
 and 68/68 rows on exact source `dfe4798`, and the independent completion review
 issued bounded `PASS` on 2026-08-13. This post-completion correction does not
-rewrite the historical M2.5 verdict. M2.6 is now the next formal proposal;
-M2.6 and M2.7 implementation has not started and proposed ADRs are not binding.
+rewrite the historical M2.5 verdict. M2.6 is now the current formalization:
+ADRs 0036 through 0039 are accepted and its executable Slice 0 decision/proof
+contract passed bounded review on 2026-08-14, but Slice 1 feature
+implementation has not started. M2.7 remains a separate proposal whose ADRs
+are not binding.
 
 - [M1 deterministic skeleton](m1-deterministic-skeleton.md)
 - [M1 milestone acceptance plan](m1-acceptance-plan.md)
@@ -32,7 +35,7 @@ M2.6 and M2.7 implementation has not started and proposed ADRs are not binding.
 - [M2.5.1 Slice 4 effective read-containment closure plan](m2.5.1-slice4-effective-read-containment-closure.md)
 - [M2.5.1 milestone acceptance plan](m2.5.1-acceptance-plan.md)
 - [M2.6 Unified Frontstage Interaction and Control](m2.6-unified-frontstage-interaction.md)
+- [M2.6 Slice 0 contract and proof-owner freeze](m2.6-slice0-contract.md)
 - [M2.6 milestone acceptance plan](m2.6-acceptance-plan.md)
-- [Temporary M2.6 deferred-boundary TODO](m2.6-deferred-boundary-todo.md)
 - [M2.7 Local Runtime Host and Single-Goal Project Control](m2.7-local-runtime-host-single-goal-control.md)
 - [M2.7 milestone acceptance plan](m2.7-acceptance-plan.md)

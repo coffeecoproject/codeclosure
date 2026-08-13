@@ -32,9 +32,10 @@ Historical M2/M2.5 identities retain their original meaning, Fake components
 remain explicit test infrastructure, and this result is not product completion
 or external-effect authority.
 
-M2.6 Unified Frontstage Interaction and Control is the next formal proposal.
-Its M2.5.1 prerequisite is satisfied, but implementation has not started and
-its proposed ADRs are not binding.
+M2.6 Unified Frontstage Interaction and Control is the current formalization.
+Its M2.5.1 prerequisite is satisfied, ADR 0036 through ADR 0039 are accepted,
+and its exact decision and proof contract passed bounded closure review on
+2026-08-14. Feature implementation has not started.
 The candidate scope is one foreground CLI frontstage, natural-language user
 input, an exact immutable pending-action/authorization/dispatch chain for the
 closed new-Intake and Goal-control action set, deterministic direct-or-separate
@@ -49,10 +50,10 @@ per exact project. It explicitly excludes queues, automatic handoff, automatic
 next-Goal Start, parallel Goal workers, multi-user operation, and
 release/deployment authority.
 
-The [M2 implementation plan](docs/plans/m2-codex-vertical-slice.md) remains the
-detailed historical status source required by the current README structural
-contract; the [milestone document](docs/milestones.md) defines completed and
-proposed bounded scopes and exit criteria.
+The [M2.6 implementation plan](docs/plans/m2.6-unified-frontstage-interaction.md)
+is the current detailed status source; the [milestone
+document](docs/milestones.md) defines completed and proposed bounded scopes and
+exit criteria.
 
 This README intentionally does not duplicate the rolling slice, feature, or
 test inventory. M1 and M2 remain regression baselines.
@@ -104,6 +105,9 @@ Current repository commands are:
 - `pnpm check:m2.5.1:slice0` — validate the frozen M2.5.1 identities, protocol
   dispositions, proof ownership, unchanged-schema causality, and protected
   demonstration checker without claiming production implementation.
+- `pnpm check:m2.6:slice0` — validate the accepted M2.6 decision set, exact
+  local identities, closed grammar/enums/budgets, and one planned owner for
+  every mandatory acceptance row without claiming feature implementation.
 - `pnpm probe:m2.5.1:intake:live` — after explicit environment authorization,
   run the pinned lower-client prerequisite and the three isolated real Intake
   compatibility paths, emitting only validated metadata receipts.
@@ -198,13 +202,13 @@ M2.5 Goal Intake is also complete as a bounded milestone. Its historical
 [completion review](docs/reviews/m2.5-completion-review.md), remain the bounded
 implementation and verdict records.
 
-M2.6 is the next proposed milestone. Its [Frontstage Interaction
+M2.6 is the current formalization. Its [Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
 plan](docs/plans/m2.6-unified-frontstage-interaction.md), and [acceptance
-plan](docs/plans/m2.6-acceptance-plan.md) are ready for decision review, not
-implementation or acceptance claims. The separate temporary
-[deferred-boundary TODO](docs/plans/m2.6-deferred-boundary-todo.md) stages
-remaining M3–M5 items and records the M2.7 reassignment without granting scope.
+plan](docs/plans/m2.6-acceptance-plan.md) bind the accepted planned boundary;
+its executable decision/proof contract passed bounded review, which is not a
+feature-implementation or acceptance claim. Deferred capabilities remain
+assigned directly to M2.7, M3, M4, or M5.
 
 M2.7 is the separate post-M2.6 candidate. Its [Local Runtime Host
 contract](docs/runtime-host.md), [implementation

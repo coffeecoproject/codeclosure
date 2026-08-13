@@ -762,15 +762,16 @@ assessment; it is not a Frontstage feature or product-completion claim.
 
 ## M2.6 — Unified Frontstage Interaction and Control
 
-Status: Proposed. Formal domain, ADR, implementation, and acceptance documents
-exist for review; implementation has not started. The M2.5.1 entry condition
-has been satisfied, and the proposed ADRs are not binding until accepted. The
+Status: Slice 0 decision/proof closure passed on 2026-08-14. ADR 0036 through
+ADR 0039 are accepted and the executable [Slice 0
+contract](plans/m2.6-slice0-contract.md) freezes the implementation inputs;
+Slice 1 feature implementation has not started. The M2.5.1 entry condition has
+been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction
-contract](frontstage-interaction.md) define the candidate boundary. Deferred
-Runtime Host, scheduling, and later-milestone ideas are staged only in the
-temporary [M2.6 deferred-boundary
-TODO](plans/m2.6-deferred-boundary-todo.md).
+contract](frontstage-interaction.md) define the planned boundary. Deferred
+Runtime Host, scheduling, and later capabilities remain assigned directly to
+M2.7, M3, M4, or M5.
 
 ### Objective
 
@@ -981,12 +982,16 @@ runtime state.
 
 - provenance-bearing Fact Graph;
 - project-assisted Goal Intake with exact read-only project provenance;
+- explicit composite-source authority when multiple user messages may support
+  one `USER_STATED` Intake field;
 - Raw Request/Intent Projection relationships to Fact and Business Scenario
   sources;
 - business-scenario discovery and applicability;
 - code/business relationship mapping;
 - Context Compiler relevance selection and hard budgets;
 - Context Manifest omission decisions;
+- durable admitted conversational facts plus authoritative relevance and
+  omission selection, without treating transcripts as facts;
 - decision and unresolved-fact gateway;
 - Goal Revision Proposal plus a distinct source-bound
   `GoalRevisionAdmissionDecision`;
@@ -996,9 +1001,11 @@ runtime state.
   including verification-asset source and coverage relationships;
 - durable per-generation change, attempted-approach, failure-pattern,
   hypothesis, and no-progress facts needed for later multi-round decisions,
-  without authorizing another repair; and
+  without authorizing another repair;
 - clean-context phase sessions and reviewer-context plumbing without making an
-  independent Reviewer mandatory or acceptance-critical.
+  independent Reviewer mandatory or acceptance-critical; and
+- evaluation of persistent Assistant Thread reuse and Compact only after the
+  authoritative context and omission contracts exist.
 
 ### Exit Criteria
 
@@ -1026,8 +1033,12 @@ Operate CodeClosure continuously on real CodeClosure development tasks.
 - robust crash/restart and dogfood reconciliation beyond the bounded M2.7 Host
   contract if that proposal is accepted;
 - Human Decision Gateway UX;
+- durable notification delivery, acknowledgement, offline handling, and richer
+  desktop/operator interaction without making notifications authoritative;
 - complete Goal Intake and clarification UX;
 - Raw Request and sensitive Intake-content retention controls;
+- long-term interaction search, export, erasure/tombstone, and provider-data
+  controls that preserve authority history and privacy boundaries;
 - richer status surface;
 - candidate retention and cleanup policy;
 - CodeClosure builds selected CodeClosure changes;
@@ -1064,6 +1075,8 @@ Potential scope after local Codex dogfooding is stable:
 - stronger isolation and remote runners;
 - multi-goal queueing, priority, and automatic scheduling beyond M2.7's
   proposed no-auto-handoff project slot;
+- parallel Goal workers and explicit multi-agent coordination with owned
+  Candidate, Evidence, cost, handoff, and failure semantics;
 - team/multi-user authority;
 - promotion/merge/release control as a separate governed subsystem;
 - evaluate whether any proven limitation justifies a Codex fork.

@@ -41,10 +41,10 @@ supersedes it.
 | [0033](0033-align-protected-verification-with-start-and-check-lifecycle.md) | Align protected verification with Start and Check lifecycle | Accepted |
 | [0034](0034-close-pre-goal-command-replay-and-sqlite-activation.md) | Close pre-Goal command replay and SQLite activation | Accepted |
 | [0035](0035-bound-intake-by-non-authoritative-effects.md) | Bound M2.5 Intake by non-authoritative effects instead of model-visible tool absence | Accepted |
-| [0036](0036-trusted-natural-language-interaction-routing.md) | Route natural language through trusted pending actions | Proposed |
-| [0037](0037-frontstage-assistant-effect-and-context-boundary.md) | Bound each Frontstage Assistant operation by a fresh manifest | Proposed |
-| [0038](0038-goal-summary-focus-and-control-boundary.md) | Expose scoped Goal summaries and exact focus through the Runtime | Proposed |
-| [0039](0039-cli-resident-frontstage-lifecycle-and-concurrency.md) | Keep the M2.6 Frontstage resident in the CLI process | Proposed |
+| [0036](0036-trusted-natural-language-interaction-routing.md) | Route natural language through trusted pending actions | Accepted |
+| [0037](0037-frontstage-assistant-effect-and-context-boundary.md) | Bound each Frontstage Assistant operation by a fresh manifest | Accepted |
+| [0038](0038-goal-summary-focus-and-control-boundary.md) | Expose scoped Goal summaries and exact focus through the Runtime | Accepted |
+| [0039](0039-cli-resident-frontstage-lifecycle-and-concurrency.md) | Keep the M2.6 Frontstage resident in the CLI process | Accepted |
 | [0040](0040-local-runtime-host-lifecycle-and-attachment.md) | Move local execution ownership into one attachable Runtime Host | Proposed |
 | [0041](0041-project-control-lease-and-read-only-secondary-cli.md) | Give one CLI the project control lease and make later CLIs observers | Proposed |
 | [0042](0042-project-scoped-single-active-goal-slot.md) | Allow one started Goal per project without adding a scheduler | Proposed |
@@ -52,14 +52,14 @@ supersedes it.
 | [0044](0044-source-freeze-owned-candidate-change-containment.md) | Enforce Candidate allowed paths from a stable source-freeze change set | Accepted |
 
 M2.5 completed within ADRs 0027, 0034, and 0035. ADRs 0036 through 0039 are
-M2.6 proposals under review; they are not implementation authority until their
-status becomes `Accepted` or a replacement decision is accepted. ADRs 0040
-through 0042 are separate M2.7 proposals and do not enlarge M2.6.
+accepted and bind the planned M2.6 implementation without claiming that the
+feature exists. ADRs 0040 through 0042 are separate M2.7 proposals and do not
+enlarge M2.6.
 
 [ADR 0043](0043-candidate-free-codex-project-read-authority.md) is the accepted
 M2.5.1 project-read snapshot/Context/configuration, phase Worker-activity, and
 cleanup/crash-reconciliation decision. It is binding only for the bounded
-M2.5.1 path and does not make later M2.6 or M2.7 proposals binding.
+M2.5.1 path and does not itself authorize any M2.6 or M2.7 capability.
 
 [ADR 0044](0044-source-freeze-owned-candidate-change-containment.md) extends
 that bounded path by assigning actual Candidate changed-path proof to the

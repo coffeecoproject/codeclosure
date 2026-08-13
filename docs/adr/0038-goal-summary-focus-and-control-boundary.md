@@ -1,6 +1,6 @@
 # ADR 0038: Expose scoped Goal summaries and exact focus through the Runtime
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-06
 
 ## Context
@@ -49,6 +49,41 @@ must not derive membership from session messages or assistant history. Default
 startup rendering may show a bounded active subset; a request for all Goals
 uses pagination and cannot silently truncate while claiming completeness.
 
+The initial query contract is exact:
+
+- `OPEN` and `ALL` are the only filters; `OPEN` is the default and includes
+  Goal status `ACTIVE`, `WAITING_FOR_INPUT`, and `BLOCKED`, while `ALL` also
+  includes `CANCELLED` and `CLOSED`;
+- the default page size is `20`, the maximum page size is `50`, and any other
+  requested size is rejected rather than clamped;
+- records order by `lastAuthoritativeChangeAt` descending and then `GoalId`
+  ascending; `lastAuthoritativeChangeAt` is exactly the later of the decoded
+  Goal and Workflow `updatedAt` values, not a message, notification, model, or
+  filesystem time;
+- `objectiveLabel` is the longest exact UTF-8 prefix of the Goal objective no
+  greater than `256` bytes and ending at a Unicode-scalar boundary, accompanied
+  by `objectiveLabelTruncated`; it is a non-authoritative display projection
+  and is neither normalized nor accepted back as Goal identity; and
+- every page reports `hasMore` and an optional opaque next cursor. It never
+  describes a partial page as the complete catalog.
+
+The first page binds the latest Goal-owned audit sequence across all Goals for
+the exact project as its catalog watermark. A next cursor binds the query-view
+policy identity/digest, trusted authority-home/principal binding, exact project
+path digest, filter, page size, watermark, and final ordering tuple from the
+previous page under one Runtime-authored cursor digest. The Runtime recomputes
+the current project watermark before serving another page. Any change, cursor
+substitution, scope mismatch, unknown field, or digest mismatch returns a
+typed `STALE_CURSOR` or invalid-input result and no rows; the caller restarts
+from the first page. This gives stable unchanged-authority pagination without
+persisting a second catalog snapshot or read-side authority.
+
+The Store owns only the narrow project-filtered authority projection and Goal-
+owned watermark read. Runtime strictly decodes it and reuses the existing
+`GoalStatusView` explanation policy for blocker, next-action, Acceptance, and
+closeout meaning. Neither the Store query nor the Frontstage independently
+reimplements those semantics.
+
 ### Persist one exact Focus Binding as convenience state
 
 An `InteractionSession` may bind no target, one Intake Run with its exact
@@ -65,6 +100,15 @@ Focus does not reserve the Goal, establish ownership, or prove freshness. Each
 later status or state-changing operation reloads current authority through the
 public application facade. A stale focus can be refreshed for a read; a
 state-changing pending action must be rebuilt against the new exact version.
+
+M2.6 updates Goal focus only from an exact Runtime result: an Intake
+Materialization result, a successful public Goal command, a read resolved from
+an already exact Goal focus, a scoped query with exactly one possible Goal, or
+a separately confirmed Pending Action naming the rendered exact Goal. An
+assistant-selected Goal reference alone and a truncated `objectiveLabel`
+cannot update focus. When several Goals remain possible, the Frontstage asks
+clarification or constructs a separately gated exact action; it does not add a
+fuzzy or ordinal target resolver to the trusted path.
 
 ### Keep status, control, and result meanings separate
 
@@ -113,10 +157,15 @@ M2.6 tests must prove:
   another authority home or project's Goals;
 - direct and Intake-created Goals appear under the same scoped query;
 - ordering and pagination are stable, bounded, and explicit about continuation;
+- exact `OPEN`/`ALL` membership, `20`/`50` page limits, ordering tie-break,
+  objective-prefix truncation, cursor scope/digest binding, and stale-watermark
+  rejection;
 - the public view contains no Store mutation capability or backend protocol
   type;
 - zero/multiple/stale target resolution cannot update focus or invoke a
   command;
+- assistant-selected IDs and truncated labels cannot become focus, while each
+  allowed exact Runtime result can create only its bound focus;
 - focus and audit update atomically and survive strict reopen;
 - a stale Goal version forces a new query/pending action rather than reusing an
   old confirmation;

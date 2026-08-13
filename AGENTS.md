@@ -194,8 +194,10 @@ fail-closed evidence contract. The explicitly authorized canonical run on exact
 clean source `dfe4798` passed all 13 stages and 68 mandatory rows with zero
 skip, waiver, expected failure, source drift, or unexplained warning. The
 independent M2.5.1 completion review issued an unconditional bounded `PASS` on
-2026-08-13. M2.5.1 is complete; M2.6 is the next proposed feature milestone,
-but its implementation has not started and its proposed ADRs are not binding.
+2026-08-13. M2.5.1 is complete; M2.6 is the next feature milestone. ADR 0036
+through ADR 0039 are accepted and its executable Slice 0 decision/proof
+contract passed bounded review on 2026-08-14, but Slice 1 feature
+implementation has not started.
 A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
@@ -248,11 +250,11 @@ itself establish real Codex or effective live-containment proof. M2.5.1 MUST NOT
 rewrite the historical M2.5 review or add Frontstage, scheduling, Host,
 arbitrary-project verification, promotion, release, or deployment scope.
 
-M2.6 — Unified Frontstage Interaction and Control — is the next proposed
-feature milestone. Its M2.5.1 prerequisite has passed. Its formal domain, ADR,
-implementation-plan, acceptance-plan, and temporary deferred-boundary
-documents exist for review; implementation has not started, and proposed ADRs
-are not binding. The bounded
+M2.6 — Unified Frontstage Interaction and Control — is the next feature
+milestone. Its M2.5.1 prerequisite has passed. ADR 0036 through ADR 0039 are
+accepted, its formal domain/implementation/acceptance documents and executable
+Slice 0 decision/proof contract exist, and the bounded Slice 0 review passed on
+2026-08-14. Slice 1 feature implementation has not started. The bounded
 candidate keeps one foreground CLI frontstage available while the process is
 alive, accepts natural-language user input, routes the closed new-Intake and
 Goal-control action set through exact immutable Runtime-owned Pending Action,
@@ -290,11 +292,11 @@ assessment, and verdict remain in
 composition closure follows
 `docs/reviews/m2.5-live-intake-compatibility-diagnostic.md`,
 `docs/plans/m2.5.1-real-intake-codex-composition-closure.md`, and
-`docs/plans/m2.5.1-acceptance-plan.md`. Proposed M2.6 work follows
+`docs/plans/m2.5.1-acceptance-plan.md`. Planned M2.6 work follows
 `docs/frontstage-interaction.md`,
 `docs/plans/m2.6-unified-frontstage-interaction.md`, and
-`docs/plans/m2.6-acceptance-plan.md`; its proposed ADRs must be accepted before
-implementation. Proposed M2.7 work is separately described by `docs/runtime-host.md`,
+`docs/plans/m2.6-acceptance-plan.md`; accepted ADR 0036 through ADR 0039 bind
+its implementation. Proposed M2.7 work is separately described by `docs/runtime-host.md`,
 `docs/plans/m2.7-local-runtime-host-single-goal-control.md`, and
 `docs/plans/m2.7-acceptance-plan.md`.
 
@@ -350,13 +352,12 @@ Once M1 scaffolding exists:
   than be followed or silently skipped. `pnpm docs:check` is the executable
   check for these rules.
 - Treat `docs/milestones.md` as the milestone boundary and
-  `docs/plans/m2.5.1-real-intake-codex-composition-closure.md` as the current
-  proposed implementation sequence. The completed M1, M2, and M2.5 plans and
-  reviews remain historical evidence; M2.6 remains the next feature proposal
-  after M2.5.1. Until the separately reviewed README status-source
-  contract is migrated, the root README MUST contain exactly one level-two
+  `docs/plans/m2.6-unified-frontstage-interaction.md` as the current planned
+  implementation sequence. The completed M1, M2, M2.5, and M2.5.1 plans and
+  reviews remain historical evidence; M2.6 is the current formalization. The
+  root README MUST contain exactly one level-two
   `Status` section, that section MUST contain prose paragraphs only, and its
-  only links MUST point to the M2 plan and milestone records enforced by
+  only links MUST point to the M2.6 plan and milestone records enforced by
   `pnpm docs:check`. The README MUST NOT contain a numbered rolling-slice status
   anywhere.
 - The root README MUST NOT duplicate a rolling feature or test inventory.

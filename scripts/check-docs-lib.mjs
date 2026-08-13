@@ -28,7 +28,10 @@ const readmeStatusProseNodeTypes = new Set([
   'strong',
   'text',
 ]);
-const requiredReadmeStatusTargets = ['docs/plans/m2-codex-vertical-slice.md', 'docs/milestones.md'];
+const requiredReadmeStatusTargets = [
+  'docs/plans/m2.6-unified-frontstage-interaction.md',
+  'docs/milestones.md',
+];
 
 function collectMarkdownSources(repositoryRoot, directory = repositoryRoot) {
   const files = [];

@@ -184,11 +184,11 @@ unconditional bounded `PASS` on 2026-08-13. The Runner and its Receipts remain
 assessment evidence only and add no Runtime, Evidence, Acceptance, or milestone
 authority.
 
-The proposed [M2.6 Frontstage Interaction
+The accepted planned [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
 plan](docs/plans/m2.6-unified-frontstage-interaction.md), and [acceptance
-plan](docs/plans/m2.6-acceptance-plan.md) define the next feature candidate.
-They propose one persistent foreground CLI interaction loop, deterministic
+plan](docs/plans/m2.6-acceptance-plan.md) define the next feature boundary.
+They plan one persistent foreground CLI interaction loop, deterministic
 route admission, an exact immutable Pending Action/Authorization/Reservation/
 Outcome chain for the closed new-Intake and Goal-control action set,
 deterministic direct-or-separate confirmation, a separate bounded Frontstage
@@ -241,9 +241,11 @@ the final prepared-source gate and ordered unchanged-source Live triad passed
 on exact source `01fd537`. The bounded Slice 4 review issued `PASS`; Slice 5's
 final canonical run then passed 13/13 stages and 68/68 rows on exact source
 `dfe4798`, and the independent completion review issued bounded `PASS` on
-2026-08-13. M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
-the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
-following M2 slice
+2026-08-13. M2.6 Slice 0 decision/proof closure passed on 2026-08-14; Slice 1
+feature implementation and all M2.7 implementation have not started. Accepted
+ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
+only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not
+binding. The following M2 slice
 records remain historical status evidence. Slice 0 decision closure is
 implemented: repeated schema,
 configuration, workspace-containment, and bounded live App Server probes pass,
@@ -422,7 +424,7 @@ facade and renders Runtime-owned read views. It does not write or query the
 control database directly, sequence internal Workflow commands, or infer
 successful completion from a worker transcript.
 
-The proposed M2.6 Frontstage adds one foreground process-lifetime interaction
+The planned M2.6 Frontstage would add one foreground process-lifetime interaction
 loop. It accepts natural-language messages, may obtain an untrusted route
 proposal from a separate bounded Frontstage Assistant, and uses deterministic
 policy to return ordinary answers/read views or construct one exact
@@ -527,9 +529,9 @@ requires a separate gateway and policy.
 
 ## Logical Components
 
-### Frontstage Interaction Coordinator — proposed M2.6
+### Frontstage Interaction Coordinator — planned M2.6
 
-The proposed Coordinator would own versioned Interaction Sessions, Messages,
+The planned Coordinator would own versioned Interaction Sessions, Messages,
 Operations, Focus Bindings, deterministic Route Decisions, exact immutable
 Pending Action/Resolution and Action Reservation/Outcome records, M2.5 Message
 Handoffs, bounded Frontstage Answers, result notifications, and startup
@@ -550,9 +552,9 @@ Worker dispatch, Candidate/Evidence state, technical Acceptance, or external
 effects. Its local one-execution-bearing-task composition would not create a
 project-wide scheduler or promise detached execution after the CLI exits.
 Same-Command-ID recovery would reuse existing public command idempotency and
-could not create replacement Start or dispatch authority. Proposed ADR 0036
+could not create replacement Start or dispatch authority. Accepted ADR 0036
 through ADR 0039 and [Frontstage
-Interaction](docs/frontstage-interaction.md) define the candidate boundary;
+Interaction](docs/frontstage-interaction.md) define the accepted planned boundary;
 none is an implementation claim.
 
 ### Local Runtime Host — proposed M2.7
@@ -1202,7 +1204,7 @@ Codex App Server Client
 │   ├── closed IntakeObservedEvent -> IntakeProtocolObserver
 │   ├── IntakePackage -> IntentAnalysisProposal
 │   └── AnswerOnlyPackage -> bounded answer response
-└── Frontstage Assistant Adapter (M2.6 proposed)
+└── Frontstage Assistant Adapter (M2.6 planned)
     └── FrontstageContextPackage -> FrontstageProposalResponse
 ```
 
@@ -1211,9 +1213,9 @@ raw-frame admission, stream, interruption, protocol limits/correlation, and
 compatibility mechanics. It owns no Goal, Workflow, Worker, Projection, Source
 Binding, Admission, Start, Acceptance, or persistence semantics. M2 implements
 and validates the Worker branch only; Goal Intake was not an M2 exit condition.
-The proposed Frontstage branch would reuse only this lower transport and would
-not import Worker or Intake authority. The proposed M2.5.1 closure first
-corrects the Intake branch for the pinned live protocol through an exhaustive
+The planned Frontstage branch would reuse only this lower transport and would
+not import Worker or Intake authority. The completed M2.5.1 closure corrected
+the Intake branch for the pinned live protocol through an exhaustive
 Adapter-local projection and private effect classifier. Successfully decoded
 Codex notifications do not reach the Intake Observer, Domain, or Runtime, and
 the lower Client's compaction callback cannot become an Intake side channel.
@@ -1494,7 +1496,7 @@ commits the exact command.
 ## Initial Deployment Model
 
 The implemented baseline is a single local control process for one user. It may
-spawn bounded child processes for workers and verification. Proposed M2.6 keeps
+spawn bounded child processes for workers and verification. Planned M2.6 keeps
 that foreground process model. Proposed M2.7 would extend it to one local
 Runtime Host plus attached local CLI clients while retaining one principal and
 local authority home; it is not a distributed or multi-user deployment.
