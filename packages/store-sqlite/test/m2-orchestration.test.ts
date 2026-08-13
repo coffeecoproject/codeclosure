@@ -108,6 +108,9 @@ import { createLocalCandidateWorkspace } from '@codeclosure/workspace-local';
 
 const createdAt = isoTimestamp('2026-07-31T12:00:00.000Z');
 const digests = new CanonicalJsonSha256DigestProvider();
+// Timeout behavior has dedicated adversarial coverage; this integration fixture
+// needs bounded headroom for real Seatbelt startup under the concurrent suite.
+const orchestrationVerificationTimeoutMilliseconds = 10_000;
 
 const genericGuards: PhaseGuardEvaluator = Object.freeze({
   evaluate: ({
@@ -439,7 +442,7 @@ function createFixture(
       options.protectedVerification === true
         ? darwinSeatbeltProtectedProfileDigest()
         : darwinSeatbeltProfileDigest(),
-    timeoutMilliseconds: 2_000,
+    timeoutMilliseconds: orchestrationVerificationTimeoutMilliseconds,
     terminationGraceMilliseconds: 100,
     stdoutLimitBytes: 4_096,
     stderrLimitBytes: 4_096,
