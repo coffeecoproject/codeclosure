@@ -34,6 +34,7 @@ import {
   parseM25SourceIdentity,
   parseNodeTestNames,
   parseNodeTestSummaries,
+  proofBindingForM25MatrixRow,
   requiredM25TestNamesForStage,
   sha256Bytes,
   validateM25EvidenceManifest,
@@ -41,6 +42,15 @@ import {
 } from './m2.5-acceptance-lib.mjs';
 
 const digest = `sha256:${'a'.repeat(64)}`;
+
+test('M25-E03 current-source proof remains bound to the M2.5.1 Intake adapter boundary owner', () => {
+  assert.deepEqual(proofBindingForM25MatrixRow('M25-E03'), {
+    stageId: 'm2.5-static-authority',
+    requiredTestNames: [
+      'm2.5.1-intake-adapter-boundary keeps one closed package edge and production capability set',
+    ],
+  });
+});
 
 function sourceIdentityOutput(reviewExclusion = M25_REVIEW_EXCLUSION) {
   return `Base Git revision: abc123

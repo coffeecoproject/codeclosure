@@ -812,7 +812,7 @@ const explicitRowProofBinding = new Map([
     'M25-E03',
     rowBinding(
       M25AcceptanceStage.STATIC_AUTHORITY,
-      'the Codex Intake adapter has one closed package edge and production capability set',
+      'm2.5.1-intake-adapter-boundary keeps one closed package edge and production capability set',
     ),
   ],
   [
