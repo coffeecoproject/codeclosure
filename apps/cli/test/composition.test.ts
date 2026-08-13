@@ -14,7 +14,7 @@ import {
   type GoalExecutionCapability,
 } from '@codeclosure/runtime';
 import { CryptographicIdentityGenerator, SystemUtcClock } from '@codeclosure/runtime/composition';
-import { openSqliteControlStore } from '@codeclosure/store-sqlite';
+import { TransactionStep, openSqliteControlStore } from '@codeclosure/store-sqlite';
 import {
   M1FakeExecutionProfileName,
   createWorkflowStartAuthorityRuntime,
@@ -28,6 +28,7 @@ import {
   runM1StaleCloseoutProof,
 } from '../dist/composition/index.js';
 import { createM1ProofReadFacade } from '../dist/composition/m1-proof-read-facade.js';
+import { observeClaimedActiveAttempt } from '../dist/composition/m1-restart-proof-observer.js';
 import { assertFreshReplacementDispatch } from '../dist/composition/m1-restart-proof-assertions.js';
 
 function temporaryRoot(t: TestContext): string {
@@ -305,6 +306,65 @@ void test('[I-004][I-009] restart proof requires Worker-caused paired finish aut
   assert.throws(
     () => assertFreshReplacementDispatch(mismatchedPairAudit, abandoned, recoveredStatus),
     /finish authority does not match/,
+  );
+});
+
+void test('[I-008][I-009] restart proof observation distinguishes a temporary SQLite writer from invalid input', (t) => {
+  const root = temporaryRoot(t);
+  const project = join(root, 'project');
+  mkdirSync(project, { mode: 0o700 });
+  const seeded = seedActiveAttempt(root, project, 'BUILT_IN');
+  const observationOptions = Object.freeze({
+    dataHomePath: seeded.dataHomePath,
+    protectedPaths: Object.freeze([
+      Object.freeze({ kind: ProtectedPathKind.PROJECT, path: project }),
+    ]),
+    allowedProjectPaths: Object.freeze([project]),
+    busyTimeoutMilliseconds: 0,
+  });
+
+  assert.deepEqual(observeClaimedActiveAttempt(observationOptions, seeded.goalId), {
+    status: 'NOT_YET_RETAINED',
+  });
+
+  let lockedObservation: ReturnType<typeof observeClaimedActiveAttempt> | undefined;
+  const store = openSqliteControlStore({
+    filename: seeded.databasePath,
+    transactionProbe: (step) => {
+      if (step === TransactionStep.AFTER_COMMAND_CHECK && lockedObservation === undefined) {
+        lockedObservation = observeClaimedActiveAttempt(observationOptions, seeded.goalId);
+      }
+    },
+  });
+  try {
+    const ids = new CryptographicIdentityGenerator();
+    const application = createCodeClosureApplication({
+      store,
+      clock: new SystemUtcClock(),
+      creationIds: ids,
+      digests: new CanonicalJsonSha256DigestProvider(),
+      projectPaths: Object.freeze({ parseNormalizedAbsolute: (path: string) => path }),
+      execution: unavailableExecution,
+    });
+    const created = application.createGoal({
+      commandId: ids.nextCommandId(),
+      objective: 'Hold one deterministic SQLite writer during proof observation',
+      projectPath: project,
+      criteria: ['Temporary writer contention does not become recovery authority'],
+    });
+    assert.equal(created.status, 'APPLIED');
+  } finally {
+    store.close();
+  }
+
+  assert.deepEqual(lockedObservation, { status: 'TEMPORARILY_BUSY' });
+  assert.throws(
+    () =>
+      observeClaimedActiveAttempt(
+        { ...observationOptions, busyTimeoutMilliseconds: -1 },
+        seeded.goalId,
+      ),
+    /busyTimeoutMilliseconds must be an integer/u,
   );
 });
 

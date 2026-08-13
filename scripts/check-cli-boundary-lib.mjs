@@ -535,7 +535,12 @@ const PRIVILEGED_COMPOSITION_EXPORTS = new Map([
     'apps/cli/src/composition/m1-restart-proof-observer.ts',
     Object.freeze({
       values: new Set(['observeClaimedActiveAttempt']),
-      types: new Set(['ClaimedActiveAttemptId', 'M1RestartProofObservationOptions']),
+      types: new Set([
+        'ClaimedActiveAttemptId',
+        'ClaimedActiveAttemptObservation',
+        'M1RestartProofObservationOptions',
+        'M1RestartProofObservationResult',
+      ]),
     }),
   ],
   [
@@ -820,7 +825,9 @@ const SENSITIVE_COMPOSITION_MODULE_IMPORTS = new Map([
         'apps/cli/src/composition/m1-restart-resume-proof.ts',
         new Set([
           'ClaimedActiveAttemptId',
+          'ClaimedActiveAttemptObservation',
           'M1RestartProofObservationOptions',
+          'M1RestartProofObservationResult',
           'observeClaimedActiveAttempt',
         ]),
       ],

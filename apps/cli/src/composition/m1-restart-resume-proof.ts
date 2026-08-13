@@ -26,6 +26,7 @@ import {
 } from './m1-proof-child-process.js';
 import {
   observeClaimedActiveAttempt,
+  type ClaimedActiveAttemptObservation,
   type M1RestartProofObservationOptions,
 } from './m1-restart-proof-observer.js';
 import type { CreateCliCompositionOptions } from './trusted-composition.js';
@@ -35,8 +36,6 @@ const RETAINED_DISPATCH_TIMEOUT_MILLISECONDS = 10_000;
 const CLI_COMMAND_TIMEOUT_MILLISECONDS = 15_000;
 const PROCESS_EXIT_TIMEOUT_MILLISECONDS = 5_000;
 const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
-
-type ClaimedActiveAttemptObservation = NonNullable<ReturnType<typeof observeClaimedActiveAttempt>>;
 
 function field(value: unknown, name: string): unknown {
   if (value === null || typeof value !== 'object') {
@@ -165,9 +164,13 @@ async function waitForClaimedActiveAttempt(
         `Public goal start exited before retaining a dispatch (status ${String(exited.code)}, signal ${String(exited.signal)}, stdout bytes ${String(Buffer.byteLength(running.stdout()))}, stderr bytes ${String(Buffer.byteLength(running.stderr()))})`,
       );
     }
-    const attemptId = observeClaimedActiveAttempt(options, goalId);
-    if (attemptId !== undefined) {
-      return attemptId;
+    const result = observeClaimedActiveAttempt(options, goalId);
+    switch (result.status) {
+      case 'OBSERVED':
+        return result.observation;
+      case 'NOT_YET_RETAINED':
+      case 'TEMPORARILY_BUSY':
+        break;
     }
     await wait(20);
   }
