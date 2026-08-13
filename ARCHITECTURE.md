@@ -175,22 +175,19 @@ demonstration contract v7 then aligned the user-stated criterion with the
 unchanged protected Check's exact public result, and the complete restarted v7
 diagnostic triad passed on exact clean source `a3a5e9b`. The final prepared-
 source gate and ordered unchanged-source Live triad then passed on exact source
-`01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 has begun. Its
-canonical non-verdict runner, package command, 13-stage/68-row proof-owner
-contract, ordered source manifests, sole future-review exclusion, and offline
-authorization fail-closed paths are implemented and tested. The canonical run
-was first attempted on clean source `3c09db3`: every stage through the current-
-source M2 regression passed, including both real Live stages, before the former
-uniform 900-second command timeout interrupted the nested M2.5 regression.
-Finite assessment-owned stage budgets and distinct timeout classification are
-now implemented; a clean-source rerun and independent review remain required,
-so M2.5.1 remains incomplete.
+`01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 then
+implemented the non-verdict canonical runner and exact evidence closure. Its
+explicitly authorized canonical run passed all 13 stages and 68 mandatory rows
+on exact clean source `dfe4798`, including both real Live stages and complete
+M1/M2/M2.5 regression. The independent completion review issued an
+unconditional bounded `PASS` on 2026-08-13. The Runner and its Receipts remain
+assessment evidence only and add no Runtime, Evidence, Acceptance, or milestone
+authority.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
 plan](docs/plans/m2.6-unified-frontstage-interaction.md), and [acceptance
-plan](docs/plans/m2.6-acceptance-plan.md) define the next feature candidate
-after M2.5.1 passes.
+plan](docs/plans/m2.6-acceptance-plan.md) define the next feature candidate.
 They propose one persistent foreground CLI interaction loop, deterministic
 route admission, an exact immutable Pending Action/Authorization/Reservation/
 Outcome chain for the closed new-Intake and Goal-control action set,
@@ -241,12 +238,10 @@ Intake, linked composition, and containment diagnostic triad then passed on
 exact clean source `1b43dfc`; it remained readiness evidence only. After the
 prepared-source failures and executable demonstration-contract v7 correction,
 the final prepared-source gate and ordered unchanged-source Live triad passed
-on exact source `01fd537`. The bounded Slice 4 review issued `PASS`; Slice 5 now
-has its non-verdict canonical runner, matrix/source-manifest contract, package
-entry, and offline fail-closed tests. Its first canonical run passed both Live
-stages and every stage through current-source M2 regression, then failed closed
-at the nested M2.5 regression because of the corrected orchestration timeout.
-A clean-source rerun and milestone review remain pending. M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
+on exact source `01fd537`. The bounded Slice 4 review issued `PASS`; Slice 5's
+final canonical run then passed 13/13 stages and 68/68 rows on exact source
+`dfe4798`, and the independent completion review issued bounded `PASS` on
+2026-08-13. M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
 records remain historical status evidence. Slice 0 decision closure is

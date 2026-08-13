@@ -13,12 +13,13 @@ Candidate-bound real Codex for `IMPLEMENT`, and no production fake fallback.
 [ADR 0043](../adr/0043-candidate-free-codex-project-read-authority.md) is
 accepted and closes the new project-read snapshot, Context, configuration/
 instruction, and cleanup authority before implementation. The Slice 0
-executable contract and proof-owner freeze now select the exact reviewed Codex
+executable contract and proof-owner freeze select the exact reviewed Codex
 `0.146.1` toolchain and retain the historical `0.146.0` identity without
-cross-version substitution. Its closure review passed and permits Slice 1.
-This post-completion correction does not rewrite the historical M2.5 verdict.
-M2.6 and M2.7 remain later formal proposals; implementation has not started
-and proposed ADRs are not binding.
+cross-version substitution. The final canonical assessment passed 13/13 stages
+and 68/68 rows on exact source `dfe4798`, and the independent completion review
+issued bounded `PASS` on 2026-08-13. This post-completion correction does not
+rewrite the historical M2.5 verdict. M2.6 is now the next formal proposal;
+M2.6 and M2.7 implementation has not started and proposed ADRs are not binding.
 
 - [M1 deterministic skeleton](m1-deterministic-skeleton.md)
 - [M1 milestone acceptance plan](m1-acceptance-plan.md)

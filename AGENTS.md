@@ -91,8 +91,8 @@ zero skip, and the independent completion review issued an unconditional
 and MUST NOT reinterpret the completed M2 execution path as intent,
 Goal, Start, or Admission authority.
 
-M2.5.1 — Real Intake-to-Codex Composition Closure — is the current pre-M2.6
-boundary. Slice 0 has frozen its contract, exact proof-owner map, bounded
+M2.5.1 — Real Intake-to-Codex Composition Closure — is complete as the bounded
+pre-M2.6 prerequisite. Slice 0 froze its contract, exact proof-owner map, bounded
 demonstration baseline, and accepted ADR 0043. Its exact new-operation
 toolchain baseline is now the reviewed Codex CLI `0.146.1` binary and protocol
 snapshot; retained M2/M2.5 `0.146.0` authority keeps its historical meaning
@@ -133,9 +133,9 @@ install/read/reopen rather than selecting that historical path. The formal
 candidate preparation creates no Fake Verification obligation. The Adapter-
 local policy may admit the pinned best-effort `unknown` command action only for
 `IMPLEMENT`; that observation is not containment proof, and the later freeze-
-v2 result must succeed before Evidence can exist. This foundation has offline
-coverage but no `M251-C11` acceptance verdict.
-Fixture isolation selection is not effective live containment proof. B3
+v2 result must succeed before Evidence can exist. At the Slice 3 boundary, this
+foundation had offline coverage but no `M251-C11` acceptance verdict. Fixture
+isolation selection was not effective live containment proof. B3
 implements deterministic Driver Profile v3 dispatch for all selected Worker
 phases, Runtime-owned candidate-free pre/post-Turn source and snapshot currency,
 Intent/Record v2 authorization, and exact integrity-failure closure without a
@@ -148,8 +148,8 @@ protected verification, Evidence, Acceptance, closeout, restart/replay, and
 terminal ProjectRead cleanup without a production Fake fallback. B5 restores
 every implemented Slice 3 deterministic proof to its frozen owner and closes
 the Slice 3 documentation/review boundary. This bounded Slice 3 result is not
-real Codex dispatch or effective live containment evidence. Slice 4 is now in
-progress through B1's prepared, content-free Intake execution-root descriptor
+real Codex dispatch or effective live containment evidence. Slice 4 began with
+B1's prepared, content-free Intake execution-root descriptor
 and trusted pre-publication separation/cleanup boundary, B2's focused,
 non-authoritative metadata-only composition Receipt and strict identity/privacy
 contract, B3's explicitly authorized real linked-path command plus composition-
@@ -159,7 +159,7 @@ Profile inputs, separately validates the distinct `DISCOVERY` and `PLAN`
 phase-entry isolation, binds exact command observation, content-free denied-
 boundary opens, independent filesystem identities, and cleanup; it is
 assessment evidence only and cannot replace B3's formal chain or Candidate
-Manager-owned freeze-v2 authority. B3 and B4 are implemented and
+Manager-owned freeze-v2 authority. B3 and B4 were then implemented and
 deterministically tested. An explicitly authorized initial B5 diagnostic later
 ran, but the corrected direct pinned App Server `command/exec` probe failed
 closed because candidate-free `readOnly` could read a content-free Authority
@@ -188,18 +188,15 @@ public `duplicate_ignored` result already required by the unchanged protected
 Check; v6 keeps its historical review meaning. The complete restarted v7
 diagnostic triad passed on exact clean source `a3a5e9b`. The final prepared-
 source quality gate and ordered unchanged-source Live triad then passed on exact
-source `01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 has
-begun. Its non-verdict assessment foundation now freezes the exact 13-stage,
-68-row proof-owner and ordered source-manifest contract. The canonical runner,
-package command, explicit sole future-review exclusion, and authorization-
-absent/invalid fail-closed paths are implemented and tested. Its first
-explicitly authorized canonical run on clean source `3c09db3` passed every
-stage through the current-source M2 regression, including real Live Intake and
-the linked Intake-to-Codex/containment paths, then failed closed when the former
-uniform 900-second command timeout interrupted the nested M2.5 regression.
-The assessment library now owns finite per-stage command budgets and distinct
-timeout classification. A clean-source canonical rerun and independent review
-remain required. M2.5.1 is not complete and M2.6 remains blocked. A real pinned-version
+source `01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 then
+implemented the non-verdict 13-stage/68-row canonical assessment and its
+fail-closed evidence contract. The explicitly authorized canonical run on exact
+clean source `dfe4798` passed all 13 stages and 68 mandatory rows with zero
+skip, waiver, expected failure, source drift, or unexplained warning. The
+independent M2.5.1 completion review issued an unconditional bounded `PASS` on
+2026-08-13. M2.5.1 is complete; M2.6 is the next proposed feature milestone,
+but its implementation has not started and its proposed ADRs are not binding.
+A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed
@@ -252,7 +249,7 @@ rewrite the historical M2.5 review or add Frontstage, scheduling, Host,
 arbitrary-project verification, promotion, release, or deployment scope.
 
 M2.6 — Unified Frontstage Interaction and Control — is the next proposed
-feature milestone after M2.5.1 passes. Its formal domain, ADR,
+feature milestone. Its M2.5.1 prerequisite has passed. Its formal domain, ADR,
 implementation-plan, acceptance-plan, and temporary deferred-boundary
 documents exist for review; implementation has not started, and proposed ADRs
 are not binding. The bounded
@@ -289,15 +286,15 @@ historical evidence for the prerequisite. The completed M2.5 implementation,
 assessment, and verdict remain in
 `docs/plans/m2.5-goal-intake-materialization.md`,
 `docs/plans/m2.5-acceptance-plan.md`, and
-`docs/reviews/m2.5-completion-review.md`. The current proposed compatibility and
+`docs/reviews/m2.5-completion-review.md`. The completed compatibility and
 composition closure follows
 `docs/reviews/m2.5-live-intake-compatibility-diagnostic.md`,
 `docs/plans/m2.5.1-real-intake-codex-composition-closure.md`, and
 `docs/plans/m2.5.1-acceptance-plan.md`. Proposed M2.6 work follows
 `docs/frontstage-interaction.md`,
 `docs/plans/m2.6-unified-frontstage-interaction.md`, and
-`docs/plans/m2.6-acceptance-plan.md` only after M2.5.1 passes and its ADRs are
-accepted. Proposed M2.7 work is separately described by `docs/runtime-host.md`,
+`docs/plans/m2.6-acceptance-plan.md`; its proposed ADRs must be accepted before
+implementation. Proposed M2.7 work is separately described by `docs/runtime-host.md`,
 `docs/plans/m2.7-local-runtime-host-single-goal-control.md`, and
 `docs/plans/m2.7-acceptance-plan.md`.
 

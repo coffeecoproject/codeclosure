@@ -67,12 +67,10 @@ the bounded Slice 3 review with an explicit protocol fixture. Real Codex
 execution of the linked composition passed the restarted initial B5 diagnostic
 on clean source `1b43dfc`; the final prepared-source gate and ordered unchanged-
 source Live triad later passed on source `01fd537`, and the bounded Slice 4
-review issued `PASS`. Slice 5's non-verdict canonical runner and offline fail-
-closed tests are implemented. Its first aggregate run passed both real Live
-stages and every stage through current-source M2 regression before the former
-uniform command timeout interrupted the nested M2.5 regression. The corrected
-assessment budget adds no Context source or compiler authority; a clean-source
-canonical rerun remains required. The
+review issued `PASS`. Slice 5's final canonical run passed all 13 stages and 68
+rows on exact source `dfe4798`, and the independent completion review issued
+bounded `PASS` on 2026-08-13. The assessment adds no Context source or compiler
+authority. The
 source checkout itself does not enter Worker-readable Context. It does not open
 selected Fact, Human Decision, omission, pre-Goal project-observation, or full
 relevance-selection Context.

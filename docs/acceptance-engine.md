@@ -35,13 +35,10 @@ even though the standalone complete Live containment matrix passed on source
 diagnostics passed on clean source `1b43dfc`, and the later final prepared-source
 gate plus ordered unchanged-source Live triad passed on source `01fd537`; the
 bounded Slice 4 review issued `PASS`. None creates another Acceptance issuer.
-Slice 5's non-verdict canonical runner and offline fail-closed tests are
-implemented; the runner and its future independent review remain outside
-technical Acceptance. Its first aggregate run passed both Live stages and
-every stage through current-source M2 regression before the former uniform
-command timeout interrupted the nested M2.5 regression. The corrected
-assessment budget remains outside technical Acceptance; a clean-source rerun
-and independent review are still required.
+Slice 5's final canonical run passed all 13 stages and 68 rows on exact source
+`dfe4798`, and the independent completion review issued bounded `PASS` on
+2026-08-13. Both remain outside technical Acceptance and create no second
+Acceptance issuer.
 Proposed M2.6 Frontstage routes,
 answers, Goal summaries, focus, pending actions, and notifications remain
 outside technical Acceptance and cannot issue `ACCEPT` or closeout.

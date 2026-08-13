@@ -465,8 +465,11 @@ detached execution.
 
 ## M2.5.1 — Real Intake-to-Codex Composition Closure
 
-Status: Active post-completion compatibility and composition closure. Slice 0
-has revised its frozen contract to the exact reviewed Codex CLI `0.146.1`
+Status: Complete as a bounded compatibility and composition closure. The final
+canonical assessment passed all 13 stages and 68 mandatory rows on exact clean
+source `dfe4798`, and the independent completion review issued an unconditional
+bounded `PASS` on 2026-08-13. Slice 0 revised its frozen contract to the exact
+reviewed Codex CLI `0.146.1`
 binary and protocol snapshot while preserving retained M2/M2.5 `0.146.0`
 authority without cross-version substitution. The Slice 0 closure review
 passed. Slice 1 implements the retained v2 Intake Profile and Adapter,
@@ -495,8 +498,8 @@ Adapter-local activity policy that discards unclassified or out-of-bound
 activity without changing historical directive v2/observation v1. Fixture
 execution selects candidate-free `readOnly` and Candidate-bound
 `workspaceWrite`, emits only the phase-appropriate proposal/completion result,
-and discards forbidden file-change results; effective black-box live
-containment is not yet proven. Accepted
+and discards forbidden file-change results; at that Slice 3 boundary, effective
+black-box live containment had not yet been proven. Accepted
 [ADR 0044](adr/0044-source-freeze-owned-candidate-change-containment.md)
 assigns that proof to an additive Candidate Manager-owned stable source-freeze
 change set. Its canonical contract, local manifest-difference derivation, C11
@@ -509,8 +512,9 @@ install/read/reopen on any C11 sub-contract mismatch and cannot fall back to
 the historical Check family. The Adapter-local policy admits the pinned best-
 effort `unknown` command action only for `IMPLEMENT`; the later freeze-v2
 record, not that activity observation, must prove containment, and failure
-invalidates the Candidate without Evidence. This is offline implementation
-foundation and has no `M251-C11` acceptance verdict. The Candidate-creation
+invalidates the Candidate without Evidence. At the Slice 3 boundary, this was
+offline implementation foundation without an `M251-C11` acceptance verdict.
+The Candidate-creation
 source-currency boundary now requires a preparation-v2 result bound to the
 exact completed PLAN ProjectRead authority; mismatch creates no Candidate and
 atomically retains `PLAN_SOURCE_NOT_CURRENT` as `PLAN / FAILED`, including
@@ -564,17 +568,14 @@ source gate and ordered unchanged-source Live triad then passed on exact source
 `01fd537`, and the bounded Slice 4 review issued `PASS`. The
 [Slice 4 effective read-containment closure plan](plans/m2.5.1-slice4-effective-read-containment-closure.md)
 records that bounded result but supplies no execution authority. Passing linked
-real user-path and effective-containment proof is now established only as
-bounded Slice 4 evidence. Slice 5's non-verdict canonical runner, package entry,
-13-stage/68-row proof-owner, ordered source-manifest/evidence-manifest contract,
-sole future-review exclusion, and offline authorization fail-closed tests are
-implemented. The first canonical run on clean source `3c09db3` passed every
-stage through current-source M2 regression, including real Live Intake and the
-linked Intake-to-Codex/containment paths, then failed closed when the former
-uniform 900-second command timeout interrupted the nested M2.5 regression.
-Finite assessment-owned stage budgets and distinct timeout classification are
-now implemented. A clean-source canonical rerun and independent milestone
-review remain required; M2.5.1 remains incomplete.
+real user-path and effective-containment proof is established as bounded Slice
+4 evidence. Slice 5's explicitly authorized final canonical run passed all 13
+stages and 68 mandatory rows on exact clean source `dfe4798`, including real
+Intake, the linked Intake-to-Codex/containment path, and complete M1/M2/M2.5
+regression. The
+[M2.5.1 completion review](reviews/m2.5.1-completion-review.md) independently
+issued an unconditional bounded `PASS` on 2026-08-13. M2.5.1 is complete; this
+does not reissue the historical M2/M2.5 verdicts or implement M2.6.
 The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
@@ -582,7 +583,8 @@ The
 [live Intake diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md),
 plus the
 [first canonical-assessment diagnostic](reviews/m2.5.1-first-canonical-assessment-diagnostic.md)
-define the bounded work.
+define the bounded work and its historical first-run failure; the completion
+review is the final milestone verdict.
 
 M2.5.1 does not revoke or rewrite the historical M2.5 `PASS`. That review
 explicitly used no live M2.5 Intake observation and bound governed execution to
@@ -754,15 +756,15 @@ The mandatory assessment must show, on one exact source identity:
 - the canonical non-verdict runner and independent review pass every mandatory
   deterministic and live row on one exact source identity.
 
-M2.5.1 completion would prove only this bounded compatibility and composition
-closure. It is a mandatory entry condition for M2.6 implementation and
-assessment, not a Frontstage feature or product-completion claim.
+M2.5.1 completion proves only this bounded compatibility and composition
+closure. It satisfies the milestone prerequisite for M2.6 implementation and
+assessment; it is not a Frontstage feature or product-completion claim.
 
 ## M2.6 — Unified Frontstage Interaction and Control
 
 Status: Proposed. Formal domain, ADR, implementation, and acceptance documents
-exist for review; implementation has not started. M2.5.1 completion is an
-entry condition, and the proposed ADRs are not binding until accepted. The
+exist for review; implementation has not started. The M2.5.1 entry condition
+has been satisfied, and the proposed ADRs are not binding until accepted. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction
 contract](frontstage-interaction.md) define the candidate boundary. Deferred

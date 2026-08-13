@@ -60,12 +60,10 @@ containment Receipt becomes Evidence. The standalone complete Live containment
 matrix passed on source `7621c8b`; the final prepared-source gate and ordered
 unchanged-source Live triad later passed on source `01fd537`, and the bounded
 Slice 4 review issued `PASS`. None of those diagnostic or assessment Receipts is
-an `EvidenceRecord`. Slice 5's non-verdict canonical runner and offline fail-
-closed tests are implemented. Its first aggregate run passed both real Live
-stages and every stage through current-source M2 regression before the former
-uniform command timeout interrupted the nested M2.5 regression. The corrected
-assessment budget adds no Evidence kind or eligibility path; a clean-source
-canonical rerun remains required.
+an `EvidenceRecord`. Slice 5's final canonical run passed all 13 stages and 68
+rows on exact source `dfe4798`, and the independent completion review issued
+bounded `PASS` on 2026-08-13. The assessment adds no Evidence kind or
+eligibility path.
 Proposed M2.6 Frontstage messages, routes, answers, focus,
 pending actions, Goal summaries, and notifications add no Evidence kind or
 eligibility path.

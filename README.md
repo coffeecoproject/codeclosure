@@ -21,45 +21,19 @@ stages and 71 mandatory rows with zero skip, and its independent review issued
 an unconditional bounded verdict. M2.5 remains a regression baseline rather
 than product completion or external-effect authority.
 
-One later real pinned-version Intake test exposed a post-completion Adapter
-compatibility defect and confirmed that ordinary M2.5 governed Start still
-selects the M1 FakeWorker Profile rather than the real M2 Codex Profile.
-M2.5.1 Real Intake-to-Codex Composition Closure is therefore the current
-pre-M2.6 boundary. It has corrected the versioned Intake Profile and Adapter
-through an internal typed protocol projection while preserving the historical
-M2.5 verdict. Its decision contract and candidate-free project-read ADR are
-accepted, and the exact reviewed Codex `0.146.1` binary and protocol snapshot
-remain selected without reinterpreting historical `0.146.0` authority. The
-bounded real Intake compatibility path passes its lower-client prerequisite
-plus real Answer-only, clear Intent, and ambiguous Intent calls with metadata-
-only evidence. The deterministic trusted-composition boundary also passed a
-bounded review on 2026-08-11 using protocol fixtures, not Live evidence. The
-additive contained execution Profile and its distinct inherited ProjectRead/
-Candidate permission profiles are implemented and deterministically tested on
-the retained Codex `0.146.1` baseline. Their explicitly authorized complete
-Live containment matrix passed on exact source `7621c8b`, proving the bounded
-phase read/write perimeter without creating product authority. After a focused
-Live assessment-consumer identity correction, an initial B5 real Intake,
-linked Materialization-to-Start-to-isolated-Candidate Codex path, and effective-
-containment diagnostic triad passed on exact clean source `1b43dfc`. Two later
-prepared-source linked attempts on `aa2f29e` correctly stopped at protected
-verification. Executable demonstration contract v7 then compatibly added the
-exact public `duplicate_ignored` result already enforced by the unchanged
-protected Check, and the complete restarted v7 diagnostic triad passed on exact
-clean source `a3a5e9b`. The final prepared-source quality gate and ordered
-unchanged-source Live triad then passed on exact source `01fd537`, and the
-bounded real user-path and failure-closure review issued `PASS`. The canonical
-M2.5.1 non-verdict assessment runner and its offline fail-closed contract are
-implemented. Its first explicitly authorized canonical run on clean source
-`3c09db3` passed every stage through the current-source M2 regression,
-including the real Live paths, then failed closed when the former uniform
-900-second command timeout interrupted the nested M2.5 regression. Finite
-assessment-owned stage budgets are now implemented; a clean-source rerun and
-independent review remain required. M2.5.1 is not complete and M2.6 remains
-blocked.
+M2.5.1 Real Intake-to-Codex Composition Closure completed its bounded review on
+2026-08-13. Its explicitly authorized canonical assessment passed all 13 stages
+and 68 mandatory rows on exact source `dfe4798`, including real Answer-only and
+Intent Intake, ordinary Start, real candidate-free `DISCOVERY`/`PLAN`, real
+Candidate-bound `IMPLEMENT`, protected verification, Evidence, Acceptance,
+closeout, strict reopen, containment, cleanup, and the complete M1/M2/M2.5
+regression set. The independent review issued an unconditional bounded `PASS`.
+Historical M2/M2.5 identities retain their original meaning, Fake components
+remain explicit test infrastructure, and this result is not product completion
+or external-effect authority.
 
-M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
-review and cannot begin until M2.5.1 passes; implementation has not started and
+M2.6 Unified Frontstage Interaction and Control is the next formal proposal.
+Its M2.5.1 prerequisite is satisfied, but implementation has not started and
 its proposed ADRs are not binding.
 The candidate scope is one foreground CLI frontstage, natural-language user
 input, an exact immutable pending-action/authorization/dispatch chain for the

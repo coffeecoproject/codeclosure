@@ -4,8 +4,8 @@
 
 This document defines the proposed M2.6 contract. M2.6 implementation has not
 started, and the proposed ADRs referenced below are not binding until accepted.
-The completed M2.5 Goal Intake boundary remains unchanged while this proposal
-is reviewed.
+The M2.5.1 milestone prerequisite has passed. The completed M2.5 Goal Intake
+boundary remains unchanged while this proposal is reviewed.
 
 ## Purpose
 

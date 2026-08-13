@@ -1750,15 +1750,11 @@ Executable demonstration contract v7 then completed the exact user-stated
 observable criterion, and the complete restarted v7 diagnostic triad passed on
 exact clean source `a3a5e9b`. The final prepared-source gate and ordered
 unchanged-source Live triad then passed on exact source `01fd537`, and the
-bounded Slice 4 review issued `PASS`. Slice 5's non-verdict canonical runner,
-13-stage/68-row proof-owner and ordered source-manifest contract, package entry,
-sole future-review exclusion, and offline fail-closed tests are implemented.
-The first canonical run on clean source `3c09db3` passed real Intake, linked
-composition/containment, and every stage through current-source M2 regression,
-then failed closed when the former uniform command timeout interrupted the
-nested M2.5 regression. Finite assessment-owned stage budgets are now
-implemented; a clean-source rerun and milestone review remain required, so
-M2.5.1 remains incomplete.
+bounded Slice 4 review issued `PASS`. Slice 5's explicitly authorized final
+canonical run then passed all 13 stages and 68 mandatory rows on exact clean
+source `dfe4798`, including real Intake, linked composition/containment, and the
+complete M1/M2/M2.5 regression set. The independent completion review issued
+an unconditional bounded `PASS` on 2026-08-13.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge
@@ -1773,10 +1769,10 @@ only. Accepted
 candidate-free project-read snapshot, Context, isolation, source-currency,
 configuration/instruction, cleanup, and recovery authority. Slice 3 implements
 the deterministic trusted production composition under that boundary and
-passes its bounded protocol-fixture review. Slice 4 now supplies the bounded
-real Codex execution and final same-source proof; it does not supply the
-M2.5.1 milestone verdict. Slice 5 canonical assessment and independent
-milestone review remain pending.
+passes its bounded protocol-fixture review. Slice 4 supplies bounded real Codex
+execution and final same-source proof; Slice 5 supplies the canonical assessment
+evidence, and the independent completion review alone supplies the M2.5.1
+milestone verdict.
 
 ### M2.6
 
