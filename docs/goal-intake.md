@@ -1753,8 +1753,12 @@ unchanged-source Live triad then passed on exact source `01fd537`, and the
 bounded Slice 4 review issued `PASS`. Slice 5's non-verdict canonical runner,
 13-stage/68-row proof-owner and ordered source-manifest contract, package entry,
 sole future-review exclusion, and offline fail-closed tests are implemented.
-The canonical mandatory Live/regression execution and milestone review have
-not run; M2.5.1 remains incomplete.
+The first canonical run on clean source `3c09db3` passed real Intake, linked
+composition/containment, and every stage through current-source M2 regression,
+then failed closed when the former uniform command timeout interrupted the
+nested M2.5 regression. Finite assessment-owned stage budgets are now
+implemented; a clean-source rerun and milestone review remain required, so
+M2.5.1 remains incomplete.
 
 M2.5.1 does not let the user or model select the Profile, rebind an existing
 Workflow, permit new Intake effects, synthesize protected checks, or merge

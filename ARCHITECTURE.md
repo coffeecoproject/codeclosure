@@ -179,8 +179,12 @@ source gate and ordered unchanged-source Live triad then passed on exact source
 canonical non-verdict runner, package command, 13-stage/68-row proof-owner
 contract, ordered source manifests, sole future-review exclusion, and offline
 authorization fail-closed paths are implemented and tested. The canonical run
-with mandatory Live execution, regressions, and independent milestone review
-has not occurred; M2.5.1 remains incomplete.
+was first attempted on clean source `3c09db3`: every stage through the current-
+source M2 regression passed, including both real Live stages, before the former
+uniform 900-second command timeout interrupted the nested M2.5 regression.
+Finite assessment-owned stage budgets and distinct timeout classification are
+now implemented; a clean-source rerun and independent review remain required,
+so M2.5.1 remains incomplete.
 
 The proposed [M2.6 Frontstage Interaction
 contract](docs/frontstage-interaction.md), [implementation
@@ -239,8 +243,10 @@ prepared-source failures and executable demonstration-contract v7 correction,
 the final prepared-source gate and ordered unchanged-source Live triad passed
 on exact source `01fd537`. The bounded Slice 4 review issued `PASS`; Slice 5 now
 has its non-verdict canonical runner, matrix/source-manifest contract, package
-entry, and offline fail-closed tests. The canonical Live/regression execution
-and milestone review have not run. M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
+entry, and offline fail-closed tests. Its first canonical run passed both Live
+stages and every stage through current-source M2 regression, then failed closed
+at the nested M2.5 regression because of the corrected orchestration timeout.
+A clean-source rerun and milestone review remain pending. M2.6 and M2.7 implementation has not started. ADR 0043 is accepted only for
 the M2.5.1 boundary; proposed ADRs 0036 through 0042 are not binding. The
 following M2 slice
 records remain historical status evidence. Slice 0 decision closure is

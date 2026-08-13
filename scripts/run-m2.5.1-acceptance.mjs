@@ -18,25 +18,30 @@ import { tmpdir } from 'node:os';
 
 import {
   M251_ACCEPTANCE_MATRIX_CONTRACT_DIGEST,
+  M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
   M251_PREFLIGHT_BINDING_ROOT_KINDS,
   M251_REQUIRED_NON_CLAIMS,
   M251_REVIEW_EXCLUSION,
   M251_SOURCE_PATH_MANIFEST_KIND,
+  M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS,
   M251_STAGE_ORDER,
   M251AcceptanceOutcome,
   M251AcceptanceStage,
   M251AssessmentMeaning,
   buildM251MatrixResults,
+  m251AssessmentCommandDigest,
   m251AssessmentOutcome,
   m251PreflightProofSupportSatisfied,
   m251Sha256Bytes,
   m251Sha256Text,
   m251SourceIdentitiesMatch,
   parseM251AcceptanceMatrix,
+  projectM251SourceClosureStage,
   projectM251PreflightProofEvidence,
   validateM251AssessmentEnvironment,
   validateM251EvidenceManifest,
 } from './m2.5.1-acceptance-lib.mjs';
+import { executeM251AssessmentStageCommands } from './m2.5.1-assessment-command.mjs';
 import {
   M251_LIVE_COMPOSITION_RECEIPT_KIND,
   assertM251LiveCompositionMetadataOnly,
@@ -80,7 +85,6 @@ const protectedCheckPath = join(
   'm2.5.1',
   'payment-idempotency-check.mjs',
 );
-const maximumOutputBytes = 128 * 1024 * 1024;
 const liveAuthorizationEnvironment = 'CODECLOSURE_M251_ACCEPTANCE_LIVE_AUTHORIZED';
 const executionRootPrefix = 'codeclosure-m2-5-1-acceptance-execution-';
 
@@ -277,12 +281,15 @@ function readUniqueJson(path, label) {
 }
 
 function run(executable, arguments_, options = {}) {
+  if (!Number.isSafeInteger(options.timeoutMilliseconds) || options.timeoutMilliseconds < 1) {
+    fail('M2.5.1 assessment subprocess requires one positive bounded timeout');
+  }
   return spawnSync(executable, arguments_, {
     cwd: options.cwd ?? repositoryRoot,
     encoding: 'utf8',
     env: options.env ?? process.env,
-    maxBuffer: maximumOutputBytes,
-    timeout: options.timeoutMilliseconds ?? 900_000,
+    maxBuffer: M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
+    timeout: options.timeoutMilliseconds,
   });
 }
 
@@ -299,13 +306,12 @@ function commandProjection(command) {
 }
 
 function commandDigest(definition, commands = definition.commands) {
-  return m251Sha256Text(
-    JSON.stringify({
-      schemaVersion: 1,
-      commandId: definition.commandId,
-      commands: commands.map(commandProjection),
-    }),
-  );
+  return m251AssessmentCommandDigest({
+    commandId: definition.commandId,
+    commands: commands.map(commandProjection),
+    commandTimeoutMilliseconds: M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[definition.id],
+    maximumOutputBytes: M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
+  });
 }
 
 function emptyCounts() {
@@ -410,6 +416,14 @@ function assertStageDefinitions(rows) {
     fail('M2.5.1 runner stage definitions differ from the canonical order');
   }
   for (const definition of stageDefinitions) {
+    const timeout = M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[definition.id];
+    if (
+      (definition.id === M251AcceptanceStage.PREFLIGHT && timeout !== null) ||
+      (definition.id !== M251AcceptanceStage.PREFLIGHT &&
+        (!Number.isSafeInteger(timeout) || timeout < 1))
+    ) {
+      fail(`M2.5.1 stage ${definition.id} has no closed command-timeout policy`);
+    }
     for (const owner of expectedOwners(definition.id, rows).map(proofOwnerParts)) {
       const absolutePath = resolve(repositoryRoot, owner.path);
       const stat = lstatSync(absolutePath);
@@ -1044,50 +1058,34 @@ function materializePreflightStage(
   }
 }
 
-function runCommandStage(
-  definition,
-  rows,
-  evidenceRoot,
-  executionRoot,
-  bindings,
-  openingSourceIdentity,
-) {
+function evaluateCommandStage(definition, rows, executionRoot, bindings, openingSourceIdentity) {
   const started = Date.now();
   const environment = stageEnvironment(definition, executionRoot, bindings);
-  const outputs = [];
-  let failure;
-  for (const [index, command] of definition.commands.entries()) {
-    const [executable, ...arguments_] = command;
-    log(`RUN ${definition.id} command ${String(index + 1)}/${String(definition.commands.length)}`);
-    const result = run(executable, arguments_, { env: environment });
-    outputs.push(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
-    if (!successful(result)) {
-      failure = Object.freeze({
-        commandIndex: index,
-        exitCode: result.status,
-        signalObserved: result.signal !== null,
-        launchErrorObserved: result.error !== undefined,
-      });
-      break;
-    }
-  }
-  const output = outputs.join('\n');
+  log(`RUN ${definition.id} (${String(definition.commands.length)} command(s))`);
+  const execution = executeM251AssessmentStageCommands({
+    stageId: definition.id,
+    executions: definition.commands.map(([executable, ...arguments_]) => ({
+      executable,
+      arguments: arguments_,
+      environment,
+    })),
+    cwd: repositoryRoot,
+  });
+  const output = execution.outputs.map(({ stdout, stderr }) => `${stdout}\n${stderr}`).join('\n');
   const proofTestNames = executedProofTestNames(definition.id, rows, output);
   const testProofOwners = observedTestProofOwners(definition.id, rows, proofTestNames);
-  if (failure !== undefined) {
-    return materializeStage(
-      definition,
-      rows,
-      evidenceRoot,
-      failure.exitCode === 2 ? M251AcceptanceOutcome.BLOCKED : M251AcceptanceOutcome.FAIL,
-      failure.exitCode === 2 ? blockedCounts() : failedCounts(),
-      failure,
-      failure.exitCode === 2 ? 'COMMAND_BLOCKED' : 'COMMAND_FAILED',
-      testProofOwners,
-      proofTestNames,
-      failure.exitCode === 2 ? 2 : 1,
-      Date.now() - started,
-    );
+  if (!execution.succeeded) {
+    const { failure } = execution;
+    return Object.freeze({
+      outcome: failure.outcome,
+      counts: failure.outcome === M251AcceptanceOutcome.BLOCKED ? blockedCounts() : failedCounts(),
+      evidence: failure.evidence,
+      reasonCode: failure.reasonCode,
+      observedProofOwners: testProofOwners,
+      executedProofTestNames: proofTestNames,
+      exitCode: failure.exitCode,
+      durationMilliseconds: Date.now() - started,
+    });
   }
   try {
     let evidence = Object.freeze({ commandCount: definition.commands.length });
@@ -1128,51 +1126,72 @@ function runCommandStage(
       definition.id !== M251AcceptanceStage.SOURCE_CLOSURE &&
       !completeProofObservation(definition.id, rows, observedProofOwners)
     ) {
-      return materializeStage(
-        definition,
-        rows,
-        evidenceRoot,
-        M251AcceptanceOutcome.FAIL,
-        failedCounts(),
-        Object.freeze({
+      return Object.freeze({
+        outcome: M251AcceptanceOutcome.FAIL,
+        counts: failedCounts(),
+        evidence: Object.freeze({
           commandCount: definition.commands.length,
           proofOwnerCoverageRejected: true,
         }),
-        'PROOF_OWNER_NOT_OBSERVED',
+        reasonCode: 'PROOF_OWNER_NOT_OBSERVED',
         observedProofOwners,
-        proofTestNames,
-        1,
-        Date.now() - started,
-      );
+        executedProofTestNames: proofTestNames,
+        exitCode: 1,
+        durationMilliseconds: Date.now() - started,
+      });
     }
-    return materializeStage(
-      definition,
-      rows,
-      evidenceRoot,
-      M251AcceptanceOutcome.PASS,
+    return Object.freeze({
+      outcome: M251AcceptanceOutcome.PASS,
       counts,
       evidence,
-      undefined,
+      reasonCode: undefined,
       observedProofOwners,
-      proofTestNames,
-      0,
-      Date.now() - started,
-    );
+      executedProofTestNames: proofTestNames,
+      exitCode: 0,
+      durationMilliseconds: Date.now() - started,
+    });
   } catch {
-    return materializeStage(
-      definition,
-      rows,
-      evidenceRoot,
-      M251AcceptanceOutcome.FAIL,
-      failedCounts(),
-      Object.freeze({ validationFailureObserved: true }),
-      'COMMAND_EVIDENCE_REJECTED',
-      testProofOwners,
-      proofTestNames,
-      1,
-      Date.now() - started,
-    );
+    return Object.freeze({
+      outcome: M251AcceptanceOutcome.FAIL,
+      counts: failedCounts(),
+      evidence: Object.freeze({ validationFailureObserved: true }),
+      reasonCode: 'COMMAND_EVIDENCE_REJECTED',
+      observedProofOwners: testProofOwners,
+      executedProofTestNames: proofTestNames,
+      exitCode: 1,
+      durationMilliseconds: Date.now() - started,
+    });
   }
+}
+
+function materializeCommandStage(
+  definition,
+  rows,
+  evidenceRoot,
+  executionRoot,
+  bindings,
+  openingSourceIdentity,
+) {
+  const evaluation = evaluateCommandStage(
+    definition,
+    rows,
+    executionRoot,
+    bindings,
+    openingSourceIdentity,
+  );
+  return materializeStage(
+    definition,
+    rows,
+    evidenceRoot,
+    evaluation.outcome,
+    evaluation.counts,
+    evaluation.evidence,
+    evaluation.reasonCode,
+    evaluation.observedProofOwners,
+    evaluation.executedProofTestNames,
+    evaluation.exitCode,
+    evaluation.durationMilliseconds,
+  );
 }
 
 function runLiveIntakeStage(
@@ -1197,26 +1216,31 @@ function runLiveIntakeStage(
     CODECLOSURE_M251_LIVE_AUTHORIZED: '1',
   };
   log(`RUN ${definition.id}`);
-  const result = run(command[0], command.slice(1), { env: environment });
-  if (!successful(result)) {
+  const execution = executeM251AssessmentStageCommands({
+    stageId: definition.id,
+    executions: [{ executable: command[0], arguments: command.slice(1), environment }],
+    cwd: repositoryRoot,
+  });
+  if (!execution.succeeded) {
+    const { failure } = execution;
     return materializeStage(
       definition,
       rows,
       evidenceRoot,
-      M251AcceptanceOutcome.FAIL,
-      failedCounts(),
-      Object.freeze({ liveFailureObserved: true }),
-      'LIVE_INTAKE_FAILED',
+      failure.outcome,
+      failure.outcome === M251AcceptanceOutcome.BLOCKED ? blockedCounts() : failedCounts(),
+      failure.evidence,
+      failure.reasonCode,
       [],
       [],
-      1,
+      failure.exitCode,
       Date.now() - started,
       [command],
     );
   }
   try {
     const receipt = parseOneJsonDocument(
-      result.stdout ?? '',
+      execution.outputs[0].stdout,
       M251_LIVE_INTAKE_RECEIPT_KIND,
       'Live Intake receipt',
     );
@@ -1296,28 +1320,34 @@ function runLiveCompositionStage(
       CODECLOSURE_M251_COMPOSITION_LIVE_AUTHORIZED: '1',
     },
   ];
-  const outputs = [];
-  for (const [index, command] of commands.entries()) {
-    log(`RUN ${definition.id} command ${String(index + 1)}/2`);
-    const result = run(command[0], command.slice(1), { env: environments[index] });
-    if (!successful(result)) {
-      return materializeStage(
-        definition,
-        rows,
-        evidenceRoot,
-        M251AcceptanceOutcome.FAIL,
-        failedCounts(),
-        Object.freeze({ commandIndex: index, liveFailureObserved: true }),
-        'LIVE_COMPOSITION_FAILED',
-        [],
-        [],
-        1,
-        Date.now() - started,
-        commands,
-      );
-    }
-    outputs.push(result.stdout ?? '');
+  log(`RUN ${definition.id} (${String(commands.length)} command(s))`);
+  const execution = executeM251AssessmentStageCommands({
+    stageId: definition.id,
+    executions: commands.map(([executable, ...arguments_], index) => ({
+      executable,
+      arguments: arguments_,
+      environment: environments[index],
+    })),
+    cwd: repositoryRoot,
+  });
+  if (!execution.succeeded) {
+    const { failure } = execution;
+    return materializeStage(
+      definition,
+      rows,
+      evidenceRoot,
+      failure.outcome,
+      failure.outcome === M251AcceptanceOutcome.BLOCKED ? blockedCounts() : failedCounts(),
+      failure.evidence,
+      failure.reasonCode,
+      [],
+      [],
+      failure.exitCode,
+      Date.now() - started,
+      commands,
+    );
   }
+  const outputs = execution.outputs.map(({ stdout }) => stdout);
   try {
     const containment = parseOneJsonDocument(
       outputs[0],
@@ -1469,7 +1499,7 @@ async function main() {
           opening.identity,
         );
       } else {
-        stage = runCommandStage(
+        stage = materializeCommandStage(
           definition,
           rows,
           evidenceRoot,
@@ -1492,11 +1522,10 @@ async function main() {
       ),
     );
     const sourceDefinition = stageDefinitions.at(-1);
-    const documentationStage = priorPassed
-      ? runCommandStage(
+    const documentationEvaluation = priorPassed
+      ? evaluateCommandStage(
           sourceDefinition,
           rows,
-          evidenceRoot,
           executionRoot,
           preflight.bindings,
           opening.identity,
@@ -1508,97 +1537,27 @@ async function main() {
     const sourceDrifted =
       !m251SourceIdentitiesMatch(opening.identity, closing.identity) ||
       opening.reference.artifactDigest !== closing.reference.artifactDigest;
-    if (!priorPassed) {
-      const counts = blockedCounts();
-      if (sourceDrifted) counts.sourceDrift = 1;
-      stages.push(
-        materializeStage(
-          sourceDefinition,
-          rows,
-          evidenceRoot,
-          M251AcceptanceOutcome.BLOCKED,
-          counts,
-          Object.freeze({
-            documentationCheckExecuted: false,
-            executionRootRemoved: true,
-            sourceDriftObserved: counts.sourceDrift === 1,
-          }),
-          'PRIOR_STAGE_NOT_SATISFIED',
-          [],
-          [],
-          2,
-        ),
-      );
-    } else if (documentationStage.outcome !== M251AcceptanceOutcome.PASS) {
-      stages.push(
-        materializeStage(
-          sourceDefinition,
-          rows,
-          evidenceRoot,
-          documentationStage.outcome,
-          sourceDrifted
-            ? Object.freeze({ ...documentationStage.counts, sourceDrift: 1 })
-            : documentationStage.counts,
-          Object.freeze({
-            documentationCheckExecuted: true,
-            documentationCheckPassed: false,
-            executionRootRemoved: true,
-            sourceDriftObserved: sourceDrifted,
-          }),
-          documentationStage.outcome === M251AcceptanceOutcome.BLOCKED
-            ? 'DOCUMENTATION_CHECK_BLOCKED'
-            : 'DOCUMENTATION_CHECK_FAILED',
-          documentationStage.observedProofOwners,
-          documentationStage.executedProofTestNames,
-          documentationStage.exitCode,
-          documentationStage.durationMilliseconds,
-        ),
-      );
-    } else if (sourceDrifted) {
-      const driftCounts = blockedCounts();
-      driftCounts.sourceDrift = 1;
-      stages.push(
-        materializeStage(
-          sourceDefinition,
-          rows,
-          evidenceRoot,
-          M251AcceptanceOutcome.BLOCKED,
-          driftCounts,
-          Object.freeze({
-            documentationCheckExecuted: true,
-            documentationCheckPassed: true,
-            executionRootRemoved: true,
-            sourceDriftObserved: true,
-          }),
-          'SOURCE_IDENTITY_DRIFTED',
-          documentationStage.observedProofOwners,
-          documentationStage.executedProofTestNames,
-          2,
-          documentationStage.durationMilliseconds,
-        ),
-      );
-    } else {
-      stages.push(
-        materializeStage(
-          sourceDefinition,
-          rows,
-          evidenceRoot,
-          M251AcceptanceOutcome.PASS,
-          documentationStage.counts,
-          Object.freeze({
-            documentationCheckExecuted: true,
-            documentationCheckPassed: true,
-            executionRootRemoved: true,
-            sourceIdentityClosed: true,
-          }),
-          undefined,
-          expectedOwners(sourceDefinition.id, rows),
-          documentationStage.executedProofTestNames,
-          0,
-          documentationStage.durationMilliseconds,
-        ),
-      );
-    }
+    const sourceClosure = projectM251SourceClosureStage({
+      documentationEvaluation: documentationEvaluation ?? null,
+      priorStagesPassed: priorPassed,
+      requiredProofOwners: expectedOwners(sourceDefinition.id, rows),
+      sourceDriftObserved: sourceDrifted,
+    });
+    stages.push(
+      materializeStage(
+        sourceDefinition,
+        rows,
+        evidenceRoot,
+        sourceClosure.outcome,
+        sourceClosure.counts,
+        sourceClosure.evidence,
+        sourceClosure.reasonCode,
+        sourceClosure.observedProofOwners,
+        sourceClosure.executedProofTestNames,
+        sourceClosure.exitCode,
+        sourceClosure.durationMilliseconds,
+      ),
+    );
     const matrixResults = buildM251MatrixResults(rows, stages);
     const outcome = m251AssessmentOutcome(matrixResults);
     const manifest = Object.freeze({

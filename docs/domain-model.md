@@ -135,8 +135,11 @@ passed on 2026-08-11 using an explicit protocol fixture. Slice 4's final
 prepared-source gate and ordered unchanged-source Live triad later proved real
 Codex dispatch through this composition on source `01fd537`, and its bounded
 review issued `PASS`. Slice 5's non-verdict canonical runner and offline fail-
-closed tests are implemented; its Live/regression execution is unrun and the
-milestone-level verdict remains pending.
+closed tests are implemented. Its first canonical run passed both real Live
+stages and every stage through current-source M2 regression before the former
+uniform command timeout interrupted the nested M2.5 regression. The corrected
+assessment-owned budget policy changes no Domain authority; a clean-source
+rerun and milestone verdict remain pending.
 The implemented Candidate-creation source-currency path uses the existing
 Workflow integrity event but freezes `PLAN_SOURCE_NOT_CURRENT` as its exact enum-backed `reason`
 and resulting Workflow `suspendedReason`; the Workflow is `PLAN / FAILED`, the

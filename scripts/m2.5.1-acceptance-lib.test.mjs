@@ -7,11 +7,13 @@ import test from 'node:test';
 
 import {
   M251_ACCEPTANCE_MATRIX_CONTRACT_DIGEST,
+  M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
   M251_MANDATORY_MATRIX_IDS,
   M251_PREFLIGHT_BINDING_ROOT_KINDS,
   M251_REQUIRED_NON_CLAIMS,
   M251_REVIEW_EXCLUSION,
   M251_SOURCE_PATH_MANIFEST_KIND,
+  M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS,
   M251_STAGE_MATRIX_ROWS,
   M251_STAGE_ORDER,
   M251AcceptanceOutcome,
@@ -19,6 +21,8 @@ import {
   M251AssessmentMeaning,
   assertM251AssessmentMetadataOnly,
   buildM251MatrixResults,
+  classifyM251AssessmentCommandFailure,
+  m251AssessmentCommandDigest,
   m251AssessmentOutcome,
   m251MatrixContractDigest,
   m251PreflightProofSupportSatisfied,
@@ -26,6 +30,7 @@ import {
   m251Sha256Text,
   m251SourceIdentityDigestFromEntries,
   parseM251AcceptanceMatrix,
+  projectM251SourceClosureStage,
   projectM251PreflightProofEvidence,
   validateM251AssessmentEnvironment,
   validateM251EvidenceManifest,
@@ -44,6 +49,246 @@ const slice0Contract = JSON.parse(slice0ContractBytes.toString('utf8'));
 const packageManifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'));
 const lockfileDigest = m251Sha256Bytes(readFileSync(resolve(repositoryRoot, 'pnpm-lock.yaml')));
 const rows = parseM251AcceptanceMatrix(acceptancePlan, slice0Contract.proofOwners);
+
+test('M2.5.1 command budgets are closed, finite, and sized for nested regressions', () => {
+  assert.deepEqual(Object.keys(M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS), M251_STAGE_ORDER);
+  assert.equal(M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES, 128 * 1024 * 1024);
+  assert.equal(M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[M251AcceptanceStage.PREFLIGHT], null);
+  for (const stageId of M251_STAGE_ORDER.slice(1)) {
+    const timeout = M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[stageId];
+    assert.ok(Number.isSafeInteger(timeout) && timeout > 0, `${stageId} must be bounded`);
+  }
+  assert.ok(
+    M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[M251AcceptanceStage.M25_REGRESSION] >
+      M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[M251AcceptanceStage.M2_REGRESSION],
+  );
+  assert.ok(
+    M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[M251AcceptanceStage.M2_REGRESSION] >
+      M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[M251AcceptanceStage.M1_REGRESSION],
+  );
+});
+
+test('M2.5.1 command identity binds its resource bounds', () => {
+  const command = {
+    commandId: 'm251-regression',
+    commands: [['corepack', 'pnpm', 'regress:m2.5']],
+    commandTimeoutMilliseconds:
+      M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS[M251AcceptanceStage.M25_REGRESSION],
+    maximumOutputBytes: M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
+  };
+  assert.notEqual(
+    m251AssessmentCommandDigest(command),
+    m251AssessmentCommandDigest({ ...command, commandTimeoutMilliseconds: 18_000_001 }),
+  );
+  assert.notEqual(
+    m251AssessmentCommandDigest(command),
+    m251AssessmentCommandDigest({ ...command, maximumOutputBytes: 1024 }),
+  );
+  assert.throws(
+    () => m251AssessmentCommandDigest({ ...command, commandTimeoutMilliseconds: 0 }),
+    /positive integer/u,
+  );
+});
+
+test('M2.5.1 command failures distinguish resource limits, launch, signal, block, and failure', () => {
+  assert.deepEqual(
+    classifyM251AssessmentCommandFailure({
+      errorCode: 'ETIMEDOUT',
+      signal: 'SIGTERM',
+      status: null,
+    }),
+    {
+      kind: 'TIMEOUT',
+      outcome: M251AcceptanceOutcome.FAIL,
+      exitCode: 1,
+      reasonCode: 'COMMAND_TIMEOUT',
+    },
+  );
+  assert.equal(
+    classifyM251AssessmentCommandFailure({
+      errorCode: 'ENOBUFS',
+      signal: 'SIGTERM',
+      status: null,
+    }).reasonCode,
+    'COMMAND_OUTPUT_LIMIT_EXCEEDED',
+  );
+  assert.equal(
+    classifyM251AssessmentCommandFailure({
+      errorCode: 'ENOENT',
+      signal: null,
+      status: null,
+    }).reasonCode,
+    'COMMAND_START_FAILED',
+  );
+  assert.equal(
+    classifyM251AssessmentCommandFailure({
+      errorCode: undefined,
+      signal: 'SIGKILL',
+      status: null,
+    }).reasonCode,
+    'COMMAND_SIGNALLED',
+  );
+  assert.deepEqual(
+    classifyM251AssessmentCommandFailure({
+      errorCode: undefined,
+      signal: null,
+      status: 2,
+    }),
+    {
+      kind: 'EXIT_BLOCKED',
+      outcome: M251AcceptanceOutcome.BLOCKED,
+      exitCode: 2,
+      reasonCode: 'COMMAND_BLOCKED',
+    },
+  );
+  assert.equal(
+    classifyM251AssessmentCommandFailure({
+      errorCode: undefined,
+      signal: null,
+      status: 1,
+    }).reasonCode,
+    'COMMAND_FAILED',
+  );
+});
+
+function sourceClosureDocumentationEvaluation(overrides = {}) {
+  return {
+    outcome: M251AcceptanceOutcome.PASS,
+    counts: {
+      executed: 1,
+      passed: 1,
+      failed: 0,
+      cancelled: 0,
+      skipped: 0,
+      todo: 0,
+      waived: 0,
+      expectedFailure: 0,
+      unexpectedNotApplicable: 0,
+      sourceDrift: 0,
+      unexplainedWarning: 0,
+    },
+    evidence: { commandCount: 1 },
+    reasonCode: undefined,
+    observedProofOwners: ['scripts/run-m2.5.1-acceptance.mjs#documentation-consistency'],
+    executedProofTestNames: [],
+    exitCode: 0,
+    durationMilliseconds: 25,
+    ...overrides,
+  };
+}
+
+const sourceClosureRequiredOwners = Object.freeze([
+  'scripts/run-m2.5.1-acceptance.mjs#documentation-consistency',
+  'scripts/run-m2.5.1-acceptance.mjs#source-manifest-closure',
+]);
+
+test('M2.5.1 source closure publishes one successful combined stage projection', () => {
+  const result = projectM251SourceClosureStage({
+    documentationEvaluation: sourceClosureDocumentationEvaluation(),
+    priorStagesPassed: true,
+    requiredProofOwners: sourceClosureRequiredOwners,
+    sourceDriftObserved: false,
+  });
+
+  assert.equal(result.outcome, M251AcceptanceOutcome.PASS);
+  assert.equal(result.reasonCode, undefined);
+  assert.deepEqual(result.observedProofOwners, sourceClosureRequiredOwners);
+  assert.deepEqual(result.evidence, {
+    commandCount: 1,
+    documentationCheckExecuted: true,
+    executionRootRemoved: true,
+    sourceDriftObserved: false,
+    documentationCheckPassed: true,
+    sourceIdentityClosed: true,
+  });
+});
+
+function failedSourceClosureProjection(reasonCode, failureKind) {
+  return projectM251SourceClosureStage({
+    documentationEvaluation: sourceClosureDocumentationEvaluation({
+      outcome: M251AcceptanceOutcome.FAIL,
+      counts: {
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        cancelled: 0,
+        skipped: 0,
+        todo: 0,
+        waived: 0,
+        expectedFailure: 0,
+        unexpectedNotApplicable: 0,
+        sourceDrift: 0,
+        unexplainedWarning: 0,
+      },
+      evidence: {
+        commandIndex: 0,
+        failureKind,
+        commandTimeoutMilliseconds: 300_000,
+        maximumOutputBytes: M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
+      },
+      reasonCode,
+      observedProofOwners: [],
+      exitCode: 1,
+    }),
+    priorStagesPassed: true,
+    requiredProofOwners: sourceClosureRequiredOwners,
+    sourceDriftObserved: false,
+  });
+}
+
+test('M2.5.1 source closure preserves an ordinary command failure', () => {
+  const result = failedSourceClosureProjection('COMMAND_FAILED', 'EXIT_FAILED');
+
+  assert.equal(result.outcome, M251AcceptanceOutcome.FAIL);
+  assert.equal(result.reasonCode, 'COMMAND_FAILED');
+  assert.equal(result.evidence.failureKind, 'EXIT_FAILED');
+  assert.equal(result.evidence.documentationCheckPassed, false);
+});
+
+test('M2.5.1 source closure preserves command timeout identity and budget', () => {
+  const result = failedSourceClosureProjection('COMMAND_TIMEOUT', 'TIMEOUT');
+
+  assert.equal(result.outcome, M251AcceptanceOutcome.FAIL);
+  assert.equal(result.reasonCode, 'COMMAND_TIMEOUT');
+  assert.deepEqual(result.evidence, {
+    commandIndex: 0,
+    failureKind: 'TIMEOUT',
+    commandTimeoutMilliseconds: 300_000,
+    maximumOutputBytes: M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES,
+    documentationCheckExecuted: true,
+    executionRootRemoved: true,
+    sourceDriftObserved: false,
+    documentationCheckPassed: false,
+  });
+});
+
+test('M2.5.1 source closure preserves output-limit failure identity and bound', () => {
+  const result = failedSourceClosureProjection('COMMAND_OUTPUT_LIMIT_EXCEEDED', 'OUTPUT_LIMIT');
+
+  assert.equal(result.outcome, M251AcceptanceOutcome.FAIL);
+  assert.equal(result.reasonCode, 'COMMAND_OUTPUT_LIMIT_EXCEEDED');
+  assert.equal(result.evidence.failureKind, 'OUTPUT_LIMIT');
+  assert.equal(result.evidence.maximumOutputBytes, M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES);
+  assert.equal(result.evidence.documentationCheckPassed, false);
+});
+
+test('M2.5.1 source closure gives source drift precedence only after documentation passes', () => {
+  const result = projectM251SourceClosureStage({
+    documentationEvaluation: sourceClosureDocumentationEvaluation(),
+    priorStagesPassed: true,
+    requiredProofOwners: sourceClosureRequiredOwners,
+    sourceDriftObserved: true,
+  });
+
+  assert.equal(result.outcome, M251AcceptanceOutcome.BLOCKED);
+  assert.equal(result.reasonCode, 'SOURCE_IDENTITY_DRIFTED');
+  assert.equal(result.counts.sourceDrift, 1);
+  assert.deepEqual(result.observedProofOwners, [
+    'scripts/run-m2.5.1-acceptance.mjs#documentation-consistency',
+  ]);
+  assert.equal(result.evidence.documentationCheckPassed, true);
+  assert.equal(result.evidence.sourceDriftObserved, true);
+});
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));

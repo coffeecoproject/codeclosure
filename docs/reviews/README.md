@@ -32,3 +32,4 @@ runtime evidence.
 - [M2.5.1 Slice 3 trusted production composition review](m2.5.1-slice3-trusted-production-composition.md)
 - [M2.5.1 Slice 4 read-containment capability investigation](m2.5.1-slice4-read-containment-capability-investigation.md)
 - [M2.5.1 Slice 4 real user-path and failure-closure review](m2.5.1-slice4-real-user-path-and-failure-closure.md)
+- [M2.5.1 first canonical-assessment diagnostic](m2.5.1-first-canonical-assessment-diagnostic.md)

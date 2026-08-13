@@ -50,9 +50,13 @@ clean source `a3a5e9b`. The final prepared-source quality gate and ordered
 unchanged-source Live triad then passed on exact source `01fd537`, and the
 bounded real user-path and failure-closure review issued `PASS`. The canonical
 M2.5.1 non-verdict assessment runner and its offline fail-closed contract are
-implemented, but the aggregate mandatory Live/regression execution and
-independent milestone review have not run. M2.5.1 is not complete and M2.6
-remains blocked.
+implemented. Its first explicitly authorized canonical run on clean source
+`3c09db3` passed every stage through the current-source M2 regression,
+including the real Live paths, then failed closed when the former uniform
+900-second command timeout interrupted the nested M2.5 regression. Finite
+assessment-owned stage budgets are now implemented; a clean-source rerun and
+independent review remain required. M2.5.1 is not complete and M2.6 remains
+blocked.
 
 M2.6 Unified Frontstage Interaction and Control remains a formal proposal under
 review and cannot begin until M2.5.1 passes; implementation has not started and

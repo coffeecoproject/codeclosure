@@ -192,10 +192,14 @@ source `01fd537`, and the bounded Slice 4 review issued `PASS`. Slice 5 has
 begun. Its non-verdict assessment foundation now freezes the exact 13-stage,
 68-row proof-owner and ordered source-manifest contract. The canonical runner,
 package command, explicit sole future-review exclusion, and authorization-
-absent/invalid fail-closed paths are implemented and tested. The runner has not
-been executed with aggregate Live authorization; its mandatory Live stages,
-current-source regressions, and independent milestone review have not run.
-M2.5.1 is not complete and M2.6 remains blocked. A real pinned-version
+absent/invalid fail-closed paths are implemented and tested. Its first
+explicitly authorized canonical run on clean source `3c09db3` passed every
+stage through the current-source M2 regression, including real Live Intake and
+the linked Intake-to-Codex/containment paths, then failed closed when the former
+uniform 900-second command timeout interrupted the nested M2.5 regression.
+The assessment library now owns finite per-stage command budgets and distinct
+timeout classification. A clean-source canonical rerun and independent review
+remain required. M2.5.1 is not complete and M2.6 remains blocked. A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
 projections plus an empty progressive `agentMessage` start, while the closed

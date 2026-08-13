@@ -568,13 +568,20 @@ real user-path and effective-containment proof is now established only as
 bounded Slice 4 evidence. Slice 5's non-verdict canonical runner, package entry,
 13-stage/68-row proof-owner, ordered source-manifest/evidence-manifest contract,
 sole future-review exclusion, and offline authorization fail-closed tests are
-implemented. The canonical mandatory Live/regression execution and independent
-milestone review have not run; M2.5.1 remains incomplete.
+implemented. The first canonical run on clean source `3c09db3` passed every
+stage through current-source M2 regression, including real Live Intake and the
+linked Intake-to-Codex/containment paths, then failed closed when the former
+uniform 900-second command timeout interrupted the nested M2.5 regression.
+Finite assessment-owned stage budgets and distinct timeout classification are
+now implemented. A clean-source canonical rerun and independent milestone
+review remain required; M2.5.1 remains incomplete.
 The
 [implementation plan](plans/m2.5.1-real-intake-codex-composition-closure.md),
 [acceptance plan](plans/m2.5.1-acceptance-plan.md),
 [Slice 0 contract](plans/m2.5.1-slice0-contract.md), and
-[live Intake diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md)
+[live Intake diagnostic](reviews/m2.5-live-intake-compatibility-diagnostic.md),
+plus the
+[first canonical-assessment diagnostic](reviews/m2.5.1-first-canonical-assessment-diagnostic.md)
 define the bounded work.
 
 M2.5.1 does not revoke or rewrite the historical M2.5 `PASS`. That review

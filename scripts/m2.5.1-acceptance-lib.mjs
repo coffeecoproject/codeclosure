@@ -34,6 +34,43 @@ export const M251AcceptanceStage = Object.freeze({
 
 export const M251_STAGE_ORDER = Object.freeze(Object.values(M251AcceptanceStage));
 
+// These are per-command bounds. Nested regression commands receive the
+// cumulative budget required by the complete bounded child procedures.
+export const M251_ASSESSMENT_COMMAND_MAXIMUM_OUTPUT_BYTES = 128 * 1024 * 1024;
+const qualityCommandBudgetMilliseconds = 1_800_000;
+const focusedCommandBudgetMilliseconds = 600_000;
+const liveCommandBudgetMilliseconds = 1_800_000;
+const m1RegressionCommandBudgetMilliseconds = 2_400_000;
+const m2RegressionCommandBudgetMilliseconds = 7_200_000;
+const m25SpecificCommandBudgetMilliseconds = 1_800_000;
+
+export const M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS = Object.freeze({
+  [M251AcceptanceStage.PREFLIGHT]: null,
+  [M251AcceptanceStage.QUALITY]: qualityCommandBudgetMilliseconds,
+  [M251AcceptanceStage.V1_COMPATIBILITY]: 300_000,
+  [M251AcceptanceStage.INTAKE_PROTOCOL]: focusedCommandBudgetMilliseconds,
+  [M251AcceptanceStage.LIVE_INTAKE]: liveCommandBudgetMilliseconds,
+  [M251AcceptanceStage.PROFILE_START]: focusedCommandBudgetMilliseconds,
+  [M251AcceptanceStage.DETERMINISTIC_COMPOSITION]: focusedCommandBudgetMilliseconds,
+  [M251AcceptanceStage.LIVE_COMPOSITION]: liveCommandBudgetMilliseconds,
+  [M251AcceptanceStage.INTEGRITY]: focusedCommandBudgetMilliseconds,
+  [M251AcceptanceStage.M1_REGRESSION]: m1RegressionCommandBudgetMilliseconds,
+  [M251AcceptanceStage.M2_REGRESSION]: m2RegressionCommandBudgetMilliseconds,
+  [M251AcceptanceStage.M25_REGRESSION]:
+    qualityCommandBudgetMilliseconds +
+    m1RegressionCommandBudgetMilliseconds +
+    m2RegressionCommandBudgetMilliseconds +
+    m25SpecificCommandBudgetMilliseconds,
+  [M251AcceptanceStage.SOURCE_CLOSURE]: 300_000,
+});
+
+if (
+  JSON.stringify(Object.keys(M251_STAGE_COMMAND_TIMEOUT_MILLISECONDS)) !==
+  JSON.stringify(M251_STAGE_ORDER)
+) {
+  throw new TypeError('M2.5.1 stage command-timeout policy differs from the canonical order');
+}
+
 export const M251_PREFLIGHT_BINDING_ROOT_KINDS = Object.freeze([
   'SOURCE_CHECKOUT',
   'DEMONSTRATION_PROJECT',
@@ -191,6 +228,13 @@ function assertNonNegativeInteger(value, name) {
   return value;
 }
 
+function assertPositiveInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
 function assertOutcome(value, name) {
   if (!Object.values(M251AcceptanceOutcome).includes(value)) {
     throw new TypeError(`${name} has an unsupported outcome`);
@@ -233,6 +277,116 @@ export function m251Sha256Bytes(value) {
 
 export function m251Sha256Text(value) {
   return m251Sha256Bytes(Buffer.from(value, 'utf8'));
+}
+
+export function m251AssessmentCommandDigest(input) {
+  const command = assertObject(input, 'M2.5.1 assessment command digest input');
+  assertExactKeys(
+    command,
+    ['commandId', 'commands', 'commandTimeoutMilliseconds', 'maximumOutputBytes'],
+    'M2.5.1 assessment command digest input',
+  );
+  const commandId = assertString(command.commandId, 'M2.5.1 assessment command ID');
+  if (!/^[a-z0-9][a-z0-9.-]*$/u.test(commandId)) {
+    throw new TypeError('M2.5.1 assessment command ID is not closed');
+  }
+  if (
+    !Array.isArray(command.commands) ||
+    command.commands.some(
+      (parts) =>
+        !Array.isArray(parts) ||
+        parts.length === 0 ||
+        parts.some((part) => typeof part !== 'string' || part.length === 0),
+    )
+  ) {
+    throw new TypeError('M2.5.1 assessment commands must be non-empty string arrays');
+  }
+  const timeout =
+    command.commandTimeoutMilliseconds === null
+      ? null
+      : assertPositiveInteger(
+          command.commandTimeoutMilliseconds,
+          'M2.5.1 assessment command timeout',
+        );
+  const maximumOutputBytes = assertPositiveInteger(
+    command.maximumOutputBytes,
+    'M2.5.1 assessment command output limit',
+  );
+  return m251Sha256Text(
+    JSON.stringify({
+      schemaVersion: 2,
+      commandId,
+      commands: command.commands,
+      commandTimeoutMilliseconds: timeout,
+      maximumOutputBytes,
+    }),
+  );
+}
+
+export function classifyM251AssessmentCommandFailure(input) {
+  const failure = assertObject(input, 'M2.5.1 assessment command failure');
+  assertExactKeys(failure, ['errorCode', 'signal', 'status'], 'M2.5.1 assessment command failure');
+  if (
+    failure.errorCode !== undefined &&
+    (typeof failure.errorCode !== 'string' || failure.errorCode.length === 0)
+  ) {
+    throw new TypeError('M2.5.1 assessment command error code is invalid');
+  }
+  if (
+    failure.signal !== null &&
+    (typeof failure.signal !== 'string' || failure.signal.length === 0)
+  ) {
+    throw new TypeError('M2.5.1 assessment command signal is invalid');
+  }
+  if (failure.status !== null && (!Number.isSafeInteger(failure.status) || failure.status < 0)) {
+    throw new TypeError('M2.5.1 assessment command status is invalid');
+  }
+  if (failure.errorCode === 'ETIMEDOUT') {
+    return Object.freeze({
+      kind: 'TIMEOUT',
+      outcome: M251AcceptanceOutcome.FAIL,
+      exitCode: 1,
+      reasonCode: 'COMMAND_TIMEOUT',
+    });
+  }
+  if (failure.errorCode === 'ENOBUFS') {
+    return Object.freeze({
+      kind: 'OUTPUT_LIMIT',
+      outcome: M251AcceptanceOutcome.FAIL,
+      exitCode: 1,
+      reasonCode: 'COMMAND_OUTPUT_LIMIT_EXCEEDED',
+    });
+  }
+  if (failure.errorCode !== undefined) {
+    return Object.freeze({
+      kind: 'START_FAILED',
+      outcome: M251AcceptanceOutcome.FAIL,
+      exitCode: 1,
+      reasonCode: 'COMMAND_START_FAILED',
+    });
+  }
+  if (failure.signal !== null) {
+    return Object.freeze({
+      kind: 'SIGNALLED',
+      outcome: M251AcceptanceOutcome.FAIL,
+      exitCode: 1,
+      reasonCode: 'COMMAND_SIGNALLED',
+    });
+  }
+  if (failure.status === 2) {
+    return Object.freeze({
+      kind: 'EXIT_BLOCKED',
+      outcome: M251AcceptanceOutcome.BLOCKED,
+      exitCode: 2,
+      reasonCode: 'COMMAND_BLOCKED',
+    });
+  }
+  return Object.freeze({
+    kind: 'EXIT_FAILED',
+    outcome: M251AcceptanceOutcome.FAIL,
+    exitCode: 1,
+    reasonCode: 'COMMAND_FAILED',
+  });
 }
 
 function proofOwnerForRow(proofOwners, rowId) {
@@ -774,6 +928,86 @@ function validateCounts(rawCounts, name) {
     throw new TypeError(`${name} passed count exceeds its executed count`);
   }
   return counts;
+}
+
+export function projectM251SourceClosureStage(input) {
+  const noCommandCounts = Object.freeze({
+    executed: 0,
+    passed: 0,
+    failed: 0,
+    cancelled: 0,
+    skipped: 0,
+    todo: 0,
+    waived: 0,
+    expectedFailure: 0,
+    unexpectedNotApplicable: 0,
+    sourceDrift: input.sourceDriftObserved ? 1 : 0,
+    unexplainedWarning: 0,
+  });
+
+  if (!input.priorStagesPassed) {
+    return Object.freeze({
+      outcome: M251AcceptanceOutcome.BLOCKED,
+      counts: noCommandCounts,
+      evidence: Object.freeze({
+        documentationCheckExecuted: false,
+        executionRootRemoved: true,
+        sourceDriftObserved: input.sourceDriftObserved,
+      }),
+      reasonCode: 'PRIOR_STAGE_NOT_SATISFIED',
+      observedProofOwners: Object.freeze([]),
+      executedProofTestNames: Object.freeze([]),
+      exitCode: 2,
+      durationMilliseconds: 0,
+    });
+  }
+
+  const documentation = input.documentationEvaluation;
+
+  const closureEvidence = (details) =>
+    Object.freeze({
+      ...documentation.evidence,
+      documentationCheckExecuted: true,
+      executionRootRemoved: true,
+      sourceDriftObserved: input.sourceDriftObserved,
+      ...details,
+    });
+
+  if (documentation.outcome !== M251AcceptanceOutcome.PASS) {
+    return Object.freeze({
+      ...documentation,
+      counts: Object.freeze({
+        ...documentation.counts,
+        sourceDrift: input.sourceDriftObserved ? 1 : documentation.counts.sourceDrift,
+      }),
+      evidence: closureEvidence({ documentationCheckPassed: false }),
+    });
+  }
+  if (input.sourceDriftObserved) {
+    return Object.freeze({
+      outcome: M251AcceptanceOutcome.BLOCKED,
+      counts: noCommandCounts,
+      evidence: closureEvidence({ documentationCheckPassed: true }),
+      reasonCode: 'SOURCE_IDENTITY_DRIFTED',
+      observedProofOwners: documentation.observedProofOwners,
+      executedProofTestNames: documentation.executedProofTestNames,
+      exitCode: 2,
+      durationMilliseconds: documentation.durationMilliseconds,
+    });
+  }
+  return Object.freeze({
+    outcome: M251AcceptanceOutcome.PASS,
+    counts: documentation.counts,
+    evidence: closureEvidence({
+      documentationCheckPassed: true,
+      sourceIdentityClosed: true,
+    }),
+    reasonCode: undefined,
+    observedProofOwners: input.requiredProofOwners,
+    executedProofTestNames: documentation.executedProofTestNames,
+    exitCode: 0,
+    durationMilliseconds: documentation.durationMilliseconds,
+  });
 }
 
 function passingCountsAreClosed(counts) {

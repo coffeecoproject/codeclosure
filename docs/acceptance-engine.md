@@ -37,7 +37,11 @@ gate plus ordered unchanged-source Live triad passed on source `01fd537`; the
 bounded Slice 4 review issued `PASS`. None creates another Acceptance issuer.
 Slice 5's non-verdict canonical runner and offline fail-closed tests are
 implemented; the runner and its future independent review remain outside
-technical Acceptance, and its mandatory Live/regression execution is unrun.
+technical Acceptance. Its first aggregate run passed both Live stages and
+every stage through current-source M2 regression before the former uniform
+command timeout interrupted the nested M2.5 regression. The corrected
+assessment budget remains outside technical Acceptance; a clean-source rerun
+and independent review are still required.
 Proposed M2.6 Frontstage routes,
 answers, Goal summaries, focus, pending actions, and notifications remain
 outside technical Acceptance and cannot issue `ACCEPT` or closeout.
