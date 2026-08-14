@@ -59,6 +59,9 @@ import {
 } from './interaction-policy.js';
 import {
   FrontstageCandidateRoute,
+  FrontstageContextOmissionReason,
+  FrontstageContextOmissionSourceClass,
+  INTERACTION_MAXIMUM_CONTEXT_MANIFEST_ENTRIES,
   FrontstageNoActionReason,
   FrontstageProposalAmbiguity,
   FrontstageProposalKind,
@@ -68,6 +71,7 @@ import {
   InteractionContentRetention,
   InteractionFocusKind,
   InteractionMessageRole,
+  InteractionMessageHandoffKind,
   InteractionOperationFailureReason,
   InteractionOperationKind,
   InteractionOperationResultKind,
@@ -81,6 +85,7 @@ import {
   PendingActionKind,
   PendingActionResolutionDisposition,
   assertFocusBindingInvariant,
+  assertFrontstageContextManifestInvariant,
   assertFrontstageAnswerInvariant,
   assertInteractionActionOutcomeInvariant,
   assertInteractionActionReservationInvariant,
@@ -93,6 +98,7 @@ import {
   assertRouteDecisionInvariant,
   assertRouteProposalInvariant,
   focusBindingProjection,
+  frontstageContextManifestProjection,
   frontstageAnswerProjection,
   interactionActionOutcomeProjection,
   interactionActionReservationProjection,
@@ -105,6 +111,7 @@ import {
   routeDecisionProjection,
   routeProposalProjection,
   type FocusBinding,
+  type FrontstageContextManifest,
   type FrontstageAnswer,
   type InteractionActionOutcome,
   type InteractionActionReservation,
@@ -261,6 +268,64 @@ const questionTargetSchema = z
     clarificationQuestionId: questionIdSchema,
     questionSpecDigest: digestSchema,
     questionDigest: digestSchema,
+  })
+  .strict();
+
+const contextPriorMessageSelectionSchema = z
+  .object({
+    messageRef: messageRefSchema,
+    selectedContentDigest: digestSchema,
+    selectedContentByteLength: positiveIntegerSchema,
+  })
+  .strict();
+const contextGoalSummarySelectionSchema = z
+  .object({
+    goalTarget: goalTargetSchema,
+    projectionDigest: digestSchema,
+  })
+  .strict();
+const contextIntakeQuestionSelectionSchema = z
+  .object({
+    questionTarget: questionTargetSchema,
+    projectionDigest: digestSchema,
+    selectedContentDigest: digestSchema,
+    selectedContentByteLength: positiveIntegerSchema,
+  })
+  .strict();
+const contextManifestOmissionSchema = z
+  .object({
+    sourceClass: z.enum(Object.values(FrontstageContextOmissionSourceClass)),
+    reasonCode: z.enum(Object.values(FrontstageContextOmissionReason)),
+    omittedSourceDigests: z.array(digestSchema).max(INTERACTION_MAXIMUM_CONTEXT_MANIFEST_ENTRIES),
+  })
+  .strict();
+const contextManifestSchema = z
+  .object({
+    id: manifestIdSchema,
+    schemaVersion: z.literal(1),
+    sessionId: sessionIdSchema,
+    operationId: operationIdSchema,
+    reservedOperationVersion: operationVersionSchema,
+    currentMessageRef: messageRefSchema,
+    currentMessageContentDigest: digestSchema,
+    currentMessageContentByteLength: positiveIntegerSchema,
+    selectedPriorMessages: z.array(contextPriorMessageSelectionSchema),
+    focusRef: focusRefSchema.optional(),
+    selectedGoalSummaries: z.array(contextGoalSummarySelectionSchema),
+    selectedIntakeQuestion: contextIntakeQuestionSelectionSchema.optional(),
+    omissions: z.array(contextManifestOmissionSchema),
+    configuration: versionedDigestRefSchema,
+    contextCompiler: versionedDigestRefSchema,
+    assistantProfile: versionedDigestRefSchema,
+    assistantAdapter: versionedDigestRefSchema,
+    responseContract: versionedDigestRefSchema,
+    routingPolicy: versionedDigestRefSchema,
+    retentionProfile: versionedDigestRefSchema,
+    budgetProfile: versionedDigestRefSchema,
+    packageDigest: digestSchema,
+    packageByteLength: positiveIntegerSchema,
+    createdAt: timestampSchema,
+    manifestDigest: digestSchema,
   })
   .strict();
 
@@ -640,22 +705,37 @@ const outcomeSchema = z
   })
   .strict();
 
-const handoffSchema = z
-  .object({
-    id: handoffIdSchema,
-    schemaVersion: z.literal(1),
-    sessionId: sessionIdSchema,
-    messageRef: messageRefSchema,
-    pendingActionRef: pendingRefSchema,
-    resolutionRef: resolutionRefSchema,
-    reservationRef: reservationRefSchema,
-    admittedUserContent: nonBlankStringSchema,
-    admittedContentDigest: digestSchema,
-    intakeCommandId: commandIdSchema,
-    createdAt: timestampSchema,
-    handoffDigest: digestSchema,
-  })
-  .strict();
+const handoffCommon = {
+  id: handoffIdSchema,
+  schemaVersion: z.literal(1),
+  sessionId: sessionIdSchema,
+  messageRef: messageRefSchema,
+  admittedUserContent: nonBlankStringSchema,
+  admittedContentDigest: digestSchema,
+  intakeCommandId: commandIdSchema,
+  createdAt: timestampSchema,
+  handoffDigest: digestSchema,
+};
+const handoffSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      ...handoffCommon,
+      kind: z.literal(InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION),
+      pendingActionRef: pendingRefSchema,
+      resolutionRef: resolutionRefSchema,
+      reservationRef: reservationRefSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...handoffCommon,
+      kind: z.literal(InteractionMessageHandoffKind.INTAKE_CLARIFICATION),
+      focusRef: focusRefSchema,
+      questionTarget: questionTargetSchema,
+      canonicalCommandInputDigest: digestSchema,
+    })
+    .strict(),
+]);
 
 const answerSchema = z
   .object({
@@ -840,6 +920,21 @@ const confirmationPolicyDefinitionSchema = z
 const confirmationPolicySchema = confirmationPolicyDefinitionSchema
   .extend({ digest: digestSchema })
   .strict();
+
+export function decodeFrontstageContextManifest(
+  value: unknown,
+  verifier: InteractionDigestVerifier,
+): FrontstageContextManifest {
+  const record = parse(contextManifestSchema, value);
+  assertFrontstageContextManifestInvariant(record);
+  verifyDigest(
+    record.manifestDigest,
+    frontstageContextManifestProjection(record),
+    verifier,
+    'Frontstage Context Manifest digest',
+  );
+  return record;
+}
 
 export function decodeInteractionSession(
   value: unknown,

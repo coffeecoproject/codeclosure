@@ -36,3 +36,4 @@ runtime evidence.
 - [M2.5.1 completion review](m2.5.1-completion-review.md)
 - [M2.6 Slice 0 contract-closure review](m2.6-slice0-contract-closure.md)
 - [M2.6 Slice 1 Interaction Domain and policy review](m2.6-slice1-interaction-domain-policy.md)
+- [M2.6 Slice 2 P0 contract-alignment review](m2.6-slice2-p0-contract-alignment.md)

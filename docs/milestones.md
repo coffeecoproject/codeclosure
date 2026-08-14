@@ -773,8 +773,10 @@ audit, typed replay/conflict, serialized Operation reservation,
 failure/interruption closure, unresolved-reservation detection, exact
 Focus/Session CAS with one Focus write owner, and strict reopen for that
 implemented subset. Successful Operation results remain with later
-result-owner transactions; this does not complete Slice 2 or claim
-`M26-D03` through `M26-D07`. The M2.5.1 entry condition has been satisfied. The
+result-owner transactions. The pre-B1 retained Context Manifest and
+discriminated Intake Handoff Domain contracts passed bounded P0 review on
+2026-08-15; this does not complete Slice 2 or claim `M26-D03` through
+`M26-D07`. The M2.5.1 entry condition has been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction
 contract](frontstage-interaction.md) define the planned boundary. Deferred

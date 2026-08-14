@@ -3,8 +3,16 @@ import test from 'node:test';
 
 import {
   FrontstageCandidateRoute,
+  FrontstageContextOmissionReason,
+  FrontstageContextOmissionSourceClass,
   FrontstageProposalAmbiguity,
   FrontstageProposalKind,
+  INTERACTION_MAXIMUM_CONTEXT_ACTIVE_QUESTION_BYTES,
+  INTERACTION_MAXIMUM_CONTEXT_GOAL_SUMMARIES,
+  INTERACTION_MAXIMUM_CONTEXT_MANIFEST_ENTRIES,
+  INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGE_BYTES,
+  INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGES,
+  INTERACTION_MAXIMUM_CONTEXT_PACKAGE_BYTES,
   INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES,
   INTERACTION_MAXIMUM_SESSION_MESSAGES,
   InteractionActionOutcomeDisposition,
@@ -13,6 +21,7 @@ import {
   InteractionContentRetention,
   InteractionFocusKind,
   InteractionMessageRole,
+  InteractionMessageHandoffKind,
   InteractionOperationFailureReason,
   InteractionOperationKind,
   InteractionOperationResultKind,
@@ -27,17 +36,21 @@ import {
   PendingActionKind,
   PendingActionResolutionDisposition,
   assertFrontstageAnswerChainInvariant,
+  assertFrontstageContextManifestReservationChain,
   assertInitialInteractionOperationInvariant,
   assertInitialInteractionSessionInvariant,
   assertInteractionActionChainInvariant,
+  assertInteractionClarificationHandoffChainInvariant,
   assertInteractionFocusUpdate,
   assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
   assertInteractionSessionTransition,
   assertInteractionUserMessageAdmission,
   commandId,
+  clarificationQuestionId,
   decodeFocusBinding,
   decodeFrontstageAnswer,
+  decodeFrontstageContextManifest,
   decodeConfirmationGrammar,
   decodeDirectActionGrammar,
   decodeInteractionActionOutcome,
@@ -58,6 +71,7 @@ import {
   frontstageAnswerId,
   frontstageAnswerProjection,
   frontstageContextManifestId,
+  frontstageContextManifestProjection,
   goalId,
   goalRevision,
   interactionActionOutcomeId,
@@ -77,6 +91,8 @@ import {
   interactionSessionId,
   interactionSessionProjection,
   interactionSessionVersion,
+  intakeRunId,
+  intakeRunVersion,
   isoTimestamp,
   pendingActionId,
   pendingActionProjection,
@@ -93,6 +109,7 @@ import {
   workflowVersion,
   type FocusBindingProjectionInput,
   type FrontstageAnswerProjectionInput,
+  type FrontstageContextManifestProjectionInput,
   type InteractionActionOutcomeProjectionInput,
   type InteractionActionReservationProjectionInput,
   type InteractionMessageHandoffProjectionInput,
@@ -194,6 +211,21 @@ function createFixtures() {
     version: policies.confirmationPolicy.version,
     digest: policies.confirmationPolicy.digest,
   };
+  const configuration = { id: 'frontstage-config_local', version: 'v1', digest: ONE };
+  const contextCompiler = { id: 'frontstage-context-compiler_local', version: 'v1', digest: TWO };
+  const assistantProfile = {
+    id: 'frontstage-assistant-profile_local',
+    version: 'v1',
+    digest: TWO,
+  };
+  const assistantAdapter = {
+    id: 'frontstage-assistant-adapter_local',
+    version: 'v1',
+    digest: TWO,
+  };
+  const responseContract = { id: 'frontstage-response_local', version: 'v1', digest: TWO };
+  const retentionProfile = { id: 'frontstage-retention_local', version: 'v1', digest: TWO };
+  const budgetProfile = { id: 'frontstage-budget_local', version: 'v1', digest: THREE };
   const goalTarget = {
     goalId: goalId('goal_golden'),
     goalRevision: goalRevision(2),
@@ -236,19 +268,60 @@ function createFixtures() {
     throw new TypeError('Golden Interaction Message must retain its content');
   }
 
+  const contextManifestBase = {
+    id: frontstageContextManifestId('frontstage-context-manifest_golden'),
+    schemaVersion: 1 as const,
+    sessionId,
+    operationId,
+    reservedOperationVersion: interactionOperationVersion(1),
+    currentMessageRef: { id: message.id, digest: message.messageDigest },
+    currentMessageContentDigest: message.contentDigest,
+    currentMessageContentByteLength: message.contentByteLength,
+    selectedPriorMessages: [],
+    focusRef: { id: focus.id, digest: focus.focusDigest },
+    selectedGoalSummaries: [{ goalTarget, projectionDigest: THREE }],
+    omissions: [
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.PRIOR_MESSAGE,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+    ],
+    configuration,
+    contextCompiler,
+    assistantProfile,
+    assistantAdapter,
+    responseContract,
+    routingPolicy,
+    retentionProfile,
+    budgetProfile,
+    packageDigest: ONE,
+    packageByteLength: 1_024,
+    createdAt: NOW,
+  } satisfies FrontstageContextManifestProjectionInput;
+  const contextManifest = decodeFrontstageContextManifest(
+    {
+      ...contextManifestBase,
+      manifestDigest: digest(frontstageContextManifestProjection(contextManifestBase)),
+    },
+    digests,
+  );
+
   const proposalBase = {
     id: proposalId,
     schemaVersion: 1 as const,
     sessionId,
     operationId,
     messageRef: { id: message.id, digest: message.messageDigest },
-    contextManifestRef: {
-      id: frontstageContextManifestId('frontstage-context-manifest_golden'),
-      digest: TWO,
-    },
-    assistantProfile: { id: 'frontstage-assistant-profile_local', version: 'v1', digest: TWO },
-    assistantAdapter: { id: 'frontstage-assistant-adapter_local', version: 'v1', digest: TWO },
-    responseContract: { id: 'frontstage-response_local', version: 'v1', digest: TWO },
+    contextManifestRef: { id: contextManifest.id, digest: contextManifest.manifestDigest },
+    assistantProfile,
+    assistantAdapter,
+    responseContract,
     kind: FrontstageProposalKind.ROUTE_PROPOSAL,
     candidateRoute: FrontstageCandidateRoute.SUBMIT_GOVERNED_INTAKE,
     candidateGoalIds: [],
@@ -401,6 +474,7 @@ function createFixtures() {
   const handoffBase = {
     id: handoffId,
     schemaVersion: 1 as const,
+    kind: InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION,
     sessionId,
     messageRef: pendingAction.originatingMessageRef,
     pendingActionRef: resolution.pendingActionRef,
@@ -415,6 +489,9 @@ function createFixtures() {
     { ...handoffBase, handoffDigest: digest(interactionMessageHandoffProjection(handoffBase)) },
     digests,
   );
+  if (handoff.kind !== InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
+    throw new TypeError('Golden Action Handoff must retain its discriminant');
+  }
 
   const sessionBase = {
     id: sessionId,
@@ -423,10 +500,10 @@ function createFixtures() {
     principalRef: principal,
     projectRef,
     state: InteractionSessionState.OPEN,
-    configuration: { id: 'frontstage-config_local', version: 'v1', digest: ONE },
+    configuration,
     routingPolicy,
     confirmationPolicy,
-    retentionProfile: { id: 'frontstage-retention_local', version: 'v1', digest: TWO },
+    retentionProfile,
     currentFocusRef: { id: focus.id, digest: focus.focusDigest },
     openedAt: NOW,
     updatedAt: NOW,
@@ -435,6 +512,41 @@ function createFixtures() {
     { ...sessionBase, sessionDigest: digest(interactionSessionProjection(sessionBase)) },
     digests,
   );
+  const contextSessionBase = {
+    ...sessionBase,
+    version: interactionSessionVersion(2),
+  } satisfies InteractionSessionProjectionInput;
+  const contextSession = decodeInteractionSession(
+    {
+      ...contextSessionBase,
+      sessionDigest: digest(interactionSessionProjection(contextSessionBase)),
+    },
+    digests,
+  );
+
+  const contextManifestOperationBase = {
+    id: contextManifest.operationId,
+    schemaVersion: 1 as const,
+    version: contextManifest.reservedOperationVersion,
+    sessionId,
+    expectedSessionVersion: contextSession.version,
+    messageRef: contextManifest.currentMessageRef,
+    operationKind: InteractionOperationKind.ROUTE,
+    contextManifestRef: { id: contextManifest.id, digest: contextManifest.manifestDigest },
+    assistantProfile: contextManifest.assistantProfile,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const contextManifestOperation = decodeInteractionOperation(
+    {
+      ...contextManifestOperationBase,
+      operationDigest: digest(interactionOperationProjection(contextManifestOperationBase)),
+    },
+    digests,
+  );
+  if (contextManifestOperation.state !== InteractionOperationState.RESERVED) {
+    throw new TypeError('Golden Context Manifest Operation must remain reserved');
+  }
 
   const answerContent = '这是一个有界回答。';
   const answerProposalBase = {
@@ -601,8 +713,11 @@ function createFixtures() {
   return {
     policies,
     session,
+    contextSession,
     message,
     focus,
+    contextManifest,
+    contextManifestOperation,
     proposal,
     decision,
     answerProposal,
@@ -1081,6 +1196,13 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
 void test('[M26-D01] owning codecs and unknown-field fixtures', () => {
   const fixtures = createFixtures();
   assertInteractionLifecycleTransitions(fixtures);
+  assertFrontstageContextManifestReservationChain({
+    session: fixtures.contextSession,
+    currentMessage: fixtures.message,
+    focus: fixtures.focus,
+    manifest: fixtures.contextManifest,
+    operation: fixtures.contextManifestOperation,
+  });
   assertInteractionActionChainInvariant({
     originatingMessage: fixtures.message,
     routeDecision: fixtures.decision,
@@ -1122,6 +1244,9 @@ void test('[M26-D01] owning codecs and unknown-field fixtures', () => {
     },
     digests,
   );
+  if (lateHandoff.kind !== InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
+    assert.fail('Late Action Handoff must retain its discriminant');
+  }
   assert.throws(
     () =>
       assertInteractionActionChainInvariant({
@@ -1210,6 +1335,12 @@ void test('[M26-D01] owning codecs and unknown-field fixtures', () => {
       record: fixtures.focus,
       digestField: 'focusDigest',
       decode: (value) => decodeFocusBinding(value, digests),
+    },
+    {
+      name: 'Frontstage Context Manifest',
+      record: fixtures.contextManifest,
+      digestField: 'manifestDigest',
+      decode: (value) => decodeFrontstageContextManifest(value, digests),
     },
     {
       name: 'Proposal',
@@ -1585,6 +1716,688 @@ void test('[M26-D01] owning codecs and unknown-field fixtures', () => {
     /reason trace|exact Route Decision authority/,
   );
   assert.throws(() => interactionSessionId('session_wrong-prefix'), /InteractionSessionId/);
+});
+
+void test('P0 Frontstage Context Manifest binds one exact Route reservation', () => {
+  const fixtures = createFixtures();
+  assert.doesNotThrow(() =>
+    assertFrontstageContextManifestReservationChain({
+      session: fixtures.contextSession,
+      currentMessage: fixtures.message,
+      focus: fixtures.focus,
+      manifest: fixtures.contextManifest,
+      operation: fixtures.contextManifestOperation,
+    }),
+  );
+
+  const substitutedMessageManifestBase = {
+    ...fixtures.contextManifest,
+    currentMessageContentDigest: ZERO,
+  } satisfies FrontstageContextManifestProjectionInput;
+  const substitutedMessageManifest = decodeFrontstageContextManifest(
+    {
+      ...substitutedMessageManifestBase,
+      manifestDigest: digest(frontstageContextManifestProjection(substitutedMessageManifestBase)),
+    },
+    digests,
+  );
+  const { operationDigest: priorOperationDigest, ...contextOperationInput } =
+    fixtures.contextManifestOperation;
+  void priorOperationDigest;
+  const substitutedMessageOperationBase = {
+    ...contextOperationInput,
+    contextManifestRef: {
+      id: substitutedMessageManifest.id,
+      digest: substitutedMessageManifest.manifestDigest,
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const substitutedMessageOperation = decodeInteractionOperation(
+    {
+      ...substitutedMessageOperationBase,
+      operationDigest: digest(interactionOperationProjection(substitutedMessageOperationBase)),
+    },
+    digests,
+  );
+  if (substitutedMessageOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('Substituted Message Operation must remain reserved');
+  }
+  assert.throws(
+    () =>
+      assertFrontstageContextManifestReservationChain({
+        session: fixtures.contextSession,
+        currentMessage: fixtures.message,
+        focus: fixtures.focus,
+        manifest: substitutedMessageManifest,
+        operation: substitutedMessageOperation,
+      }),
+    /exact current Session, Message, and Route reservation/,
+  );
+
+  const { sessionDigest: priorContextSessionDigest, ...contextSessionInput } =
+    fixtures.contextSession;
+  void priorContextSessionDigest;
+  const advancedSessionBase = {
+    ...contextSessionInput,
+    version: interactionSessionVersion(3),
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  const advancedSession = decodeInteractionSession(
+    {
+      ...advancedSessionBase,
+      sessionDigest: digest(interactionSessionProjection(advancedSessionBase)),
+    },
+    digests,
+  );
+  const advancedOperationBase = {
+    ...contextOperationInput,
+    expectedSessionVersion: advancedSession.version,
+    reservedAt: AFTER,
+  } satisfies InteractionOperationProjectionInput;
+  const advancedOperation = decodeInteractionOperation(
+    {
+      ...advancedOperationBase,
+      operationDigest: digest(interactionOperationProjection(advancedOperationBase)),
+    },
+    digests,
+  );
+  if (advancedOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('Advanced Session Operation must remain reserved');
+  }
+  assert.throws(
+    () =>
+      assertFrontstageContextManifestReservationChain({
+        session: advancedSession,
+        currentMessage: fixtures.message,
+        focus: fixtures.focus,
+        manifest: fixtures.contextManifest,
+        operation: advancedOperation,
+      }),
+    /current Session and Message/,
+  );
+
+  const oversizedPackageBase = {
+    ...fixtures.contextManifest,
+    packageByteLength: INTERACTION_MAXIMUM_CONTEXT_PACKAGE_BYTES + 1,
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...oversizedPackageBase,
+          manifestDigest: digest(frontstageContextManifestProjection(oversizedPackageBase)),
+        },
+        digests,
+      ),
+    /Package byte length is outside its budget/,
+  );
+
+  const priorOmissionsRemoved = fixtures.contextManifest.omissions.filter(
+    (omission) => omission.sourceClass !== FrontstageContextOmissionSourceClass.PRIOR_MESSAGE,
+  );
+  const oversizedPriorSelectionBase = {
+    ...fixtures.contextManifest,
+    selectedPriorMessages: [
+      {
+        messageRef: {
+          id: interactionMessageId('interaction-message_p0-oversized-prior'),
+          digest: ONE,
+        },
+        selectedContentDigest: TWO,
+        selectedContentByteLength: INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGE_BYTES + 1,
+      },
+    ],
+    omissions: priorOmissionsRemoved,
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...oversizedPriorSelectionBase,
+          manifestDigest: digest(frontstageContextManifestProjection(oversizedPriorSelectionBase)),
+        },
+        digests,
+      ),
+    /prior Message content byte length is outside its budget/,
+  );
+
+  const tooManyPriorSelectionsBase = {
+    ...fixtures.contextManifest,
+    selectedPriorMessages: Array.from(
+      { length: INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGES + 1 },
+      (_, index) => ({
+        messageRef: {
+          id: interactionMessageId(`interaction-message_p0-prior-${String(index)}`),
+          digest: ONE,
+        },
+        selectedContentDigest: TWO,
+        selectedContentByteLength: 1,
+      }),
+    ),
+    omissions: priorOmissionsRemoved,
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...tooManyPriorSelectionsBase,
+          manifestDigest: digest(frontstageContextManifestProjection(tooManyPriorSelectionsBase)),
+        },
+        digests,
+      ),
+    /too many prior Messages/,
+  );
+
+  const tooManyGoalSummariesBase = {
+    ...fixtures.contextManifest,
+    selectedGoalSummaries: Array.from(
+      { length: INTERACTION_MAXIMUM_CONTEXT_GOAL_SUMMARIES + 1 },
+      (_, index) => ({
+        goalTarget: {
+          goalId: goalId(`goal_p0-context-${String(index)}`),
+          goalRevision: goalRevision(1),
+          workflowId: workflowId(`workflow_p0-context-${String(index)}`),
+          workflowVersion: workflowVersion(1),
+        },
+        projectionDigest: THREE,
+      }),
+    ),
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...tooManyGoalSummariesBase,
+          manifestDigest: digest(frontstageContextManifestProjection(tooManyGoalSummariesBase)),
+        },
+        digests,
+      ),
+    /too many Goal summaries/,
+  );
+
+  const omittedPriorDigests = Array.from(
+    { length: INTERACTION_MAXIMUM_CONTEXT_MANIFEST_ENTRIES - 4 },
+    (_, index) => digest({ kind: 'P0_OMITTED_PRIOR_MESSAGE', index }),
+  );
+  const atEntryBudgetBase = {
+    ...fixtures.contextManifest,
+    omissions: fixtures.contextManifest.omissions.map((omission) =>
+      omission.sourceClass === FrontstageContextOmissionSourceClass.PRIOR_MESSAGE
+        ? {
+            sourceClass: omission.sourceClass,
+            reasonCode: FrontstageContextOmissionReason.SELECTION_LIMIT,
+            omittedSourceDigests: omittedPriorDigests,
+          }
+        : omission,
+    ),
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.doesNotThrow(() =>
+    decodeFrontstageContextManifest(
+      {
+        ...atEntryBudgetBase,
+        manifestDigest: digest(frontstageContextManifestProjection(atEntryBudgetBase)),
+      },
+      digests,
+    ),
+  );
+  const overEntryBudgetBase = {
+    ...atEntryBudgetBase,
+    omissions: atEntryBudgetBase.omissions.map((omission) =>
+      omission.sourceClass === FrontstageContextOmissionSourceClass.PRIOR_MESSAGE
+        ? {
+            ...omission,
+            omittedSourceDigests: [
+              ...omission.omittedSourceDigests,
+              digest({ kind: 'P0_OMITTED_PRIOR_MESSAGE', index: omittedPriorDigests.length }),
+            ],
+          }
+        : omission,
+    ),
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...overEntryBudgetBase,
+          manifestDigest: digest(frontstageContextManifestProjection(overEntryBudgetBase)),
+        },
+        digests,
+      ),
+    /Manifest has too many entries/,
+  );
+
+  const goalByteBudgetOmissionBase = {
+    ...fixtures.contextManifest,
+    selectedGoalSummaries: [],
+    omissions: [
+      ...fixtures.contextManifest.omissions,
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.GOAL_SUMMARY,
+        reasonCode: FrontstageContextOmissionReason.BYTE_BUDGET,
+        omittedSourceDigests: [THREE],
+      },
+    ],
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.doesNotThrow(() =>
+    decodeFrontstageContextManifest(
+      {
+        ...goalByteBudgetOmissionBase,
+        manifestDigest: digest(frontstageContextManifestProjection(goalByteBudgetOmissionBase)),
+      },
+      digests,
+    ),
+  );
+
+  const selectedAndOmittedGoalBase = {
+    ...fixtures.contextManifest,
+    omissions: [
+      ...fixtures.contextManifest.omissions,
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.GOAL_SUMMARY,
+        reasonCode: FrontstageContextOmissionReason.SELECTION_LIMIT,
+        omittedSourceDigests: [THREE],
+      },
+    ],
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...selectedAndOmittedGoalBase,
+          manifestDigest: digest(frontstageContextManifestProjection(selectedAndOmittedGoalBase)),
+        },
+        digests,
+      ),
+    /selected and omitted together/,
+  );
+
+  const questionOmissionsRemoved = fixtures.contextManifest.omissions.filter(
+    (omission) =>
+      omission.sourceClass !== FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION,
+  );
+  const oversizedQuestionSelectionBase = {
+    ...fixtures.contextManifest,
+    selectedIntakeQuestion: {
+      questionTarget: {
+        intakeRunId: intakeRunId('intake_p0-context-question'),
+        intakeRunVersion: intakeRunVersion(1),
+        clarificationQuestionId: clarificationQuestionId(
+          'clarification-question_p0-context-question',
+        ),
+        questionSpecDigest: ONE,
+        questionDigest: TWO,
+      },
+      projectionDigest: THREE,
+      selectedContentDigest: ONE,
+      selectedContentByteLength: INTERACTION_MAXIMUM_CONTEXT_ACTIVE_QUESTION_BYTES + 1,
+    },
+    omissions: questionOmissionsRemoved,
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...oversizedQuestionSelectionBase,
+          manifestDigest: digest(
+            frontstageContextManifestProjection(oversizedQuestionSelectionBase),
+          ),
+        },
+        digests,
+      ),
+    /active Intake Question content byte length is outside its budget/,
+  );
+
+  const invalidOmissionBase = {
+    ...fixtures.contextManifest,
+    omissions: [
+      ...fixtures.contextManifest.omissions,
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.FOCUS,
+        reasonCode: FrontstageContextOmissionReason.BYTE_BUDGET,
+        omittedSourceDigests: [ONE],
+      },
+    ],
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...invalidOmissionBase,
+          manifestDigest: digest(frontstageContextManifestProjection(invalidOmissionBase)),
+        },
+        digests,
+      ),
+    /omission reason is invalid/,
+  );
+
+  const falseQuestionOmissionBase = {
+    ...fixtures.contextManifest,
+    omissions: fixtures.contextManifest.omissions.map((omission) =>
+      omission.sourceClass === FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION
+        ? {
+            sourceClass: omission.sourceClass,
+            reasonCode: FrontstageContextOmissionReason.BYTE_BUDGET,
+            omittedSourceDigests: [ONE],
+          }
+        : omission,
+    ),
+  } satisfies FrontstageContextManifestProjectionInput;
+  const falseQuestionOmissionManifest = decodeFrontstageContextManifest(
+    {
+      ...falseQuestionOmissionBase,
+      manifestDigest: digest(frontstageContextManifestProjection(falseQuestionOmissionBase)),
+    },
+    digests,
+  );
+  const falseQuestionOmissionOperationBase = {
+    ...contextOperationInput,
+    contextManifestRef: {
+      id: falseQuestionOmissionManifest.id,
+      digest: falseQuestionOmissionManifest.manifestDigest,
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const falseQuestionOmissionOperation = decodeInteractionOperation(
+    {
+      ...falseQuestionOmissionOperationBase,
+      operationDigest: digest(interactionOperationProjection(falseQuestionOmissionOperationBase)),
+    },
+    digests,
+  );
+  if (falseQuestionOmissionOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('False Question Omission Operation must remain reserved');
+  }
+  assert.throws(
+    () =>
+      assertFrontstageContextManifestReservationChain({
+        session: fixtures.contextSession,
+        currentMessage: fixtures.message,
+        focus: fixtures.focus,
+        manifest: falseQuestionOmissionManifest,
+        operation: falseQuestionOmissionOperation,
+      }),
+    /without Question Focus must record only a not-present Question source/,
+  );
+});
+
+void test('P0 clarification Handoff preserves existing M2.5 Question authority', () => {
+  const fixtures = createFixtures();
+  const questionTarget = {
+    intakeRunId: intakeRunId('intake_p0-clarification'),
+    intakeRunVersion: intakeRunVersion(2),
+    clarificationQuestionId: clarificationQuestionId('clarification-question_p0-clarification'),
+    questionSpecDigest: ONE,
+    questionDigest: TWO,
+  };
+  const focusBase = {
+    id: focusBindingId('focus-binding_p0-clarification'),
+    schemaVersion: 1 as const,
+    sessionId: fixtures.session.id,
+    basedOnSessionVersion: fixtures.session.version,
+    kind: InteractionFocusKind.INTAKE_QUESTION,
+    questionTarget,
+    createdAt: NOW,
+  } satisfies FocusBindingProjectionInput;
+  const focus = decodeFocusBinding(
+    { ...focusBase, focusDigest: digest(focusBindingProjection(focusBase)) },
+    digests,
+  );
+  const { sessionDigest: priorSessionDigest, ...sessionInput } = fixtures.session;
+  void priorSessionDigest;
+  const sessionBase = {
+    ...sessionInput,
+    version: interactionSessionVersion(2),
+    currentFocusRef: { id: focus.id, digest: focus.focusDigest },
+  } satisfies InteractionSessionProjectionInput;
+  const session = decodeInteractionSession(
+    { ...sessionBase, sessionDigest: digest(interactionSessionProjection(sessionBase)) },
+    digests,
+  );
+  const questionManifestBase = {
+    ...fixtures.contextManifest,
+    id: frontstageContextManifestId('frontstage-context-manifest_p0-question'),
+    operationId: interactionOperationId('interaction-operation_p0-question-context'),
+    currentMessageRef: { id: fixtures.message.id, digest: fixtures.message.messageDigest },
+    currentMessageContentDigest: fixtures.message.contentDigest,
+    currentMessageContentByteLength: fixtures.message.contentByteLength,
+    focusRef: { id: focus.id, digest: focus.focusDigest },
+    selectedGoalSummaries: [],
+    selectedIntakeQuestion: {
+      questionTarget,
+      projectionDigest: THREE,
+      selectedContentDigest: TWO,
+      selectedContentByteLength: 64,
+    },
+    omissions: [
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.PRIOR_MESSAGE,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.GOAL_SUMMARY,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+    ],
+  } satisfies FrontstageContextManifestProjectionInput;
+  const questionManifest = decodeFrontstageContextManifest(
+    {
+      ...questionManifestBase,
+      manifestDigest: digest(frontstageContextManifestProjection(questionManifestBase)),
+    },
+    digests,
+  );
+  const questionOperationBase = {
+    id: questionManifest.operationId,
+    schemaVersion: 1 as const,
+    version: questionManifest.reservedOperationVersion,
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: questionManifest.currentMessageRef,
+    operationKind: InteractionOperationKind.ROUTE,
+    contextManifestRef: { id: questionManifest.id, digest: questionManifest.manifestDigest },
+    assistantProfile: questionManifest.assistantProfile,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: LATER,
+  } satisfies InteractionOperationProjectionInput;
+  const questionOperation = decodeInteractionOperation(
+    {
+      ...questionOperationBase,
+      operationDigest: digest(interactionOperationProjection(questionOperationBase)),
+    },
+    digests,
+  );
+  if (questionOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('Question Context Operation must remain reserved');
+  }
+  assert.doesNotThrow(() =>
+    assertFrontstageContextManifestReservationChain({
+      session,
+      currentMessage: fixtures.message,
+      focus,
+      manifest: questionManifest,
+      operation: questionOperation,
+    }),
+  );
+  const selectedAndOmittedQuestionBase = {
+    ...questionManifest,
+    omissions: [
+      ...questionManifest.omissions,
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION,
+        reasonCode: FrontstageContextOmissionReason.BYTE_BUDGET,
+        omittedSourceDigests: [questionTarget.questionDigest],
+      },
+    ],
+  } satisfies FrontstageContextManifestProjectionInput;
+  assert.throws(
+    () =>
+      decodeFrontstageContextManifest(
+        {
+          ...selectedAndOmittedQuestionBase,
+          manifestDigest: digest(
+            frontstageContextManifestProjection(selectedAndOmittedQuestionBase),
+          ),
+        },
+        digests,
+      ),
+    /selected Intake Question cannot also be omitted/,
+  );
+
+  const { selectedIntakeQuestion: selectedQuestion, ...questionManifestWithoutSelection } =
+    questionManifestBase;
+  void selectedQuestion;
+  const omittedQuestionManifestBase = {
+    ...questionManifestWithoutSelection,
+    omissions: [
+      ...questionManifestBase.omissions,
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION,
+        reasonCode: FrontstageContextOmissionReason.BYTE_BUDGET,
+        omittedSourceDigests: [questionTarget.questionDigest],
+      },
+    ],
+  } satisfies FrontstageContextManifestProjectionInput;
+  const omittedQuestionManifest = decodeFrontstageContextManifest(
+    {
+      ...omittedQuestionManifestBase,
+      manifestDigest: digest(frontstageContextManifestProjection(omittedQuestionManifestBase)),
+    },
+    digests,
+  );
+  const omittedQuestionOperationBase = {
+    ...questionOperationBase,
+    contextManifestRef: {
+      id: omittedQuestionManifest.id,
+      digest: omittedQuestionManifest.manifestDigest,
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const omittedQuestionOperation = decodeInteractionOperation(
+    {
+      ...omittedQuestionOperationBase,
+      operationDigest: digest(interactionOperationProjection(omittedQuestionOperationBase)),
+    },
+    digests,
+  );
+  if (omittedQuestionOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('Omitted Question Operation must remain reserved');
+  }
+  assert.doesNotThrow(() =>
+    assertFrontstageContextManifestReservationChain({
+      session,
+      currentMessage: fixtures.message,
+      focus,
+      manifest: omittedQuestionManifest,
+      operation: omittedQuestionOperation,
+    }),
+  );
+  const handoffBase = {
+    id: interactionMessageHandoffId('interaction-message-handoff_p0-clarification'),
+    schemaVersion: 1 as const,
+    kind: InteractionMessageHandoffKind.INTAKE_CLARIFICATION,
+    sessionId: session.id,
+    messageRef: { id: fixtures.message.id, digest: fixtures.message.messageDigest },
+    focusRef: { id: focus.id, digest: focus.focusDigest },
+    questionTarget,
+    admittedUserContent: fixtures.message.content,
+    admittedContentDigest: fixtures.message.contentDigest,
+    intakeCommandId: commandId('command_p0-clarification'),
+    canonicalCommandInputDigest: THREE,
+    createdAt: LATER,
+  } satisfies InteractionMessageHandoffProjectionInput;
+  const handoff = decodeInteractionMessageHandoff(
+    { ...handoffBase, handoffDigest: digest(interactionMessageHandoffProjection(handoffBase)) },
+    digests,
+  );
+  if (handoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+    assert.fail('Clarification Handoff must retain its discriminant');
+  }
+  assert.equal(
+    handoff.handoffDigest,
+    'sha256:4a05c559f8f4b8dcf319f96c5c44e0aaf914acf927fb3e525b33ff4e751e198b',
+  );
+  assertEveryTopLevelFieldIsBound(
+    interactionMessageHandoffProjection(handoff),
+    handoff.handoffDigest,
+  );
+  assert.doesNotThrow(() =>
+    assertInteractionClarificationHandoffChainInvariant({
+      session,
+      message: fixtures.message,
+      focus,
+      handoff,
+    }),
+  );
+  assert.throws(
+    () =>
+      decodeInteractionMessageHandoff(
+        { ...handoff, pendingActionRef: fixtures.resolution.pendingActionRef },
+        digests,
+      ),
+    /unrecognized key/i,
+  );
+  assert.throws(
+    () => decodeInteractionMessageHandoff({ ...handoff, kind: 'UNKNOWN_HANDOFF_KIND' }, digests),
+    /invalid discriminator/i,
+  );
+  const substitutedQuestionHandoffBase = {
+    ...handoffBase,
+    questionTarget: { ...questionTarget, questionDigest: THREE },
+  } satisfies InteractionMessageHandoffProjectionInput;
+  const substitutedQuestionHandoff = decodeInteractionMessageHandoff(
+    {
+      ...substitutedQuestionHandoffBase,
+      handoffDigest: digest(interactionMessageHandoffProjection(substitutedQuestionHandoffBase)),
+    },
+    digests,
+  );
+  if (substitutedQuestionHandoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+    assert.fail('Substituted Question Handoff must remain a clarification member');
+  }
+  assert.throws(
+    () =>
+      assertInteractionClarificationHandoffChainInvariant({
+        session,
+        message: fixtures.message,
+        focus,
+        handoff: substitutedQuestionHandoff,
+      }),
+    /exact Session, Message, Focus, and Question/,
+  );
+
+  const advancedSessionBase = {
+    ...sessionBase,
+    version: interactionSessionVersion(3),
+    updatedAt: MIDDLE,
+  } satisfies InteractionSessionProjectionInput;
+  const advancedSession = decodeInteractionSession(
+    {
+      ...advancedSessionBase,
+      sessionDigest: digest(interactionSessionProjection(advancedSessionBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertInteractionClarificationHandoffChainInvariant({
+        session: advancedSession,
+        message: fixtures.message,
+        focus,
+        handoff,
+      }),
+    /current Session and Message/,
+  );
+  assert.throws(
+    () =>
+      assertInteractionActionChainInvariant({
+        originatingMessage: fixtures.message,
+        routeDecision: fixtures.decision,
+        pendingAction: fixtures.pendingAction,
+        resolution: fixtures.resolution,
+        reservation: fixtures.reservation,
+        handoff: handoff as never,
+      }),
+    /authorized Intake Action handoff/,
+  );
 });
 
 void test('action authority provenance, confirmation, and causal ordering', () => {
@@ -2392,6 +3205,7 @@ void test('[M26-D02] canonical golden vectors', () => {
     session: fixtures.session.sessionDigest,
     message: fixtures.message.messageDigest,
     focus: fixtures.focus.focusDigest,
+    contextManifest: fixtures.contextManifest.manifestDigest,
     proposal: fixtures.proposal.proposalDigest,
     decision: fixtures.decision.decisionDigest,
     pendingAction: fixtures.pendingAction.pendingActionDigest,
@@ -2410,13 +3224,14 @@ void test('[M26-D02] canonical golden vectors', () => {
     session: 'sha256:a651f26e725bd77fc64c92a746700df72eb9455509ec691f071cb08522306bf8',
     message: 'sha256:50b229eae7c553a2357280c6478d62a18fa26dd2486e6a7cbedc1c872648bf16',
     focus: 'sha256:a7259d55c773e90ebef398de8dd76fcde8143d9e23beb7734c10f8534d1912f1',
-    proposal: 'sha256:6517f54e132e39a4b821b03493c2183f94dd3b2f6c3de1bdd00501a15d101b97',
+    contextManifest: 'sha256:c3b9a279990d3864640b1df7b9be57e5c9b3281c30b0ec52f7914efe4da09b3e',
+    proposal: 'sha256:08185238dcc56e965d02aa9b0f15299ef9abe4e9cf58685d1200d6da7ff7d5f3',
     decision: 'sha256:8e087d54fa593f191b4609969bfe4828bc153a93dfe56476d810880b03107c4a',
     pendingAction: 'sha256:1fa4a4092908e7cfb3bb9f27da7fbe3b71aeb29808ebb10655364dfb52762e47',
     resolution: 'sha256:8d02d48d078e5d3115aaf478ead51a2fc186c12f26fd1287bb5c7a9db913a385',
     reservation: 'sha256:9251019400e2c57edbeb1f6d0e4dc8ac82afd511364e20638c72067850ed0c19',
     outcome: 'sha256:b5ff78714528468a5ae063ae4c7c383d044b3b889757469b579da039f047cdc3',
-    handoff: 'sha256:0256bc1babeabbe4f57b4fca6fe0881fe6e4574a4ef639e818f2bc818c928303',
+    handoff: 'sha256:31a2f13329e6f4b03d93861fc011a72fef1db43d4efe0cda7c0bb878dd22a538',
     answer: 'sha256:8965a2113cb9fe234f22f8dbc8ea323718da7d36c50a8d3a1b84bbcf1f8670ad',
     operation: 'sha256:05a114dea91fd19aa11805acb037a289623ef0b17f0da5aec377748b6b0b20c8',
   });
@@ -2438,6 +3253,7 @@ void test('[M26-D02] canonical golden vectors', () => {
     [interactionSessionProjection(fixtures.session), actual.session],
     [interactionMessageProjection(fixtures.message), actual.message],
     [focusBindingProjection(fixtures.focus), actual.focus],
+    [frontstageContextManifestProjection(fixtures.contextManifest), actual.contextManifest],
     [routeProposalProjection(fixtures.proposal), actual.proposal],
     [routeDecisionProjection(fixtures.decision), actual.decision],
     [pendingActionProjection(fixtures.pendingAction), actual.pendingAction],

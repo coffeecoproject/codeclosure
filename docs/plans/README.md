@@ -24,8 +24,10 @@ contract passed bounded review on 2026-08-14. Slice 1's Interaction Domain,
 strict codecs, lifecycle/relationship invariants, canonical digests, and
 deterministic Runtime policy also passed bounded review on 2026-08-14. Slice 2
 SQLite Interaction authority is in progress through policy/schema,
-Session/Message, Operation failure closure, and Focus foundations; it is not
-complete. M2.7 remains a separate proposal whose ADRs are not binding.
+Session/Message, Operation failure closure, and Focus foundations. Its pre-B1
+retained Context Manifest and discriminated Intake Handoff Domain contracts
+passed bounded P0 review on 2026-08-15; Slice 2 is not complete. M2.7 remains a
+separate proposal whose ADRs are not binding.
 
 - [M1 deterministic skeleton](m1-deterministic-skeleton.md)
 - [M1 milestone acceptance plan](m1-acceptance-plan.md)

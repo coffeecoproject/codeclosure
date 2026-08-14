@@ -66,6 +66,13 @@ export const INTERACTION_MAXIMUM_SESSION_MESSAGES = 512;
 export const INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES = 2_097_152;
 export const INTERACTION_MAXIMUM_RETAINED_ANSWER_BYTES = 16_384;
 export const INTERACTION_MAXIMUM_CLARIFICATION_OR_EXPLANATION_BYTES = 2_048;
+export const INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGES = 8;
+export const INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGE_BYTES = 4_096;
+export const INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGE_TOTAL_BYTES = 32_768;
+export const INTERACTION_MAXIMUM_CONTEXT_GOAL_SUMMARIES = 20;
+export const INTERACTION_MAXIMUM_CONTEXT_ACTIVE_QUESTION_BYTES = 2_048;
+export const INTERACTION_MAXIMUM_CONTEXT_PACKAGE_BYTES = 65_536;
+export const INTERACTION_MAXIMUM_CONTEXT_MANIFEST_ENTRIES = 64;
 
 export const InteractionSessionState = {
   OPEN: 'OPEN',
@@ -254,6 +261,30 @@ export const InteractionActionOutcomeDisposition = {
 } as const;
 export type InteractionActionOutcomeDisposition =
   (typeof InteractionActionOutcomeDisposition)[keyof typeof InteractionActionOutcomeDisposition];
+
+export const InteractionMessageHandoffKind = {
+  AUTHORIZED_INTAKE_ACTION: 'AUTHORIZED_INTAKE_ACTION',
+  INTAKE_CLARIFICATION: 'INTAKE_CLARIFICATION',
+} as const;
+export type InteractionMessageHandoffKind =
+  (typeof InteractionMessageHandoffKind)[keyof typeof InteractionMessageHandoffKind];
+
+export const FrontstageContextOmissionSourceClass = {
+  PRIOR_MESSAGE: 'PRIOR_MESSAGE',
+  FOCUS: 'FOCUS',
+  GOAL_SUMMARY: 'GOAL_SUMMARY',
+  ACTIVE_INTAKE_QUESTION: 'ACTIVE_INTAKE_QUESTION',
+} as const;
+export type FrontstageContextOmissionSourceClass =
+  (typeof FrontstageContextOmissionSourceClass)[keyof typeof FrontstageContextOmissionSourceClass];
+
+export const FrontstageContextOmissionReason = {
+  NOT_PRESENT: 'NOT_PRESENT',
+  SELECTION_LIMIT: 'SELECTION_LIMIT',
+  BYTE_BUDGET: 'BYTE_BUDGET',
+} as const;
+export type FrontstageContextOmissionReason =
+  (typeof FrontstageContextOmissionReason)[keyof typeof FrontstageContextOmissionReason];
 
 export const InteractionOperationResultKind = {
   ROUTE_DECIDED: 'ROUTE_DECIDED',
@@ -622,6 +653,58 @@ export interface InteractionActionOutcome {
   readonly outcomeDigest: Sha256Digest;
 }
 
+export interface FrontstageContextPriorMessageSelection {
+  readonly messageRef: InteractionDigestRef<InteractionMessageId>;
+  readonly selectedContentDigest: Sha256Digest;
+  readonly selectedContentByteLength: number;
+}
+
+export interface FrontstageContextGoalSummarySelection {
+  readonly goalTarget: InteractionGoalTargetRef;
+  readonly projectionDigest: Sha256Digest;
+}
+
+export interface FrontstageContextIntakeQuestionSelection {
+  readonly questionTarget: InteractionQuestionTargetRef;
+  readonly projectionDigest: Sha256Digest;
+  readonly selectedContentDigest: Sha256Digest;
+  readonly selectedContentByteLength: number;
+}
+
+export interface FrontstageContextManifestOmission {
+  readonly sourceClass: FrontstageContextOmissionSourceClass;
+  readonly reasonCode: FrontstageContextOmissionReason;
+  readonly omittedSourceDigests: readonly Sha256Digest[];
+}
+
+export interface FrontstageContextManifest {
+  readonly id: FrontstageContextManifestId;
+  readonly schemaVersion: 1;
+  readonly sessionId: InteractionSessionId;
+  readonly operationId: InteractionOperationId;
+  readonly reservedOperationVersion: InteractionOperationVersion;
+  readonly currentMessageRef: InteractionDigestRef<InteractionMessageId>;
+  readonly currentMessageContentDigest: Sha256Digest;
+  readonly currentMessageContentByteLength: number;
+  readonly selectedPriorMessages: readonly FrontstageContextPriorMessageSelection[];
+  readonly focusRef?: InteractionDigestRef<FocusBindingId>;
+  readonly selectedGoalSummaries: readonly FrontstageContextGoalSummarySelection[];
+  readonly selectedIntakeQuestion?: FrontstageContextIntakeQuestionSelection;
+  readonly omissions: readonly FrontstageContextManifestOmission[];
+  readonly configuration: InteractionVersionedDigestRef;
+  readonly contextCompiler: InteractionVersionedDigestRef;
+  readonly assistantProfile: InteractionVersionedDigestRef;
+  readonly assistantAdapter: InteractionVersionedDigestRef;
+  readonly responseContract: InteractionVersionedDigestRef;
+  readonly routingPolicy: InteractionVersionedDigestRef;
+  readonly retentionProfile: InteractionVersionedDigestRef;
+  readonly budgetProfile: InteractionVersionedDigestRef;
+  readonly packageDigest: Sha256Digest;
+  readonly packageByteLength: number;
+  readonly createdAt: IsoTimestamp;
+  readonly manifestDigest: Sha256Digest;
+}
+
 export interface InteractionActionChain {
   readonly originatingMessage: InteractionMessage;
   readonly resolutionMessage?: InteractionMessage;
@@ -630,7 +713,7 @@ export interface InteractionActionChain {
   readonly resolution: PendingActionResolution;
   readonly reservation?: InteractionActionReservation;
   readonly outcome?: InteractionActionOutcome;
-  readonly handoff?: InteractionMessageHandoff;
+  readonly handoff?: AuthorizedIntakeActionMessageHandoff;
 }
 
 export interface FrontstageAnswerChain {
@@ -643,19 +726,48 @@ export interface FrontstageAnswerChain {
   readonly answerOperation: CompletedInteractionOperation;
 }
 
-export interface InteractionMessageHandoff {
+interface InteractionMessageHandoffCommon {
   readonly id: InteractionMessageHandoffId;
   readonly schemaVersion: 1;
   readonly sessionId: InteractionSessionId;
   readonly messageRef: InteractionDigestRef<InteractionMessageId>;
-  readonly pendingActionRef: InteractionDigestRef<PendingActionId>;
-  readonly resolutionRef: InteractionDigestRef<PendingActionResolutionId>;
-  readonly reservationRef: InteractionDigestRef<InteractionActionReservationId>;
   readonly admittedUserContent: string;
   readonly admittedContentDigest: Sha256Digest;
   readonly intakeCommandId: CommandId;
   readonly createdAt: IsoTimestamp;
   readonly handoffDigest: Sha256Digest;
+}
+
+export interface AuthorizedIntakeActionMessageHandoff extends InteractionMessageHandoffCommon {
+  readonly kind: typeof InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION;
+  readonly pendingActionRef: InteractionDigestRef<PendingActionId>;
+  readonly resolutionRef: InteractionDigestRef<PendingActionResolutionId>;
+  readonly reservationRef: InteractionDigestRef<InteractionActionReservationId>;
+}
+
+export interface IntakeClarificationMessageHandoff extends InteractionMessageHandoffCommon {
+  readonly kind: typeof InteractionMessageHandoffKind.INTAKE_CLARIFICATION;
+  readonly focusRef: InteractionDigestRef<FocusBindingId>;
+  readonly questionTarget: InteractionQuestionTargetRef;
+  readonly canonicalCommandInputDigest: Sha256Digest;
+}
+
+export type InteractionMessageHandoff =
+  AuthorizedIntakeActionMessageHandoff | IntakeClarificationMessageHandoff;
+
+export interface FrontstageContextManifestReservationChain {
+  readonly session: InteractionSession;
+  readonly currentMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly manifest: FrontstageContextManifest;
+  readonly operation: ReservedInteractionOperation;
+}
+
+export interface InteractionClarificationHandoffChain {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus: FocusBinding;
+  readonly handoff: IntakeClarificationMessageHandoff;
 }
 
 export interface FrontstageAnswer {
@@ -1003,6 +1115,28 @@ export function assertInteractionMessageInvariant(message: InteractionMessage): 
       InteractionContentOmissionReason,
       message.omissionReason,
       'Interaction content omission reason',
+    );
+  }
+}
+
+/** Owns the one current retained user Message relationship reused by later chains. */
+function assertCurrentRetainedUserMessage(
+  session: InteractionSession,
+  message: InteractionMessage,
+): asserts message is RetainedInteractionMessage & UserInteractionMessageOrigin {
+  assertInteractionSessionInvariant(session);
+  assertInteractionMessageInvariant(message);
+  if (
+    session.state !== InteractionSessionState.OPEN ||
+    session.version <= 1 ||
+    message.role !== InteractionMessageRole.USER ||
+    message.retention !== InteractionContentRetention.RETAINED ||
+    message.sessionId !== session.id ||
+    message.principalRef !== session.principalRef ||
+    message.createdAt !== session.updatedAt
+  ) {
+    throw new DomainInvariantError(
+      'Interaction current retained user Message does not bind the exact current Session and Message',
     );
   }
 }
@@ -1453,6 +1587,285 @@ export function assertInteractionActionOutcomeInvariant(outcome: InteractionActi
   sha256Digest(outcome.outcomeDigest);
 }
 
+export function assertFrontstageContextManifestInvariant(
+  manifest: FrontstageContextManifest,
+): void {
+  frontstageContextManifestId(manifest.id);
+  interactionSessionId(manifest.sessionId);
+  interactionOperationId(manifest.operationId);
+  interactionOperationVersion(manifest.reservedOperationVersion);
+  interactionMessageId(manifest.currentMessageRef.id);
+  assertDigestRef(manifest.currentMessageRef);
+  sha256Digest(manifest.currentMessageContentDigest);
+  assertNonNegativeInteger(
+    manifest.currentMessageContentByteLength,
+    'Frontstage Context current Message content byte length',
+  );
+  if (
+    manifest.currentMessageContentByteLength === 0 ||
+    manifest.currentMessageContentByteLength > INTERACTION_MAXIMUM_MESSAGE_BYTES
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context current Message content byte length is outside its budget',
+    );
+  }
+
+  if (manifest.selectedPriorMessages.length > INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGES) {
+    throw new DomainInvariantError('Frontstage Context selected too many prior Messages');
+  }
+  let priorMessageBytes = 0;
+  for (const selection of manifest.selectedPriorMessages) {
+    interactionMessageId(selection.messageRef.id);
+    assertDigestRef(selection.messageRef);
+    sha256Digest(selection.selectedContentDigest);
+    assertNonNegativeInteger(
+      selection.selectedContentByteLength,
+      'Frontstage Context prior Message content byte length',
+    );
+    if (
+      selection.selectedContentByteLength === 0 ||
+      selection.selectedContentByteLength > INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGE_BYTES
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context prior Message content byte length is outside its budget',
+      );
+    }
+    priorMessageBytes += selection.selectedContentByteLength;
+  }
+  assertUnique(
+    manifest.selectedPriorMessages.map((selection) => selection.messageRef.id),
+    'Frontstage Context selected prior Message references',
+  );
+  if (
+    manifest.selectedPriorMessages.some(
+      (selection) => selection.messageRef.id === manifest.currentMessageRef.id,
+    )
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context current Message cannot also be selected as prior context',
+    );
+  }
+  if (priorMessageBytes > INTERACTION_MAXIMUM_CONTEXT_PRIOR_MESSAGE_TOTAL_BYTES) {
+    throw new DomainInvariantError('Frontstage Context prior Message content exceeds its budget');
+  }
+
+  if (manifest.focusRef !== undefined) {
+    focusBindingId(manifest.focusRef.id);
+    assertDigestRef(manifest.focusRef);
+  }
+  if (manifest.selectedGoalSummaries.length > INTERACTION_MAXIMUM_CONTEXT_GOAL_SUMMARIES) {
+    throw new DomainInvariantError('Frontstage Context selected too many Goal summaries');
+  }
+  for (const selection of manifest.selectedGoalSummaries) {
+    assertInteractionGoalTargetRefInvariant(selection.goalTarget);
+    sha256Digest(selection.projectionDigest);
+  }
+  assertUnique(
+    manifest.selectedGoalSummaries.map((selection) => selection.goalTarget.goalId),
+    'Frontstage Context selected Goal summaries',
+  );
+
+  if (manifest.selectedIntakeQuestion !== undefined) {
+    if (manifest.focusRef === undefined) {
+      throw new DomainInvariantError(
+        'Frontstage Context Intake Question selection requires exact Focus',
+      );
+    }
+    assertInteractionQuestionTargetRefInvariant(manifest.selectedIntakeQuestion.questionTarget);
+    sha256Digest(manifest.selectedIntakeQuestion.projectionDigest);
+    sha256Digest(manifest.selectedIntakeQuestion.selectedContentDigest);
+    assertNonNegativeInteger(
+      manifest.selectedIntakeQuestion.selectedContentByteLength,
+      'Frontstage Context active Intake Question content byte length',
+    );
+    if (
+      manifest.selectedIntakeQuestion.selectedContentByteLength === 0 ||
+      manifest.selectedIntakeQuestion.selectedContentByteLength >
+        INTERACTION_MAXIMUM_CONTEXT_ACTIVE_QUESTION_BYTES
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context active Intake Question content byte length is outside its budget',
+      );
+    }
+  }
+
+  const omissionKeys: string[] = [];
+  const omittedDigestsBySource = new Map<FrontstageContextOmissionSourceClass, Set<string>>();
+  for (const omission of manifest.omissions) {
+    assertKnown(
+      FrontstageContextOmissionSourceClass,
+      omission.sourceClass,
+      'Frontstage Context omission source class',
+    );
+    assertKnown(
+      FrontstageContextOmissionReason,
+      omission.reasonCode,
+      'Frontstage Context omission reason',
+    );
+    omission.omittedSourceDigests.forEach(sha256Digest);
+    assertUnique(omission.omittedSourceDigests, 'Frontstage Context omitted source digests');
+    const omissionKey = `${omission.sourceClass}:${omission.reasonCode}`;
+    omissionKeys.push(omissionKey);
+    if (
+      (omission.reasonCode === FrontstageContextOmissionReason.NOT_PRESENT) !==
+      (omission.omittedSourceDigests.length === 0)
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context NOT_PRESENT omission alone must have no source digest',
+      );
+    }
+    if (
+      (omission.sourceClass === FrontstageContextOmissionSourceClass.FOCUS &&
+        omission.reasonCode !== FrontstageContextOmissionReason.NOT_PRESENT) ||
+      (omission.sourceClass === FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION &&
+        omission.reasonCode === FrontstageContextOmissionReason.SELECTION_LIMIT)
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context omission reason is invalid for its source class',
+      );
+    }
+    const priorDigests = omittedDigestsBySource.get(omission.sourceClass) ?? new Set<string>();
+    for (const digest of omission.omittedSourceDigests) {
+      if (priorDigests.has(digest)) {
+        throw new DomainInvariantError(
+          'Frontstage Context source cannot have multiple omission reasons',
+        );
+      }
+      priorDigests.add(digest);
+    }
+    omittedDigestsBySource.set(omission.sourceClass, priorDigests);
+  }
+  assertUnique(omissionKeys, 'Frontstage Context omission source/reason pairs');
+
+  const hasNotPresent = (sourceClass: FrontstageContextOmissionSourceClass): boolean =>
+    manifest.omissions.some(
+      (omission) =>
+        omission.sourceClass === sourceClass &&
+        omission.reasonCode === FrontstageContextOmissionReason.NOT_PRESENT,
+    );
+  const hasAnyOmission = (sourceClass: FrontstageContextOmissionSourceClass): boolean =>
+    manifest.omissions.some((omission) => omission.sourceClass === sourceClass);
+  if (
+    (manifest.focusRef === undefined) !==
+    hasNotPresent(FrontstageContextOmissionSourceClass.FOCUS)
+  ) {
+    throw new DomainInvariantError('Frontstage Context Focus presence and omission do not match');
+  }
+  if (
+    manifest.selectedPriorMessages.length === 0 &&
+    !hasAnyOmission(FrontstageContextOmissionSourceClass.PRIOR_MESSAGE)
+  ) {
+    throw new DomainInvariantError('Frontstage Context empty prior Messages require an omission');
+  }
+  if (
+    manifest.selectedGoalSummaries.length === 0 &&
+    !hasAnyOmission(FrontstageContextOmissionSourceClass.GOAL_SUMMARY)
+  ) {
+    throw new DomainInvariantError('Frontstage Context empty Goal summaries require an omission');
+  }
+  if (
+    manifest.selectedIntakeQuestion === undefined &&
+    !hasAnyOmission(FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context empty Intake Question selection requires an omission',
+    );
+  }
+  if (
+    manifest.selectedPriorMessages.length > 0 &&
+    hasNotPresent(FrontstageContextOmissionSourceClass.PRIOR_MESSAGE)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context selected prior Messages cannot be marked not present',
+    );
+  }
+  if (
+    manifest.selectedGoalSummaries.length > 0 &&
+    hasNotPresent(FrontstageContextOmissionSourceClass.GOAL_SUMMARY)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context selected Goal summaries cannot be marked not present',
+    );
+  }
+  if (
+    manifest.selectedIntakeQuestion !== undefined &&
+    hasAnyOmission(FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context selected Intake Question cannot also be omitted',
+    );
+  }
+  for (const sourceClass of Object.values(FrontstageContextOmissionSourceClass)) {
+    if (
+      hasNotPresent(sourceClass) &&
+      manifest.omissions.some(
+        (omission) =>
+          omission.sourceClass === sourceClass &&
+          omission.reasonCode !== FrontstageContextOmissionReason.NOT_PRESENT,
+      )
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context source class cannot be absent and budget-omitted together',
+      );
+    }
+  }
+
+  const selectedDigestsBySource = new Map<FrontstageContextOmissionSourceClass, Set<string>>([
+    [
+      FrontstageContextOmissionSourceClass.PRIOR_MESSAGE,
+      new Set(manifest.selectedPriorMessages.map((selection) => selection.messageRef.digest)),
+    ],
+    [
+      FrontstageContextOmissionSourceClass.GOAL_SUMMARY,
+      new Set(manifest.selectedGoalSummaries.map((selection) => selection.projectionDigest)),
+    ],
+  ]);
+  for (const [sourceClass, selectedDigests] of selectedDigestsBySource) {
+    const omittedDigests = omittedDigestsBySource.get(sourceClass);
+    if (
+      omittedDigests !== undefined &&
+      [...selectedDigests].some((digest) => omittedDigests.has(digest))
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context source cannot be selected and omitted together',
+      );
+    }
+  }
+
+  const manifestEntryCount =
+    1 +
+    manifest.selectedPriorMessages.length +
+    (manifest.focusRef === undefined ? 0 : 1) +
+    manifest.selectedGoalSummaries.length +
+    (manifest.selectedIntakeQuestion === undefined ? 0 : 1) +
+    manifest.omissions.reduce(
+      (count, omission) => count + Math.max(1, omission.omittedSourceDigests.length),
+      0,
+    );
+  if (manifestEntryCount > INTERACTION_MAXIMUM_CONTEXT_MANIFEST_ENTRIES) {
+    throw new DomainInvariantError('Frontstage Context Manifest has too many entries');
+  }
+
+  assertVersionedDigestRef(manifest.configuration, 'Frontstage configuration');
+  assertVersionedDigestRef(manifest.contextCompiler, 'Frontstage Context compiler');
+  assertVersionedDigestRef(manifest.assistantProfile, 'Frontstage Assistant Profile');
+  assertVersionedDigestRef(manifest.assistantAdapter, 'Frontstage Assistant Adapter');
+  assertVersionedDigestRef(manifest.responseContract, 'Frontstage response contract');
+  assertVersionedDigestRef(manifest.routingPolicy, 'Interaction routing policy');
+  assertVersionedDigestRef(manifest.retentionProfile, 'Interaction retention profile');
+  assertVersionedDigestRef(manifest.budgetProfile, 'Frontstage budget profile');
+  sha256Digest(manifest.packageDigest);
+  assertNonNegativeInteger(manifest.packageByteLength, 'Frontstage Context Package byte length');
+  if (
+    manifest.packageByteLength === 0 ||
+    manifest.packageByteLength > INTERACTION_MAXIMUM_CONTEXT_PACKAGE_BYTES
+  ) {
+    throw new DomainInvariantError('Frontstage Context Package byte length is outside its budget');
+  }
+  isoTimestamp(manifest.createdAt);
+  sha256Digest(manifest.manifestDigest);
+}
+
 function sameDigestRef<Id extends string>(
   left: InteractionDigestRef<Id>,
   right: InteractionDigestRef<Id>,
@@ -1478,6 +1891,19 @@ function sameGoalTarget(left: InteractionGoalTargetRef, right: InteractionGoalTa
   );
 }
 
+function sameQuestionTarget(
+  left: InteractionQuestionTargetRef,
+  right: InteractionQuestionTargetRef,
+): boolean {
+  return (
+    left.intakeRunId === right.intakeRunId &&
+    left.intakeRunVersion === right.intakeRunVersion &&
+    left.clarificationQuestionId === right.clarificationQuestionId &&
+    left.questionSpecDigest === right.questionSpecDigest &&
+    left.questionDigest === right.questionDigest
+  );
+}
+
 function samePolicyTrace(
   left: InteractionPolicyTraceEntry,
   right: InteractionPolicyTraceEntry,
@@ -1496,6 +1922,107 @@ function isAuthorizedResolution(resolution: PendingActionResolution): boolean {
     resolution.disposition === PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED ||
     resolution.disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
   );
+}
+
+/**
+ * Owns the non-circular reservation relationship: the Manifest binds the
+ * preallocated Route Operation identity/version, while the Operation binds the
+ * final Manifest digest.
+ */
+export function assertFrontstageContextManifestReservationChain(
+  chain: FrontstageContextManifestReservationChain,
+): void {
+  const { session, currentMessage, focus, manifest, operation } = chain;
+  assertFrontstageContextManifestInvariant(manifest);
+  assertInteractionOperationReservationChain({ session, message: currentMessage, operation });
+
+  if (
+    manifest.sessionId !== session.id ||
+    !sameDigestRef(manifest.currentMessageRef, {
+      id: currentMessage.id,
+      digest: currentMessage.messageDigest,
+    }) ||
+    manifest.currentMessageContentDigest !== currentMessage.contentDigest ||
+    manifest.currentMessageContentByteLength !== currentMessage.contentByteLength ||
+    manifest.operationId !== operation.id ||
+    manifest.reservedOperationVersion !== operation.version ||
+    operation.operationKind !== InteractionOperationKind.ROUTE ||
+    operation.contextManifestRef === undefined ||
+    !sameDigestRef(operation.contextManifestRef, {
+      id: manifest.id,
+      digest: manifest.manifestDigest,
+    }) ||
+    operation.assistantProfile === undefined ||
+    !sameVersionedDigestRef(operation.assistantProfile, manifest.assistantProfile) ||
+    !sameVersionedDigestRef(manifest.configuration, session.configuration) ||
+    !sameVersionedDigestRef(manifest.routingPolicy, session.routingPolicy) ||
+    !sameVersionedDigestRef(manifest.retentionProfile, session.retentionProfile)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context Manifest must bind the exact current Session, Message, and Route reservation',
+    );
+  }
+
+  if (currentMessage.createdAt > manifest.createdAt || manifest.createdAt > operation.reservedAt) {
+    throw new DomainInvariantError('Frontstage Context Manifest reservation has invalid causality');
+  }
+
+  if (
+    !sameOptionalDigestRef(manifest.focusRef, session.currentFocusRef) ||
+    (manifest.focusRef === undefined) !== (focus === undefined)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context Manifest must bind the exact current Focus presence',
+    );
+  }
+  if (focus !== undefined && manifest.focusRef !== undefined) {
+    assertFocusBindingInvariant(focus);
+    if (
+      focus.sessionId !== session.id ||
+      focus.basedOnSessionVersion >= session.version ||
+      !sameDigestRef(manifest.focusRef, { id: focus.id, digest: focus.focusDigest }) ||
+      focus.createdAt > manifest.createdAt
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context Manifest must bind the exact current Focus',
+      );
+    }
+  }
+
+  const questionOmissions = manifest.omissions.filter(
+    (omission) =>
+      omission.sourceClass === FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION,
+  );
+  if (focus?.kind === InteractionFocusKind.INTAKE_QUESTION) {
+    if (manifest.selectedIntakeQuestion !== undefined) {
+      if (
+        !sameQuestionTarget(manifest.selectedIntakeQuestion.questionTarget, focus.questionTarget) ||
+        questionOmissions.length !== 0
+      ) {
+        throw new DomainInvariantError(
+          'Frontstage Context Intake Question must bind or explicitly omit the exact current Question Focus',
+        );
+      }
+    } else if (
+      questionOmissions.length !== 1 ||
+      questionOmissions[0]?.reasonCode !== FrontstageContextOmissionReason.BYTE_BUDGET ||
+      questionOmissions[0].omittedSourceDigests.length !== 1 ||
+      questionOmissions[0].omittedSourceDigests[0] !== focus.questionTarget.questionDigest
+    ) {
+      throw new DomainInvariantError(
+        'Frontstage Context Intake Question must bind or explicitly omit the exact current Question Focus',
+      );
+    }
+  } else if (
+    manifest.selectedIntakeQuestion !== undefined ||
+    questionOmissions.length !== 1 ||
+    questionOmissions[0]?.reasonCode !== FrontstageContextOmissionReason.NOT_PRESENT ||
+    questionOmissions[0].omittedSourceDigests.length !== 0
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context without Question Focus must record only a not-present Question source',
+    );
+  }
 }
 
 /**
@@ -1753,7 +2280,7 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
     throw new DomainInvariantError('An Intake Action Outcome requires its exact message handoff');
   }
   if (handoff !== undefined) {
-    assertInteractionMessageHandoffInvariant(handoff);
+    assertAuthorizedIntakeActionMessageHandoffInvariant(handoff);
     if (handoff.createdAt < reservation.reservedAt) {
       throw new DomainInvariantError('Intake handoff cannot precede its Action Reservation');
     }
@@ -1892,13 +2419,21 @@ export function assertInteractionMessageHandoffInvariant(handoff: InteractionMes
   interactionMessageHandoffId(handoff.id);
   interactionSessionId(handoff.sessionId);
   interactionMessageId(handoff.messageRef.id);
-  pendingActionId(handoff.pendingActionRef.id);
-  pendingActionResolutionId(handoff.resolutionRef.id);
-  interactionActionReservationId(handoff.reservationRef.id);
   assertDigestRef(handoff.messageRef);
-  assertDigestRef(handoff.pendingActionRef);
-  assertDigestRef(handoff.resolutionRef);
-  assertDigestRef(handoff.reservationRef);
+  assertKnown(InteractionMessageHandoffKind, handoff.kind, 'Interaction Message Handoff kind');
+  if (handoff.kind === InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
+    pendingActionId(handoff.pendingActionRef.id);
+    pendingActionResolutionId(handoff.resolutionRef.id);
+    interactionActionReservationId(handoff.reservationRef.id);
+    assertDigestRef(handoff.pendingActionRef);
+    assertDigestRef(handoff.resolutionRef);
+    assertDigestRef(handoff.reservationRef);
+  } else {
+    focusBindingId(handoff.focusRef.id);
+    assertDigestRef(handoff.focusRef);
+    assertInteractionQuestionTargetRefInvariant(handoff.questionTarget);
+    sha256Digest(handoff.canonicalCommandInputDigest);
+  }
   assertNonBlank(handoff.admittedUserContent, 'Interaction handoff content');
   assertUtf8ByteLimit(
     handoff.admittedUserContent,
@@ -1909,6 +2444,52 @@ export function assertInteractionMessageHandoffInvariant(handoff: InteractionMes
   commandId(handoff.intakeCommandId);
   isoTimestamp(handoff.createdAt);
   sha256Digest(handoff.handoffDigest);
+}
+
+function assertAuthorizedIntakeActionMessageHandoffInvariant(
+  handoff: InteractionMessageHandoff,
+): asserts handoff is AuthorizedIntakeActionMessageHandoff {
+  assertInteractionMessageHandoffInvariant(handoff);
+  if (handoff.kind !== InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
+    throw new DomainInvariantError(
+      'Interaction Action chain accepts only an authorized Intake Action handoff',
+    );
+  }
+}
+
+/**
+ * Owns clarification provenance only. The existing M2.5 Question and later
+ * Intake command remain their own authorities; this chain cannot authorize a
+ * Pending Action or synthesize an Answer Binding.
+ */
+export function assertInteractionClarificationHandoffChainInvariant(
+  chain: InteractionClarificationHandoffChain,
+): void {
+  const { session, message, focus, handoff } = chain;
+  assertCurrentRetainedUserMessage(session, message);
+  assertFocusBindingInvariant(focus);
+  assertInteractionMessageHandoffInvariant(handoff);
+
+  if (
+    focus.kind !== InteractionFocusKind.INTAKE_QUESTION ||
+    focus.sessionId !== session.id ||
+    focus.basedOnSessionVersion >= session.version ||
+    session.currentFocusRef === undefined ||
+    !sameDigestRef(session.currentFocusRef, { id: focus.id, digest: focus.focusDigest }) ||
+    handoff.sessionId !== session.id ||
+    !sameDigestRef(handoff.messageRef, { id: message.id, digest: message.messageDigest }) ||
+    !sameDigestRef(handoff.focusRef, { id: focus.id, digest: focus.focusDigest }) ||
+    !sameQuestionTarget(handoff.questionTarget, focus.questionTarget) ||
+    handoff.admittedUserContent !== message.content ||
+    handoff.admittedContentDigest !== message.contentDigest
+  ) {
+    throw new DomainInvariantError(
+      'Intake clarification handoff must preserve the exact Session, Message, Focus, and Question',
+    );
+  }
+  if (message.createdAt > handoff.createdAt || focus.createdAt > handoff.createdAt) {
+    throw new DomainInvariantError('Intake clarification handoff has invalid causal ordering');
+  }
 }
 
 export function assertFrontstageAnswerInvariant(answer: FrontstageAnswer): void {
@@ -2096,24 +2677,16 @@ export function assertInteractionOperationReservationChain(
   chain: InteractionOperationReservationChain,
 ): void {
   const { session, message, operation } = chain;
-  assertInteractionSessionInvariant(session);
-  assertInteractionMessageInvariant(message);
+  assertCurrentRetainedUserMessage(session, message);
   assertInitialInteractionOperationInvariant(operation);
 
   if (
-    session.state !== InteractionSessionState.OPEN ||
-    session.version <= 1 ||
-    message.role !== InteractionMessageRole.USER ||
-    message.retention !== InteractionContentRetention.RETAINED ||
     operation.sessionId !== session.id ||
     operation.expectedSessionVersion !== session.version ||
-    message.sessionId !== session.id ||
-    message.principalRef !== session.principalRef ||
     !sameDigestRef(operation.messageRef, {
       id: message.id,
       digest: message.messageDigest,
     }) ||
-    message.createdAt !== session.updatedAt ||
     operation.reservedAt < message.createdAt ||
     operation.reservedAt < session.updatedAt
   ) {
@@ -2298,10 +2871,19 @@ export function interactionActionOutcomeProjection(
   return projectionWithout(record, 'outcomeDigest');
 }
 
-export type InteractionMessageHandoffProjectionInput = Omit<
-  InteractionMessageHandoff,
-  'handoffDigest'
+export type FrontstageContextManifestProjectionInput = Omit<
+  FrontstageContextManifest,
+  'manifestDigest'
 >;
+export function frontstageContextManifestProjection(
+  record: FrontstageContextManifestProjectionInput,
+): unknown {
+  return projectionWithout(record, 'manifestDigest');
+}
+
+export type InteractionMessageHandoffProjectionInput =
+  | Omit<AuthorizedIntakeActionMessageHandoff, 'handoffDigest'>
+  | Omit<IntakeClarificationMessageHandoff, 'handoffDigest'>;
 export function interactionMessageHandoffProjection(
   record: InteractionMessageHandoffProjectionInput,
 ): unknown {

@@ -249,7 +249,9 @@ Session lifecycle, and user-message SQLite authority with atomic audit,
 typed replay/conflict, Operation reservation and failure/interruption closure,
 unresolved-operation detection, exact Focus/Session CAS with one Focus write
 owner, and strict reopen. Later successful Operation result,
-Pending-Action/action-chain, and recovery transactions, Slice 3 onward, and all
+Pending-Action/action-chain, and recovery transactions have not started. The
+pre-B1 retained Context Manifest and discriminated Intake Handoff Domain
+contracts passed bounded P0 review on 2026-08-15; B1, Slice 3 onward, and all
 M2.7 implementation have not started.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted

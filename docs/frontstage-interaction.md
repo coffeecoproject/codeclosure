@@ -13,10 +13,11 @@ strict reopen for that subset. It also implements serialized Operation
 reservation, failure/interruption closure, and unresolved-reservation
 detection, plus exact Focus/Session CAS with one Focus write owner, typed
 replay/conflict/busy, atomic audit, SQLite backstops, and strict reopen.
-Successful Operation results and the remaining Slice 2 transactions,
-Assistant Adapter, routing composition, Goal query/control, and CLI work remain
-later. The M2.5.1 milestone prerequisite has passed, and the completed M2.5
-Goal Intake boundary remains unchanged.
+The pre-B1 retained Context Manifest and discriminated Intake Handoff Domain
+contracts passed bounded P0 review on 2026-08-15. Successful Operation results
+and the remaining Slice 2 transactions, Assistant Adapter, routing composition,
+Goal query/control, and CLI work remain later. The M2.5.1 milestone prerequisite
+has passed, and the completed M2.5 Goal Intake boundary remains unchanged.
 
 ## Purpose
 
