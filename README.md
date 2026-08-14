@@ -35,10 +35,11 @@ or external-effect authority.
 M2.6 Unified Frontstage Interaction and Control is the current formalization.
 Its M2.5.1 prerequisite is satisfied, ADR 0036 through ADR 0039 are accepted,
 and its exact decision and proof contract passed bounded closure review on
-2026-08-14. Feature implementation is underway: an initial Interaction Domain,
-strict-codec, and deterministic Runtime-policy candidate exists, but its
-bounded review has not passed and no persistence, Assistant Adapter, or
-Frontstage CLI composition has been implemented.
+2026-08-14. The first implementation boundary—Interaction Domain, strict
+codecs, lifecycle and relationship invariants, canonical digest projections,
+and deterministic Runtime policy—also passed bounded review on 2026-08-14.
+SQLite persistence, Assistant Adapter, routing composition, Goal query/control,
+and Frontstage CLI work have not started.
 The candidate scope is one foreground CLI frontstage, natural-language user
 input, an exact immutable pending-action/authorization/dispatch chain for the
 closed new-Intake and Goal-control action set, deterministic direct-or-separate

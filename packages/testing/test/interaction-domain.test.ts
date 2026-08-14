@@ -26,6 +26,8 @@ import {
   PendingActionResolutionDisposition,
   assertFrontstageAnswerChainInvariant,
   assertInteractionActionChainInvariant,
+  assertInteractionOperationTransition,
+  assertInteractionSessionTransition,
   commandId,
   decodeFocusBinding,
   decodeFrontstageAnswer,
@@ -608,8 +610,204 @@ function createFixtures() {
   };
 }
 
+function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof createFixtures>): void {
+  if (fixtures.session.state !== InteractionSessionState.OPEN) {
+    throw new TypeError('Lifecycle fixture must start with an open Interaction Session');
+  }
+  if (fixtures.operation.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Lifecycle fixture must include one completed Interaction Operation');
+  }
+
+  const { sessionDigest, ...openSession } = fixtures.session;
+  void sessionDigest;
+  const decodeSession = (base: InteractionSessionProjectionInput) =>
+    decodeInteractionSession(
+      { ...base, sessionDigest: digest(interactionSessionProjection(base)) },
+      digests,
+    );
+  const closingBase = {
+    ...openSession,
+    version: interactionSessionVersion(2),
+    state: InteractionSessionState.CLOSING,
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  const closing = decodeSession(closingBase);
+  const closedBase = {
+    ...closingBase,
+    version: interactionSessionVersion(3),
+    state: InteractionSessionState.CLOSED,
+    updatedAt: AFTER,
+  } satisfies InteractionSessionProjectionInput;
+  const closed = decodeSession(closedBase);
+  const interruptedBase = {
+    ...openSession,
+    version: interactionSessionVersion(2),
+    state: InteractionSessionState.INTERRUPTED,
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  const interrupted = decodeSession(interruptedBase);
+  const closingInterruptedBase = {
+    ...closingBase,
+    version: interactionSessionVersion(3),
+    state: InteractionSessionState.INTERRUPTED,
+    updatedAt: AFTER,
+  } satisfies InteractionSessionProjectionInput;
+  const closingInterrupted = decodeSession(closingInterruptedBase);
+  const retentionClosedBase = {
+    ...openSession,
+    version: interactionSessionVersion(2),
+    state: InteractionSessionState.CLOSED,
+    terminalReason: InteractionSessionTerminalReason.RETENTION_LIMIT_REACHED,
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  const retentionClosed = decodeSession(retentionClosedBase);
+  const openUpdateBase = {
+    ...openSession,
+    version: interactionSessionVersion(2),
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  const openUpdate = decodeSession(openUpdateBase);
+
+  assert.doesNotThrow(() => assertInteractionSessionTransition(fixtures.session, openUpdate));
+  assert.doesNotThrow(() => assertInteractionSessionTransition(fixtures.session, closing));
+  assert.doesNotThrow(() => assertInteractionSessionTransition(closing, closed));
+  assert.doesNotThrow(() => assertInteractionSessionTransition(fixtures.session, interrupted));
+  assert.doesNotThrow(() => assertInteractionSessionTransition(closing, closingInterrupted));
+  assert.doesNotThrow(() => assertInteractionSessionTransition(fixtures.session, retentionClosed));
+
+  const directNormalCloseBase = {
+    ...openSession,
+    version: interactionSessionVersion(2),
+    state: InteractionSessionState.CLOSED,
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  assert.throws(
+    () =>
+      assertInteractionSessionTransition(fixtures.session, decodeSession(directNormalCloseBase)),
+    /retention limit/,
+  );
+  const reopenedBase = {
+    ...openSession,
+    version: interactionSessionVersion(3),
+    updatedAt: AFTER,
+  } satisfies InteractionSessionProjectionInput;
+  assert.throws(
+    () => assertInteractionSessionTransition(interrupted, decodeSession(reopenedBase)),
+    /terminal Interaction Session/,
+  );
+  const repeatedClosingBase = {
+    ...closingBase,
+    version: interactionSessionVersion(3),
+    updatedAt: AFTER,
+  } satisfies InteractionSessionProjectionInput;
+  assert.throws(
+    () => assertInteractionSessionTransition(closing, decodeSession(repeatedClosingBase)),
+    /lifecycle transition is not allowed/,
+  );
+  const { currentFocusRef, ...closingWithoutFocusInput } = closingBase;
+  void currentFocusRef;
+  const closingWithoutFocus = decodeSession(closingWithoutFocusInput);
+  assert.throws(
+    () => assertInteractionSessionTransition(fixtures.session, closingWithoutFocus),
+    /focus cannot change/,
+  );
+  const replacedConfigurationBase = {
+    ...openSession,
+    version: interactionSessionVersion(2),
+    configuration: { id: 'frontstage-config_replaced', version: 'v1', digest: THREE },
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  assert.throws(
+    () =>
+      assertInteractionSessionTransition(
+        fixtures.session,
+        decodeSession(replacedConfigurationBase),
+      ),
+    /changed immutable authority/,
+  );
+
+  const operationCommon = {
+    id: fixtures.operation.id,
+    schemaVersion: 1 as const,
+    sessionId: fixtures.operation.sessionId,
+    expectedSessionVersion: fixtures.operation.expectedSessionVersion,
+    messageRef: fixtures.operation.messageRef,
+    operationKind: fixtures.operation.operationKind,
+    reservedAt: fixtures.operation.reservedAt,
+  };
+  const decodeOperation = (base: InteractionOperationProjectionInput) =>
+    decodeInteractionOperation(
+      { ...base, operationDigest: digest(interactionOperationProjection(base)) },
+      digests,
+    );
+  const reservedBase = {
+    ...operationCommon,
+    version: interactionOperationVersion(1),
+    state: InteractionOperationState.RESERVED,
+  } satisfies InteractionOperationProjectionInput;
+  const reserved = decodeOperation(reservedBase);
+  const completedBase = {
+    ...operationCommon,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: fixtures.operation.result,
+    completedAt: LATER,
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeOperation(completedBase);
+  const failedBase = {
+    ...operationCommon,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.FAILED,
+    failureReason: InteractionOperationFailureReason.ASSISTANT_FAILED,
+    completedAt: LATER,
+  } satisfies InteractionOperationProjectionInput;
+  const failed = decodeOperation(failedBase);
+  const interruptedOperationBase = {
+    ...operationCommon,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.INTERRUPTED,
+    failureReason: InteractionOperationFailureReason.INTERRUPTED,
+    completedAt: LATER,
+  } satisfies InteractionOperationProjectionInput;
+  const interruptedOperation = decodeOperation(interruptedOperationBase);
+
+  assert.doesNotThrow(() => assertInteractionOperationTransition(reserved, completed));
+  assert.doesNotThrow(() => assertInteractionOperationTransition(reserved, failed));
+  assert.doesNotThrow(() => assertInteractionOperationTransition(reserved, interruptedOperation));
+
+  const repeatedReservationBase = {
+    ...reservedBase,
+    version: interactionOperationVersion(2),
+  } satisfies InteractionOperationProjectionInput;
+  assert.throws(
+    () => assertInteractionOperationTransition(reserved, decodeOperation(repeatedReservationBase)),
+    /must terminalize/,
+  );
+  assert.throws(
+    () => assertInteractionOperationTransition(completed, failed),
+    /terminal Interaction Operation/,
+  );
+  const reboundCompletedBase = {
+    ...completedBase,
+    messageRef: { ...completedBase.messageRef, digest: THREE },
+  } satisfies InteractionOperationProjectionInput;
+  assert.throws(
+    () => assertInteractionOperationTransition(reserved, decodeOperation(reboundCompletedBase)),
+    /changed reserved authority/,
+  );
+  const sameVersionCompletedBase = {
+    ...completedBase,
+    version: interactionOperationVersion(1),
+  } satisfies InteractionOperationProjectionInput;
+  assert.throws(
+    () => assertInteractionOperationTransition(reserved, decodeOperation(sameVersionCompletedBase)),
+    /advance exactly one version/,
+  );
+}
+
 void test('[M26-D01] owning codecs and unknown-field fixtures', () => {
   const fixtures = createFixtures();
+  assertInteractionLifecycleTransitions(fixtures);
   assertInteractionActionChainInvariant({
     originatingMessage: fixtures.message,
     routeDecision: fixtures.decision,

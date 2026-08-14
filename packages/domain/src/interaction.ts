@@ -306,11 +306,8 @@ interface InteractionSessionCommon {
   readonly sessionDigest: Sha256Digest;
 }
 
-export interface NonClosedInteractionSession extends InteractionSessionCommon {
-  readonly state:
-    | typeof InteractionSessionState.OPEN
-    | typeof InteractionSessionState.CLOSING
-    | typeof InteractionSessionState.INTERRUPTED;
+export interface NonTerminalInteractionSession extends InteractionSessionCommon {
+  readonly state: typeof InteractionSessionState.OPEN | typeof InteractionSessionState.CLOSING;
 }
 
 export interface ClosedInteractionSession extends InteractionSessionCommon {
@@ -318,7 +315,13 @@ export interface ClosedInteractionSession extends InteractionSessionCommon {
   readonly terminalReason?: typeof InteractionSessionTerminalReason.RETENTION_LIMIT_REACHED;
 }
 
-export type InteractionSession = NonClosedInteractionSession | ClosedInteractionSession;
+export interface InterruptedInteractionSession extends InteractionSessionCommon {
+  readonly state: typeof InteractionSessionState.INTERRUPTED;
+}
+
+export type TerminalInteractionSession = ClosedInteractionSession | InterruptedInteractionSession;
+
+export type InteractionSession = NonTerminalInteractionSession | TerminalInteractionSession;
 
 interface InteractionMessageCommon {
   readonly id: InteractionMessageId;
@@ -826,6 +829,22 @@ export function assertInteractionQuestionTargetRefInvariant(
   sha256Digest(reference.questionDigest);
 }
 
+function sameInteractionProjectRef(
+  left: InteractionProjectRef,
+  right: InteractionProjectRef,
+): boolean {
+  return (
+    left.normalizedPath === right.normalizedPath && left.identityDigest === right.identityDigest
+  );
+}
+
+function sameVersionedDigestRef(
+  left: InteractionVersionedDigestRef,
+  right: InteractionVersionedDigestRef,
+): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest;
+}
+
 export function assertInteractionSessionInvariant(session: InteractionSession): void {
   interactionSessionId(session.id);
   interactionSessionVersion(session.version);
@@ -857,6 +876,80 @@ export function assertInteractionSessionInvariant(session: InteractionSession): 
     throw new DomainInvariantError('Interaction Session update cannot precede opening');
   }
   sha256Digest(session.sessionDigest);
+}
+
+/**
+ * Owns the semantic lifecycle of one Interaction Session. Persistence remains
+ * responsible for compare-and-swap, atomic audit, and durable uniqueness.
+ */
+export function assertInteractionSessionTransition(
+  current: InteractionSession,
+  next: InteractionSession,
+): void {
+  assertInteractionSessionInvariant(current);
+  assertInteractionSessionInvariant(next);
+
+  if (
+    next.id !== current.id ||
+    next.principalRef !== current.principalRef ||
+    !sameInteractionProjectRef(next.projectRef, current.projectRef) ||
+    !sameVersionedDigestRef(next.configuration, current.configuration) ||
+    !sameVersionedDigestRef(next.routingPolicy, current.routingPolicy) ||
+    !sameVersionedDigestRef(next.confirmationPolicy, current.confirmationPolicy) ||
+    !sameVersionedDigestRef(next.retentionProfile, current.retentionProfile) ||
+    next.openedAt !== current.openedAt
+  ) {
+    throw new DomainInvariantError('Interaction Session transition changed immutable authority');
+  }
+  if (next.version !== current.version + 1) {
+    throw new DomainInvariantError(
+      'Interaction Session transition must advance exactly one version',
+    );
+  }
+  if (next.updatedAt < current.updatedAt) {
+    throw new DomainInvariantError('Interaction Session transition time moved backwards');
+  }
+  if (
+    current.state === InteractionSessionState.CLOSED ||
+    current.state === InteractionSessionState.INTERRUPTED
+  ) {
+    throw new DomainInvariantError('A terminal Interaction Session cannot transition');
+  }
+
+  if (
+    current.state === InteractionSessionState.CLOSING &&
+    next.state !== InteractionSessionState.CLOSED &&
+    next.state !== InteractionSessionState.INTERRUPTED
+  ) {
+    throw new DomainInvariantError('Interaction Session lifecycle transition is not allowed');
+  }
+
+  if (
+    current.state === InteractionSessionState.OPEN &&
+    next.state === InteractionSessionState.CLOSED &&
+    next.terminalReason !== InteractionSessionTerminalReason.RETENTION_LIMIT_REACHED
+  ) {
+    throw new DomainInvariantError(
+      'An open Interaction Session may close directly only at the retention limit',
+    );
+  }
+  if (
+    current.state === InteractionSessionState.CLOSING &&
+    next.state === InteractionSessionState.CLOSED &&
+    next.terminalReason !== undefined
+  ) {
+    throw new DomainInvariantError(
+      'A gracefully closed Interaction Session cannot claim a retention-limit terminal reason',
+    );
+  }
+  if (
+    next.state !== InteractionSessionState.OPEN &&
+    !sameOptionalDigestRef(next.currentFocusRef, current.currentFocusRef)
+  ) {
+    throw new DomainInvariantError(
+      'Interaction Session focus cannot change during a lifecycle transition',
+    );
+  }
 }
 
 export function assertInteractionMessageInvariant(message: InteractionMessage): void {
@@ -1836,9 +1929,50 @@ export function assertInteractionOperationInvariant(operation: InteractionOperat
   sha256Digest(operation.operationDigest);
 }
 
+/**
+ * Owns the only legal Interaction Operation transition. A reserved operation
+ * may terminalize exactly once; replay and transaction atomicity remain Store
+ * responsibilities.
+ */
+export function assertInteractionOperationTransition(
+  current: InteractionOperation,
+  next: InteractionOperation,
+): void {
+  assertInteractionOperationInvariant(current);
+  assertInteractionOperationInvariant(next);
+
+  if (current.state !== InteractionOperationState.RESERVED) {
+    throw new DomainInvariantError('A terminal Interaction Operation cannot transition');
+  }
+  if (next.state === InteractionOperationState.RESERVED) {
+    throw new DomainInvariantError('An Interaction Operation transition must terminalize');
+  }
+  if (next.version !== current.version + 1) {
+    throw new DomainInvariantError(
+      'Interaction Operation transition must advance exactly one version',
+    );
+  }
+  if (
+    next.id !== current.id ||
+    next.sessionId !== current.sessionId ||
+    next.expectedSessionVersion !== current.expectedSessionVersion ||
+    !sameDigestRef(next.messageRef, current.messageRef) ||
+    next.operationKind !== current.operationKind ||
+    !sameOptionalDigestRef(next.contextManifestRef, current.contextManifestRef) ||
+    (next.assistantProfile === undefined) !== (current.assistantProfile === undefined) ||
+    (next.assistantProfile !== undefined &&
+      current.assistantProfile !== undefined &&
+      !sameVersionedDigestRef(next.assistantProfile, current.assistantProfile)) ||
+    next.reservedAt !== current.reservedAt
+  ) {
+    throw new DomainInvariantError('Interaction Operation transition changed reserved authority');
+  }
+}
+
 export type InteractionSessionProjectionInput =
-  | Omit<NonClosedInteractionSession, 'sessionDigest'>
-  | Omit<ClosedInteractionSession, 'sessionDigest'>;
+  | Omit<NonTerminalInteractionSession, 'sessionDigest'>
+  | Omit<ClosedInteractionSession, 'sessionDigest'>
+  | Omit<InterruptedInteractionSession, 'sessionDigest'>;
 function projectionWithout(record: object, excludedField: string): unknown {
   const projection: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {

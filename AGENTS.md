@@ -196,10 +196,10 @@ skip, waiver, expected failure, source drift, or unexplained warning. The
 independent M2.5.1 completion review issued an unconditional bounded `PASS` on
 2026-08-13. M2.5.1 is complete; M2.6 is the next feature milestone. ADR 0036
 through ADR 0039 are accepted and its executable Slice 0 decision/proof
-contract passed bounded review on 2026-08-14. Slice 1 implementation is
-underway: its Interaction Domain, strict codecs, and deterministic Runtime
-policy candidate exist, but bounded Slice 1 review has not passed and later
-M2.6 slices have not started.
+contract passed bounded review on 2026-08-14. Slice 1's Interaction Domain,
+strict codecs, lifecycle and relationship invariants, canonical digest
+projections, and deterministic Runtime policy passed bounded review on
+2026-08-14. Later M2.6 slices have not started.
 A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
@@ -256,8 +256,9 @@ M2.6 — Unified Frontstage Interaction and Control — is the next feature
 milestone. Its M2.5.1 prerequisite has passed. ADR 0036 through ADR 0039 are
 accepted, its formal domain/implementation/acceptance documents and executable
 Slice 0 decision/proof contract exist, and the bounded Slice 0 review passed on
-2026-08-14. Slice 1 implementation is underway and has not passed its bounded
-review. The bounded
+2026-08-14. Slice 1's bounded Interaction Domain and deterministic-policy
+review passed on 2026-08-14; Slice 2 and later implementation has not started.
+The bounded
 candidate keeps one foreground CLI frontstage available while the process is
 alive, accepts natural-language user input, routes the closed new-Intake and
 Goal-control action set through exact immutable Runtime-owned Pending Action,

@@ -765,10 +765,10 @@ assessment; it is not a Frontstage feature or product-completion claim.
 Status: Slice 0 decision/proof closure passed on 2026-08-14. ADR 0036 through
 ADR 0039 are accepted and the executable [Slice 0
 contract](plans/m2.6-slice0-contract.md) freezes the implementation inputs;
-Slice 1 Interaction Domain, strict-codec, immutable-relationship, and
-deterministic Runtime-policy implementation is underway but has not passed
-bounded review. Later M2.6 slices have not started. The M2.5.1 entry condition
-has been satisfied. The
+Slice 1 Interaction Domain, strict-codec, lifecycle/relationship invariant,
+canonical-digest, and deterministic Runtime-policy implementation passed
+bounded review on 2026-08-14. Later M2.6 slices have not started. The M2.5.1
+entry condition has been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction
 contract](frontstage-interaction.md) define the planned boundary. Deferred

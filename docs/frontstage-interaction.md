@@ -4,12 +4,12 @@
 
 This document defines the accepted planned M2.6 contract. ADR 0036 through ADR
 0039 are accepted and the executable Slice 0 decision/proof contract passed its
-bounded closure review on 2026-08-14. Slice 1 feature implementation has not
-passed review: its Interaction Domain, strict codecs, immutable relationship
-checks, and deterministic Runtime policy candidate are implemented, while
-SQLite, Assistant Adapter, routing composition, Goal query/control, and CLI
-work remain later slices. The M2.5.1 milestone prerequisite has passed, and
-the completed M2.5 Goal Intake boundary remains unchanged.
+bounded closure review on 2026-08-14. Slice 1's Interaction Domain, strict
+codecs, lifecycle and relationship invariants, canonical digest projections,
+and deterministic Runtime policy passed bounded review on 2026-08-14. SQLite,
+Assistant Adapter, routing composition, Goal query/control, and CLI work remain
+later slices. The M2.5.1 milestone prerequisite has passed, and the completed
+M2.5 Goal Intake boundary remains unchanged.
 
 ## Purpose
 
