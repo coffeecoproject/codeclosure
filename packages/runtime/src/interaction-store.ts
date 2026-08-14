@@ -3,6 +3,8 @@ import type {
   CommandId,
   ConfirmationGrammar,
   DirectActionGrammar,
+  FocusBinding,
+  FocusBindingId,
   InteractionConfirmationPolicy,
   InteractionMessage,
   InteractionMessageId,
@@ -259,4 +261,41 @@ export interface InteractionOperationControlStore extends InteractionSessionCont
   listReservedInteractionOperations(
     sessionId: InteractionSessionId,
   ): readonly ReservedInteractionOperation[];
+}
+
+export interface RecordInteractionFocusBinding {
+  readonly currentSession: InteractionSession;
+  readonly focus: FocusBinding;
+  readonly nextSession: InteractionSession;
+  readonly focusAuditWrite: InteractionAuditWrite;
+  readonly sessionAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionFocusBindingRecordResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      focus: FocusBinding;
+      session: InteractionSession;
+    }>
+  | Readonly<{ status: 'SESSION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'FOCUS_CONFLICT';
+      currentFocus: FocusBinding;
+    }>
+  | InteractionSessionOperationBusyResult;
+
+/**
+ * Runtime authors the exact Focus and Session transition. The Store owns their
+ * atomic CAS, replay/conflict classification, audit membership, and strict
+ * reopen. Successful Operation completion remains with result-specific ports.
+ */
+export interface InteractionFocusControlStore extends InteractionSessionControlStore {
+  recordInteractionFocusBinding(
+    input: RecordInteractionFocusBinding,
+  ): InteractionFocusBindingRecordResult;
+  getInteractionFocusBinding(focusId: FocusBindingId): FocusBinding | undefined;
 }

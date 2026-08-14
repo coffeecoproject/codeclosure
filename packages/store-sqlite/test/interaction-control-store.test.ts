@@ -10,13 +10,17 @@ import Database from 'better-sqlite3';
 import {
   auditEventId,
   decodeDirectActionGrammar,
+  decodeFocusBinding,
   decodeInteractionMessage,
   decodeInteractionOperation,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
   directActionGrammarProjection,
+  focusBindingId,
+  focusBindingProjection,
   frontstageContextManifestId,
   InteractionContentRetention,
+  InteractionFocusKind,
   InteractionMessageRole,
   InteractionOperationFailureReason,
   InteractionOperationKind,
@@ -36,6 +40,8 @@ import {
   principalId,
   routeDecisionId,
   type CompletedInteractionOperation,
+  type FocusBinding,
+  type FocusBindingProjectionInput,
   type InteractionMessage,
   type InteractionOperationProjectionInput,
   type ReservedInteractionOperation,
@@ -54,6 +60,7 @@ import {
   type InteractionAuditWrite,
   type InteractionPolicySet,
   type ReserveInteractionOperation,
+  type RecordInteractionFocusBinding,
   type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
 } from '@codeclosure/runtime';
@@ -198,6 +205,75 @@ function transitionSession(
     return decodeSessionProjection({ ...common, state: InteractionSessionState.CLOSED });
   }
   return decodeSessionProjection({ ...common, state });
+}
+
+function createNoFocusBinding(
+  session: InteractionSession,
+  suffix: string,
+  createdAt = '2026-08-14T01:00:01.000Z',
+): FocusBinding {
+  const base = {
+    id: focusBindingId(`focus-binding_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    basedOnSessionVersion: session.version,
+    kind: InteractionFocusKind.NONE,
+    createdAt: isoTimestamp(createdAt),
+  } satisfies FocusBindingProjectionInput;
+  return decodeFocusBinding(
+    { ...base, focusDigest: digests.digest(focusBindingProjection(base)) },
+    digests,
+  );
+}
+
+function applyFocusToSession(current: InteractionSession, focus: FocusBinding): InteractionSession {
+  return decodeSessionProjection({
+    id: current.id,
+    schemaVersion: 1,
+    version: interactionSessionVersion(current.version + 1),
+    principalRef: current.principalRef,
+    projectRef: current.projectRef,
+    state: InteractionSessionState.OPEN,
+    configuration: current.configuration,
+    routingPolicy: current.routingPolicy,
+    confirmationPolicy: current.confirmationPolicy,
+    retentionProfile: current.retentionProfile,
+    currentFocusRef: Object.freeze({ id: focus.id, digest: focus.focusDigest }),
+    openedAt: current.openedAt,
+    updatedAt: focus.createdAt,
+  });
+}
+
+function createFocusBindingRecordInput(
+  currentSession: InteractionSession,
+  focus: FocusBinding,
+  nextSession: InteractionSession,
+  suffix: string,
+): RecordInteractionFocusBinding {
+  const auditSuffix = fixtureIdentifierSuffix(suffix);
+  return Object.freeze({
+    currentSession,
+    focus,
+    nextSession,
+    focusAuditWrite: Object.freeze({
+      id: auditEventId(`audit_interaction-focus-${auditSuffix}`),
+      aggregateType: InteractionAuditAggregateType.FOCUS_BINDING,
+      aggregateId: focus.id,
+      eventType: InteractionAuditEventType.FOCUS_BINDING_RECORDED,
+      payloadDigest: focus.focusDigest,
+      occurredAt: focus.createdAt,
+    }),
+    sessionAuditWrite: Object.freeze({
+      id: auditEventId(`audit_interaction-focus-session-${auditSuffix}`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+      aggregateId: nextSession.id,
+      eventType: InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+      payloadDigest: nextSession.sessionDigest,
+      occurredAt: nextSession.updatedAt,
+      beforeVersion: currentSession.version,
+      afterVersion: nextSession.version,
+    }),
+  });
 }
 
 function createUserMessage(
@@ -1426,6 +1502,329 @@ void test('Slice 2 concurrent message consumers produce one winner and one typed
   }
 });
 
+void test('Slice 2 Focus write is atomic, replayable, conflict-typed, and strictly reopens', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'focus-record');
+  const focus = createNoFocusBinding(initial, 'focus-record');
+  const focusedSession = applyFocusToSession(initial, focus);
+  const input = createFocusBindingRecordInput(initial, focus, focusedSession, 'focus-record');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'focus-record'));
+
+  assert.deepEqual(store.recordInteractionFocusBinding(input), {
+    status: 'APPLIED',
+    focus,
+    session: focusedSession,
+  });
+  assert.deepEqual(store.recordInteractionFocusBinding(input), {
+    status: 'REPLAYED',
+    focus,
+    session: focusedSession,
+  });
+  assert.deepEqual(store.getInteractionFocusBinding(focus.id), focus);
+
+  const conflictingFocus = createNoFocusBinding(
+    initial,
+    'focus-record',
+    '2026-08-14T01:00:01.500Z',
+  );
+  const conflictingSession = applyFocusToSession(initial, conflictingFocus);
+  assert.deepEqual(
+    store.recordInteractionFocusBinding(
+      createFocusBindingRecordInput(
+        initial,
+        conflictingFocus,
+        conflictingSession,
+        'focus-record-conflict',
+      ),
+    ),
+    { status: 'FOCUS_CONFLICT', currentFocus: focus },
+  );
+
+  const staleFocus = createNoFocusBinding(
+    initial,
+    'focus-record-stale',
+    '2026-08-14T01:00:02.000Z',
+  );
+  const staleSession = applyFocusToSession(initial, staleFocus);
+  assert.deepEqual(
+    store.recordInteractionFocusBinding(
+      createFocusBindingRecordInput(initial, staleFocus, staleSession, 'focus-record-stale'),
+    ),
+    { status: 'VERSION_CONFLICT', currentSession: focusedSession },
+  );
+  assert.equal(store.getInteractionFocusBinding(staleFocus.id), undefined);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionSession(initial.id), focusedSession);
+    assert.deepEqual(reopened.getInteractionFocusBinding(focus.id), focus);
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('Slice 2 exact Focus replay returns the current Session without restoring historical focus', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'focus-historical-replay');
+  const firstFocus = createNoFocusBinding(initial, 'focus-historical-replay-first');
+  const firstSession = applyFocusToSession(initial, firstFocus);
+  const secondFocus = createNoFocusBinding(
+    firstSession,
+    'focus-historical-replay-second',
+    '2026-08-14T01:00:02.000Z',
+  );
+  const secondSession = applyFocusToSession(firstSession, secondFocus);
+  const firstInput = createFocusBindingRecordInput(
+    initial,
+    firstFocus,
+    firstSession,
+    'focus-historical-replay-first',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'focus-historical-replay'));
+
+  assert.equal(store.recordInteractionFocusBinding(firstInput).status, 'APPLIED');
+  assert.equal(
+    store.recordInteractionFocusBinding(
+      createFocusBindingRecordInput(
+        firstSession,
+        secondFocus,
+        secondSession,
+        'focus-historical-replay-second',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  assert.deepEqual(store.recordInteractionFocusBinding(firstInput), {
+    status: 'REPLAYED',
+    focus: firstFocus,
+    session: secondSession,
+  });
+  assert.deepEqual(store.getInteractionSession(initial.id), secondSession);
+  store.close();
+});
+
+void test('Slice 2 Focus write returns typed missing-Session and active-Operation results', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+
+  const missing = createInitialSession(policies, 'focus-missing-session');
+  const missingFocus = createNoFocusBinding(missing, 'focus-missing-session');
+  const missingNext = applyFocusToSession(missing, missingFocus);
+  assert.deepEqual(
+    store.recordInteractionFocusBinding(
+      createFocusBindingRecordInput(missing, missingFocus, missingNext, 'focus-missing-session'),
+    ),
+    { status: 'SESSION_NOT_FOUND' },
+  );
+
+  const initial = createInitialSession(policies, 'focus-operation-busy');
+  const message = createUserMessage(
+    initial,
+    'focus-operation-busy',
+    '操作执行期间不能单独切换焦点',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'focus-operation-busy');
+  store.createInteractionSession(createSessionInput(initial, 'focus-operation-busy'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'focus-operation-busy'),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, 'focus-operation-busy'),
+  );
+  const focus = createNoFocusBinding(session, 'focus-operation-busy', '2026-08-14T01:00:03.000Z');
+  const nextSession = applyFocusToSession(session, focus);
+  assert.deepEqual(
+    store.recordInteractionFocusBinding(
+      createFocusBindingRecordInput(session, focus, nextSession, 'focus-operation-busy'),
+    ),
+    { status: 'SESSION_OPERATION_BUSY', currentOperation: operation },
+  );
+  assert.equal(store.getInteractionFocusBinding(focus.id), undefined);
+  store.close();
+});
+
+void test('Slice 2 Focus has one write owner across Runtime and SQLite backstops', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'focus-single-owner');
+  const firstFocus = createNoFocusBinding(initial, 'focus-single-owner-first');
+  const firstSession = applyFocusToSession(initial, firstFocus);
+  const secondFocus = createNoFocusBinding(
+    firstSession,
+    'focus-single-owner-second',
+    '2026-08-14T01:00:02.000Z',
+  );
+  const secondSession = applyFocusToSession(firstSession, secondFocus);
+  const revertedSession = decodeSessionProjection({
+    id: secondSession.id,
+    schemaVersion: 1,
+    version: interactionSessionVersion(secondSession.version + 1),
+    principalRef: secondSession.principalRef,
+    projectRef: secondSession.projectRef,
+    state: InteractionSessionState.OPEN,
+    configuration: secondSession.configuration,
+    routingPolicy: secondSession.routingPolicy,
+    confirmationPolicy: secondSession.confirmationPolicy,
+    retentionProfile: secondSession.retentionProfile,
+    currentFocusRef: Object.freeze({ id: firstFocus.id, digest: firstFocus.focusDigest }),
+    openedAt: secondSession.openedAt,
+    updatedAt: isoTimestamp('2026-08-14T01:00:03.000Z'),
+  });
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'focus-single-owner'));
+  store.recordInteractionFocusBinding(
+    createFocusBindingRecordInput(initial, firstFocus, firstSession, 'focus-single-owner-first'),
+  );
+  store.recordInteractionFocusBinding(
+    createFocusBindingRecordInput(
+      firstSession,
+      secondFocus,
+      secondSession,
+      'focus-single-owner-second',
+    ),
+  );
+  assert.throws(
+    () =>
+      store.transitionInteractionSession(
+        createSessionTransitionInput(secondSession, revertedSession, 'focus-single-owner-revert'),
+      ),
+    /lifecycle transition cannot change Focus authority/u,
+  );
+  assert.deepEqual(store.getInteractionSession(initial.id), secondSession);
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `UPDATE interaction_sessions
+                SET version = ?, current_focus_id = ?, current_focus_digest = ?,
+                    updated_at = ?, session_digest = ?, record_json = ?
+              WHERE id = ?`,
+          )
+          .run(
+            revertedSession.version,
+            firstFocus.id,
+            firstFocus.focusDigest,
+            revertedSession.updatedAt,
+            revertedSession.sessionDigest,
+            JSON.stringify(revertedSession),
+            revertedSession.id,
+          ),
+      /illegal Interaction Session transition/u,
+    );
+  } finally {
+    database.close();
+  }
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionSession(initial.id), secondSession);
+    assert.deepEqual(reopened.getInteractionFocusBinding(firstFocus.id), firstFocus);
+    assert.deepEqual(reopened.getInteractionFocusBinding(secondFocus.id), secondFocus);
+  } finally {
+    reopened.close();
+  }
+});
+
+const focusRecordRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_FOCUS_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_FOCUS_WRITE,
+  InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_SESSION_TRANSITION_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of focusRecordRollbackSteps) {
+  void test(`Slice 2 Focus write rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `focus-rollback-${step}`);
+    const focus = createNoFocusBinding(initial, `focus-rollback-${step}`);
+    const nextSession = applyFocusToSession(initial, focus);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(createSessionInput(initial, `focus-rollback-${step}`));
+    setup.close();
+
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.recordInteractionFocusBinding(
+          createFocusBindingRecordInput(initial, focus, nextSession, `focus-rollback-${step}`),
+        ),
+      new RegExp(step),
+    );
+    assert.deepEqual(store.getInteractionSession(initial.id), initial);
+    assert.equal(store.getInteractionFocusBinding(focus.id), undefined);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.deepEqual(reopened.getInteractionSession(initial.id), initial);
+      assert.equal(reopened.getInteractionFocusBinding(focus.id), undefined);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 concurrent Focus consumers produce one winner and one typed loser', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'concurrent-focus');
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  setup.createInteractionSession(createSessionInput(initial, 'concurrent-focus'));
+  setup.close();
+
+  const firstFocus = createNoFocusBinding(initial, 'concurrent-focus-first');
+  const secondFocus = createNoFocusBinding(initial, 'concurrent-focus-second');
+  const firstNext = applyFocusToSession(initial, firstFocus);
+  const secondNext = applyFocusToSession(initial, secondFocus);
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(
+      firstStore.recordInteractionFocusBinding(
+        createFocusBindingRecordInput(initial, firstFocus, firstNext, 'concurrent-focus-first'),
+      ).status,
+      'APPLIED',
+    );
+    assert.deepEqual(
+      secondStore.recordInteractionFocusBinding(
+        createFocusBindingRecordInput(initial, secondFocus, secondNext, 'concurrent-focus-second'),
+      ),
+      { status: 'VERSION_CONFLICT', currentSession: firstNext },
+    );
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
 void test('Slice 2 Operation reservation replays exactly, closes same-Session busy, and reopens', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
@@ -2567,8 +2966,147 @@ void test('Slice 2 strict reopen rejects retained Message content substitution',
 
   assert.throws(
     () => SqliteControlStore.open({ filename }),
-    /Interaction Session\/Message\/Operation authority failed strict reopen/u,
+    /Interaction Session\/Message\/Operation\/Focus authority failed strict reopen/u,
   );
+});
+
+void test('Slice 2 strict reopen rejects a Focus without its atomic audit membership', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'focus-missing-audit');
+  const focus = createNoFocusBinding(initial, 'focus-missing-audit');
+  const focusedSession = applyFocusToSession(initial, focus);
+  const input = createFocusBindingRecordInput(
+    initial,
+    focus,
+    focusedSession,
+    'focus-missing-audit',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'focus-missing-audit'));
+  store.recordInteractionFocusBinding(input);
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER interaction_audit_events_no_delete');
+    database
+      .prepare('DELETE FROM interaction_audit_events WHERE audit_event_id = ?')
+      .run(input.focusAuditWrite.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /orphan or substituted audit/u);
+});
+
+void test('Slice 2 strict reopen rejects substituted Focus authority JSON', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'focus-authority-substitution');
+  const focus = createNoFocusBinding(initial, 'focus-authority-substitution');
+  const focusedSession = applyFocusToSession(initial, focus);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'focus-authority-substitution'));
+  store.recordInteractionFocusBinding(
+    createFocusBindingRecordInput(initial, focus, focusedSession, 'focus-authority-substitution'),
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER interaction_focus_bindings_no_update');
+    database
+      .prepare(
+        `UPDATE interaction_focus_bindings
+            SET record_json = json_set(record_json, '$.createdAt', ?)
+          WHERE id = ?`,
+      )
+      .run('2026-08-14T01:00:01.500Z', focus.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /Interaction Session\/Message\/Operation\/Focus authority failed strict reopen/u,
+  );
+});
+
+void test('Slice 2 strict reopen rejects a Session rebound to historical Focus', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'focus-historical-rebind');
+  const firstFocus = createNoFocusBinding(initial, 'focus-historical-rebind-first');
+  const firstSession = applyFocusToSession(initial, firstFocus);
+  const secondFocus = createNoFocusBinding(
+    firstSession,
+    'focus-historical-rebind-second',
+    '2026-08-14T01:00:02.000Z',
+  );
+  const secondSession = applyFocusToSession(firstSession, secondFocus);
+  const reboundSession = decodeSessionProjection({
+    id: secondSession.id,
+    schemaVersion: 1,
+    version: interactionSessionVersion(secondSession.version + 1),
+    principalRef: secondSession.principalRef,
+    projectRef: secondSession.projectRef,
+    state: InteractionSessionState.OPEN,
+    configuration: secondSession.configuration,
+    routingPolicy: secondSession.routingPolicy,
+    confirmationPolicy: secondSession.confirmationPolicy,
+    retentionProfile: secondSession.retentionProfile,
+    currentFocusRef: Object.freeze({ id: firstFocus.id, digest: firstFocus.focusDigest }),
+    openedAt: secondSession.openedAt,
+    updatedAt: isoTimestamp('2026-08-14T01:00:03.000Z'),
+  });
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'focus-historical-rebind'));
+  store.recordInteractionFocusBinding(
+    createFocusBindingRecordInput(
+      initial,
+      firstFocus,
+      firstSession,
+      'focus-historical-rebind-first',
+    ),
+  );
+  store.recordInteractionFocusBinding(
+    createFocusBindingRecordInput(
+      firstSession,
+      secondFocus,
+      secondSession,
+      'focus-historical-rebind-second',
+    ),
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER interaction_sessions_update_guard');
+    database
+      .prepare(
+        `UPDATE interaction_sessions
+            SET version = ?, current_focus_id = ?, current_focus_digest = ?,
+                updated_at = ?, session_digest = ?, record_json = ?
+          WHERE id = ?`,
+      )
+      .run(
+        reboundSession.version,
+        firstFocus.id,
+        firstFocus.focusDigest,
+        reboundSession.updatedAt,
+        reboundSession.sessionDigest,
+        JSON.stringify(reboundSession),
+        reboundSession.id,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /has no exact current Focus/u);
 });
 
 void test('Slice 2 strict reopen rejects later-slice rows without an owning Store path', (t) => {
@@ -2861,6 +3399,10 @@ void test('Slice 2 migration establishes the bounded Interaction authority skele
     assert.match(
       sessionTriggerSql as string,
       /OLD\.state = 'CLOSING'.*NEW\.state = 'CLOSED'.*terminal_reason IS NOT NULL/su,
+    );
+    assert.match(
+      sessionTriggerSql as string,
+      /interaction_focus_bindings AS focus.*focus\.based_on_session_version = OLD\.version.*focus\.created_at = NEW\.updated_at/su,
     );
   } finally {
     database.close();

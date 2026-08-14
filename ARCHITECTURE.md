@@ -247,9 +247,10 @@ digest, and deterministic Runtime-policy implementation passed bounded review
 on 2026-08-14. Slice 2 implementation is in progress through its policy,
 Session lifecycle, and user-message SQLite authority with atomic audit,
 typed replay/conflict, Operation reservation and failure/interruption closure,
-unresolved-operation detection, and strict reopen. Later successful Operation
-result, Focus, Pending-Action/action-chain, and recovery transactions, Slice 3
-onward, and all M2.7 implementation have not started.
+unresolved-operation detection, exact Focus/Session CAS with one Focus write
+owner, and strict reopen. Later successful Operation result,
+Pending-Action/action-chain, and recovery transactions, Slice 3 onward, and all
+M2.7 implementation have not started.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not

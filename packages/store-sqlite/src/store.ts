@@ -78,6 +78,7 @@ import {
   decodeEvidenceSet,
   decodeExecutionProfile,
   decodeExecutionProfileBinding,
+  decodeFocusBinding,
   decodeExternalBackendCapabilityRecord,
   decodeExternalExecutionIntent,
   decodeExternalExecutionObservation,
@@ -134,6 +135,7 @@ import {
   deriveCapabilityGrant,
   deriveExternalPhaseResponseSchemaPolicy,
   assertInitialInteractionSessionInvariant,
+  assertInteractionFocusUpdate,
   assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
   assertInteractionSessionTransition,
@@ -208,6 +210,8 @@ import {
   type ExecutionProfile,
   type ExecutionProfileBinding,
   type ExecutionProfileId,
+  type FocusBinding,
+  type FocusBindingId,
   type ExternalBackendCapabilityRecord,
   type ExternalExecutionId,
   type ExternalExecutionPhaseDispatchEntry,
@@ -400,6 +404,8 @@ import {
   type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
   type InteractionAuditWrite,
+  type InteractionFocusBindingRecordResult,
+  type InteractionFocusControlStore,
   type InteractionOperationControlStore,
   type InteractionOperationReservationResult,
   type InteractionOperationTerminalResult,
@@ -408,6 +414,7 @@ import {
   type InteractionSessionCreateResult,
   type InteractionSessionTransitionResult,
   type InteractionUserMessageAdmissionResult,
+  type RecordInteractionFocusBinding,
   type ReserveInteractionOperation,
   type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
@@ -637,6 +644,8 @@ export const InteractionTransactionStep = {
   AFTER_OPERATION_WRITE: 'AFTER_INTERACTION_OPERATION_WRITE',
   AFTER_OPERATION_TERMINAL_AUDIT_WRITE: 'AFTER_INTERACTION_OPERATION_TERMINAL_AUDIT_WRITE',
   AFTER_OPERATION_TERMINAL_WRITE: 'AFTER_INTERACTION_OPERATION_TERMINAL_WRITE',
+  AFTER_FOCUS_AUDIT_WRITE: 'AFTER_INTERACTION_FOCUS_AUDIT_WRITE',
+  AFTER_FOCUS_WRITE: 'AFTER_INTERACTION_FOCUS_WRITE',
   AFTER_AUDIT_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_AUDIT_MEMBERSHIP_WRITE',
   BEFORE_COMMIT: 'BEFORE_INTERACTION_COMMIT',
 } as const;
@@ -1145,6 +1154,19 @@ const retainedInteractionMessageRowSchema = z
   })
   .strict();
 
+const retainedInteractionFocusRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    based_on_session_version: z.number().int().positive(),
+    kind: z.string().min(1),
+    created_at: z.string().min(1),
+    focus_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
 const retainedInteractionOperationRowSchema = z
   .object({
     id: z.string().min(1),
@@ -1266,6 +1288,14 @@ interface NormalizedInteractionOperationTerminalization {
   readonly currentOperation: ReservedInteractionOperation;
   readonly nextOperation: FailedOrInterruptedInteractionOperation;
   readonly auditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionFocusBindingRecord {
+  readonly currentSession: InteractionSession;
+  readonly focus: FocusBinding;
+  readonly nextSession: InteractionSession;
+  readonly focusAuditWrite: InteractionAuditWrite;
+  readonly sessionAuditWrite: InteractionAuditWrite;
 }
 
 function assertExactObjectKeys(
@@ -1485,6 +1515,14 @@ function normalizeInteractionSessionTransition(
   const currentSession = decodeInteractionSession(input.currentSession, canonicalAuthorityDigests);
   const nextSession = decodeInteractionSession(input.nextSession, canonicalAuthorityDigests);
   assertInteractionSessionTransition(currentSession, nextSession);
+  if (
+    currentSession.currentFocusRef?.id !== nextSession.currentFocusRef?.id ||
+    currentSession.currentFocusRef?.digest !== nextSession.currentFocusRef?.digest
+  ) {
+    throw new StoreInvariantError(
+      'Interaction Session lifecycle transition cannot change Focus authority',
+    );
+  }
   const auditWrite = normalizeExactInteractionAuditWrite(input.auditWrite, {
     recordType: 'Interaction Session transition audit',
     aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
@@ -1610,6 +1648,49 @@ function normalizeInteractionOperationTerminalization(
     afterVersion: nextOperation.version,
   });
   return Object.freeze({ currentOperation, nextOperation, auditWrite });
+}
+
+function normalizeInteractionFocusBindingRecord(
+  input: RecordInteractionFocusBinding,
+): NormalizedInteractionFocusBindingRecord {
+  assertExactObjectKeys(
+    input,
+    ['currentSession', 'focus', 'nextSession', 'focusAuditWrite', 'sessionAuditWrite'],
+    [],
+    'Interaction Focus record input',
+  );
+  const currentSession = decodeInteractionSession(input.currentSession, canonicalAuthorityDigests);
+  const focus = decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const nextSession = decodeInteractionSession(input.nextSession, canonicalAuthorityDigests);
+  assertInteractionFocusUpdate({ currentSession, focus, nextSession });
+  const focusAuditWrite = normalizeExactInteractionAuditWrite(input.focusAuditWrite, {
+    recordType: 'Interaction Focus record audit',
+    aggregateType: InteractionAuditAggregateType.FOCUS_BINDING,
+    aggregateId: focus.id,
+    eventType: InteractionAuditEventType.FOCUS_BINDING_RECORDED,
+    payloadDigest: focus.focusDigest,
+    occurredAt: focus.createdAt,
+  });
+  const sessionAuditWrite = normalizeExactInteractionAuditWrite(input.sessionAuditWrite, {
+    recordType: 'Interaction Focus Session-transition audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+    aggregateId: nextSession.id,
+    eventType: InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+    payloadDigest: nextSession.sessionDigest,
+    occurredAt: nextSession.updatedAt,
+    beforeVersion: currentSession.version,
+    afterVersion: nextSession.version,
+  });
+  if (focusAuditWrite.id === sessionAuditWrite.id) {
+    throw new StoreInvariantError('Interaction Focus audit identities must be distinct');
+  }
+  return Object.freeze({
+    currentSession,
+    focus,
+    nextSession,
+    focusAuditWrite,
+    sessionAuditWrite,
+  });
 }
 
 function interactionOperationReservationDigest(operation: InteractionOperation): Sha256Digest {
@@ -3107,7 +3188,8 @@ export class SqliteControlStore
     WorkflowDriverControlStore,
     IntakeControlStore,
     ProjectReadCleanupControlStore,
-    InteractionOperationControlStore
+    InteractionOperationControlStore,
+    InteractionFocusControlStore
 {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
@@ -3691,6 +3773,78 @@ export class SqliteControlStore
       const operation = this.getReservedInteractionOperationInsideTransaction(sessionIdentifier);
       return operation === undefined ? Object.freeze([]) : Object.freeze([operation]);
     });
+  }
+
+  public recordInteractionFocusBinding(
+    rawInput: RecordInteractionFocusBinding,
+  ): InteractionFocusBindingRecordResult {
+    this.assertOpen();
+    const input = normalizeInteractionFocusBindingRecord(rawInput);
+    return this.runImmediate(() => {
+      const existingFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+      if (existingFocus !== undefined && !sameCanonicalAuthority(existingFocus, input.focus)) {
+        return { status: 'FOCUS_CONFLICT', currentFocus: existingFocus };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.currentSession.id);
+      if (retainedSession === undefined) {
+        return { status: 'SESSION_NOT_FOUND' };
+      }
+      if (existingFocus !== undefined) {
+        return {
+          status: 'REPLAYED',
+          focus: existingFocus,
+          session: retainedSession,
+        };
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.currentSession)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const activeOperation = this.getReservedInteractionOperationInsideTransaction(
+        input.currentSession.id,
+      );
+      if (activeOperation !== undefined) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: activeOperation };
+      }
+
+      this.insertAuditEvent(input.focusAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_FOCUS_AUDIT_WRITE);
+      this.insertInteractionFocusBinding(input.focus);
+      this.probe(InteractionTransactionStep.AFTER_FOCUS_WRITE);
+      this.appendInteractionAuditMembership(input.currentSession.id, input.focusAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
+
+      this.insertAuditEvent(input.sessionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE);
+      this.updateInteractionSession(input.currentSession, input.nextSession);
+      this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_WRITE);
+      this.appendInteractionAuditMembership(input.nextSession.id, input.sessionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
+
+      const persistedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+      const persistedSession = this.getInteractionSessionInsideTransaction(input.nextSession.id);
+      if (
+        persistedFocus === undefined ||
+        persistedSession === undefined ||
+        !sameCanonicalAuthority(persistedFocus, input.focus) ||
+        !sameCanonicalAuthority(persistedSession, input.nextSession)
+      ) {
+        throw new StoreInvariantError(
+          'The Interaction Focus and Session transition were not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'APPLIED',
+        focus: persistedFocus,
+        session: persistedSession,
+      };
+    });
+  }
+
+  public getInteractionFocusBinding(focusIdentifier: FocusBindingId): FocusBinding | undefined {
+    this.assertOpen();
+    return this.runRead(() => this.getInteractionFocusBindingInsideTransaction(focusIdentifier));
   }
 
   public installIntentAdmissionPolicy(
@@ -6176,6 +6330,57 @@ export class SqliteControlStore
     return message;
   }
 
+  private decodeRetainedInteractionFocusRow(rawRow: unknown): FocusBinding {
+    const row = retainedInteractionFocusRowSchema.parse(rawRow);
+    const focus = decodeFocusBinding(
+      parseJson(row.record_json, 'Interaction Focus Binding'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      focus.id !== row.id ||
+      focus.schemaVersion !== row.schema_version ||
+      focus.sessionId !== row.session_id ||
+      focus.basedOnSessionVersion !== row.based_on_session_version ||
+      focus.kind !== row.kind ||
+      focus.createdAt !== row.created_at ||
+      focus.focusDigest !== row.focus_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Interaction Focus ${focus.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return focus;
+  }
+
+  private getInteractionFocusBindingInsideTransaction(
+    focusIdentifier: FocusBindingId,
+  ): FocusBinding | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, based_on_session_version, kind,
+                created_at, focus_digest, record_json
+           FROM interaction_focus_bindings
+          WHERE id = ?`,
+      )
+      .get(focusIdentifier);
+    if (rawRow === undefined) {
+      return undefined;
+    }
+    const focus = this.decodeRetainedInteractionFocusRow(rawRow);
+    const session = this.getInteractionSessionInsideTransaction(focus.sessionId);
+    if (
+      session === undefined ||
+      focus.basedOnSessionVersion >= session.version ||
+      focus.createdAt < session.openedAt ||
+      focus.createdAt > session.updatedAt
+    ) {
+      throw new StoreInvariantError(
+        `Retained Interaction Focus ${focus.id} does not bind its Session transition`,
+      );
+    }
+    return focus;
+  }
+
   private decodeRetainedInteractionOperationRow(rawRow: unknown): InteractionOperation {
     const row = retainedInteractionOperationRowSchema.parse(rawRow);
     const operation = decodeInteractionOperation(
@@ -6406,6 +6611,26 @@ export class SqliteControlStore
       );
   }
 
+  private insertInteractionFocusBinding(focus: FocusBinding): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_focus_bindings(
+           id, schema_version, session_id, based_on_session_version, kind,
+           created_at, focus_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        focus.id,
+        focus.schemaVersion,
+        focus.sessionId,
+        focus.basedOnSessionVersion,
+        focus.kind,
+        focus.createdAt,
+        focus.focusDigest,
+        serializeJson(decodeJsonValue(focus)),
+      );
+  }
+
   private insertInteractionOperation(operation: ReservedInteractionOperation): void {
     this.#database
       .prepare(
@@ -6505,7 +6730,6 @@ export class SqliteControlStore
       return;
     }
     const unimplementedTableNames = [
-      'interaction_focus_bindings',
       'interaction_route_proposals',
       'interaction_route_decisions',
       'interaction_pending_actions',
@@ -6548,6 +6772,54 @@ export class SqliteControlStore
       const sessionById = new Map<string, InteractionSession>(
         sessions.map((session) => [session.id, session]),
       );
+
+      const focusRows = z.array(retainedInteractionFocusRowSchema).parse(
+        this.#database
+          .prepare(
+            `SELECT id, schema_version, session_id, based_on_session_version, kind,
+                    created_at, focus_digest, record_json
+               FROM interaction_focus_bindings
+              ORDER BY id`,
+          )
+          .all(),
+      );
+      const focuses = focusRows.map((row) => this.decodeRetainedInteractionFocusRow(row));
+      const focusById = new Map<string, FocusBinding>(focuses.map((focus) => [focus.id, focus]));
+      for (const focus of focuses) {
+        const session = sessionById.get(focus.sessionId);
+        if (
+          session === undefined ||
+          focus.basedOnSessionVersion >= session.version ||
+          focus.createdAt < session.openedAt ||
+          focus.createdAt > session.updatedAt
+        ) {
+          throw new StoreInvariantError(
+            `Retained Interaction Focus ${focus.id} has no valid Session transition`,
+          );
+        }
+      }
+      for (const session of sessions) {
+        const sessionFocuses = focuses
+          .filter((focus) => focus.sessionId === session.id)
+          .sort((left, right) => left.basedOnSessionVersion - right.basedOnSessionVersion);
+        const currentFocus = sessionFocuses.at(-1);
+        if (currentFocus === undefined && session.currentFocusRef === undefined) {
+          continue;
+        }
+        const retainedCurrentFocus =
+          session.currentFocusRef === undefined
+            ? undefined
+            : focusById.get(session.currentFocusRef.id);
+        if (
+          currentFocus?.id !== session.currentFocusRef?.id ||
+          currentFocus?.focusDigest !== session.currentFocusRef?.digest ||
+          retainedCurrentFocus?.sessionId !== session.id
+        ) {
+          throw new StoreInvariantError(
+            `Retained Interaction Session ${session.id} has no exact current Focus`,
+          );
+        }
+      }
 
       const messageRows = z.array(retainedInteractionMessageRowSchema).parse(
         this.#database
@@ -6644,14 +6916,15 @@ export class SqliteControlStore
             .prepare(
               `SELECT id
                  FROM audit_events
-                WHERE aggregate_type IN (?, ?, ?)
-                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?)
+                WHERE aggregate_type IN (?, ?, ?, ?)
+                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ORDER BY id`,
             )
             .all(
               InteractionAuditAggregateType.INTERACTION_SESSION,
               InteractionAuditAggregateType.INTERACTION_MESSAGE,
               InteractionAuditAggregateType.INTERACTION_OPERATION,
+              InteractionAuditAggregateType.FOCUS_BINDING,
               InteractionAuditEventType.INTERACTION_SESSION_OPENED,
               InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
               InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
@@ -6660,6 +6933,7 @@ export class SqliteControlStore
               InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
               InteractionAuditEventType.INTERACTION_OPERATION_FAILED,
               InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED,
+              InteractionAuditEventType.FOCUS_BINDING_RECORDED,
             ),
         )
         .map((row) => auditEventId(row.id));
@@ -6671,7 +6945,7 @@ export class SqliteControlStore
         relatedAuditIds.some((id) => !membershipAuditIdSet.has(id))
       ) {
         throw new StoreInvariantError(
-          'Retained Interaction Session/Message/Operation authority has an orphan or substituted audit',
+          'Retained Interaction Session/Message/Operation/Focus authority has an orphan or substituted audit',
         );
       }
 
@@ -6707,6 +6981,7 @@ export class SqliteControlStore
         const sessionOperations = operations.filter(
           (operation) => operation.sessionId === session.id,
         );
+        const sessionFocuses = focuses.filter((focus) => focus.sessionId === session.id);
         const operationAuditCount = sessionOperations.reduce(
           (count, operation) =>
             count + (operation.state === InteractionOperationState.RESERVED ? 1 : 2),
@@ -6715,7 +6990,7 @@ export class SqliteControlStore
         if (
           sessionAudits.length !== session.version ||
           sessionMembership.length !==
-            session.version + sessionMessages.length + operationAuditCount
+            session.version + sessionMessages.length + operationAuditCount + sessionFocuses.length
         ) {
           throw new StoreInvariantError(
             `Retained Interaction Session ${session.id} audit cardinality is invalid`,
@@ -6795,6 +7070,40 @@ export class SqliteControlStore
           ) {
             throw new StoreInvariantError(
               `Retained Interaction Message ${message.id} lost its atomic Session transition`,
+            );
+          }
+        }
+
+        for (const focus of sessionFocuses) {
+          const focusAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.FOCUS_BINDING &&
+              row.aggregate_id === focus.id,
+          );
+          const focusAudit = focusAudits[0];
+          if (
+            focusAudits.length !== 1 ||
+            focusAudit?.event_type !== InteractionAuditEventType.FOCUS_BINDING_RECORDED ||
+            focusAudit.before_version !== null ||
+            focusAudit.after_version !== null ||
+            focusAudit.payload_digest !== focus.focusDigest ||
+            focusAudit.occurred_at !== focus.createdAt
+          ) {
+            throw new StoreInvariantError(
+              `Retained Interaction Focus ${focus.id} lost its exact record audit`,
+            );
+          }
+          const following = sessionMembership[focusAudit.position + 1];
+          if (
+            following?.aggregate_type !== InteractionAuditAggregateType.INTERACTION_SESSION ||
+            following.aggregate_id !== session.id ||
+            following.event_type !== InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED ||
+            following.before_version !== focus.basedOnSessionVersion ||
+            following.after_version !== focus.basedOnSessionVersion + 1 ||
+            following.occurred_at !== focus.createdAt
+          ) {
+            throw new StoreInvariantError(
+              `Retained Interaction Focus ${focus.id} lost its atomic Session transition`,
             );
           }
         }
@@ -6895,6 +7204,13 @@ export class SqliteControlStore
               `Retained Interaction Operation audit ${membership.id} crosses Session authority`,
             );
           }
+        } else if (membership.aggregate_type === InteractionAuditAggregateType.FOCUS_BINDING) {
+          const focus = focusById.get(membership.aggregate_id);
+          if (focus?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Interaction Focus audit ${membership.id} crosses Session authority`,
+            );
+          }
         } else if (
           membership.aggregate_type !== InteractionAuditAggregateType.INTERACTION_SESSION ||
           membership.aggregate_id !== membership.session_id
@@ -6909,7 +7225,7 @@ export class SqliteControlStore
         throw error;
       }
       throw new StoreInvariantError(
-        'Retained M2.6 Interaction Session/Message/Operation authority failed strict reopen',
+        'Retained M2.6 Interaction Session/Message/Operation/Focus authority failed strict reopen',
         { cause: error },
       );
     }

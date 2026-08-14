@@ -690,6 +690,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0035_project_read_currency_failure.sql',
       '0036_contained_profile_candidate_freeze.sql',
       '0037_frontstage_interaction.sql',
+      '0038_interaction_focus_authority.sql',
     ],
   );
   store.close();
