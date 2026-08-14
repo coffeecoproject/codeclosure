@@ -5,8 +5,11 @@
 This document defines the accepted planned M2.6 contract. ADR 0036 through ADR
 0039 are accepted and the executable Slice 0 decision/proof contract passed its
 bounded closure review on 2026-08-14. Slice 1 feature implementation has not
-started. The M2.5.1 milestone prerequisite has passed, and the completed M2.5
-Goal Intake boundary remains unchanged.
+passed review: its Interaction Domain, strict codecs, immutable relationship
+checks, and deterministic Runtime policy candidate are implemented, while
+SQLite, Assistant Adapter, routing composition, Goal query/control, and CLI
+work remain later slices. The M2.5.1 milestone prerequisite has passed, and
+the completed M2.5 Goal Intake boundary remains unchanged.
 
 ## Purpose
 
@@ -197,6 +200,7 @@ public action. It binds:
 
 - session, principal, project, originating message, and current focus;
 - one closed action kind;
+- one exact structured action derivation;
 - exact target identity and expected version when applicable;
 - one preallocated public Command ID;
 - exact canonical command input digest;
@@ -207,6 +211,15 @@ public action. It binds:
 
 The record is immutable. It is never updated with later authorization,
 consumption, or command-result state.
+
+The deterministic Interaction Confirmation Policy is the sole owner of the
+structured action derivation. A `PendingAction` MUST retain either
+`ROUTED_ACTION`, which preserves the exact `RouteDecision` action kind, or the
+single closed `BUSY_GOVERNED_MATERIALIZE_ONLY_ALTERNATIVE`, which may derive
+only a separately confirmed `SUBMIT_MATERIALIZE_ONLY_INTAKE` action from a
+busy-session `SUBMIT_GOVERNED_INTAKE` decision. The Domain validates this
+closed matrix. Reason-trace text is diagnostic metadata and MUST NOT be parsed
+as a competing derivation authority.
 
 The initial kinds are:
 
@@ -300,6 +313,14 @@ A `FrontstageAnswer` is bounded interaction output with exact operation,
 message, profile, response-contract, retention, and disposition bindings. It
 is not a Fact, Source Binding, Goal, Criterion, Evidence, Human Decision,
 Acceptance Decision, or authorization.
+
+Its Domain chain MUST bind the exact originating Session and retained user
+message, the completed `ROUTE` Operation that produced the accepted Answer
+Proposal and Route Decision, the Session-owned retention profile, and the
+completed `FRONTSTAGE_ANSWER` Operation that recorded the Answer. Those records
+MUST preserve causal order from Session/message through routing and Answer
+recording; neither operation nor retention identity may be inferred from
+displayed transcript text.
 
 Ordinary Frontstage answers are separate from M2.5 `AnswerOnlyResponse`
 authority. They avoid manufacturing a synthetic M2.5 Intake Run merely to hold

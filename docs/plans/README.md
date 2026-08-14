@@ -21,8 +21,9 @@ issued bounded `PASS` on 2026-08-13. This post-completion correction does not
 rewrite the historical M2.5 verdict. M2.6 is now the current formalization:
 ADRs 0036 through 0039 are accepted and its executable Slice 0 decision/proof
 contract passed bounded review on 2026-08-14, but Slice 1 feature
-implementation has not started. M2.7 remains a separate proposal whose ADRs
-are not binding.
+implementation is still under bounded review. Its Domain/codecs and
+deterministic Runtime-policy candidate exist; later M2.6 slices have not
+started. M2.7 remains a separate proposal whose ADRs are not binding.
 
 - [M1 deterministic skeleton](m1-deterministic-skeleton.md)
 - [M1 milestone acceptance plan](m1-acceptance-plan.md)

@@ -146,9 +146,12 @@ Resume authority is created. Exact match is carried through a versioned
 Candidate preparation result and independently rebound by Runtime and Store
 before Candidate/Generation authority may be retained.
 
-Proposed M2.6 Interaction records remain
-planned in [Frontstage Interaction](frontstage-interaction.md); they do not
-change existing Intake, Goal, Workflow, Evidence, or Acceptance authority.
+The M2.6 Slice 1 Interaction record and strict-codec candidate is implemented
+for bounded review under [Frontstage Interaction](frontstage-interaction.md).
+It reuses the M2.5 declared-project reference, keeps cross-record meaning in
+Domain invariants, and does not change existing Intake, Goal, Workflow,
+Evidence, or Acceptance authority. SQLite persistence and Frontstage
+composition remain later M2.6 slices.
 Proposed M2.7 separately adds Host/epoch, project control-lease/epoch, and
 project execution-slot records under [Local Runtime Host](runtime-host.md).
 They remain planned and cannot replace Goal, Workflow, command, or Acceptance

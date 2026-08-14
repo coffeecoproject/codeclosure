@@ -62,6 +62,21 @@ export type ProjectReadSnapshotCleanupOutcomeId = Brand<
   string,
   'ProjectReadSnapshotCleanupOutcomeId'
 >;
+export type InteractionSessionId = Brand<string, 'InteractionSessionId'>;
+export type InteractionMessageId = Brand<string, 'InteractionMessageId'>;
+export type InteractionOperationId = Brand<string, 'InteractionOperationId'>;
+export type FocusBindingId = Brand<string, 'FocusBindingId'>;
+export type RouteProposalId = Brand<string, 'RouteProposalId'>;
+export type RouteDecisionId = Brand<string, 'RouteDecisionId'>;
+export type PendingActionId = Brand<string, 'PendingActionId'>;
+export type PendingActionResolutionId = Brand<string, 'PendingActionResolutionId'>;
+export type InteractionActionReservationId = Brand<string, 'InteractionActionReservationId'>;
+export type InteractionActionOutcomeId = Brand<string, 'InteractionActionOutcomeId'>;
+export type InteractionMessageHandoffId = Brand<string, 'InteractionMessageHandoffId'>;
+export type FrontstageAnswerId = Brand<string, 'FrontstageAnswerId'>;
+export type FrontstageContextManifestId = Brand<string, 'FrontstageContextManifestId'>;
+export type InteractionRoutingPolicyId = Brand<string, 'InteractionRoutingPolicyId'>;
+export type InteractionConfirmationPolicyId = Brand<string, 'InteractionConfirmationPolicyId'>;
 
 export type GoalRevision = Brand<number, 'GoalRevision'>;
 export type WorkflowVersion = Brand<number, 'WorkflowVersion'>;
@@ -69,6 +84,8 @@ export type AggregateVersion = Brand<number, 'AggregateVersion'>;
 export type RawRequestRevision = Brand<number, 'RawRequestRevision'>;
 export type IntakeRunVersion = Brand<number, 'IntakeRunVersion'>;
 export type IntentProjectionRevision = Brand<number, 'IntentProjectionRevision'>;
+export type InteractionSessionVersion = Brand<number, 'InteractionSessionVersion'>;
+export type InteractionOperationVersion = Brand<number, 'InteractionOperationVersion'>;
 export type IsoTimestamp = Brand<string, 'IsoTimestamp'>;
 export type Sha256Digest = Brand<string, 'Sha256Digest'>;
 
@@ -213,6 +230,36 @@ export const projectReadSnapshotCleanupOutcomeId = (
   value: string,
 ): ProjectReadSnapshotCleanupOutcomeId =>
   parseIdentifier('project-read-cleanup-outcome', value, 'ProjectReadSnapshotCleanupOutcomeId');
+export const interactionSessionId = (value: string): InteractionSessionId =>
+  parseIdentifier('interaction-session', value, 'InteractionSessionId');
+export const interactionMessageId = (value: string): InteractionMessageId =>
+  parseIdentifier('interaction-message', value, 'InteractionMessageId');
+export const interactionOperationId = (value: string): InteractionOperationId =>
+  parseIdentifier('interaction-operation', value, 'InteractionOperationId');
+export const focusBindingId = (value: string): FocusBindingId =>
+  parseIdentifier('focus-binding', value, 'FocusBindingId');
+export const routeProposalId = (value: string): RouteProposalId =>
+  parseIdentifier('route-proposal', value, 'RouteProposalId');
+export const routeDecisionId = (value: string): RouteDecisionId =>
+  parseIdentifier('route-decision', value, 'RouteDecisionId');
+export const pendingActionId = (value: string): PendingActionId =>
+  parseIdentifier('pending-action', value, 'PendingActionId');
+export const pendingActionResolutionId = (value: string): PendingActionResolutionId =>
+  parseIdentifier('pending-action-resolution', value, 'PendingActionResolutionId');
+export const interactionActionReservationId = (value: string): InteractionActionReservationId =>
+  parseIdentifier('interaction-action-reservation', value, 'InteractionActionReservationId');
+export const interactionActionOutcomeId = (value: string): InteractionActionOutcomeId =>
+  parseIdentifier('interaction-action-outcome', value, 'InteractionActionOutcomeId');
+export const interactionMessageHandoffId = (value: string): InteractionMessageHandoffId =>
+  parseIdentifier('interaction-message-handoff', value, 'InteractionMessageHandoffId');
+export const frontstageAnswerId = (value: string): FrontstageAnswerId =>
+  parseIdentifier('frontstage-answer', value, 'FrontstageAnswerId');
+export const frontstageContextManifestId = (value: string): FrontstageContextManifestId =>
+  parseIdentifier('frontstage-context-manifest', value, 'FrontstageContextManifestId');
+export const interactionRoutingPolicyId = (value: string): InteractionRoutingPolicyId =>
+  parseIdentifier('interaction-routing-policy', value, 'InteractionRoutingPolicyId');
+export const interactionConfirmationPolicyId = (value: string): InteractionConfirmationPolicyId =>
+  parseIdentifier('interaction-confirmation-policy', value, 'InteractionConfirmationPolicyId');
 
 export const goalRevision = (value: number): GoalRevision =>
   parsePositiveInteger(value, 'GoalRevision');
@@ -226,6 +273,10 @@ export const intakeRunVersion = (value: number): IntakeRunVersion =>
   parsePositiveInteger(value, 'IntakeRunVersion');
 export const intentProjectionRevision = (value: number): IntentProjectionRevision =>
   parsePositiveInteger(value, 'IntentProjectionRevision');
+export const interactionSessionVersion = (value: number): InteractionSessionVersion =>
+  parsePositiveInteger(value, 'InteractionSessionVersion');
+export const interactionOperationVersion = (value: number): InteractionOperationVersion =>
+  parsePositiveInteger(value, 'InteractionOperationVersion');
 
 export const nextWorkflowVersion = (value: WorkflowVersion): WorkflowVersion =>
   workflowVersion(value + 1);

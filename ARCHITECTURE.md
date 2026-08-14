@@ -241,8 +241,10 @@ the final prepared-source gate and ordered unchanged-source Live triad passed
 on exact source `01fd537`. The bounded Slice 4 review issued `PASS`; Slice 5's
 final canonical run then passed 13/13 stages and 68/68 rows on exact source
 `dfe4798`, and the independent completion review issued bounded `PASS` on
-2026-08-13. M2.6 Slice 0 decision/proof closure passed on 2026-08-14; Slice 1
-feature implementation and all M2.7 implementation have not started. Accepted
+2026-08-13. M2.6 Slice 0 decision/proof closure passed on 2026-08-14. Slice 1
+Interaction Domain, strict-codec, and deterministic Runtime-policy
+implementation is underway but has not passed bounded review; later M2.6
+slices and all M2.7 implementation have not started. Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not
 binding. The following M2 slice
