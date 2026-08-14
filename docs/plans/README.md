@@ -22,9 +22,10 @@ rewrite the historical M2.5 verdict. M2.6 is now the current formalization:
 ADRs 0036 through 0039 are accepted and its executable Slice 0 decision/proof
 contract passed bounded review on 2026-08-14. Slice 1's Interaction Domain,
 strict codecs, lifecycle/relationship invariants, canonical digests, and
-deterministic Runtime policy also passed bounded review on 2026-08-14; later
-M2.6 slices have not started. M2.7 remains a separate proposal whose ADRs are
-not binding.
+deterministic Runtime policy also passed bounded review on 2026-08-14. Slice 2
+SQLite Interaction authority is in progress through policy/schema,
+Session/Message, Operation failure closure, and Focus foundations; it is not
+complete. M2.7 remains a separate proposal whose ADRs are not binding.
 
 - [M1 deterministic skeleton](m1-deterministic-skeleton.md)
 - [M1 milestone acceptance plan](m1-acceptance-plan.md)
@@ -38,6 +39,7 @@ not binding.
 - [M2.5.1 milestone acceptance plan](m2.5.1-acceptance-plan.md)
 - [M2.6 Unified Frontstage Interaction and Control](m2.6-unified-frontstage-interaction.md)
 - [M2.6 Slice 0 contract and proof-owner freeze](m2.6-slice0-contract.md)
+- [M2.6 Slice 2 temporary execution plan](m2.6-slice2-temporary-execution-plan.md)
 - [M2.6 milestone acceptance plan](m2.6-acceptance-plan.md)
 - [M2.7 Local Runtime Host and Single-Goal Project Control](m2.7-local-runtime-host-single-goal-control.md)
 - [M2.7 milestone acceptance plan](m2.7-acceptance-plan.md)
