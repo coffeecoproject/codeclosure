@@ -11,21 +11,34 @@ import {
   auditEventId,
   decodeDirectActionGrammar,
   decodeInteractionMessage,
+  decodeInteractionOperation,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
   directActionGrammarProjection,
+  frontstageContextManifestId,
   InteractionContentRetention,
   InteractionMessageRole,
+  InteractionOperationFailureReason,
+  InteractionOperationKind,
+  InteractionOperationResultKind,
+  InteractionOperationState,
   InteractionSessionState,
   interactionRoutingPolicyProjection,
   interactionMessageId,
   interactionMessageProjection,
+  interactionOperationId,
+  interactionOperationProjection,
+  interactionOperationVersion,
   interactionSessionId,
   interactionSessionProjection,
   interactionSessionVersion,
   isoTimestamp,
   principalId,
+  routeDecisionId,
+  type CompletedInteractionOperation,
   type InteractionMessage,
+  type InteractionOperationProjectionInput,
+  type ReservedInteractionOperation,
   type InteractionSessionProjectionInput,
   type InteractionSession,
 } from '@codeclosure/domain';
@@ -36,9 +49,12 @@ import {
   createM26InteractionPolicies,
   type AdmitInteractionUserMessage,
   type CreateInteractionSession,
+  type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
   type InteractionAuditWrite,
   type InteractionPolicySet,
+  type ReserveInteractionOperation,
+  type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
 } from '@codeclosure/runtime';
 import {
@@ -279,6 +295,172 @@ function createUserMessageAdmissionInput(
     nextSession,
     messageAuditWrite,
     sessionAuditWrite,
+  });
+}
+
+function decodeOperationProjection(
+  base: InteractionOperationProjectionInput,
+): ReturnType<typeof decodeInteractionOperation> {
+  return decodeInteractionOperation(
+    { ...base, operationDigest: digests.digest(interactionOperationProjection(base)) },
+    digests,
+  );
+}
+
+function createReservedOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  reservedAt = '2026-08-14T01:00:02.000Z',
+  assistantBinding?: Readonly<{
+    contextManifestRef: NonNullable<ReservedInteractionOperation['contextManifestRef']>;
+    assistantProfile: NonNullable<ReservedInteractionOperation['assistantProfile']>;
+  }>,
+): ReservedInteractionOperation {
+  const base = {
+    id: interactionOperationId(`interaction-operation_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: Object.freeze({ id: message.id, digest: message.messageDigest }),
+    operationKind: InteractionOperationKind.ROUTE,
+    ...(assistantBinding ?? {}),
+    state: InteractionOperationState.RESERVED,
+    reservedAt: isoTimestamp(reservedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const operation = decodeOperationProjection(base);
+  if (operation.state !== InteractionOperationState.RESERVED) {
+    throw new TypeError('Fixture Operation did not remain reserved');
+  }
+  return operation;
+}
+
+function terminalizeOperation(
+  operation: ReservedInteractionOperation,
+  state: typeof InteractionOperationState.FAILED | typeof InteractionOperationState.INTERRUPTED,
+  completedAt = '2026-08-14T01:00:03.000Z',
+): FailedOrInterruptedInteractionOperation {
+  const common = {
+    id: operation.id,
+    schemaVersion: operation.schemaVersion,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    ...(operation.contextManifestRef === undefined
+      ? {}
+      : { contextManifestRef: operation.contextManifestRef }),
+    ...(operation.assistantProfile === undefined
+      ? {}
+      : { assistantProfile: operation.assistantProfile }),
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp(completedAt),
+  };
+  const base =
+    state === InteractionOperationState.FAILED
+      ? {
+          ...common,
+          state,
+          failureReason:
+            operation.assistantProfile === undefined
+              ? InteractionOperationFailureReason.VALIDATION_REJECTED
+              : InteractionOperationFailureReason.ASSISTANT_FAILED,
+        }
+      : {
+          ...common,
+          state,
+          failureReason: InteractionOperationFailureReason.INTERRUPTED,
+        };
+  const terminal = decodeOperationProjection(base);
+  if (
+    terminal.state !== InteractionOperationState.FAILED &&
+    terminal.state !== InteractionOperationState.INTERRUPTED
+  ) {
+    throw new TypeError('Fixture Operation did not terminalize');
+  }
+  return terminal;
+}
+
+function completeOperationWithoutOwnedResult(
+  operation: ReservedInteractionOperation,
+): CompletedInteractionOperation {
+  const routeDecisionRef = Object.freeze({
+    id: routeDecisionId('route-decision_unowned-operation-result'),
+    digest: digests.digest({ kind: 'unowned-route-decision' }),
+  });
+  const completed = decodeOperationProjection({
+    id: operation.id,
+    schemaVersion: operation.schemaVersion,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    ...(operation.contextManifestRef === undefined
+      ? {}
+      : { contextManifestRef: operation.contextManifestRef }),
+    ...(operation.assistantProfile === undefined
+      ? {}
+      : { assistantProfile: operation.assistantProfile }),
+    state: InteractionOperationState.COMPLETED,
+    result: Object.freeze({
+      kind: InteractionOperationResultKind.ROUTE_DECIDED,
+      routeDecisionRef,
+    }),
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp('2026-08-14T01:00:03.000Z'),
+  });
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Fixture Operation did not complete');
+  }
+  return completed;
+}
+
+function createOperationReservationInput(
+  session: InteractionSession,
+  message: InteractionMessage,
+  operation: ReservedInteractionOperation,
+  suffix: string,
+): ReserveInteractionOperation {
+  return Object.freeze({
+    session,
+    message,
+    operation,
+    auditWrite: Object.freeze({
+      id: auditEventId(`audit_interaction-operation-reserved-${fixtureIdentifierSuffix(suffix)}`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+      aggregateId: operation.id,
+      eventType: InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+      payloadDigest: operation.operationDigest,
+      occurredAt: operation.reservedAt,
+      afterVersion: operation.version,
+    }),
+  });
+}
+
+function createOperationTerminalInput(
+  currentOperation: ReservedInteractionOperation,
+  nextOperation: FailedOrInterruptedInteractionOperation,
+  suffix: string,
+): TerminalizeInteractionOperation {
+  return Object.freeze({
+    currentOperation,
+    nextOperation,
+    auditWrite: Object.freeze({
+      id: auditEventId(`audit_interaction-operation-terminal-${fixtureIdentifierSuffix(suffix)}`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+      aggregateId: nextOperation.id,
+      eventType:
+        nextOperation.state === InteractionOperationState.FAILED
+          ? InteractionAuditEventType.INTERACTION_OPERATION_FAILED
+          : InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED,
+      payloadDigest: nextOperation.operationDigest,
+      occurredAt: nextOperation.completedAt,
+      beforeVersion: currentOperation.version,
+      afterVersion: nextOperation.version,
+    }),
   });
 }
 
@@ -1244,6 +1426,1057 @@ void test('Slice 2 concurrent message consumers produce one winner and one typed
   }
 });
 
+void test('Slice 2 Operation reservation replays exactly, closes same-Session busy, and reopens', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'operation-reservation');
+  const message = createUserMessage(
+    initial,
+    'operation-reservation',
+    '请分析这个请求',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'operation-reservation');
+  const input = createOperationReservationInput(
+    session,
+    message,
+    operation,
+    'operation-reservation',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  assert.deepEqual(store.reserveInteractionOperation(input), {
+    status: 'SESSION_NOT_FOUND',
+  });
+  assert.deepEqual(
+    store.terminalizeInteractionOperation(
+      createOperationTerminalInput(
+        operation,
+        terminalizeOperation(operation, InteractionOperationState.FAILED),
+        'operation-not-found',
+      ),
+    ),
+    { status: 'OPERATION_NOT_FOUND' },
+  );
+  store.createInteractionSession(createSessionInput(initial, 'operation-reservation'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'operation-reservation'),
+  );
+
+  assert.deepEqual(store.reserveInteractionOperation(input), {
+    status: 'RESERVED',
+    operation,
+  });
+  assert.deepEqual(store.reserveInteractionOperation(input), {
+    status: 'REPLAYED',
+    operation,
+  });
+  assert.deepEqual(store.listReservedInteractionOperations(session.id), [operation]);
+
+  const conflicting = createReservedOperation(
+    session,
+    message,
+    'operation-reservation',
+    '2026-08-14T01:00:03.000Z',
+  );
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(session, message, conflicting, 'operation-conflict'),
+    ),
+    { status: 'OPERATION_CONFLICT', currentOperation: operation },
+  );
+
+  const secondOperation = createReservedOperation(session, message, 'operation-busy');
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(session, message, secondOperation, 'operation-busy'),
+    ),
+    { status: 'SESSION_OPERATION_BUSY', currentOperation: operation },
+  );
+
+  const nextMessage = createUserMessage(
+    session,
+    'operation-busy-message',
+    '这是下一条消息',
+    '2026-08-14T01:00:04.000Z',
+  );
+  const nextSession = transitionSession(
+    session,
+    InteractionSessionState.OPEN,
+    nextMessage.createdAt,
+  );
+  assert.deepEqual(
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(session, nextMessage, nextSession, 'operation-busy-message'),
+    ),
+    { status: 'SESSION_OPERATION_BUSY', currentOperation: operation },
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionOperation(operation.id), operation);
+    assert.deepEqual(reopened.listReservedInteractionOperations(session.id), [operation]);
+    assert.equal(reopened.getInteractionMessage(nextMessage.id), undefined);
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('Slice 2 unresolved Operation permits CLOSING but blocks other Session transitions', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'operation-session-serialization');
+  const message = createUserMessage(
+    initial,
+    'operation-session-serialization',
+    '保持会话和操作串行',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'operation-session-serialization');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'operation-session-serialization'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'operation-session-serialization'),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, 'operation-session-serialization'),
+  );
+
+  const advancedOpen = transitionSession(
+    session,
+    InteractionSessionState.OPEN,
+    '2026-08-14T01:00:03.000Z',
+  );
+  assert.deepEqual(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(session, advancedOpen, 'operation-session-open-busy'),
+    ),
+    { status: 'SESSION_OPERATION_BUSY', currentOperation: operation },
+  );
+
+  const closing = transitionSession(
+    session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:03.000Z',
+  );
+  const closingInput = createSessionTransitionInput(session, closing, 'operation-session-closing');
+  assert.deepEqual(store.transitionInteractionSession(closingInput), {
+    status: 'APPLIED',
+    session: closing,
+  });
+  assert.deepEqual(store.transitionInteractionSession(closingInput), {
+    status: 'REPLAYED',
+    session: closing,
+  });
+
+  const closed = transitionSession(
+    closing,
+    InteractionSessionState.CLOSED,
+    '2026-08-14T01:00:04.000Z',
+  );
+  assert.deepEqual(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(closing, closed, 'operation-session-closed-busy'),
+    ),
+    { status: 'SESSION_OPERATION_BUSY', currentOperation: operation },
+  );
+  const interruptedSession = transitionSession(
+    closing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:04.000Z',
+  );
+  assert.deepEqual(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(
+        closing,
+        interruptedSession,
+        'operation-session-interrupted-busy',
+      ),
+    ),
+    { status: 'SESSION_OPERATION_BUSY', currentOperation: operation },
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionSession(session.id), closing);
+    assert.deepEqual(reopened.listReservedInteractionOperations(session.id), [operation]);
+    const backdatedInterruption = terminalizeOperation(
+      operation,
+      InteractionOperationState.INTERRUPTED,
+      '2026-08-14T01:00:02.500Z',
+    );
+    assert.throws(
+      () =>
+        reopened.terminalizeInteractionOperation(
+          createOperationTerminalInput(
+            operation,
+            backdatedInterruption,
+            'operation-session-backdated-interruption',
+          ),
+        ),
+      /audit time moved backwards/u,
+    );
+    assert.deepEqual(reopened.getInteractionOperation(operation.id), operation);
+    const interruptedOperation = terminalizeOperation(
+      operation,
+      InteractionOperationState.INTERRUPTED,
+      '2026-08-14T01:00:04.000Z',
+    );
+    assert.equal(
+      reopened.terminalizeInteractionOperation(
+        createOperationTerminalInput(
+          operation,
+          interruptedOperation,
+          'operation-session-interrupted',
+        ),
+      ).status,
+      'APPLIED',
+    );
+    assert.deepEqual(
+      reopened.transitionInteractionSession(
+        createSessionTransitionInput(closing, closed, 'operation-session-closed'),
+      ),
+      { status: 'APPLIED', session: closed },
+    );
+  } finally {
+    reopened.close();
+  }
+
+  const finalReopen = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(finalReopen.getInteractionSession(session.id), closed);
+    assert.equal(
+      finalReopen.getInteractionOperation(operation.id)?.state,
+      InteractionOperationState.INTERRUPTED,
+    );
+    assert.deepEqual(finalReopen.listReservedInteractionOperations(session.id), []);
+  } finally {
+    finalReopen.close();
+  }
+});
+
+void test('Slice 2 Operation reservation returns typed Message and Session freshness conflicts', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+
+  const missingInitial = createInitialSession(policies, 'operation-missing-message');
+  const missingMessage = createUserMessage(
+    missingInitial,
+    'operation-missing-message',
+    '尚未持久化',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const missingSession = transitionSession(
+    missingInitial,
+    InteractionSessionState.OPEN,
+    missingMessage.createdAt,
+  );
+  store.createInteractionSession(createSessionInput(missingInitial, 'operation-missing-message'));
+  store.transitionInteractionSession(
+    createSessionTransitionInput(missingInitial, missingSession, 'operation-missing-message'),
+  );
+  const missingOperation = createReservedOperation(
+    missingSession,
+    missingMessage,
+    'operation-missing-message',
+  );
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        missingSession,
+        missingMessage,
+        missingOperation,
+        'operation-missing-message',
+      ),
+    ),
+    { status: 'MESSAGE_NOT_FOUND' },
+  );
+
+  const initial = createInitialSession(policies, 'operation-stale-session');
+  const message = createUserMessage(
+    initial,
+    'operation-stale-session',
+    '原始消息',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.createInteractionSession(createSessionInput(initial, 'operation-stale-session'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'operation-stale-session'),
+  );
+
+  const substitutedMessage = createUserMessage(
+    initial,
+    'operation-stale-session',
+    '替换消息',
+    message.createdAt,
+  );
+  const substitutedOperation = createReservedOperation(
+    session,
+    substitutedMessage,
+    'operation-substituted-message',
+  );
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        session,
+        substitutedMessage,
+        substitutedOperation,
+        'operation-substituted-message',
+      ),
+    ),
+    { status: 'MESSAGE_CONFLICT', currentMessage: message },
+  );
+
+  const closing = transitionSession(
+    session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:03.000Z',
+  );
+  store.transitionInteractionSession(
+    createSessionTransitionInput(session, closing, 'operation-stale-session-closing'),
+  );
+  const staleOperation = createReservedOperation(session, message, 'operation-stale-session');
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(session, message, staleOperation, 'operation-stale-session'),
+    ),
+    { status: 'VERSION_CONFLICT', currentSession: closing },
+  );
+  store.close();
+});
+
+const operationReservationRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_OPERATION_WRITE,
+  InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of operationReservationRollbackSteps) {
+  void test(`Slice 2 Operation reservation rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `operation-reserve-rollback-${step}`);
+    const message = createUserMessage(
+      initial,
+      `operation-reserve-rollback-${step}`,
+      '预约回滚',
+      '2026-08-14T01:00:01.000Z',
+    );
+    const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+    const operation = createReservedOperation(
+      session,
+      message,
+      `operation-reserve-rollback-${step}`,
+    );
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(
+      createSessionInput(initial, `operation-reserve-rollback-${step}`),
+    );
+    setup.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(
+        initial,
+        message,
+        session,
+        `operation-reserve-rollback-${step}`,
+      ),
+    );
+    setup.close();
+
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.reserveInteractionOperation(
+          createOperationReservationInput(
+            session,
+            message,
+            operation,
+            `operation-reserve-rollback-${step}`,
+          ),
+        ),
+      new RegExp(step),
+    );
+    assert.equal(store.getInteractionOperation(operation.id), undefined);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.equal(reopened.getInteractionOperation(operation.id), undefined);
+      assert.deepEqual(reopened.listReservedInteractionOperations(session.id), []);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 Operation failure/interruption terminalization replays and releases serialization', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'operation-terminal');
+  const firstMessage = createUserMessage(
+    initial,
+    'operation-terminal-first',
+    '第一次操作',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const firstSession = transitionSession(
+    initial,
+    InteractionSessionState.OPEN,
+    firstMessage.createdAt,
+  );
+  const firstAssistantBinding = Object.freeze({
+    contextManifestRef: Object.freeze({
+      id: frontstageContextManifestId('frontstage-context-manifest_operation-terminal-first'),
+      digest: digests.digest({ manifest: 'operation-terminal-first' }),
+    }),
+    assistantProfile: Object.freeze({
+      id: 'frontstage-assistant-profile_operation-terminal-first',
+      version: 'frontstage-assistant-profile-v1',
+      digest: digests.digest({ profile: 'operation-terminal-first-v1' }),
+    }),
+  });
+  const firstOperation = createReservedOperation(
+    firstSession,
+    firstMessage,
+    'operation-terminal-first',
+    '2026-08-14T01:00:02.000Z',
+    firstAssistantBinding,
+  );
+  const failed = terminalizeOperation(firstOperation, InteractionOperationState.FAILED);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'operation-terminal'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      initial,
+      firstMessage,
+      firstSession,
+      'operation-terminal-first',
+    ),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      firstSession,
+      firstMessage,
+      firstOperation,
+      'operation-terminal-first',
+    ),
+  );
+
+  const terminalInput = createOperationTerminalInput(
+    firstOperation,
+    failed,
+    'operation-terminal-first',
+  );
+  assert.deepEqual(store.terminalizeInteractionOperation(terminalInput), {
+    status: 'APPLIED',
+    operation: failed,
+  });
+  assert.deepEqual(store.terminalizeInteractionOperation(terminalInput), {
+    status: 'REPLAYED',
+    operation: failed,
+  });
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        firstSession,
+        firstMessage,
+        firstOperation,
+        'operation-terminal-first-reservation-replay',
+      ),
+    ),
+    { status: 'REPLAYED', operation: failed },
+  );
+  const conflictingReservation = createReservedOperation(
+    firstSession,
+    firstMessage,
+    'operation-terminal-first',
+    firstOperation.reservedAt,
+    Object.freeze({
+      contextManifestRef: firstAssistantBinding.contextManifestRef,
+      assistantProfile: Object.freeze({
+        ...firstAssistantBinding.assistantProfile,
+        version: 'frontstage-assistant-profile-v2',
+        digest: digests.digest({ profile: 'operation-terminal-first-v2' }),
+      }),
+    }),
+  );
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        firstSession,
+        firstMessage,
+        conflictingReservation,
+        'operation-terminal-first-reservation-conflict',
+      ),
+    ),
+    { status: 'OPERATION_CONFLICT', currentOperation: failed },
+  );
+  const conflictingTerminal = terminalizeOperation(
+    firstOperation,
+    InteractionOperationState.INTERRUPTED,
+  );
+  assert.deepEqual(
+    store.terminalizeInteractionOperation(
+      createOperationTerminalInput(
+        firstOperation,
+        conflictingTerminal,
+        'operation-terminal-conflict',
+      ),
+    ),
+    { status: 'VERSION_CONFLICT', currentOperation: failed },
+  );
+  assert.deepEqual(store.listReservedInteractionOperations(firstSession.id), []);
+
+  const backdatedMessage = createUserMessage(
+    firstSession,
+    'operation-terminal-backdated-message',
+    '不能写入旧时间消息',
+    '2026-08-14T01:00:02.500Z',
+  );
+  const backdatedSession = transitionSession(
+    firstSession,
+    InteractionSessionState.OPEN,
+    backdatedMessage.createdAt,
+  );
+  assert.throws(
+    () =>
+      store.admitInteractionUserMessage(
+        createUserMessageAdmissionInput(
+          firstSession,
+          backdatedMessage,
+          backdatedSession,
+          'operation-terminal-backdated-message',
+        ),
+      ),
+    /audit time moved backwards/u,
+  );
+  assert.equal(store.getInteractionMessage(backdatedMessage.id), undefined);
+  assert.deepEqual(store.getInteractionSession(firstSession.id), firstSession);
+
+  const secondMessage = createUserMessage(
+    firstSession,
+    'operation-terminal-second',
+    '第二次操作',
+    '2026-08-14T01:00:04.000Z',
+  );
+  const secondSession = transitionSession(
+    firstSession,
+    InteractionSessionState.OPEN,
+    secondMessage.createdAt,
+  );
+  assert.equal(
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(
+        firstSession,
+        secondMessage,
+        secondSession,
+        'operation-terminal-second',
+      ),
+    ).status,
+    'ADMITTED',
+  );
+  const secondOperation = createReservedOperation(
+    secondSession,
+    secondMessage,
+    'operation-terminal-second',
+    '2026-08-14T01:00:05.000Z',
+  );
+  assert.equal(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        secondSession,
+        secondMessage,
+        secondOperation,
+        'operation-terminal-second',
+      ),
+    ).status,
+    'RESERVED',
+  );
+  const interrupted = terminalizeOperation(
+    secondOperation,
+    InteractionOperationState.INTERRUPTED,
+    '2026-08-14T01:00:06.000Z',
+  );
+  assert.equal(
+    store.terminalizeInteractionOperation(
+      createOperationTerminalInput(secondOperation, interrupted, 'operation-terminal-second'),
+    ).status,
+    'APPLIED',
+  );
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        secondSession,
+        secondMessage,
+        secondOperation,
+        'operation-terminal-second-reservation-replay',
+      ),
+    ),
+    { status: 'REPLAYED', operation: interrupted },
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionOperation(firstOperation.id), failed);
+    assert.deepEqual(reopened.getInteractionOperation(secondOperation.id), interrupted);
+    assert.deepEqual(
+      reopened.reserveInteractionOperation(
+        createOperationReservationInput(
+          firstSession,
+          firstMessage,
+          firstOperation,
+          'operation-terminal-first-reopen-replay',
+        ),
+      ),
+      { status: 'REPLAYED', operation: failed },
+    );
+    assert.deepEqual(
+      reopened.reserveInteractionOperation(
+        createOperationReservationInput(
+          secondSession,
+          secondMessage,
+          secondOperation,
+          'operation-terminal-second-reopen-replay',
+        ),
+      ),
+      { status: 'REPLAYED', operation: interrupted },
+    );
+    assert.deepEqual(reopened.listReservedInteractionOperations(secondSession.id), []);
+  } finally {
+    reopened.close();
+  }
+});
+
+const operationTerminalRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_OPERATION_TERMINAL_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_OPERATION_TERMINAL_WRITE,
+  InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of operationTerminalRollbackSteps) {
+  void test(`Slice 2 Operation terminalization rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `operation-terminal-rollback-${step}`);
+    const message = createUserMessage(
+      initial,
+      `operation-terminal-rollback-${step}`,
+      '终态回滚',
+      '2026-08-14T01:00:01.000Z',
+    );
+    const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+    const operation = createReservedOperation(
+      session,
+      message,
+      `operation-terminal-rollback-${step}`,
+    );
+    const failed = terminalizeOperation(operation, InteractionOperationState.FAILED);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(
+      createSessionInput(initial, `operation-terminal-rollback-${step}`),
+    );
+    setup.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(
+        initial,
+        message,
+        session,
+        `operation-terminal-rollback-${step}`,
+      ),
+    );
+    setup.reserveInteractionOperation(
+      createOperationReservationInput(
+        session,
+        message,
+        operation,
+        `operation-terminal-rollback-${step}`,
+      ),
+    );
+    setup.close();
+
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.terminalizeInteractionOperation(
+          createOperationTerminalInput(operation, failed, `operation-terminal-rollback-${step}`),
+        ),
+      new RegExp(step),
+    );
+    assert.deepEqual(store.getInteractionOperation(operation.id), operation);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.deepEqual(reopened.getInteractionOperation(operation.id), operation);
+      assert.deepEqual(reopened.listReservedInteractionOperations(session.id), [operation]);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 concurrent Operation consumers produce one reservation and one typed busy result', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'concurrent-operation');
+  const message = createUserMessage(
+    initial,
+    'concurrent-operation',
+    '并发预约',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  setup.createInteractionSession(createSessionInput(initial, 'concurrent-operation'));
+  setup.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'concurrent-operation'),
+  );
+  setup.close();
+
+  const firstOperation = createReservedOperation(session, message, 'concurrent-operation-first');
+  const secondOperation = createReservedOperation(session, message, 'concurrent-operation-second');
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(
+      firstStore.reserveInteractionOperation(
+        createOperationReservationInput(
+          session,
+          message,
+          firstOperation,
+          'concurrent-operation-first',
+        ),
+      ).status,
+      'RESERVED',
+    );
+    assert.deepEqual(
+      secondStore.reserveInteractionOperation(
+        createOperationReservationInput(
+          session,
+          message,
+          secondOperation,
+          'concurrent-operation-second',
+        ),
+      ),
+      { status: 'SESSION_OPERATION_BUSY', currentOperation: firstOperation },
+    );
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
+void test('Slice 2 strict reopen rejects a standalone successful Operation without its result owner', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'unowned-operation-result');
+  const message = createUserMessage(
+    initial,
+    'unowned-operation-result',
+    '不能单独成功',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'unowned-operation-result');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'unowned-operation-result'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'unowned-operation-result'),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, 'unowned-operation-result'),
+  );
+  store.close();
+
+  const completed = completeOperationWithoutOwnedResult(operation);
+  const database = new Database(filename);
+  try {
+    database
+      .prepare(
+        `UPDATE interaction_operations
+            SET version = ?, state = ?, completed_at = ?, operation_digest = ?, record_json = ?
+          WHERE id = ?`,
+      )
+      .run(
+        completed.version,
+        completed.state,
+        completed.completedAt,
+        completed.operationDigest,
+        JSON.stringify(completed),
+        completed.id,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /has no implemented valid closure/u);
+});
+
+void test('Slice 2 strict reopen rejects a terminal Session with an unresolved Operation', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'terminal-session-reserved-operation');
+  const message = createUserMessage(
+    initial,
+    'terminal-session-reserved-operation',
+    '终态会话不能掩盖未完成操作',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(
+    session,
+    message,
+    'terminal-session-reserved-operation',
+  );
+  const closing = transitionSession(
+    session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:03.000Z',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(
+    createSessionInput(initial, 'terminal-session-reserved-operation'),
+  );
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      initial,
+      message,
+      session,
+      'terminal-session-reserved-operation',
+    ),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      session,
+      message,
+      operation,
+      'terminal-session-reserved-operation',
+    ),
+  );
+  store.transitionInteractionSession(
+    createSessionTransitionInput(session, closing, 'terminal-session-reserved-operation-closing'),
+  );
+  store.close();
+
+  const closed = transitionSession(
+    closing,
+    InteractionSessionState.CLOSED,
+    '2026-08-14T01:00:04.000Z',
+  );
+  const closedInput = createSessionTransitionInput(
+    closing,
+    closed,
+    'terminal-session-reserved-operation-closed',
+  );
+  const database = new Database(filename);
+  try {
+    database
+      .prepare(
+        `UPDATE interaction_sessions
+            SET version = ?, state = ?, terminal_reason = NULL, updated_at = ?,
+                session_digest = ?, record_json = ?
+          WHERE id = ?`,
+      )
+      .run(
+        closed.version,
+        closed.state,
+        closed.updatedAt,
+        closed.sessionDigest,
+        JSON.stringify(closed),
+        closed.id,
+      );
+    database
+      .prepare(
+        `INSERT INTO audit_events(
+           id, aggregate_type, aggregate_id, event_type, actor_type,
+           before_version, after_version, payload_digest, occurred_at
+         ) VALUES (?, ?, ?, ?, 'RUNTIME', ?, ?, ?, ?)`,
+      )
+      .run(
+        closedInput.auditWrite.id,
+        closedInput.auditWrite.aggregateType,
+        closedInput.auditWrite.aggregateId,
+        closedInput.auditWrite.eventType,
+        closedInput.auditWrite.beforeVersion,
+        closedInput.auditWrite.afterVersion,
+        closedInput.auditWrite.payloadDigest,
+        closedInput.auditWrite.occurredAt,
+      );
+    database
+      .prepare(
+        `INSERT INTO interaction_audit_events(session_id, position, audit_event_id)
+         SELECT ?, COALESCE(MAX(position), -1) + 1, ?
+           FROM interaction_audit_events
+          WHERE session_id = ?`,
+      )
+      .run(closed.id, closedInput.auditWrite.id, closed.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /has no implemented valid closure/u);
+});
+
+void test('Slice 2 strict reopen rejects a backdated Operation terminal audit', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'backdated-operation-terminal-audit');
+  const message = createUserMessage(
+    initial,
+    'backdated-operation-terminal-audit',
+    '终态审计时间不可倒退',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'backdated-operation-terminal-audit');
+  const closing = transitionSession(
+    session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:03.000Z',
+  );
+  const interrupted = terminalizeOperation(
+    operation,
+    InteractionOperationState.INTERRUPTED,
+    '2026-08-14T01:00:04.000Z',
+  );
+  const terminalInput = createOperationTerminalInput(
+    operation,
+    interrupted,
+    'backdated-operation-terminal-audit',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'backdated-operation-terminal-audit'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      initial,
+      message,
+      session,
+      'backdated-operation-terminal-audit',
+    ),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      session,
+      message,
+      operation,
+      'backdated-operation-terminal-audit',
+    ),
+  );
+  store.transitionInteractionSession(
+    createSessionTransitionInput(session, closing, 'backdated-operation-terminal-audit-closing'),
+  );
+  assert.equal(store.terminalizeInteractionOperation(terminalInput).status, 'APPLIED');
+  store.close();
+
+  const backdated = terminalizeOperation(
+    operation,
+    InteractionOperationState.INTERRUPTED,
+    '2026-08-14T01:00:02.500Z',
+  );
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER interaction_operations_update_guard');
+    database.exec('DROP TRIGGER audit_events_no_update');
+    database
+      .prepare(
+        `UPDATE interaction_operations
+            SET completed_at = ?, operation_digest = ?, record_json = ?
+          WHERE id = ?`,
+      )
+      .run(
+        backdated.completedAt,
+        backdated.operationDigest,
+        JSON.stringify(backdated),
+        backdated.id,
+      );
+    database
+      .prepare(
+        `UPDATE audit_events
+            SET payload_digest = ?, occurred_at = ?
+          WHERE id = ?`,
+      )
+      .run(backdated.operationDigest, backdated.completedAt, terminalInput.auditWrite.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /Runtime-owned and ordered/u);
+});
+
+void test('Slice 2 strict reopen rejects substituted Operation audit authority', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'operation-audit-substitution');
+  const message = createUserMessage(
+    initial,
+    'operation-audit-substitution',
+    '审计不可替换',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'operation-audit-substitution');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'operation-audit-substitution'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'operation-audit-substitution'),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, 'operation-audit-substitution'),
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER audit_events_no_update');
+    database
+      .prepare(
+        `UPDATE audit_events
+            SET payload_digest = ?
+          WHERE aggregate_type = ? AND aggregate_id = ?`,
+      )
+      .run(
+        digests.digest({ substituted: true }),
+        InteractionAuditAggregateType.INTERACTION_OPERATION,
+        operation.id,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /lost its reservation audit/u);
+});
+
 void test('Slice 2 strict reopen rejects an orphan Session audit', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
@@ -1334,7 +2567,7 @@ void test('Slice 2 strict reopen rejects retained Message content substitution',
 
   assert.throws(
     () => SqliteControlStore.open({ filename }),
-    /Interaction Session\/Message authority failed strict reopen/u,
+    /Interaction Session\/Message\/Operation authority failed strict reopen/u,
   );
 });
 
@@ -1349,30 +2582,61 @@ void test('Slice 2 strict reopen rejects later-slice rows without an owning Stor
     '2026-08-14T01:00:01.000Z',
   );
   const afterMessage = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(afterMessage, message, 'unimplemented-route-proposal');
   const store = SqliteControlStore.open({ filename });
   store.installInteractionPolicies(installInput(policies));
   store.createInteractionSession(createSessionInput(initial, 'unimplemented-operation'));
   store.admitInteractionUserMessage(
     createUserMessageAdmissionInput(initial, message, afterMessage, 'unimplemented-operation'),
   );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      afterMessage,
+      message,
+      operation,
+      'unimplemented-route-proposal',
+    ),
+  );
   store.close();
 
   const database = new Database(filename);
   try {
-    insertReservedOperation(
-      database,
-      initial.id,
-      message.id,
-      message.messageDigest,
-      'interaction-operation_unimplemented-path',
-    );
+    const proposalId = 'route-proposal_unimplemented-path';
+    const proposalDigest = digests.digest({ proposalId, operationId: operation.id });
+    const record = {
+      id: proposalId,
+      schemaVersion: 1,
+      sessionId: initial.id,
+      operationId: operation.id,
+      messageRef: { id: message.id, digest: message.messageDigest },
+      kind: 'NO_ACTION_PROPOSAL',
+      observedAt: '2026-08-14T01:00:03.000Z',
+      proposalDigest,
+    };
+    database
+      .prepare(
+        `INSERT INTO interaction_route_proposals(
+           id, schema_version, session_id, operation_id, message_id, message_digest,
+           proposal_kind, proposal_digest, observed_at, record_json
+         ) VALUES (?, 1, ?, ?, ?, ?, 'NO_ACTION_PROPOSAL', ?, ?, ?)`,
+      )
+      .run(
+        proposalId,
+        initial.id,
+        operation.id,
+        message.id,
+        message.messageDigest,
+        proposalDigest,
+        record.observedAt,
+        JSON.stringify(record),
+      );
   } finally {
     database.close();
   }
 
   assert.throws(
     () => SqliteControlStore.open({ filename }),
-    /interaction_operations rows have no implemented M2\.6 Store authority path/u,
+    /interaction_route_proposals rows have no implemented M2\.6 Store authority path/u,
   );
 });
 

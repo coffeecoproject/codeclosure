@@ -2163,6 +2163,48 @@ export function assertInteractionOperationTransition(
   }
 }
 
+export type InteractionOperationReservationProjection = Omit<
+  ReservedInteractionOperation,
+  'operationDigest'
+>;
+
+/**
+ * Owns reconstruction of the immutable version-1 reservation represented by
+ * a reservation or its one legal terminal successor. Persistence may hash
+ * this projection for replay and audit validation but must not redefine the
+ * reservation fields or invent a reservation for an initially terminal local
+ * Operation.
+ */
+export function interactionOperationReservationProjection(
+  operation: InteractionOperation,
+): InteractionOperationReservationProjection {
+  assertInteractionOperationInvariant(operation);
+  if (operation.state === InteractionOperationState.RESERVED) {
+    assertInitialInteractionOperationInvariant(operation);
+  } else if (operation.version !== 2) {
+    throw new DomainInvariantError(
+      'A terminal Interaction Operation represents a prior reservation only at version 2',
+    );
+  }
+  return Object.freeze({
+    id: operation.id,
+    schemaVersion: operation.schemaVersion,
+    version: interactionOperationVersion(1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    ...(operation.contextManifestRef === undefined
+      ? {}
+      : { contextManifestRef: operation.contextManifestRef }),
+    ...(operation.assistantProfile === undefined
+      ? {}
+      : { assistantProfile: operation.assistantProfile }),
+    state: InteractionOperationState.RESERVED,
+    reservedAt: operation.reservedAt,
+  });
+}
+
 export type InteractionSessionProjectionInput =
   | Omit<NonTerminalInteractionSession, 'sessionDigest'>
   | Omit<ClosedInteractionSession, 'sessionDigest'>

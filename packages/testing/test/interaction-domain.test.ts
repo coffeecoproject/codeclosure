@@ -71,6 +71,7 @@ import {
   interactionMessageProjection,
   interactionOperationId,
   interactionOperationProjection,
+  interactionOperationReservationProjection,
   interactionRoutingPolicyProjection,
   interactionOperationVersion,
   interactionSessionId,
@@ -992,6 +993,47 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
     completedAt: LATER,
   } satisfies InteractionOperationProjectionInput;
   const interruptedOperation = decodeOperation(interruptedOperationBase);
+  const { contextManifestRef, assistantProfile } = fixtures.answerRouteOperation;
+  if (contextManifestRef === undefined || assistantProfile === undefined) {
+    throw new TypeError('Assistant Operation fixture must bind its Manifest and Profile');
+  }
+  const assistantReservationBase = {
+    id: fixtures.answerRouteOperation.id,
+    schemaVersion: fixtures.answerRouteOperation.schemaVersion,
+    version: interactionOperationVersion(1),
+    sessionId: fixtures.answerRouteOperation.sessionId,
+    expectedSessionVersion: fixtures.answerRouteOperation.expectedSessionVersion,
+    messageRef: fixtures.answerRouteOperation.messageRef,
+    operationKind: fixtures.answerRouteOperation.operationKind,
+    contextManifestRef,
+    assistantProfile,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: fixtures.answerRouteOperation.reservedAt,
+  } satisfies InteractionOperationProjectionInput;
+  const assistantReservation = decodeOperation(assistantReservationBase);
+  if (assistantReservation.state !== InteractionOperationState.RESERVED) {
+    throw new TypeError('Assistant reservation projection must remain reserved');
+  }
+  const assistantFailureBase = {
+    ...assistantReservationBase,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.FAILED,
+    failureReason: InteractionOperationFailureReason.ASSISTANT_FAILED,
+    completedAt: LATER,
+  } satisfies InteractionOperationProjectionInput;
+  const assistantFailure = decodeOperation(assistantFailureBase);
+  assert.doesNotThrow(() =>
+    assertInteractionOperationTransition(assistantReservation, assistantFailure),
+  );
+  assert.deepEqual(
+    interactionOperationReservationProjection(assistantFailure),
+    assistantReservationBase,
+  );
+  assert.doesNotThrow(() => assertInitialInteractionOperationInvariant(fixtures.operation));
+  assert.throws(
+    () => interactionOperationReservationProjection(fixtures.operation),
+    /prior reservation only at version 2/,
+  );
   const interruptedCreationBase = {
     ...interruptedOperationBase,
     version: interactionOperationVersion(1),

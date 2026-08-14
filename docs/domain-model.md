@@ -154,8 +154,11 @@ meaning in Domain invariants, and do not change existing Intake, Goal,
 Workflow, Evidence, or Acceptance authority. Slice 2 SQLite persistence now
 implements policy installation plus atomic Session create/lifecycle and
 user-message admission, typed replay/conflict, ordered audit membership, and
-strict reopen for that subset. The remaining Interaction transactions and
-Frontstage composition remain later M2.6 work.
+strict reopen for that subset. It now also persists one serialized Operation
+reservation per Session, closes failure/interruption terminal states, and
+detects unresolved reservations. Successful Operation results remain part of
+their later result-owner transactions; the remaining Interaction transactions
+and Frontstage composition remain later M2.6 work.
 Proposed M2.7 separately adds Host/epoch, project control-lease/epoch, and
 project execution-slot records under [Local Runtime Host](runtime-host.md).
 They remain planned and cannot replace Goal, Workflow, command, or Acceptance

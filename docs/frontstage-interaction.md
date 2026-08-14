@@ -9,10 +9,12 @@ codecs, lifecycle and relationship invariants, canonical digest projections,
 and deterministic Runtime policy passed bounded review on 2026-08-14. Slice 2
 SQLite work now implements policy installation plus atomic Session
 create/lifecycle and user-message admission with typed replay/conflict and
-strict reopen for that subset. Remaining Slice 2 transactions, Assistant
-Adapter, routing composition, Goal query/control, and CLI work remain later.
-The M2.5.1 milestone prerequisite has passed, and the completed M2.5 Goal
-Intake boundary remains unchanged.
+strict reopen for that subset. It also implements serialized Operation
+reservation, failure/interruption closure, and unresolved-reservation
+detection. Successful Operation results and the remaining Slice 2
+transactions, Assistant Adapter, routing composition, Goal query/control, and
+CLI work remain later. The M2.5.1 milestone prerequisite has passed, and the
+completed M2.5 Goal Intake boundary remains unchanged.
 
 ## Purpose
 

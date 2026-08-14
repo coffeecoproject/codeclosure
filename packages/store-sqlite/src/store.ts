@@ -34,6 +34,8 @@ import {
   IntentAdmissionReasonCode,
   IntentExecutionDisposition,
   IntentProjectionField,
+  InteractionOperationState,
+  InteractionSessionState,
   RecoveryReconciliationDisposition,
   RecoveryReconciliationPurpose,
   RunStatus,
@@ -113,6 +115,7 @@ import {
   decodeIntentProjectionRevision,
   decodeInteractionConfirmationPolicy,
   decodeInteractionMessage,
+  decodeInteractionOperation,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
   decodeMaterialAmbiguity,
@@ -131,6 +134,8 @@ import {
   deriveCapabilityGrant,
   deriveExternalPhaseResponseSchemaPolicy,
   assertInitialInteractionSessionInvariant,
+  assertInteractionOperationReservationChain,
+  assertInteractionOperationTransition,
   assertInteractionSessionTransition,
   assertInteractionUserMessageAdmission,
   assertInteractionUserMessageAdmissionBinding,
@@ -140,6 +145,7 @@ import {
   intakeCommandResultProjection,
   intakeRunId,
   intentAdmissionPolicyId,
+  interactionOperationReservationProjection,
   hasExactWorkflowActiveAttemptAuthority,
   evidenceId,
   evidenceSetDigestProjection,
@@ -238,8 +244,11 @@ import {
   type IntentProjectionRevisionRecord,
   type InteractionMessage,
   type InteractionMessageId,
+  type InteractionOperation,
+  type InteractionOperationId,
   type InteractionSession,
   type InteractionSessionId,
+  type ReservedInteractionOperation,
   type MaterialAmbiguity,
   type MaterialAmbiguitySet,
   type RawRequest,
@@ -388,15 +397,19 @@ import {
   InteractionAuditEventType,
   type AdmitInteractionUserMessage,
   type CreateInteractionSession,
+  type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
   type InteractionAuditWrite,
-  type InteractionPolicyControlStore,
+  type InteractionOperationControlStore,
+  type InteractionOperationReservationResult,
+  type InteractionOperationTerminalResult,
   type InteractionPolicyInstallResult,
   type InteractionPolicySet,
-  type InteractionSessionControlStore,
   type InteractionSessionCreateResult,
   type InteractionSessionTransitionResult,
   type InteractionUserMessageAdmissionResult,
+  type ReserveInteractionOperation,
+  type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
   type IntakeReservationStoreResult,
   type IntentAdmissionPolicyInstallResult,
@@ -620,6 +633,10 @@ export const InteractionTransactionStep = {
   AFTER_MESSAGE_WRITE: 'AFTER_INTERACTION_MESSAGE_WRITE',
   AFTER_SESSION_TRANSITION_AUDIT_WRITE: 'AFTER_INTERACTION_SESSION_TRANSITION_AUDIT_WRITE',
   AFTER_SESSION_TRANSITION_WRITE: 'AFTER_INTERACTION_SESSION_TRANSITION_WRITE',
+  AFTER_OPERATION_RESERVATION_AUDIT_WRITE: 'AFTER_INTERACTION_OPERATION_RESERVATION_AUDIT_WRITE',
+  AFTER_OPERATION_WRITE: 'AFTER_INTERACTION_OPERATION_WRITE',
+  AFTER_OPERATION_TERMINAL_AUDIT_WRITE: 'AFTER_INTERACTION_OPERATION_TERMINAL_AUDIT_WRITE',
+  AFTER_OPERATION_TERMINAL_WRITE: 'AFTER_INTERACTION_OPERATION_TERMINAL_WRITE',
   AFTER_AUDIT_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_AUDIT_MEMBERSHIP_WRITE',
   BEFORE_COMMIT: 'BEFORE_INTERACTION_COMMIT',
 } as const;
@@ -1128,6 +1145,29 @@ const retainedInteractionMessageRowSchema = z
   })
   .strict();
 
+const retainedInteractionOperationRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    expected_session_version: z.number().int().positive(),
+    message_id: z.string().min(1),
+    message_digest: z.string().min(1),
+    operation_kind: z.string().min(1),
+    state: z.string().min(1),
+    context_manifest_id: z.string().nullable(),
+    context_manifest_digest: z.string().nullable(),
+    assistant_profile_id: z.string().nullable(),
+    assistant_profile_version: z.string().nullable(),
+    assistant_profile_digest: z.string().nullable(),
+    reserved_at: z.string().min(1),
+    completed_at: z.string().nullable(),
+    operation_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
 const retainedInteractionAuditMembershipRowSchema = z
   .object({
     session_id: z.string().min(1),
@@ -1213,6 +1253,19 @@ interface NormalizedInteractionUserMessageAdmission {
   readonly nextSession: InteractionSession;
   readonly messageAuditWrite: InteractionAuditWrite;
   readonly sessionAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionOperationReservation {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly operation: ReservedInteractionOperation;
+  readonly auditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionOperationTerminalization {
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: FailedOrInterruptedInteractionOperation;
+  readonly auditWrite: InteractionAuditWrite;
 }
 
 function assertExactObjectKeys(
@@ -1486,6 +1539,83 @@ function normalizeInteractionUserMessageAdmission(
     messageAuditWrite,
     sessionAuditWrite,
   });
+}
+
+function normalizeInteractionOperationReservation(
+  input: ReserveInteractionOperation,
+): NormalizedInteractionOperationReservation {
+  assertExactObjectKeys(
+    input,
+    ['session', 'message', 'operation', 'auditWrite'],
+    [],
+    'Interaction Operation reservation input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const operation = decodeInteractionOperation(input.operation, canonicalAuthorityDigests);
+  if (operation.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Interaction Operation reservation must be RESERVED');
+  }
+  assertInteractionOperationReservationChain({ session, message, operation });
+  const auditWrite = normalizeExactInteractionAuditWrite(input.auditWrite, {
+    recordType: 'Interaction Operation reservation audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+    aggregateId: operation.id,
+    eventType: InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+    payloadDigest: operation.operationDigest,
+    occurredAt: operation.reservedAt,
+    afterVersion: operation.version,
+  });
+  return Object.freeze({ session, message, operation, auditWrite });
+}
+
+function normalizeInteractionOperationTerminalization(
+  input: TerminalizeInteractionOperation,
+): NormalizedInteractionOperationTerminalization {
+  assertExactObjectKeys(
+    input,
+    ['currentOperation', 'nextOperation', 'auditWrite'],
+    [],
+    'Interaction Operation terminalization input',
+  );
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  if (currentOperation.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Current Interaction Operation must be RESERVED');
+  }
+  if (
+    nextOperation.state !== InteractionOperationState.FAILED &&
+    nextOperation.state !== InteractionOperationState.INTERRUPTED
+  ) {
+    throw new StoreInvariantError(
+      'This Interaction Operation transaction may close only failure or interruption',
+    );
+  }
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  const eventType =
+    nextOperation.state === InteractionOperationState.FAILED
+      ? InteractionAuditEventType.INTERACTION_OPERATION_FAILED
+      : InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED;
+  const auditWrite = normalizeExactInteractionAuditWrite(input.auditWrite, {
+    recordType: 'Interaction Operation terminal audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+    aggregateId: nextOperation.id,
+    eventType,
+    payloadDigest: nextOperation.operationDigest,
+    occurredAt: nextOperation.completedAt,
+    beforeVersion: currentOperation.version,
+    afterVersion: nextOperation.version,
+  });
+  return Object.freeze({ currentOperation, nextOperation, auditWrite });
+}
+
+function interactionOperationReservationDigest(operation: InteractionOperation): Sha256Digest {
+  return sha256Digest(
+    canonicalAuthorityDigests.digest(interactionOperationReservationProjection(operation)),
+  );
 }
 
 function isSameOrWithin(path: string, parent: string): boolean {
@@ -2977,8 +3107,7 @@ export class SqliteControlStore
     WorkflowDriverControlStore,
     IntakeControlStore,
     ProjectReadCleanupControlStore,
-    InteractionPolicyControlStore,
-    InteractionSessionControlStore
+    InteractionOperationControlStore
 {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
@@ -3302,7 +3431,7 @@ export class SqliteControlStore
       this.probe(InteractionTransactionStep.AFTER_SESSION_OPEN_AUDIT_WRITE);
       this.insertInteractionSession(input.session);
       this.probe(InteractionTransactionStep.AFTER_SESSION_WRITE);
-      this.appendInteractionAuditMembership(input.session.id, input.auditWrite.id);
+      this.appendInteractionAuditMembership(input.session.id, input.auditWrite);
       this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
       const persisted = this.getInteractionSessionInsideTransaction(input.session.id);
       if (persisted === undefined || !sameCanonicalAuthority(persisted, input.session)) {
@@ -3329,12 +3458,22 @@ export class SqliteControlStore
       if (!sameCanonicalAuthority(retained, input.currentSession)) {
         return { status: 'VERSION_CONFLICT', currentSession: retained };
       }
+      const activeOperation = this.getReservedInteractionOperationInsideTransaction(retained.id);
+      if (
+        activeOperation !== undefined &&
+        !(
+          retained.state === InteractionSessionState.OPEN &&
+          input.nextSession.state === InteractionSessionState.CLOSING
+        )
+      ) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: activeOperation };
+      }
       this.assertInteractionSessionPolicyBindings(input.nextSession);
       this.insertAuditEvent(input.auditWrite);
       this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE);
       this.updateInteractionSession(input.currentSession, input.nextSession);
       this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_WRITE);
-      this.appendInteractionAuditMembership(input.nextSession.id, input.auditWrite.id);
+      this.appendInteractionAuditMembership(input.nextSession.id, input.auditWrite);
       this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
       const persisted = this.getInteractionSessionInsideTransaction(input.nextSession.id);
       if (persisted === undefined || !sameCanonicalAuthority(persisted, input.nextSession)) {
@@ -3375,6 +3514,12 @@ export class SqliteControlStore
       if (!sameCanonicalAuthority(retained, input.currentSession)) {
         return { status: 'VERSION_CONFLICT', currentSession: retained };
       }
+      const activeOperation = this.getReservedInteractionOperationInsideTransaction(
+        input.currentSession.id,
+      );
+      if (activeOperation !== undefined) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: activeOperation };
+      }
       const retainedTotals = this.getInteractionRetainedMessageTotals(input.currentSession.id);
       assertInteractionUserMessageAdmission({
         currentSession: input.currentSession,
@@ -3388,14 +3533,14 @@ export class SqliteControlStore
       this.probe(InteractionTransactionStep.AFTER_MESSAGE_AUDIT_WRITE);
       this.insertInteractionMessage(input.message);
       this.probe(InteractionTransactionStep.AFTER_MESSAGE_WRITE);
-      this.appendInteractionAuditMembership(input.currentSession.id, input.messageAuditWrite.id);
+      this.appendInteractionAuditMembership(input.currentSession.id, input.messageAuditWrite);
       this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
 
       this.insertAuditEvent(input.sessionAuditWrite);
       this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE);
       this.updateInteractionSession(input.currentSession, input.nextSession);
       this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_WRITE);
-      this.appendInteractionAuditMembership(input.nextSession.id, input.sessionAuditWrite.id);
+      this.appendInteractionAuditMembership(input.nextSession.id, input.sessionAuditWrite);
       this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
 
       const persistedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
@@ -3427,6 +3572,125 @@ export class SqliteControlStore
   ): InteractionMessage | undefined {
     this.assertOpen();
     return this.runRead(() => this.getInteractionMessageInsideTransaction(messageIdentifier));
+  }
+
+  public reserveInteractionOperation(
+    rawInput: ReserveInteractionOperation,
+  ): InteractionOperationReservationResult {
+    this.assertOpen();
+    const input = normalizeInteractionOperationReservation(rawInput);
+    return this.runImmediate(() => {
+      const existing = this.getInteractionOperationInsideTransaction(input.operation.id);
+      if (existing !== undefined) {
+        return interactionOperationReservationDigest(existing) === input.operation.operationDigest
+          ? { status: 'REPLAYED', operation: existing }
+          : { status: 'OPERATION_CONFLICT', currentOperation: existing };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        return { status: 'SESSION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
+      if (retainedMessage === undefined) {
+        return { status: 'MESSAGE_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedMessage, input.message)) {
+        return { status: 'MESSAGE_CONFLICT', currentMessage: retainedMessage };
+      }
+      assertInteractionOperationReservationChain({
+        session: retainedSession,
+        message: retainedMessage,
+        operation: input.operation,
+      });
+      const active = this.getReservedInteractionOperationInsideTransaction(input.session.id);
+      if (active !== undefined) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: active };
+      }
+
+      this.insertAuditEvent(input.auditWrite);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE);
+      this.insertInteractionOperation(input.operation);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.auditWrite);
+      this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
+      const persisted = this.getInteractionOperationInsideTransaction(input.operation.id);
+      if (
+        persisted?.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(persisted, input.operation)
+      ) {
+        throw new StoreInvariantError(
+          'The reserved Interaction Operation was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return { status: 'RESERVED', operation: persisted };
+    });
+  }
+
+  public terminalizeInteractionOperation(
+    rawInput: TerminalizeInteractionOperation,
+  ): InteractionOperationTerminalResult {
+    this.assertOpen();
+    const input = normalizeInteractionOperationTerminalization(rawInput);
+    return this.runImmediate(() => {
+      const retained = this.getInteractionOperationInsideTransaction(input.currentOperation.id);
+      if (retained === undefined) {
+        return { status: 'OPERATION_NOT_FOUND' };
+      }
+      if (sameCanonicalAuthority(retained, input.nextOperation)) {
+        if (
+          retained.state !== InteractionOperationState.FAILED &&
+          retained.state !== InteractionOperationState.INTERRUPTED
+        ) {
+          throw new StoreInvariantError('Replayed Interaction Operation is not failure-closed');
+        }
+        return { status: 'REPLAYED', operation: retained };
+      }
+      if (!sameCanonicalAuthority(retained, input.currentOperation)) {
+        return { status: 'VERSION_CONFLICT', currentOperation: retained };
+      }
+
+      this.insertAuditEvent(input.auditWrite);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_TERMINAL_AUDIT_WRITE);
+      this.updateInteractionOperation(input.currentOperation, input.nextOperation);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_TERMINAL_WRITE);
+      this.appendInteractionAuditMembership(input.currentOperation.sessionId, input.auditWrite);
+      this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
+      const persisted = this.getInteractionOperationInsideTransaction(input.nextOperation.id);
+      if (
+        persisted === undefined ||
+        (persisted.state !== InteractionOperationState.FAILED &&
+          persisted.state !== InteractionOperationState.INTERRUPTED) ||
+        !sameCanonicalAuthority(persisted, input.nextOperation)
+      ) {
+        throw new StoreInvariantError(
+          'The terminal Interaction Operation was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', operation: persisted };
+    });
+  }
+
+  public getInteractionOperation(
+    operationIdentifier: InteractionOperationId,
+  ): InteractionOperation | undefined {
+    this.assertOpen();
+    return this.runRead(() => this.getInteractionOperationInsideTransaction(operationIdentifier));
+  }
+
+  public listReservedInteractionOperations(
+    sessionIdentifier: InteractionSessionId,
+  ): readonly ReservedInteractionOperation[] {
+    this.assertOpen();
+    return this.runRead(() => {
+      const operation = this.getReservedInteractionOperationInsideTransaction(sessionIdentifier);
+      return operation === undefined ? Object.freeze([]) : Object.freeze([operation]);
+    });
   }
 
   public installIntentAdmissionPolicy(
@@ -5912,6 +6176,112 @@ export class SqliteControlStore
     return message;
   }
 
+  private decodeRetainedInteractionOperationRow(rawRow: unknown): InteractionOperation {
+    const row = retainedInteractionOperationRowSchema.parse(rawRow);
+    const operation = decodeInteractionOperation(
+      parseJson(row.record_json, 'Interaction Operation'),
+      canonicalAuthorityDigests,
+    );
+    const contextManifestId = operation.contextManifestRef?.id ?? null;
+    const contextManifestDigest = operation.contextManifestRef?.digest ?? null;
+    const assistantProfileId = operation.assistantProfile?.id ?? null;
+    const assistantProfileVersion = operation.assistantProfile?.version ?? null;
+    const assistantProfileDigest = operation.assistantProfile?.digest ?? null;
+    const completedAt =
+      operation.state === InteractionOperationState.RESERVED ? null : operation.completedAt;
+    if (
+      operation.id !== row.id ||
+      operation.schemaVersion !== row.schema_version ||
+      operation.version !== row.version ||
+      operation.sessionId !== row.session_id ||
+      operation.expectedSessionVersion !== row.expected_session_version ||
+      operation.messageRef.id !== row.message_id ||
+      operation.messageRef.digest !== row.message_digest ||
+      operation.operationKind !== row.operation_kind ||
+      operation.state !== row.state ||
+      contextManifestId !== row.context_manifest_id ||
+      contextManifestDigest !== row.context_manifest_digest ||
+      assistantProfileId !== row.assistant_profile_id ||
+      assistantProfileVersion !== row.assistant_profile_version ||
+      assistantProfileDigest !== row.assistant_profile_digest ||
+      operation.reservedAt !== row.reserved_at ||
+      completedAt !== row.completed_at ||
+      operation.operationDigest !== row.operation_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Interaction Operation ${operation.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return operation;
+  }
+
+  private getInteractionOperationInsideTransaction(
+    operationIdentifier: InteractionOperationId,
+  ): InteractionOperation | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, version, session_id, expected_session_version,
+                message_id, message_digest, operation_kind, state, context_manifest_id,
+                context_manifest_digest, assistant_profile_id, assistant_profile_version,
+                assistant_profile_digest, reserved_at, completed_at, operation_digest,
+                record_json
+           FROM interaction_operations
+          WHERE id = ?`,
+      )
+      .get(operationIdentifier);
+    if (rawRow === undefined) {
+      return undefined;
+    }
+    const operation = this.decodeRetainedInteractionOperationRow(rawRow);
+    const session = this.getInteractionSessionInsideTransaction(operation.sessionId);
+    const message = this.getInteractionMessageInsideTransaction(operation.messageRef.id);
+    if (
+      session === undefined ||
+      message?.sessionId !== operation.sessionId ||
+      message.messageDigest !== operation.messageRef.digest ||
+      operation.expectedSessionVersion > session.version ||
+      operation.reservedAt < message.createdAt
+    ) {
+      throw new StoreInvariantError(
+        `Retained Interaction Operation ${operation.id} does not bind its Session and Message`,
+      );
+    }
+    return operation;
+  }
+
+  private getReservedInteractionOperationInsideTransaction(
+    sessionIdentifier: InteractionSessionId,
+  ): ReservedInteractionOperation | undefined {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, schema_version, version, session_id, expected_session_version,
+                message_id, message_digest, operation_kind, state, context_manifest_id,
+                context_manifest_digest, assistant_profile_id, assistant_profile_version,
+                assistant_profile_digest, reserved_at, completed_at, operation_digest,
+                record_json
+           FROM interaction_operations
+          WHERE session_id = ? AND state = 'RESERVED'
+          ORDER BY id`,
+      )
+      .all(sessionIdentifier);
+    if (rows.length > 1) {
+      throw new StoreInvariantError(
+        `Interaction Session ${sessionIdentifier} has multiple reserved Operations`,
+      );
+    }
+    const row = rows[0];
+    if (row === undefined) {
+      return undefined;
+    }
+    const operation = this.decodeRetainedInteractionOperationRow(row);
+    if (operation.state !== InteractionOperationState.RESERVED) {
+      throw new StoreInvariantError(
+        `Interaction Session ${sessionIdentifier} selected a non-reserved Operation`,
+      );
+    }
+    return operation;
+  }
+
   private getInteractionRetainedMessageTotals(
     sessionIdentifier: InteractionSessionId,
   ): Readonly<{ count: number; contentBytes: number }> {
@@ -6036,28 +6406,94 @@ export class SqliteControlStore
       );
   }
 
+  private insertInteractionOperation(operation: ReservedInteractionOperation): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_operations(
+           id, schema_version, version, session_id, expected_session_version,
+           message_id, message_digest, operation_kind, state, context_manifest_id,
+           context_manifest_digest, assistant_profile_id, assistant_profile_version,
+           assistant_profile_digest, reserved_at, completed_at, operation_digest,
+           record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run(
+        operation.id,
+        operation.schemaVersion,
+        operation.version,
+        operation.sessionId,
+        operation.expectedSessionVersion,
+        operation.messageRef.id,
+        operation.messageRef.digest,
+        operation.operationKind,
+        operation.state,
+        operation.contextManifestRef?.id ?? null,
+        operation.contextManifestRef?.digest ?? null,
+        operation.assistantProfile?.id ?? null,
+        operation.assistantProfile?.version ?? null,
+        operation.assistantProfile?.digest ?? null,
+        operation.reservedAt,
+        operation.operationDigest,
+        serializeJson(decodeJsonValue(operation)),
+      );
+  }
+
+  private updateInteractionOperation(
+    currentOperation: ReservedInteractionOperation,
+    nextOperation: FailedOrInterruptedInteractionOperation,
+  ): void {
+    const update = this.#database
+      .prepare(
+        `UPDATE interaction_operations
+            SET version = ?, state = ?, completed_at = ?, operation_digest = ?, record_json = ?
+          WHERE id = ? AND version = ? AND operation_digest = ? AND state = 'RESERVED'`,
+      )
+      .run(
+        nextOperation.version,
+        nextOperation.state,
+        nextOperation.completedAt,
+        nextOperation.operationDigest,
+        serializeJson(decodeJsonValue(nextOperation)),
+        currentOperation.id,
+        currentOperation.version,
+        currentOperation.operationDigest,
+      );
+    if (update.changes !== 1) {
+      throw new OptimisticConcurrencyError('Interaction Operation', currentOperation.id);
+    }
+  }
+
   private appendInteractionAuditMembership(
     sessionIdentifier: InteractionSessionId,
-    eventIdentifier: AuditEventId,
+    auditWrite: InteractionAuditWrite,
   ): void {
-    const row = z
-      .object({ next_position: z.number().int().nonnegative() })
+    const latest = z
+      .object({ position: z.number().int().nonnegative(), occurred_at: z.string().min(1) })
       .strict()
+      .optional()
       .parse(
         this.#database
           .prepare(
-            `SELECT COALESCE(MAX(position), -1) + 1 AS next_position
-               FROM interaction_audit_events
-              WHERE session_id = ?`,
+            `SELECT membership.position, audit.occurred_at
+               FROM interaction_audit_events AS membership
+               JOIN audit_events AS audit ON audit.id = membership.audit_event_id
+              WHERE membership.session_id = ?
+              ORDER BY membership.position DESC
+              LIMIT 1`,
           )
           .get(sessionIdentifier),
       );
+    if (latest !== undefined && auditWrite.occurredAt < latest.occurred_at) {
+      throw new StoreInvariantError(
+        `Interaction Session ${sessionIdentifier} audit time moved backwards`,
+      );
+    }
     this.#database
       .prepare(
         `INSERT INTO interaction_audit_events(session_id, position, audit_event_id)
          VALUES (?, ?, ?)`,
       )
-      .run(sessionIdentifier, row.next_position, eventIdentifier);
+      .run(sessionIdentifier, (latest?.position ?? -1) + 1, auditWrite.id);
   }
 
   private assertRetainedInteractionAuthorityClosure(): void {
@@ -6070,7 +6506,6 @@ export class SqliteControlStore
     }
     const unimplementedTableNames = [
       'interaction_focus_bindings',
-      'interaction_operations',
       'interaction_route_proposals',
       'interaction_route_decisions',
       'interaction_pending_actions',
@@ -6145,6 +6580,49 @@ export class SqliteControlStore
         }
       }
 
+      const operationRows = z.array(retainedInteractionOperationRowSchema).parse(
+        this.#database
+          .prepare(
+            `SELECT id, schema_version, version, session_id, expected_session_version,
+                    message_id, message_digest, operation_kind, state, context_manifest_id,
+                    context_manifest_digest, assistant_profile_id, assistant_profile_version,
+                    assistant_profile_digest, reserved_at, completed_at, operation_digest,
+                    record_json
+               FROM interaction_operations
+              ORDER BY id`,
+          )
+          .all(),
+      );
+      const operations = operationRows.map((row) =>
+        this.decodeRetainedInteractionOperationRow(row),
+      );
+      const operationById = new Map<string, InteractionOperation>(
+        operations.map((operation) => [operation.id, operation]),
+      );
+      for (const operation of operations) {
+        const session = sessionById.get(operation.sessionId);
+        const message = messageById.get(operation.messageRef.id);
+        if (
+          session === undefined ||
+          message?.sessionId !== operation.sessionId ||
+          message.messageDigest !== operation.messageRef.digest ||
+          operation.expectedSessionVersion > session.version ||
+          operation.reservedAt < message.createdAt ||
+          operation.state === InteractionOperationState.COMPLETED ||
+          (operation.state === InteractionOperationState.RESERVED &&
+            !(
+              (session.state === InteractionSessionState.OPEN &&
+                operation.expectedSessionVersion === session.version) ||
+              (session.state === InteractionSessionState.CLOSING &&
+                operation.expectedSessionVersion === session.version - 1)
+            ))
+        ) {
+          throw new StoreInvariantError(
+            `Retained Interaction Operation ${operation.id} has no implemented valid closure`,
+          );
+        }
+      }
+
       const membershipRows = z.array(retainedInteractionAuditMembershipRowSchema).parse(
         this.#database
           .prepare(
@@ -6166,17 +6644,22 @@ export class SqliteControlStore
             .prepare(
               `SELECT id
                  FROM audit_events
-                WHERE aggregate_type IN (?, ?)
-                   OR event_type IN (?, ?, ?, ?)
+                WHERE aggregate_type IN (?, ?, ?)
+                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?)
                 ORDER BY id`,
             )
             .all(
               InteractionAuditAggregateType.INTERACTION_SESSION,
               InteractionAuditAggregateType.INTERACTION_MESSAGE,
+              InteractionAuditAggregateType.INTERACTION_OPERATION,
               InteractionAuditEventType.INTERACTION_SESSION_OPENED,
               InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
               InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
               InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+              InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+              InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+              InteractionAuditEventType.INTERACTION_OPERATION_FAILED,
+              InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED,
             ),
         )
         .map((row) => auditEventId(row.id));
@@ -6188,7 +6671,7 @@ export class SqliteControlStore
         relatedAuditIds.some((id) => !membershipAuditIdSet.has(id))
       ) {
         throw new StoreInvariantError(
-          'Retained Interaction Session/Message authority has an orphan or substituted audit',
+          'Retained Interaction Session/Message/Operation authority has an orphan or substituted audit',
         );
       }
 
@@ -6206,7 +6689,10 @@ export class SqliteControlStore
               row.command_id !== null ||
               row.correlation_id !== null ||
               row.causation_id !== null ||
-              (index > 0 && row.sequence <= (sessionMembership[index - 1]?.sequence ?? 0)),
+              (index > 0 &&
+                (row.sequence <= (sessionMembership[index - 1]?.sequence ?? 0) ||
+                  row.occurred_at <
+                    (sessionMembership[index - 1]?.occurred_at ?? row.occurred_at))),
           )
         ) {
           throw new StoreInvariantError(
@@ -6218,9 +6704,18 @@ export class SqliteControlStore
           (row) => row.aggregate_type === InteractionAuditAggregateType.INTERACTION_SESSION,
         );
         const sessionMessages = messages.filter((message) => message.sessionId === session.id);
+        const sessionOperations = operations.filter(
+          (operation) => operation.sessionId === session.id,
+        );
+        const operationAuditCount = sessionOperations.reduce(
+          (count, operation) =>
+            count + (operation.state === InteractionOperationState.RESERVED ? 1 : 2),
+          0,
+        );
         if (
           sessionAudits.length !== session.version ||
-          sessionMembership.length !== session.version + sessionMessages.length
+          sessionMembership.length !==
+            session.version + sessionMessages.length + operationAuditCount
         ) {
           throw new StoreInvariantError(
             `Retained Interaction Session ${session.id} audit cardinality is invalid`,
@@ -6303,6 +6798,79 @@ export class SqliteControlStore
             );
           }
         }
+
+        for (const operation of sessionOperations) {
+          const operationAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.INTERACTION_OPERATION &&
+              row.aggregate_id === operation.id,
+          );
+          const reservationAudit = operationAudits[0];
+          const expectedAuditCount = operation.state === InteractionOperationState.RESERVED ? 1 : 2;
+          if (operationAudits.length !== expectedAuditCount || reservationAudit === undefined) {
+            throw new StoreInvariantError(
+              `Retained Interaction Operation ${operation.id} lost its exact audit chain`,
+            );
+          }
+          if (
+            reservationAudit.event_type !==
+              InteractionAuditEventType.INTERACTION_OPERATION_RESERVED ||
+            reservationAudit.before_version !== null ||
+            reservationAudit.after_version !== 1 ||
+            reservationAudit.payload_digest !== interactionOperationReservationDigest(operation) ||
+            reservationAudit.occurred_at !== operation.reservedAt
+          ) {
+            throw new StoreInvariantError(
+              `Retained Interaction Operation ${operation.id} lost its reservation audit`,
+            );
+          }
+
+          const message = messageById.get(operation.messageRef.id);
+          const messageAudit = sessionMembership.find(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.INTERACTION_MESSAGE &&
+              row.aggregate_id === operation.messageRef.id,
+          );
+          const messageSessionTransition =
+            messageAudit === undefined ? undefined : sessionMembership[messageAudit.position + 1];
+          if (
+            messageSessionTransition?.aggregate_type !==
+              InteractionAuditAggregateType.INTERACTION_SESSION ||
+            messageSessionTransition.after_version !== operation.expectedSessionVersion ||
+            messageSessionTransition.occurred_at !== message?.createdAt ||
+            reservationAudit.position <= messageSessionTransition.position
+          ) {
+            throw new StoreInvariantError(
+              `Retained Interaction Operation ${operation.id} lost its exact Session/Message reservation point`,
+            );
+          }
+
+          if (operation.state === InteractionOperationState.RESERVED) {
+            if (operation.version !== 1) {
+              throw new StoreInvariantError(
+                `Retained reserved Interaction Operation ${operation.id} has an invalid version`,
+              );
+            }
+            continue;
+          }
+          const terminalAudit = operationAudits[1];
+          if (
+            operation.version !== 2 ||
+            terminalAudit?.event_type !==
+              (operation.state === InteractionOperationState.FAILED
+                ? InteractionAuditEventType.INTERACTION_OPERATION_FAILED
+                : InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED) ||
+            terminalAudit.before_version !== 1 ||
+            terminalAudit.after_version !== 2 ||
+            terminalAudit.payload_digest !== operation.operationDigest ||
+            terminalAudit.occurred_at !== operation.completedAt ||
+            terminalAudit.position <= reservationAudit.position
+          ) {
+            throw new StoreInvariantError(
+              `Retained Interaction Operation ${operation.id} lost its terminal audit`,
+            );
+          }
+        }
       }
 
       for (const membership of membershipRows) {
@@ -6319,6 +6887,15 @@ export class SqliteControlStore
             );
           }
         } else if (
+          membership.aggregate_type === InteractionAuditAggregateType.INTERACTION_OPERATION
+        ) {
+          const operation = operationById.get(membership.aggregate_id);
+          if (operation?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Interaction Operation audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (
           membership.aggregate_type !== InteractionAuditAggregateType.INTERACTION_SESSION ||
           membership.aggregate_id !== membership.session_id
         ) {
@@ -6332,7 +6909,7 @@ export class SqliteControlStore
         throw error;
       }
       throw new StoreInvariantError(
-        'Retained M2.6 Interaction Session/Message authority failed strict reopen',
+        'Retained M2.6 Interaction Session/Message/Operation authority failed strict reopen',
         { cause: error },
       );
     }

@@ -6,10 +6,15 @@ import type {
   InteractionConfirmationPolicy,
   InteractionMessage,
   InteractionMessageId,
+  InteractionOperation,
+  InteractionOperationId,
   InteractionRoutingPolicy,
   InteractionSession,
   InteractionSessionId,
   IsoTimestamp,
+  FailedInteractionOperation,
+  InterruptedInteractionOperation,
+  ReservedInteractionOperation,
   Sha256Digest,
 } from '@codeclosure/domain';
 
@@ -119,6 +124,11 @@ export interface TransitionInteractionSession {
   readonly auditWrite: InteractionAuditWrite;
 }
 
+export type InteractionSessionOperationBusyResult = Readonly<{
+  status: 'SESSION_OPERATION_BUSY';
+  currentOperation: ReservedInteractionOperation;
+}>;
+
 export type InteractionSessionTransitionResult =
   | Readonly<{
       status: 'APPLIED' | 'REPLAYED';
@@ -128,7 +138,8 @@ export type InteractionSessionTransitionResult =
   | Readonly<{
       status: 'VERSION_CONFLICT';
       currentSession: InteractionSession;
-    }>;
+    }>
+  | InteractionSessionOperationBusyResult;
 
 export interface AdmitInteractionUserMessage {
   readonly currentSession: InteractionSession;
@@ -152,7 +163,8 @@ export type InteractionUserMessageAdmissionResult =
   | Readonly<{
       status: 'MESSAGE_CONFLICT';
       currentMessage: InteractionMessage;
-    }>;
+    }>
+  | InteractionSessionOperationBusyResult;
 
 /**
  * Runtime owns the policy definitions. The Store owns only atomic installation,
@@ -178,4 +190,73 @@ export interface InteractionSessionControlStore extends InteractionPolicyControl
   ): InteractionUserMessageAdmissionResult;
   getInteractionSession(sessionId: InteractionSessionId): InteractionSession | undefined;
   getInteractionMessage(messageId: InteractionMessageId): InteractionMessage | undefined;
+}
+
+export interface ReserveInteractionOperation {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly operation: ReservedInteractionOperation;
+  readonly auditWrite: InteractionAuditWrite;
+}
+
+export type InteractionOperationReservationResult =
+  | Readonly<{
+      status: 'RESERVED';
+      operation: ReservedInteractionOperation;
+    }>
+  | Readonly<{
+      status: 'REPLAYED';
+      operation: InteractionOperation;
+    }>
+  | Readonly<{ status: 'SESSION_NOT_FOUND' | 'MESSAGE_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_CONFLICT';
+      currentMessage: InteractionMessage;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | InteractionSessionOperationBusyResult;
+
+export type FailedOrInterruptedInteractionOperation =
+  FailedInteractionOperation | InterruptedInteractionOperation;
+
+export interface TerminalizeInteractionOperation {
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: FailedOrInterruptedInteractionOperation;
+  readonly auditWrite: InteractionAuditWrite;
+}
+
+export type InteractionOperationTerminalResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      operation: FailedOrInterruptedInteractionOperation;
+    }>
+  | Readonly<{ status: 'OPERATION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>;
+
+/**
+ * Successful completion remains owned by the later result-specific atomic
+ * transaction. This port closes reservation plus payload-free failure and
+ * interruption without creating a competing success authority.
+ */
+export interface InteractionOperationControlStore extends InteractionSessionControlStore {
+  reserveInteractionOperation(
+    input: ReserveInteractionOperation,
+  ): InteractionOperationReservationResult;
+  terminalizeInteractionOperation(
+    input: TerminalizeInteractionOperation,
+  ): InteractionOperationTerminalResult;
+  getInteractionOperation(operationId: InteractionOperationId): InteractionOperation | undefined;
+  listReservedInteractionOperations(
+    sessionId: InteractionSessionId,
+  ): readonly ReservedInteractionOperation[];
 }
