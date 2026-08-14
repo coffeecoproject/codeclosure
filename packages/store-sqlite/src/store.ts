@@ -61,6 +61,8 @@ import {
   commandId,
   contextManifestId,
   decodeContextPackage,
+  decodeConfirmationGrammar,
+  decodeDirectActionGrammar,
   decodeAcceptanceDecision,
   decodeAcceptanceInputManifest,
   decodeAcceptanceRepairRecord,
@@ -109,6 +111,8 @@ import {
   decodeIntentAdmissionPolicyInstallInput,
   decodeIntentAnalysisProposal,
   decodeIntentProjectionRevision,
+  decodeInteractionConfirmationPolicy,
+  decodeInteractionRoutingPolicy,
   decodeMaterialAmbiguity,
   decodeMaterialAmbiguitySet,
   decodeRawRequest,
@@ -255,6 +259,7 @@ import {
   ExternalExecutionAbandonReasonCode,
   ExternalMaintenanceFailureReasonCode,
   compileBoundedM2RepairContext,
+  assertM26InteractionPoliciesInvariant,
   contextManifestDigestProjection,
   compileM1AcceptanceInput,
   createProtectedAssetReadLease,
@@ -369,6 +374,13 @@ import {
   type IntakeAuthorityView,
   type IntakeCommitStoreResult,
   type IntakeControlStore,
+  InteractionAuditAggregateType,
+  InteractionAuditEventType,
+  type InstallInteractionPolicies,
+  type InteractionAuditWrite,
+  type InteractionPolicyControlStore,
+  type InteractionPolicyInstallResult,
+  type InteractionPolicySet,
   type IntakeReservationStoreResult,
   type IntentAdmissionPolicyInstallResult,
   type CommitAnalyzedIntake,
@@ -576,6 +588,20 @@ export const ProjectReadCleanupTransactionStep = {
 export type ProjectReadCleanupTransactionStep =
   (typeof ProjectReadCleanupTransactionStep)[keyof typeof ProjectReadCleanupTransactionStep];
 
+export const InteractionTransactionStep = {
+  AFTER_DIRECT_ACTION_GRAMMAR_AUDIT_WRITE: 'AFTER_INTERACTION_DIRECT_ACTION_GRAMMAR_AUDIT_WRITE',
+  AFTER_DIRECT_ACTION_GRAMMAR_WRITE: 'AFTER_INTERACTION_DIRECT_ACTION_GRAMMAR_WRITE',
+  AFTER_CONFIRMATION_GRAMMAR_AUDIT_WRITE: 'AFTER_INTERACTION_CONFIRMATION_GRAMMAR_AUDIT_WRITE',
+  AFTER_CONFIRMATION_GRAMMAR_WRITE: 'AFTER_INTERACTION_CONFIRMATION_GRAMMAR_WRITE',
+  AFTER_ROUTING_POLICY_AUDIT_WRITE: 'AFTER_INTERACTION_ROUTING_POLICY_AUDIT_WRITE',
+  AFTER_ROUTING_POLICY_WRITE: 'AFTER_INTERACTION_ROUTING_POLICY_WRITE',
+  AFTER_CONFIRMATION_POLICY_AUDIT_WRITE: 'AFTER_INTERACTION_CONFIRMATION_POLICY_AUDIT_WRITE',
+  AFTER_CONFIRMATION_POLICY_WRITE: 'AFTER_INTERACTION_CONFIRMATION_POLICY_WRITE',
+  BEFORE_COMMIT: 'BEFORE_INTERACTION_COMMIT',
+} as const;
+export type InteractionTransactionStep =
+  (typeof InteractionTransactionStep)[keyof typeof InteractionTransactionStep];
+
 export interface SqliteControlStoreOptions {
   readonly filename: string;
   readonly migrationsDirectory?: string;
@@ -589,7 +615,8 @@ export interface SqliteControlStoreOptions {
       | AcceptanceTransactionStep
       | RecoveryTransactionStep
       | IntakeTransactionStep
-      | ProjectReadCleanupTransactionStep,
+      | ProjectReadCleanupTransactionStep
+      | InteractionTransactionStep,
   ) => void;
 }
 
@@ -1011,6 +1038,23 @@ const auditSequenceWatermarkRowSchema = z
   })
   .strict();
 
+const retainedInteractionPolicyRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    authority_version: z.string().min(1),
+    authority_digest: z.string().min(1),
+    installed_at: z.string().min(1),
+    install_audit_event_id: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+type RetainedInteractionPolicyRow = z.infer<typeof retainedInteractionPolicyRowSchema>;
+
+const retainedInteractionPolicyAuditIdentityRowSchema = z
+  .object({ id: z.string().min(1) })
+  .strict();
+
 export type CreateGoalWithWorkflowInput = CommitGoalCreation;
 
 export interface CommitWorkflowEventInput extends AuditWriteIdentity {
@@ -1051,6 +1095,149 @@ function systemNow(): IsoTimestamp {
 }
 
 const canonicalAuthorityDigests = new CanonicalJsonSha256DigestProvider();
+
+interface NormalizedInteractionPolicyInstall {
+  readonly policies: InteractionPolicySet;
+  readonly installedAt: IsoTimestamp;
+  readonly auditWrites: InstallInteractionPolicies['auditWrites'];
+}
+
+function assertExactObjectKeys(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[],
+  recordType: string,
+): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new StoreInvariantError(`${recordType} must be an object`);
+  }
+  const actualKeys = Object.keys(value);
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  if (
+    requiredKeys.some((key) => !Object.hasOwn(value, key)) ||
+    actualKeys.some((key) => !allowedKeys.has(key))
+  ) {
+    throw new StoreInvariantError(`${recordType} has missing or unknown fields`);
+  }
+}
+
+function decodeInteractionPolicySet(policies: InteractionPolicySet): InteractionPolicySet {
+  assertExactObjectKeys(
+    policies,
+    ['directActionGrammar', 'confirmationGrammar', 'routingPolicy', 'confirmationPolicy'],
+    [],
+    'Interaction Policy set',
+  );
+  return Object.freeze({
+    directActionGrammar: decodeDirectActionGrammar(
+      policies.directActionGrammar,
+      canonicalAuthorityDigests,
+    ),
+    confirmationGrammar: decodeConfirmationGrammar(
+      policies.confirmationGrammar,
+      canonicalAuthorityDigests,
+    ),
+    routingPolicy: decodeInteractionRoutingPolicy(
+      policies.routingPolicy,
+      canonicalAuthorityDigests,
+    ),
+    confirmationPolicy: decodeInteractionConfirmationPolicy(
+      policies.confirmationPolicy,
+      canonicalAuthorityDigests,
+    ),
+  });
+}
+
+function normalizeInteractionPolicyAuditWrite(
+  write: InteractionAuditWrite,
+  aggregateId: string,
+  payloadDigest: Sha256Digest,
+  occurredAt: IsoTimestamp,
+): InteractionAuditWrite {
+  assertExactObjectKeys(
+    write,
+    ['id', 'aggregateType', 'aggregateId', 'eventType', 'payloadDigest', 'occurredAt'],
+    ['beforeVersion', 'afterVersion', 'commandId', 'correlationId', 'causationId'],
+    'Interaction Policy install audit',
+  );
+  const id = auditEventId(write.id);
+  const retainedPayloadDigest = sha256Digest(write.payloadDigest);
+  const retainedOccurredAt = isoTimestamp(write.occurredAt);
+  if (
+    write.aggregateType !== InteractionAuditAggregateType.INTERACTION_POLICY ||
+    write.aggregateId !== aggregateId ||
+    write.eventType !== InteractionAuditEventType.INTERACTION_POLICY_INSTALLED ||
+    retainedPayloadDigest !== payloadDigest ||
+    retainedOccurredAt !== occurredAt ||
+    write.beforeVersion !== undefined ||
+    write.afterVersion !== undefined ||
+    write.commandId !== undefined ||
+    write.correlationId !== undefined ||
+    write.causationId !== undefined
+  ) {
+    throw new StoreInvariantError(
+      `Interaction Policy ${aggregateId} install audit does not match its authority record`,
+    );
+  }
+  return Object.freeze({
+    id,
+    aggregateType: InteractionAuditAggregateType.INTERACTION_POLICY,
+    aggregateId,
+    eventType: InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+    payloadDigest: retainedPayloadDigest,
+    occurredAt: retainedOccurredAt,
+  });
+}
+
+function normalizeInteractionPolicyInstall(
+  input: InstallInteractionPolicies,
+): NormalizedInteractionPolicyInstall {
+  assertExactObjectKeys(
+    input,
+    ['policies', 'installedAt', 'auditWrites'],
+    [],
+    'Interaction Policy install input',
+  );
+  assertExactObjectKeys(
+    input.auditWrites,
+    ['directActionGrammar', 'confirmationGrammar', 'routingPolicy', 'confirmationPolicy'],
+    [],
+    'Interaction Policy install audit set',
+  );
+  const policies = decodeInteractionPolicySet(input.policies);
+  const installedAt = isoTimestamp(input.installedAt);
+  const auditWrites = Object.freeze({
+    directActionGrammar: normalizeInteractionPolicyAuditWrite(
+      input.auditWrites.directActionGrammar,
+      policies.directActionGrammar.id,
+      policies.directActionGrammar.digest,
+      installedAt,
+    ),
+    confirmationGrammar: normalizeInteractionPolicyAuditWrite(
+      input.auditWrites.confirmationGrammar,
+      policies.confirmationGrammar.id,
+      policies.confirmationGrammar.digest,
+      installedAt,
+    ),
+    routingPolicy: normalizeInteractionPolicyAuditWrite(
+      input.auditWrites.routingPolicy,
+      policies.routingPolicy.id,
+      policies.routingPolicy.digest,
+      installedAt,
+    ),
+    confirmationPolicy: normalizeInteractionPolicyAuditWrite(
+      input.auditWrites.confirmationPolicy,
+      policies.confirmationPolicy.id,
+      policies.confirmationPolicy.digest,
+      installedAt,
+    ),
+  });
+  const auditIds = Object.values(auditWrites).map((write) => write.id);
+  if (new Set(auditIds).size !== auditIds.length) {
+    throw new StoreInvariantError('Interaction Policy install audit identities must be distinct');
+  }
+  return Object.freeze({ policies, installedAt, auditWrites });
+}
 
 function isSameOrWithin(path: string, parent: string): boolean {
   const relation = relative(parent, path);
@@ -2540,7 +2727,8 @@ export class SqliteControlStore
     CodeClosureApplicationStore,
     WorkflowDriverControlStore,
     IntakeControlStore,
-    ProjectReadCleanupControlStore
+    ProjectReadCleanupControlStore,
+    InteractionPolicyControlStore
 {
   readonly #database: Database.Database;
   readonly #appliedMigrations: readonly AppliedMigration[];
@@ -2554,7 +2742,8 @@ export class SqliteControlStore
           | AcceptanceTransactionStep
           | RecoveryTransactionStep
           | IntakeTransactionStep
-          | ProjectReadCleanupTransactionStep,
+          | ProjectReadCleanupTransactionStep
+          | InteractionTransactionStep,
       ) => void)
     | undefined;
   #closed = false;
@@ -2571,7 +2760,8 @@ export class SqliteControlStore
             | AcceptanceTransactionStep
             | RecoveryTransactionStep
             | IntakeTransactionStep
-            | ProjectReadCleanupTransactionStep,
+            | ProjectReadCleanupTransactionStep
+            | InteractionTransactionStep,
         ) => void)
       | undefined,
     authorityIsolationLease?: SqliteAuthorityIsolationLease,
@@ -2621,6 +2811,7 @@ export class SqliteControlStore
       store.assertRetainedProjectReadAuthorityClosure();
       store.assertRetainedProjectReadCleanupAuthorityClosure();
       store.assertRetainedIntakeAuthorityClosure();
+      store.assertRetainedInteractionAuthorityClosure();
       return store;
     } catch (error) {
       database.close();
@@ -2682,6 +2873,7 @@ export class SqliteControlStore
       store.assertRetainedProjectReadAuthorityClosure();
       store.assertRetainedProjectReadCleanupAuthorityClosure();
       store.assertRetainedIntakeAuthorityClosure();
+      store.assertRetainedInteractionAuthorityClosure();
       store.assertRetainedProjectReferencesUnchanged(isolationSnapshot);
       isolationLease.assertCurrent();
       database.exec('COMMIT');
@@ -2717,6 +2909,127 @@ export class SqliteControlStore
   public appliedMigrations(): readonly AppliedMigration[] {
     this.assertOpen();
     return this.#appliedMigrations;
+  }
+
+  public installInteractionPolicies(
+    rawInput: InstallInteractionPolicies,
+  ): InteractionPolicyInstallResult {
+    this.assertOpen();
+    const input = normalizeInteractionPolicyInstall(rawInput);
+    return this.runImmediate(() => {
+      const existing = this.getInstalledInteractionPoliciesInsideTransaction();
+      if (existing !== undefined) {
+        return sameCanonicalAuthority(existing, input.policies)
+          ? { status: 'EXISTING', policies: existing }
+          : {
+              status: 'POLICY_CONFLICT',
+              message: 'The installed M2.6 Interaction Policy set has different authority',
+            };
+      }
+      assertM26InteractionPoliciesInvariant(input.policies, canonicalAuthorityDigests);
+
+      this.insertAuditEvent(input.auditWrites.directActionGrammar);
+      this.probe(InteractionTransactionStep.AFTER_DIRECT_ACTION_GRAMMAR_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO interaction_direct_action_grammars(
+             id, schema_version, grammar_version, grammar_digest, installed_at,
+             install_audit_event_id, record_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.policies.directActionGrammar.id,
+          input.policies.directActionGrammar.schemaVersion,
+          input.policies.directActionGrammar.version,
+          input.policies.directActionGrammar.digest,
+          input.installedAt,
+          input.auditWrites.directActionGrammar.id,
+          serializeJson(decodeJsonValue(input.policies.directActionGrammar)),
+        );
+      this.probe(InteractionTransactionStep.AFTER_DIRECT_ACTION_GRAMMAR_WRITE);
+
+      this.insertAuditEvent(input.auditWrites.confirmationGrammar);
+      this.probe(InteractionTransactionStep.AFTER_CONFIRMATION_GRAMMAR_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO interaction_confirmation_grammars(
+             id, schema_version, grammar_version, grammar_digest, installed_at,
+             install_audit_event_id, record_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.policies.confirmationGrammar.id,
+          input.policies.confirmationGrammar.schemaVersion,
+          input.policies.confirmationGrammar.version,
+          input.policies.confirmationGrammar.digest,
+          input.installedAt,
+          input.auditWrites.confirmationGrammar.id,
+          serializeJson(decodeJsonValue(input.policies.confirmationGrammar)),
+        );
+      this.probe(InteractionTransactionStep.AFTER_CONFIRMATION_GRAMMAR_WRITE);
+
+      this.insertAuditEvent(input.auditWrites.routingPolicy);
+      this.probe(InteractionTransactionStep.AFTER_ROUTING_POLICY_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO interaction_routing_policies(
+             id, schema_version, policy_version, direct_action_grammar_id,
+             direct_action_grammar_version, direct_action_grammar_digest, policy_digest,
+             installed_at, install_audit_event_id, record_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.policies.routingPolicy.id,
+          input.policies.routingPolicy.schemaVersion,
+          input.policies.routingPolicy.version,
+          input.policies.routingPolicy.directActionGrammar.id,
+          input.policies.routingPolicy.directActionGrammar.version,
+          input.policies.routingPolicy.directActionGrammar.digest,
+          input.policies.routingPolicy.digest,
+          input.installedAt,
+          input.auditWrites.routingPolicy.id,
+          serializeJson(decodeJsonValue(input.policies.routingPolicy)),
+        );
+      this.probe(InteractionTransactionStep.AFTER_ROUTING_POLICY_WRITE);
+
+      this.insertAuditEvent(input.auditWrites.confirmationPolicy);
+      this.probe(InteractionTransactionStep.AFTER_CONFIRMATION_POLICY_AUDIT_WRITE);
+      this.#database
+        .prepare(
+          `INSERT INTO interaction_confirmation_policies(
+             id, schema_version, policy_version, confirmation_grammar_id,
+             confirmation_grammar_version, confirmation_grammar_digest, policy_digest,
+             installed_at, install_audit_event_id, record_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.policies.confirmationPolicy.id,
+          input.policies.confirmationPolicy.schemaVersion,
+          input.policies.confirmationPolicy.version,
+          input.policies.confirmationPolicy.confirmationGrammar.id,
+          input.policies.confirmationPolicy.confirmationGrammar.version,
+          input.policies.confirmationPolicy.confirmationGrammar.digest,
+          input.policies.confirmationPolicy.digest,
+          input.installedAt,
+          input.auditWrites.confirmationPolicy.id,
+          serializeJson(decodeJsonValue(input.policies.confirmationPolicy)),
+        );
+      this.probe(InteractionTransactionStep.AFTER_CONFIRMATION_POLICY_WRITE);
+
+      const persisted = this.getInstalledInteractionPoliciesInsideTransaction();
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, input.policies)) {
+        throw new StoreInvariantError(
+          'The M2.6 Interaction Policy set was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return { status: 'INSTALLED', policies: persisted };
+    });
+  }
+
+  public getInstalledInteractionPolicies(): InteractionPolicySet | undefined {
+    this.assertOpen();
+    return this.runRead(() => this.getInstalledInteractionPoliciesInsideTransaction());
   }
 
   public installIntentAdmissionPolicy(
@@ -4810,6 +5123,253 @@ export class SqliteControlStore
       this.probe(IntakeTransactionStep.BEFORE_COMMIT);
       return { status: 'APPLIED', outcome, intakeRun: nextRun };
     });
+  }
+
+  private decodeRetainedInteractionPolicy<
+    Value extends Readonly<{
+      id: string;
+      schemaVersion: number;
+      version: string;
+      digest: Sha256Digest;
+    }>,
+  >(
+    rawRows: unknown,
+    recordType: string,
+    decode: (value: unknown) => Value,
+  ): Readonly<{ record: Value; row: RetainedInteractionPolicyRow }> {
+    const rows = z.array(retainedInteractionPolicyRowSchema).parse(rawRows);
+    if (rows.length !== 1) {
+      throw new StoreInvariantError(
+        `Retained ${recordType} authority must contain exactly one installed record`,
+      );
+    }
+    const row = rows[0];
+    if (row === undefined) {
+      throw new StoreInvariantError(`Retained ${recordType} authority is missing`);
+    }
+    const record = decode(parseJson(row.record_json, recordType));
+    if (
+      record.id !== row.id ||
+      record.schemaVersion !== row.schema_version ||
+      record.version !== row.authority_version ||
+      record.digest !== row.authority_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained ${recordType} materialized columns differ from its authority JSON`,
+      );
+    }
+    isoTimestamp(row.installed_at);
+    auditEventId(row.install_audit_event_id);
+    sha256Digest(row.authority_digest);
+    return Object.freeze({ record, row });
+  }
+
+  private assertRetainedInteractionPolicyAudit(
+    record: Readonly<{ id: string; digest: Sha256Digest }>,
+    row: RetainedInteractionPolicyRow,
+  ): void {
+    const rawAudit = this.#database
+      .prepare(
+        `SELECT id, sequence, aggregate_type, aggregate_id, event_type, actor_type,
+                command_id, before_version, after_version, correlation_id, causation_id,
+                payload_digest, occurred_at
+           FROM audit_events
+          WHERE id = ?`,
+      )
+      .get(row.install_audit_event_id);
+    if (rawAudit === undefined) {
+      throw new StoreInvariantError(
+        `Retained Interaction Policy ${record.id} has no install audit`,
+      );
+    }
+    const audit = decodeAuditEvent(rawAudit);
+    if (
+      audit.aggregateType !== InteractionAuditAggregateType.INTERACTION_POLICY ||
+      audit.aggregateId !== record.id ||
+      audit.eventType !== InteractionAuditEventType.INTERACTION_POLICY_INSTALLED ||
+      audit.actorType !== 'RUNTIME' ||
+      audit.payloadDigest !== record.digest ||
+      audit.occurredAt !== row.installed_at ||
+      audit.beforeVersion !== undefined ||
+      audit.afterVersion !== undefined ||
+      audit.commandId !== undefined ||
+      audit.correlationId !== undefined ||
+      audit.causationId !== undefined
+    ) {
+      throw new StoreInvariantError(
+        `Retained Interaction Policy ${record.id} lost its exact install audit`,
+      );
+    }
+  }
+
+  private getInstalledInteractionPoliciesInsideTransaction(): InteractionPolicySet | undefined {
+    const policyTableNames = [
+      'interaction_direct_action_grammars',
+      'interaction_confirmation_grammars',
+      'interaction_routing_policies',
+      'interaction_confirmation_policies',
+    ] as const;
+    const tablePresence = policyTableNames.map((tableName) => this.hasTable(tableName));
+    const migrationApplied = this.#appliedMigrations.some(
+      (migration) => migration.name === '0037_frontstage_interaction.sql',
+    );
+    if (!migrationApplied) {
+      if (tablePresence.some(Boolean)) {
+        throw new StoreInvariantError(
+          'M2.6 Interaction Policy tables exist without their append-only migration',
+        );
+      }
+      return undefined;
+    }
+    if (!tablePresence.every(Boolean)) {
+      throw new StoreInvariantError(
+        'The applied M2.6 migration is missing an Interaction Policy authority table',
+      );
+    }
+    try {
+      const policyAuditIds = z
+        .array(retainedInteractionPolicyAuditIdentityRowSchema)
+        .parse(
+          this.#database
+            .prepare(
+              `SELECT id
+                 FROM audit_events
+                WHERE aggregate_type = ? OR event_type = ?
+                ORDER BY id`,
+            )
+            .all(
+              InteractionAuditAggregateType.INTERACTION_POLICY,
+              InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+            ),
+        )
+        .map((row) => auditEventId(row.id));
+      const directRows = this.#database
+        .prepare(
+          `SELECT id, schema_version, grammar_version AS authority_version,
+                  grammar_digest AS authority_digest, installed_at,
+                  install_audit_event_id, record_json
+             FROM interaction_direct_action_grammars`,
+        )
+        .all();
+      const confirmationGrammarRows = this.#database
+        .prepare(
+          `SELECT id, schema_version, grammar_version AS authority_version,
+                  grammar_digest AS authority_digest, installed_at,
+                  install_audit_event_id, record_json
+             FROM interaction_confirmation_grammars`,
+        )
+        .all();
+      const routingRows = this.#database
+        .prepare(
+          `SELECT id, schema_version, policy_version AS authority_version,
+                  policy_digest AS authority_digest, installed_at,
+                  install_audit_event_id, record_json
+             FROM interaction_routing_policies`,
+        )
+        .all();
+      const confirmationPolicyRows = this.#database
+        .prepare(
+          `SELECT id, schema_version, policy_version AS authority_version,
+                  policy_digest AS authority_digest, installed_at,
+                  install_audit_event_id, record_json
+             FROM interaction_confirmation_policies`,
+        )
+        .all();
+      const rowCounts = [
+        directRows.length,
+        confirmationGrammarRows.length,
+        routingRows.length,
+        confirmationPolicyRows.length,
+      ];
+      if (rowCounts.every((count) => count === 0)) {
+        if (policyAuditIds.length !== 0) {
+          throw new StoreInvariantError(
+            'Retained M2.6 Interaction Policy authority has an orphan install audit',
+          );
+        }
+        return undefined;
+      }
+      if (!rowCounts.every((count) => count === 1)) {
+        throw new StoreInvariantError(
+          'Retained M2.6 Interaction Policy authority is partial or duplicated',
+        );
+      }
+      const direct = this.decodeRetainedInteractionPolicy(
+        directRows,
+        'Direct Action Grammar',
+        (value) => decodeDirectActionGrammar(value, canonicalAuthorityDigests),
+      );
+      const confirmationGrammar = this.decodeRetainedInteractionPolicy(
+        confirmationGrammarRows,
+        'Confirmation Grammar',
+        (value) => decodeConfirmationGrammar(value, canonicalAuthorityDigests),
+      );
+      const routing = this.decodeRetainedInteractionPolicy(
+        routingRows,
+        'Interaction Routing Policy',
+        (value) => decodeInteractionRoutingPolicy(value, canonicalAuthorityDigests),
+      );
+      const confirmationPolicy = this.decodeRetainedInteractionPolicy(
+        confirmationPolicyRows,
+        'Interaction Confirmation Policy',
+        (value) => decodeInteractionConfirmationPolicy(value, canonicalAuthorityDigests),
+      );
+      const expectedPolicyAuditIds = [
+        direct.row.install_audit_event_id,
+        confirmationGrammar.row.install_audit_event_id,
+        routing.row.install_audit_event_id,
+        confirmationPolicy.row.install_audit_event_id,
+      ].map((value) => auditEventId(value));
+      const expectedPolicyAuditIdSet = new Set(expectedPolicyAuditIds);
+      if (
+        expectedPolicyAuditIdSet.size !== expectedPolicyAuditIds.length ||
+        policyAuditIds.length !== expectedPolicyAuditIds.length ||
+        policyAuditIds.some((id) => !expectedPolicyAuditIdSet.has(id))
+      ) {
+        throw new StoreInvariantError(
+          'Retained M2.6 Interaction Policy authority has an extra or substituted install audit',
+        );
+      }
+      const installedTimes = [
+        direct.row.installed_at,
+        confirmationGrammar.row.installed_at,
+        routing.row.installed_at,
+        confirmationPolicy.row.installed_at,
+      ];
+      if (!installedTimes.every((value) => value === installedTimes[0])) {
+        throw new StoreInvariantError(
+          'Retained M2.6 Interaction Policy records do not share one atomic install time',
+        );
+      }
+
+      const policies = decodeInteractionPolicySet({
+        directActionGrammar: direct.record,
+        confirmationGrammar: confirmationGrammar.record,
+        routingPolicy: routing.record,
+        confirmationPolicy: confirmationPolicy.record,
+      });
+      assertM26InteractionPoliciesInvariant(policies, canonicalAuthorityDigests);
+      this.assertRetainedInteractionPolicyAudit(direct.record, direct.row);
+      this.assertRetainedInteractionPolicyAudit(
+        confirmationGrammar.record,
+        confirmationGrammar.row,
+      );
+      this.assertRetainedInteractionPolicyAudit(routing.record, routing.row);
+      this.assertRetainedInteractionPolicyAudit(confirmationPolicy.record, confirmationPolicy.row);
+      return policies;
+    } catch (error) {
+      if (error instanceof StoreInvariantError) {
+        throw error;
+      }
+      throw new StoreInvariantError(
+        'Retained M2.6 Interaction Policy authority failed strict reopen',
+        { cause: error },
+      );
+    }
+  }
+
+  private assertRetainedInteractionAuthorityClosure(): void {
+    this.getInstalledInteractionPoliciesInsideTransaction();
   }
 
   private assertRetainedProjectReferencesUnchanged(
@@ -18890,6 +19450,7 @@ export class SqliteControlStore
       this.assertRetainedCurrentWorkflowCommandClosure();
       this.assertRetainedProjectReadCleanupAuthorityClosure();
       this.assertRetainedIntakeAuthorityClosure();
+      this.assertRetainedInteractionAuthorityClosure();
       const result = operation();
       this.assertRetainedWorkflowAttemptLifecycleClosure();
       this.assertRetainedWorkflowStartAuthorityClosure();
@@ -18898,6 +19459,7 @@ export class SqliteControlStore
       this.assertRetainedCurrentWorkflowCommandClosure();
       this.assertRetainedProjectReadCleanupAuthorityClosure();
       this.assertRetainedIntakeAuthorityClosure();
+      this.assertRetainedInteractionAuthorityClosure();
       this.#authorityIsolationLease?.assertCurrent();
       this.#database.exec('COMMIT');
       return result;
@@ -19003,7 +19565,8 @@ export class SqliteControlStore
       | AcceptanceTransactionStep
       | RecoveryTransactionStep
       | IntakeTransactionStep
-      | ProjectReadCleanupTransactionStep,
+      | ProjectReadCleanupTransactionStep
+      | InteractionTransactionStep,
   ): void {
     this.#transactionProbe?.(step);
   }

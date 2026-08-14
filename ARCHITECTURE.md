@@ -244,7 +244,9 @@ final canonical run then passed 13/13 stages and 68/68 rows on exact source
 2026-08-13. M2.6 Slice 0 decision/proof closure passed on 2026-08-14. Slice 1
 Interaction Domain, strict-codec, lifecycle/relationship invariant, canonical
 digest, and deterministic Runtime-policy implementation passed bounded review
-on 2026-08-14; later M2.6 slices and all M2.7 implementation have not started.
+on 2026-08-14. Slice 2 implementation is in progress through its initial
+SQLite authority and policy-install foundation; later Slice 2 transactions,
+Slice 3 onward, and all M2.7 implementation have not started.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not

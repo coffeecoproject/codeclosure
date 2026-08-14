@@ -1,0 +1,1089 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test, { type TestContext } from 'node:test';
+
+import Database from 'better-sqlite3';
+
+import {
+  auditEventId,
+  decodeDirectActionGrammar,
+  decodeInteractionRoutingPolicy,
+  directActionGrammarProjection,
+  interactionRoutingPolicyProjection,
+  isoTimestamp,
+} from '@codeclosure/domain';
+import {
+  CanonicalJsonSha256DigestProvider,
+  InteractionAuditAggregateType,
+  InteractionAuditEventType,
+  createM26InteractionPolicies,
+  type InstallInteractionPolicies,
+  type InteractionPolicySet,
+} from '@codeclosure/runtime';
+import {
+  InteractionTransactionStep,
+  SqliteControlStore,
+  applyMigrations,
+  defaultMigrationsDirectory,
+} from '@codeclosure/store-sqlite';
+
+const digests = new CanonicalJsonSha256DigestProvider();
+const INSTALLED_AT = isoTimestamp('2026-08-14T01:00:00.000Z');
+
+function temporaryDatabase(t: TestContext): string {
+  const directory = mkdtempSync(join(tmpdir(), 'codeclosure-interaction-store-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  return join(directory, 'authority.sqlite');
+}
+
+function installInput(policies: InteractionPolicySet): InstallInteractionPolicies {
+  const audit = (
+    suffix: string,
+    aggregateId: string,
+    payloadDigest: InteractionPolicySet['directActionGrammar']['digest'],
+  ) =>
+    Object.freeze({
+      id: auditEventId(`audit_interaction-policy-${suffix}`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_POLICY,
+      aggregateId,
+      eventType: InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+      payloadDigest,
+      occurredAt: INSTALLED_AT,
+    });
+  return Object.freeze({
+    policies,
+    installedAt: INSTALLED_AT,
+    auditWrites: Object.freeze({
+      directActionGrammar: audit(
+        'direct-action',
+        policies.directActionGrammar.id,
+        policies.directActionGrammar.digest,
+      ),
+      confirmationGrammar: audit(
+        'confirmation-grammar',
+        policies.confirmationGrammar.id,
+        policies.confirmationGrammar.digest,
+      ),
+      routingPolicy: audit('routing', policies.routingPolicy.id, policies.routingPolicy.digest),
+      confirmationPolicy: audit(
+        'confirmation-policy',
+        policies.confirmationPolicy.id,
+        policies.confirmationPolicy.digest,
+      ),
+    }),
+  });
+}
+
+type StoredSessionState = 'OPEN' | 'CLOSING';
+
+function insertSession(
+  database: Database.Database,
+  policies: InteractionPolicySet,
+  id: string,
+  state: StoredSessionState,
+): void {
+  const principalRef = 'principal_sql-backstop';
+  const projectPath = `/fixture/${id}`;
+  const projectIdentityDigest = digests.digest({ projectPath });
+  const configurationId = 'frontstage-config_sql-backstop';
+  const configurationVersion = 'v1';
+  const configurationDigest = digests.digest({ configurationId, configurationVersion });
+  const retentionProfileId = 'frontstage-retention_sql-backstop';
+  const retentionProfileVersion = 'v1';
+  const retentionProfileDigest = digests.digest({ retentionProfileId, retentionProfileVersion });
+  const sessionDigest = digests.digest({ id, state, version: 1 });
+  const record = {
+    id,
+    schemaVersion: 1,
+    version: 1,
+    principalRef,
+    projectRef: { normalizedPath: projectPath, identityDigest: projectIdentityDigest },
+    state,
+    configuration: {
+      id: configurationId,
+      version: configurationVersion,
+      digest: configurationDigest,
+    },
+    routingPolicy: {
+      id: policies.routingPolicy.id,
+      version: policies.routingPolicy.version,
+      digest: policies.routingPolicy.digest,
+    },
+    confirmationPolicy: {
+      id: policies.confirmationPolicy.id,
+      version: policies.confirmationPolicy.version,
+      digest: policies.confirmationPolicy.digest,
+    },
+    retentionProfile: {
+      id: retentionProfileId,
+      version: retentionProfileVersion,
+      digest: retentionProfileDigest,
+    },
+    openedAt: INSTALLED_AT,
+    updatedAt: INSTALLED_AT,
+    sessionDigest,
+  };
+  database
+    .prepare(
+      `INSERT INTO interaction_sessions(
+         id, schema_version, version, principal_ref, project_path, project_identity_digest,
+         state, terminal_reason, configuration_id, configuration_version,
+         configuration_digest, routing_policy_id, routing_policy_version,
+         routing_policy_digest, confirmation_policy_id, confirmation_policy_version,
+         confirmation_policy_digest, retention_profile_id, retention_profile_version,
+         retention_profile_digest, current_focus_id, current_focus_digest, opened_at,
+         updated_at, session_digest, record_json
+       ) VALUES (
+         ?, 1, 1, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?
+       )`,
+    )
+    .run(
+      id,
+      principalRef,
+      projectPath,
+      projectIdentityDigest,
+      state,
+      configurationId,
+      configurationVersion,
+      configurationDigest,
+      policies.routingPolicy.id,
+      policies.routingPolicy.version,
+      policies.routingPolicy.digest,
+      policies.confirmationPolicy.id,
+      policies.confirmationPolicy.version,
+      policies.confirmationPolicy.digest,
+      retentionProfileId,
+      retentionProfileVersion,
+      retentionProfileDigest,
+      INSTALLED_AT,
+      INSTALLED_AT,
+      sessionDigest,
+      JSON.stringify(record),
+    );
+}
+
+function insertUserMessage(database: Database.Database, sessionId: string, id: string): string {
+  const contentDigest = digests.digest({ id, content: 'fixture' });
+  const messageDigest = digests.digest({ id, sessionId, role: 'USER' });
+  const record = {
+    id,
+    schemaVersion: 1,
+    sessionId,
+    principalRef: 'principal_sql-backstop',
+    role: 'USER',
+    retention: 'RETAINED',
+    contentDigest,
+    contentByteLength: 7,
+    createdAt: INSTALLED_AT,
+    messageDigest,
+  };
+  database
+    .prepare(
+      `INSERT INTO interaction_messages(
+         id, schema_version, session_id, principal_ref, role, retention, content_digest,
+         content_byte_length, caused_by_operation_id, caused_by_operation_digest,
+         created_at, message_digest, record_json
+       ) VALUES (?, 1, ?, ?, 'USER', 'RETAINED', ?, 7, NULL, NULL, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      sessionId,
+      record.principalRef,
+      contentDigest,
+      INSTALLED_AT,
+      messageDigest,
+      JSON.stringify(record),
+    );
+  return messageDigest;
+}
+
+function insertReservedOperation(
+  database: Database.Database,
+  sessionId: string,
+  messageId: string,
+  messageDigest: string,
+  id: string,
+): string {
+  const operationDigest = digests.digest({ id, sessionId, messageId });
+  const record = {
+    id,
+    schemaVersion: 1,
+    version: 1,
+    sessionId,
+    expectedSessionVersion: 1,
+    messageRef: { id: messageId, digest: messageDigest },
+    operationKind: 'ROUTE',
+    state: 'RESERVED',
+    reservedAt: INSTALLED_AT,
+    operationDigest,
+  };
+  database
+    .prepare(
+      `INSERT INTO interaction_operations(
+         id, schema_version, version, session_id, expected_session_version, message_id,
+         message_digest, operation_kind, state, context_manifest_id, context_manifest_digest,
+         assistant_profile_id, assistant_profile_version, assistant_profile_digest,
+         reserved_at, completed_at, operation_digest, record_json
+       ) VALUES (?, 1, 1, ?, 1, ?, ?, 'ROUTE', 'RESERVED', NULL, NULL, NULL, NULL, NULL, ?, NULL, ?, ?)`,
+    )
+    .run(
+      id,
+      sessionId,
+      messageId,
+      messageDigest,
+      INSTALLED_AT,
+      operationDigest,
+      JSON.stringify(record),
+    );
+  return operationDigest;
+}
+
+function insertFrontstageMessage(
+  database: Database.Database,
+  sessionId: string,
+  operationId: string,
+  operationDigest: string,
+  id: string,
+): void {
+  const contentDigest = digests.digest({ id, content: 'frontstage fixture' });
+  const messageDigest = digests.digest({ id, sessionId, operationId });
+  const record = {
+    id,
+    schemaVersion: 1,
+    sessionId,
+    principalRef: 'principal_sql-backstop',
+    role: 'FRONTSTAGE',
+    retention: 'RETAINED',
+    contentDigest,
+    contentByteLength: 18,
+    causedByOperationRef: { id: operationId, digest: operationDigest },
+    createdAt: INSTALLED_AT,
+    messageDigest,
+  };
+  database
+    .prepare(
+      `INSERT INTO interaction_messages(
+         id, schema_version, session_id, principal_ref, role, retention, content_digest,
+         content_byte_length, caused_by_operation_id, caused_by_operation_digest,
+         created_at, message_digest, record_json
+       ) VALUES (?, 1, ?, ?, 'FRONTSTAGE', 'RETAINED', ?, 18, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      sessionId,
+      record.principalRef,
+      contentDigest,
+      operationId,
+      operationDigest,
+      INSTALLED_AT,
+      messageDigest,
+      JSON.stringify(record),
+    );
+}
+
+function insertPolicyInstallAudit(
+  database: Database.Database,
+  id: string,
+  aggregateId: string,
+  payloadDigest: string,
+): void {
+  database
+    .prepare(
+      `INSERT INTO audit_events(
+         id, aggregate_type, aggregate_id, event_type, actor_type, payload_digest, occurred_at
+       ) VALUES (?, ?, ?, ?, 'RUNTIME', ?, ?)`,
+    )
+    .run(
+      id,
+      InteractionAuditAggregateType.INTERACTION_POLICY,
+      aggregateId,
+      InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+      payloadDigest,
+      INSTALLED_AT,
+    );
+}
+
+function insertActionReservationChain(
+  database: Database.Database,
+  sessionId: string,
+  suffix: string,
+): Readonly<{
+  id: string;
+  digest: string;
+  commandId: string;
+  canonicalCommandInputDigest: string;
+}> {
+  const messageId = `interaction-message_${suffix}`;
+  const messageDigest = insertUserMessage(database, sessionId, messageId);
+  const decisionId = `route-decision_${suffix}`;
+  const decisionDigest = digests.digest({ decisionId, sessionId });
+  database
+    .prepare(
+      `INSERT INTO interaction_route_decisions(
+         id, schema_version, session_id, expected_session_version, message_id, message_digest,
+         proposal_id, proposal_digest, focus_id, focus_digest, outcome, decided_at,
+         decision_digest, record_json
+       ) VALUES (?, 1, ?, 1, ?, ?, NULL, NULL, NULL, NULL, 'PROPOSE_GOAL_CONTROL', ?, ?, ?)`,
+    )
+    .run(
+      decisionId,
+      sessionId,
+      messageId,
+      messageDigest,
+      INSTALLED_AT,
+      decisionDigest,
+      JSON.stringify({
+        id: decisionId,
+        schemaVersion: 1,
+        sessionId,
+        expectedSessionVersion: 1,
+        messageRef: { id: messageId, digest: messageDigest },
+        outcome: 'PROPOSE_GOAL_CONTROL',
+        decisionDigest,
+      }),
+    );
+
+  const pendingActionId = `pending-action_${suffix}`;
+  const commandId = `command_${suffix}`;
+  const canonicalCommandInputDigest = digests.digest({ commandId, kind: 'input' });
+  const pendingActionDigest = digests.digest({ pendingActionId, decisionId });
+  database
+    .prepare(
+      `INSERT INTO interaction_pending_actions(
+         id, schema_version, session_id, originating_message_id,
+         originating_message_digest, route_decision_id, route_decision_digest,
+         focus_id, focus_digest, action_kind, confirmation_requirement, public_capability,
+         preallocated_command_id, canonical_command_input_digest, expires_at, created_at,
+         pending_action_digest, record_json
+       ) VALUES (
+         ?, 1, ?, ?, ?, ?, ?, NULL, NULL, 'START_GOAL',
+         'DIRECT_USER_MESSAGE_SUFFICIENT', 'START_GOAL', ?, ?, ?, ?, ?, ?
+       )`,
+    )
+    .run(
+      pendingActionId,
+      sessionId,
+      messageId,
+      messageDigest,
+      decisionId,
+      decisionDigest,
+      commandId,
+      canonicalCommandInputDigest,
+      '2026-08-14T01:05:00.000Z',
+      INSTALLED_AT,
+      pendingActionDigest,
+      JSON.stringify({
+        id: pendingActionId,
+        schemaVersion: 1,
+        sessionId,
+        originatingMessageRef: { id: messageId, digest: messageDigest },
+        routeDecisionRef: { id: decisionId, digest: decisionDigest },
+        kind: 'START_GOAL',
+        confirmationRequirement: 'DIRECT_USER_MESSAGE_SUFFICIENT',
+        publicCapability: 'START_GOAL',
+        preallocatedCommandId: commandId,
+        canonicalCommandInputDigest,
+        pendingActionDigest,
+      }),
+    );
+
+  const resolutionId = `pending-action-resolution_${suffix}`;
+  const resolutionDigest = digests.digest({ resolutionId, pendingActionId });
+  database
+    .prepare(
+      `INSERT INTO interaction_pending_action_resolutions(
+         id, schema_version, session_id, pending_action_id, pending_action_digest,
+         disposition, resolved_at, resolution_digest, record_json
+       ) VALUES (?, 1, ?, ?, ?, 'DIRECT_USER_AUTHORIZED', ?, ?, ?)`,
+    )
+    .run(
+      resolutionId,
+      sessionId,
+      pendingActionId,
+      pendingActionDigest,
+      INSTALLED_AT,
+      resolutionDigest,
+      JSON.stringify({
+        id: resolutionId,
+        schemaVersion: 1,
+        pendingActionRef: { id: pendingActionId, digest: pendingActionDigest },
+        disposition: 'DIRECT_USER_AUTHORIZED',
+        resolutionDigest,
+      }),
+    );
+
+  const reservationId = `interaction-action-reservation_${suffix}`;
+  const reservationDigest = digests.digest({ reservationId, pendingActionId, resolutionId });
+  database
+    .prepare(
+      `INSERT INTO interaction_action_reservations(
+         id, schema_version, session_id, pending_action_id, pending_action_digest,
+         resolution_id, resolution_digest, public_capability, command_id,
+         canonical_command_input_digest, reserved_at, reservation_digest, record_json
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, 'START_GOAL', ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      reservationId,
+      sessionId,
+      pendingActionId,
+      pendingActionDigest,
+      resolutionId,
+      resolutionDigest,
+      commandId,
+      canonicalCommandInputDigest,
+      INSTALLED_AT,
+      reservationDigest,
+      JSON.stringify({
+        id: reservationId,
+        schemaVersion: 1,
+        pendingActionRef: { id: pendingActionId, digest: pendingActionDigest },
+        resolutionRef: { id: resolutionId, digest: resolutionDigest },
+        publicCapability: 'START_GOAL',
+        commandId,
+        canonicalCommandInputDigest,
+        reservedAt: INSTALLED_AT,
+        reservationDigest,
+      }),
+    );
+  return Object.freeze({
+    id: reservationId,
+    digest: reservationDigest,
+    commandId,
+    canonicalCommandInputDigest,
+  });
+}
+
+function insertActionOutcome(
+  database: Database.Database,
+  sessionId: string,
+  reservation: ReturnType<typeof insertActionReservationChain>,
+  suffix: string,
+): void {
+  const id = `interaction-action-outcome_${suffix}`;
+  const publicCommandOutcomeDigest = digests.digest({ id, kind: 'public-outcome' });
+  const resultProjectionDigest = digests.digest({ id, kind: 'result-projection' });
+  const outcomeDigest = digests.digest({ id, reservationId: reservation.id });
+  database
+    .prepare(
+      `INSERT INTO interaction_action_outcomes(
+         id, schema_version, session_id, reservation_id, reservation_digest, command_id,
+         canonical_command_input_digest, disposition, public_command_outcome_digest,
+         result_projection_digest, completed_at, outcome_digest, record_json
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, 'APPLIED', ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      sessionId,
+      reservation.id,
+      reservation.digest,
+      reservation.commandId,
+      reservation.canonicalCommandInputDigest,
+      publicCommandOutcomeDigest,
+      resultProjectionDigest,
+      INSTALLED_AT,
+      outcomeDigest,
+      JSON.stringify({
+        id,
+        schemaVersion: 1,
+        reservationRef: { id: reservation.id, digest: reservation.digest },
+        commandId: reservation.commandId,
+        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+        disposition: 'APPLIED',
+        publicCommandOutcomeDigest,
+        resultProjectionDigest,
+        completedAt: INSTALLED_AT,
+        outcomeDigest,
+      }),
+    );
+}
+
+void test('Slice 2 policy authority installs atomically, replays exactly, and strictly reopens', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const input = installInput(policies);
+  const store = SqliteControlStore.open({ filename });
+
+  assert.deepEqual(store.installInteractionPolicies(input), {
+    status: 'INSTALLED',
+    policies,
+  });
+  assert.deepEqual(store.installInteractionPolicies(input), {
+    status: 'EXISTING',
+    policies,
+  });
+  assert.deepEqual(store.getInstalledInteractionPolicies(), policies);
+  store.close();
+
+  const database = new Database(filename, { readonly: true });
+  try {
+    const auditCount = database
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM audit_events
+          WHERE aggregate_type = ? AND event_type = ?`,
+      )
+      .get(
+        InteractionAuditAggregateType.INTERACTION_POLICY,
+        InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+      ) as { readonly count: number };
+    assert.equal(auditCount.count, 4);
+  } finally {
+    database.close();
+  }
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInstalledInteractionPolicies(), policies);
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('Slice 2 policy install rejects unknown envelope fields and types retained conflicts', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const input = installInput(policies);
+  const store = SqliteControlStore.open({ filename });
+  try {
+    const unknownOuterField = { ...input, unexpected: true };
+    assert.throws(
+      () => store.installInteractionPolicies(unknownOuterField),
+      /missing or unknown fields/u,
+    );
+    const unknownAuditField = {
+      ...input,
+      auditWrites: {
+        ...input.auditWrites,
+        routingPolicy: { ...input.auditWrites.routingPolicy, unexpected: true },
+      },
+    };
+    assert.throws(
+      () => store.installInteractionPolicies(unknownAuditField),
+      /missing or unknown fields/u,
+    );
+    assert.deepEqual(store.installInteractionPolicies(input).status, 'INSTALLED');
+
+    const { digest: ignoredDirectDigest, ...retainedDirectBase } = policies.directActionGrammar;
+    void ignoredDirectDigest;
+    const alternateDirectBase = {
+      ...retainedDirectBase,
+      id: 'codeclosure-m2-6-zh-cn-direct-action-conflict',
+      version: 'codeclosure-m2-6-zh-cn-direct-action-conflict-v1',
+    };
+    const alternateDirect = decodeDirectActionGrammar(
+      {
+        ...alternateDirectBase,
+        digest: digests.digest(directActionGrammarProjection(alternateDirectBase)),
+      },
+      digests,
+    );
+    const { digest: ignoredRoutingDigest, ...retainedRoutingBase } = policies.routingPolicy;
+    void ignoredRoutingDigest;
+    const alternateRoutingBase = {
+      ...retainedRoutingBase,
+      directActionGrammar: {
+        id: alternateDirect.id,
+        version: alternateDirect.version,
+        digest: alternateDirect.digest,
+      },
+    };
+    const alternateRouting = decodeInteractionRoutingPolicy(
+      {
+        ...alternateRoutingBase,
+        digest: digests.digest(interactionRoutingPolicyProjection(alternateRoutingBase)),
+      },
+      digests,
+    );
+    const alternatePolicies = {
+      ...policies,
+      directActionGrammar: alternateDirect,
+      routingPolicy: alternateRouting,
+    };
+    assert.equal(
+      store.installInteractionPolicies(installInput(alternatePolicies)).status,
+      'POLICY_CONFLICT',
+    );
+  } finally {
+    store.close();
+  }
+});
+
+const rollbackSteps = Object.freeze(Object.values(InteractionTransactionStep));
+
+for (const step of rollbackSteps) {
+  void test(`Slice 2 policy install rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(() => store.installInteractionPolicies(installInput(policies)), new RegExp(step));
+    assert.equal(store.getInstalledInteractionPolicies(), undefined);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.equal(reopened.getInstalledInteractionPolicies(), undefined);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 strict reopen rejects partial Interaction Policy authority', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = OFF');
+    const partialAuditId = auditEventId('audit_interaction-policy-partial');
+    database
+      .prepare(
+        `INSERT INTO audit_events(
+           id, aggregate_type, aggregate_id, event_type, actor_type,
+           payload_digest, occurred_at
+         ) VALUES (?, ?, ?, ?, 'RUNTIME', ?, ?)`,
+      )
+      .run(
+        partialAuditId,
+        InteractionAuditAggregateType.INTERACTION_POLICY,
+        policies.directActionGrammar.id,
+        InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+        policies.directActionGrammar.digest,
+        INSTALLED_AT,
+      );
+    database
+      .prepare(
+        `INSERT INTO interaction_direct_action_grammars(
+           id, schema_version, grammar_version, grammar_digest, installed_at,
+           install_audit_event_id, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        policies.directActionGrammar.id,
+        policies.directActionGrammar.schemaVersion,
+        policies.directActionGrammar.version,
+        policies.directActionGrammar.digest,
+        INSTALLED_AT,
+        partialAuditId,
+        JSON.stringify(policies.directActionGrammar),
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /Interaction Policy authority is partial or duplicated/u,
+  );
+});
+
+void test('Slice 2 strict reopen cannot treat a missing policy anchor table as absent', (t) => {
+  const filename = temporaryDatabase(t);
+  const store = SqliteControlStore.open({ filename });
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = OFF');
+    database.exec('DROP TABLE interaction_direct_action_grammars');
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /missing an Interaction Policy authority table/u,
+  );
+});
+
+void test('Slice 2 strict reopen rejects an orphan Interaction Policy install audit', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    insertPolicyInstallAudit(
+      database,
+      auditEventId('audit_interaction-policy-orphan'),
+      policies.directActionGrammar.id,
+      policies.directActionGrammar.digest,
+    );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /orphan install audit/u);
+});
+
+void test('Slice 2 strict reopen rejects an extra Interaction Policy install audit', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    insertPolicyInstallAudit(
+      database,
+      auditEventId('audit_interaction-policy-extra'),
+      policies.directActionGrammar.id,
+      policies.directActionGrammar.digest,
+    );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /extra or substituted install audit/u);
+});
+
+void test('Slice 2 migration establishes the bounded Interaction authority skeleton only', (t) => {
+  const filename = temporaryDatabase(t);
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    applyMigrations(database, defaultMigrationsDirectory(), () => INSTALLED_AT);
+    const rows = database
+      .prepare(
+        `SELECT name
+           FROM sqlite_schema
+          WHERE type = 'table'
+            AND (name LIKE 'interaction_%' OR name = 'frontstage_answers')
+          ORDER BY name`,
+      )
+      .all() as readonly { readonly name: string }[];
+    assert.deepEqual(
+      rows.map((row) => row.name),
+      [
+        'frontstage_answers',
+        'interaction_action_outcomes',
+        'interaction_action_reservations',
+        'interaction_audit_events',
+        'interaction_confirmation_grammars',
+        'interaction_confirmation_policies',
+        'interaction_direct_action_grammars',
+        'interaction_focus_bindings',
+        'interaction_message_handoffs',
+        'interaction_messages',
+        'interaction_operations',
+        'interaction_pending_action_resolutions',
+        'interaction_pending_actions',
+        'interaction_route_decisions',
+        'interaction_route_proposals',
+        'interaction_routing_policies',
+        'interaction_sessions',
+      ],
+    );
+    const deferredCount = database
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM sqlite_schema
+          WHERE type = 'table'
+            AND name IN (
+              'interaction_manifests',
+              'interaction_configurations',
+              'interaction_assistant_profiles'
+            )`,
+      )
+      .get() as { readonly count: number };
+    assert.equal(deferredCount.count, 0);
+
+    const answerColumns = database
+      .prepare("PRAGMA table_info('frontstage_answers')")
+      .all() as readonly { readonly name: string }[];
+    assert.equal(
+      answerColumns.some((column) => column.name === 'operation_id'),
+      false,
+    );
+    assert.equal(
+      answerColumns.some((column) => column.name === 'operation_digest'),
+      false,
+    );
+
+    const messageForeignKeys = database
+      .prepare("PRAGMA foreign_key_list('interaction_messages')")
+      .all() as readonly {
+      readonly table: string;
+      readonly from: string;
+      readonly to: string;
+    }[];
+    assert.deepEqual(
+      messageForeignKeys
+        .filter((foreignKey) => foreignKey.table === 'interaction_operations')
+        .map((foreignKey) => [foreignKey.from, foreignKey.to])
+        .sort(),
+      [
+        ['caused_by_operation_digest', 'operation_digest'],
+        ['caused_by_operation_id', 'id'],
+        ['session_id', 'session_id'],
+      ],
+    );
+
+    const reservationSql = database
+      .prepare(
+        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'interaction_action_reservations'",
+      )
+      .pluck()
+      .get();
+    assert.equal(typeof reservationSql, 'string');
+    assert.match(
+      reservationSql as string,
+      /public_capability TEXT NOT NULL CHECK \(public_capability IN/u,
+    );
+
+    const sessionTriggerSql = database
+      .prepare(
+        "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'interaction_sessions_update_guard'",
+      )
+      .pluck()
+      .get();
+    assert.equal(typeof sessionTriggerSql, 'string');
+    assert.match(
+      sessionTriggerSql as string,
+      /OLD\.state = 'OPEN'.*NEW\.state = 'CLOSED'.*RETENTION_LIMIT_REACHED/su,
+    );
+    assert.match(
+      sessionTriggerSql as string,
+      /OLD\.state = 'CLOSING'.*NEW\.state = 'CLOSED'.*terminal_reason IS NOT NULL/su,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+void test('Slice 2 Session lifecycle backstops reject both illegal direct-close forms', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    insertSession(database, policies, 'interaction-session_open-backstop', 'OPEN');
+    insertSession(database, policies, 'interaction-session_closing-backstop', 'CLOSING');
+
+    const update = database.prepare(
+      `UPDATE interaction_sessions
+          SET version = 2, state = ?, terminal_reason = ?, updated_at = ?,
+              session_digest = ?, record_json = ?
+        WHERE id = ?`,
+    );
+    const directCloseId = 'interaction-session_open-backstop';
+    const directCloseDigest = digests.digest({ id: directCloseId, state: 'CLOSED', version: 2 });
+    assert.throws(
+      () =>
+        update.run(
+          'CLOSED',
+          null,
+          '2026-08-14T01:00:01.000Z',
+          directCloseDigest,
+          JSON.stringify({
+            id: directCloseId,
+            schemaVersion: 1,
+            version: 2,
+            principalRef: 'principal_sql-backstop',
+            projectRef: {
+              normalizedPath: `/fixture/${directCloseId}`,
+              identityDigest: digests.digest({ projectPath: `/fixture/${directCloseId}` }),
+            },
+            state: 'CLOSED',
+            sessionDigest: directCloseDigest,
+          }),
+          directCloseId,
+        ),
+      /illegal Interaction Session transition/u,
+    );
+
+    const terminalCloseId = 'interaction-session_closing-backstop';
+    const terminalCloseDigest = digests.digest({
+      id: terminalCloseId,
+      state: 'CLOSED',
+      version: 2,
+    });
+    assert.throws(
+      () =>
+        update.run(
+          'CLOSED',
+          'RETENTION_LIMIT_REACHED',
+          '2026-08-14T01:00:01.000Z',
+          terminalCloseDigest,
+          JSON.stringify({
+            id: terminalCloseId,
+            schemaVersion: 1,
+            version: 2,
+            principalRef: 'principal_sql-backstop',
+            projectRef: {
+              normalizedPath: `/fixture/${terminalCloseId}`,
+              identityDigest: digests.digest({ projectPath: `/fixture/${terminalCloseId}` }),
+            },
+            state: 'CLOSED',
+            sessionDigest: terminalCloseDigest,
+          }),
+          terminalCloseId,
+        ),
+      /illegal Interaction Session transition/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+void test('Slice 2 Reservation storage rejects capabilities outside the Domain enum', (t) => {
+  const filename = temporaryDatabase(t);
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    applyMigrations(database, defaultMigrationsDirectory(), () => INSTALLED_AT);
+    // This test isolates the column-level enum backstop. The relational chain
+    // remains owned by its separate schema and Store transaction tests.
+    database.pragma('foreign_keys = OFF');
+    const invalidCapability = 'UNKNOWN_CAPABILITY';
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO interaction_action_reservations(
+               id, schema_version, session_id, pending_action_id, pending_action_digest,
+               resolution_id, resolution_digest, public_capability, command_id,
+               canonical_command_input_digest, reserved_at, reservation_digest, record_json
+             ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            'interaction-action-reservation_invalid-capability',
+            'interaction-session_missing',
+            'pending-action_missing',
+            digests.digest({ kind: 'pending-action' }),
+            'pending-action-resolution_missing',
+            digests.digest({ kind: 'pending-action-resolution' }),
+            invalidCapability,
+            'command_invalid-capability',
+            digests.digest({ kind: 'command-input' }),
+            INSTALLED_AT,
+            digests.digest({ kind: 'reservation' }),
+            JSON.stringify({
+              id: 'interaction-action-reservation_invalid-capability',
+              pendingActionRef: {
+                id: 'pending-action_missing',
+                digest: digests.digest({ kind: 'pending-action' }),
+              },
+              resolutionRef: {
+                id: 'pending-action-resolution_missing',
+                digest: digests.digest({ kind: 'pending-action-resolution' }),
+              },
+              publicCapability: invalidCapability,
+              commandId: 'command_invalid-capability',
+              canonicalCommandInputDigest: digests.digest({ kind: 'command-input' }),
+              reservationDigest: digests.digest({ kind: 'reservation' }),
+            }),
+          ),
+      /public_capability IN/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+void test('Slice 2 Message causal backstop rejects absent and cross-Session Operations', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    const firstSessionId = 'interaction-session_causal-first';
+    const secondSessionId = 'interaction-session_causal-second';
+    insertSession(database, policies, firstSessionId, 'OPEN');
+    insertSession(database, policies, secondSessionId, 'OPEN');
+
+    assert.throws(
+      () =>
+        database.transaction(() => {
+          insertFrontstageMessage(
+            database,
+            firstSessionId,
+            'interaction-operation_missing',
+            digests.digest({ kind: 'missing-operation' }),
+            'interaction-message_missing-operation',
+          );
+        })(),
+      /FOREIGN KEY constraint failed/u,
+    );
+
+    const userMessageId = 'interaction-message_causal-user';
+    const userMessageDigest = insertUserMessage(database, firstSessionId, userMessageId);
+    const operationId = 'interaction-operation_causal-first';
+    const operationDigest = insertReservedOperation(
+      database,
+      firstSessionId,
+      userMessageId,
+      userMessageDigest,
+      operationId,
+    );
+    assert.throws(
+      () =>
+        database.transaction(() => {
+          insertFrontstageMessage(
+            database,
+            secondSessionId,
+            operationId,
+            operationDigest,
+            'interaction-message_cross-session-operation',
+          );
+        })(),
+      /FOREIGN KEY constraint failed/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+void test('Slice 2 Action Outcome binds the exact Reservation Session', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    const reservationSessionId = 'interaction-session_outcome-reservation';
+    const substitutedSessionId = 'interaction-session_outcome-substituted';
+    insertSession(database, policies, reservationSessionId, 'OPEN');
+    insertSession(database, policies, substitutedSessionId, 'OPEN');
+    const reservation = insertActionReservationChain(
+      database,
+      reservationSessionId,
+      'outcome-session-binding',
+    );
+
+    assert.throws(
+      () =>
+        insertActionOutcome(database, substitutedSessionId, reservation, 'cross-session-adversary'),
+      /FOREIGN KEY constraint failed/u,
+    );
+    assert.doesNotThrow(() =>
+      insertActionOutcome(database, reservationSessionId, reservation, 'same-session'),
+    );
+  } finally {
+    database.close();
+  }
+});

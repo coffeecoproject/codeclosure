@@ -53,6 +53,7 @@ const migrationNames = Object.freeze([
   '0034_candidate_freeze_evidence_v2.sql',
   '0035_project_read_currency_failure.sql',
   '0036_contained_profile_candidate_freeze.sql',
+  '0037_frontstage_interaction.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -166,12 +167,12 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
     })),
   );
   assert.deepEqual(firstInspection, {
-    counts: { table: 68, index: 25, trigger: 236, view: 0 },
+    counts: { table: 85, index: 32, trigger: 270, view: 0 },
     foreignKeyViolationCount: 0,
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:5d474549353dd0d59cb9727a8a5fc5370d33c4ff4fb2592f014c38384e291530',
+    schemaDigest: 'sha256:aaa342385d5a0a349b1fc9838a03ac5df6fdbba9304ef34e2b3319ccc054e8ed',
   });
 
   const reopened = new Database(filename);

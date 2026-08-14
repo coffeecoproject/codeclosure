@@ -767,7 +767,9 @@ ADR 0039 are accepted and the executable [Slice 0
 contract](plans/m2.6-slice0-contract.md) freezes the implementation inputs;
 Slice 1 Interaction Domain, strict-codec, lifecycle/relationship invariant,
 canonical-digest, and deterministic Runtime-policy implementation passed
-bounded review on 2026-08-14. Later M2.6 slices have not started. The M2.5.1
+bounded review on 2026-08-14. Slice 2 implementation is in progress through
+its initial append-only SQLite authority and policy-install/reopen foundation;
+this does not complete Slice 2 or claim `M26-D03` through `M26-D07`. The M2.5.1
 entry condition has been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction

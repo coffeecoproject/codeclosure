@@ -5,6 +5,8 @@ import {
   FrontstageCandidateRoute,
   FrontstageProposalAmbiguity,
   FrontstageProposalKind,
+  INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES,
+  INTERACTION_MAXIMUM_SESSION_MESSAGES,
   InteractionActionOutcomeDisposition,
   InteractionConfirmationRequirement,
   InteractionContentOmissionReason,
@@ -25,9 +27,14 @@ import {
   PendingActionKind,
   PendingActionResolutionDisposition,
   assertFrontstageAnswerChainInvariant,
+  assertInitialInteractionOperationInvariant,
+  assertInitialInteractionSessionInvariant,
   assertInteractionActionChainInvariant,
+  assertInteractionFocusUpdate,
+  assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
   assertInteractionSessionTransition,
+  assertInteractionUserMessageAdmission,
   commandId,
   decodeFocusBinding,
   decodeFrontstageAnswer,
@@ -88,6 +95,7 @@ import {
   type InteractionActionOutcomeProjectionInput,
   type InteractionActionReservationProjectionInput,
   type InteractionMessageHandoffProjectionInput,
+  type InteractionMessage,
   type InteractionMessageProjectionInput,
   type InteractionOperationProjectionInput,
   type InteractionSessionProjectionInput,
@@ -625,6 +633,82 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
       { ...base, sessionDigest: digest(interactionSessionProjection(base)) },
       digests,
     );
+  const { currentFocusRef: initialFocusRef, ...initialSessionInput } = openSession;
+  void initialFocusRef;
+  const initialSession = decodeSession(initialSessionInput);
+  assert.doesNotThrow(() => assertInitialInteractionSessionInvariant(initialSession));
+  assert.throws(
+    () => assertInitialInteractionSessionInvariant(fixtures.session),
+    /unfocused OPEN version 1/,
+  );
+
+  const admittedSessionBase = {
+    ...initialSessionInput,
+    version: interactionSessionVersion(2),
+    updatedAt: fixtures.message.createdAt,
+  } satisfies InteractionSessionProjectionInput;
+  const admittedSession = decodeSession(admittedSessionBase);
+  assert.doesNotThrow(() =>
+    assertInteractionUserMessageAdmission({
+      currentSession: initialSession,
+      message: fixtures.message,
+      nextSession: admittedSession,
+      retainedMessageCountBefore: 0,
+      retainedContentBytesBefore: 0,
+    }),
+  );
+  const retentionLimitSessionBase = {
+    ...initialSessionInput,
+    version: interactionSessionVersion(2),
+    state: InteractionSessionState.CLOSED,
+    terminalReason: InteractionSessionTerminalReason.RETENTION_LIMIT_REACHED,
+    updatedAt: fixtures.message.createdAt,
+  } satisfies InteractionSessionProjectionInput;
+  const retentionLimitSession = decodeSession(retentionLimitSessionBase);
+  assert.doesNotThrow(() =>
+    assertInteractionUserMessageAdmission({
+      currentSession: initialSession,
+      message: fixtures.message,
+      nextSession: retentionLimitSession,
+      retainedMessageCountBefore: INTERACTION_MAXIMUM_SESSION_MESSAGES - 1,
+      retainedContentBytesBefore: 0,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    assertInteractionUserMessageAdmission({
+      currentSession: initialSession,
+      message: fixtures.message,
+      nextSession: retentionLimitSession,
+      retainedMessageCountBefore: 0,
+      retainedContentBytesBefore:
+        INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES - fixtures.message.contentByteLength,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertInteractionUserMessageAdmission({
+        currentSession: initialSession,
+        message: fixtures.message,
+        nextSession: admittedSession,
+        retainedMessageCountBefore: 512,
+        retainedContentBytesBefore: 0,
+      }),
+    /retention budget is exhausted/,
+  );
+
+  const focusedSessionBase = {
+    ...initialSessionInput,
+    version: interactionSessionVersion(2),
+    currentFocusRef: { id: fixtures.focus.id, digest: fixtures.focus.focusDigest },
+    updatedAt: fixtures.focus.createdAt,
+  } satisfies InteractionSessionProjectionInput;
+  assert.doesNotThrow(() =>
+    assertInteractionFocusUpdate({
+      currentSession: initialSession,
+      focus: fixtures.focus,
+      nextSession: decodeSession(focusedSessionBase),
+    }),
+  );
   const closingBase = {
     ...openSession,
     version: interactionSessionVersion(2),
@@ -746,6 +830,139 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
     state: InteractionOperationState.RESERVED,
   } satisfies InteractionOperationProjectionInput;
   const reserved = decodeOperation(reservedBase);
+  if (reserved.state !== InteractionOperationState.RESERVED) {
+    throw new TypeError('Reservation fixture must remain reserved');
+  }
+  assert.doesNotThrow(() => assertInitialInteractionOperationInvariant(reserved));
+  assert.throws(
+    () => assertInitialInteractionOperationInvariant(fixtures.answerRouteOperation),
+    /must be reserved before terminalization/,
+  );
+  const admittedReservedBase = {
+    ...reservedBase,
+    expectedSessionVersion: admittedSession.version,
+  } satisfies InteractionOperationProjectionInput;
+  const admittedReserved = decodeOperation(admittedReservedBase);
+  if (admittedReserved.state !== InteractionOperationState.RESERVED) {
+    throw new TypeError('Admitted reservation fixture must remain reserved');
+  }
+  const reserveForMessage = (message: InteractionMessage) =>
+    decodeOperation({
+      ...admittedReservedBase,
+      messageRef: { id: message.id, digest: message.messageDigest },
+      reservedAt:
+        message.createdAt > admittedReserved.reservedAt
+          ? message.createdAt
+          : admittedReserved.reservedAt,
+    });
+  assert.doesNotThrow(() =>
+    assertInteractionOperationReservationChain({
+      session: admittedSession,
+      message: fixtures.message,
+      operation: admittedReserved,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertInteractionOperationReservationChain({
+        session: initialSession,
+        message: fixtures.message,
+        operation: reserved,
+      }),
+    /current Session and Message/,
+  );
+  const staleMessageBase = {
+    ...fixtures.message,
+    id: interactionMessageId('interaction-message_stale-reservation-adversary'),
+    createdAt: BEFORE,
+  } satisfies InteractionMessageProjectionInput;
+  const staleMessage = decodeInteractionMessage(
+    {
+      ...staleMessageBase,
+      messageDigest: digest(interactionMessageProjection(staleMessageBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertInteractionOperationReservationChain({
+        session: admittedSession,
+        message: staleMessage,
+        operation: reserveForMessage(staleMessage),
+      }),
+    /current Session and Message/,
+  );
+  const futureMessageBase = {
+    ...fixtures.message,
+    id: interactionMessageId('interaction-message_future-reservation-adversary'),
+    createdAt: LATER,
+  } satisfies InteractionMessageProjectionInput;
+  const futureMessage = decodeInteractionMessage(
+    {
+      ...futureMessageBase,
+      messageDigest: digest(interactionMessageProjection(futureMessageBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertInteractionOperationReservationChain({
+        session: admittedSession,
+        message: futureMessage,
+        operation: reserveForMessage(futureMessage),
+      }),
+    /current Session and Message/,
+  );
+  const frontstageMessageBase = {
+    ...fixtures.message,
+    id: interactionMessageId('interaction-message_frontstage-reservation-adversary'),
+    role: InteractionMessageRole.FRONTSTAGE,
+    causedByOperationRef: { id: reserved.id, digest: reserved.operationDigest },
+  } satisfies InteractionMessageProjectionInput;
+  const frontstageMessage = decodeInteractionMessage(
+    {
+      ...frontstageMessageBase,
+      messageDigest: digest(interactionMessageProjection(frontstageMessageBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertInteractionOperationReservationChain({
+        session: admittedSession,
+        message: frontstageMessage,
+        operation: reserveForMessage(frontstageMessage),
+      }),
+    /current Session and Message/,
+  );
+  const omittedMessageBase = {
+    id: interactionMessageId('interaction-message_omitted-reservation-adversary'),
+    schemaVersion: 1 as const,
+    sessionId: fixtures.message.sessionId,
+    principalRef: fixtures.message.principalRef,
+    role: InteractionMessageRole.USER,
+    retention: InteractionContentRetention.OMITTED,
+    omissionReason: InteractionContentOmissionReason.RETENTION_POLICY,
+    contentDigest: ZERO,
+    contentByteLength: 0,
+    createdAt: fixtures.message.createdAt,
+  } satisfies InteractionMessageProjectionInput;
+  const omittedMessage = decodeInteractionMessage(
+    {
+      ...omittedMessageBase,
+      messageDigest: digest(interactionMessageProjection(omittedMessageBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertInteractionOperationReservationChain({
+        session: admittedSession,
+        message: omittedMessage,
+        operation: reserveForMessage(omittedMessage),
+      }),
+    /current Session and Message/,
+  );
   const completedBase = {
     ...operationCommon,
     version: interactionOperationVersion(2),
@@ -770,6 +987,15 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
     completedAt: LATER,
   } satisfies InteractionOperationProjectionInput;
   const interruptedOperation = decodeOperation(interruptedOperationBase);
+  const interruptedCreationBase = {
+    ...interruptedOperationBase,
+    version: interactionOperationVersion(1),
+  } satisfies InteractionOperationProjectionInput;
+
+  assert.throws(
+    () => assertInitialInteractionOperationInvariant(decodeOperation(interruptedCreationBase)),
+    /cannot be created directly as interrupted/,
+  );
 
   assert.doesNotThrow(() => assertInteractionOperationTransition(reserved, completed));
   assert.doesNotThrow(() => assertInteractionOperationTransition(reserved, failed));

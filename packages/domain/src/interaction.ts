@@ -62,6 +62,8 @@ import {
 import { DomainInvariantError } from './workflow.js';
 
 export const INTERACTION_MAXIMUM_MESSAGE_BYTES = 16_384;
+export const INTERACTION_MAXIMUM_SESSION_MESSAGES = 512;
+export const INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES = 2_097_152;
 export const INTERACTION_MAXIMUM_RETAINED_ANSWER_BYTES = 16_384;
 export const INTERACTION_MAXIMUM_CLARIFICATION_OR_EXPLANATION_BYTES = 2_048;
 
@@ -879,6 +881,26 @@ export function assertInteractionSessionInvariant(session: InteractionSession): 
 }
 
 /**
+ * Owns the initial Session shape. Persistence may allocate identity and commit
+ * the record with audit, but it cannot create a pre-aged or terminal Session.
+ */
+export function assertInitialInteractionSessionInvariant(
+  session: InteractionSession,
+): asserts session is NonTerminalInteractionSession {
+  assertInteractionSessionInvariant(session);
+  if (
+    session.version !== 1 ||
+    session.state !== InteractionSessionState.OPEN ||
+    session.openedAt !== session.updatedAt ||
+    session.currentFocusRef !== undefined
+  ) {
+    throw new DomainInvariantError(
+      'An initial Interaction Session must be an unfocused OPEN version 1 record',
+    );
+  }
+}
+
+/**
  * Owns the semantic lifecycle of one Interaction Session. Persistence remains
  * responsible for compare-and-swap, atomic audit, and durable uniqueness.
  */
@@ -985,6 +1007,70 @@ export function assertInteractionMessageInvariant(message: InteractionMessage): 
   }
 }
 
+export interface InteractionUserMessageAdmission {
+  readonly currentSession: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly nextSession: InteractionSession;
+  readonly retainedMessageCountBefore: number;
+  readonly retainedContentBytesBefore: number;
+}
+
+/**
+ * Owns the aggregate meaning of admitting one user message. Store code remains
+ * responsible for CAS, counting retained rows, and committing record plus audit
+ * atomically.
+ */
+export function assertInteractionUserMessageAdmission(
+  input: InteractionUserMessageAdmission,
+): void {
+  const { currentSession, message, nextSession } = input;
+  assertInteractionSessionInvariant(currentSession);
+  assertInteractionMessageInvariant(message);
+  assertInteractionSessionTransition(currentSession, nextSession);
+  assertNonNegativeInteger(input.retainedMessageCountBefore, 'Retained Interaction Message count');
+  assertNonNegativeInteger(
+    input.retainedContentBytesBefore,
+    'Retained Interaction Message content bytes',
+  );
+
+  if (
+    currentSession.state !== InteractionSessionState.OPEN ||
+    message.role !== InteractionMessageRole.USER ||
+    message.retention !== InteractionContentRetention.RETAINED ||
+    message.sessionId !== currentSession.id ||
+    message.principalRef !== currentSession.principalRef ||
+    message.createdAt < currentSession.updatedAt ||
+    nextSession.updatedAt !== message.createdAt ||
+    !sameOptionalDigestRef(nextSession.currentFocusRef, currentSession.currentFocusRef)
+  ) {
+    throw new DomainInvariantError(
+      'Interaction user-message admission does not bind one current OPEN Session',
+    );
+  }
+
+  const retainedMessageCountAfter = input.retainedMessageCountBefore + 1;
+  const retainedContentBytesAfter = input.retainedContentBytesBefore + message.contentByteLength;
+  if (
+    retainedMessageCountAfter > INTERACTION_MAXIMUM_SESSION_MESSAGES ||
+    retainedContentBytesAfter > INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES
+  ) {
+    throw new DomainInvariantError('Interaction Session retention budget is exhausted');
+  }
+  const reachedRetentionLimit =
+    retainedMessageCountAfter === INTERACTION_MAXIMUM_SESSION_MESSAGES ||
+    retainedContentBytesAfter === INTERACTION_MAXIMUM_SESSION_CONTENT_BYTES;
+  if (
+    (reachedRetentionLimit &&
+      (nextSession.state !== InteractionSessionState.CLOSED ||
+        nextSession.terminalReason !== InteractionSessionTerminalReason.RETENTION_LIMIT_REACHED)) ||
+    (!reachedRetentionLimit && nextSession.state !== InteractionSessionState.OPEN)
+  ) {
+    throw new DomainInvariantError(
+      'Interaction Session retention-limit disposition does not match its retained totals',
+    );
+  }
+}
+
 export function assertFocusBindingInvariant(focus: FocusBinding): void {
   focusBindingId(focus.id);
   interactionSessionId(focus.sessionId);
@@ -997,6 +1083,38 @@ export function assertFocusBindingInvariant(focus: FocusBinding): void {
   }
   isoTimestamp(focus.createdAt);
   sha256Digest(focus.focusDigest);
+}
+
+export interface InteractionFocusUpdate {
+  readonly currentSession: InteractionSession;
+  readonly focus: FocusBinding;
+  readonly nextSession: InteractionSession;
+}
+
+/** Owns the exact Focus record installed by one Session version transition. */
+export function assertInteractionFocusUpdate(input: InteractionFocusUpdate): void {
+  const { currentSession, focus, nextSession } = input;
+  assertInteractionSessionInvariant(currentSession);
+  assertFocusBindingInvariant(focus);
+  assertInteractionSessionTransition(currentSession, nextSession);
+
+  if (
+    currentSession.state !== InteractionSessionState.OPEN ||
+    nextSession.state !== InteractionSessionState.OPEN ||
+    focus.sessionId !== currentSession.id ||
+    focus.basedOnSessionVersion !== currentSession.version ||
+    focus.createdAt < currentSession.updatedAt ||
+    nextSession.updatedAt !== focus.createdAt ||
+    nextSession.currentFocusRef === undefined ||
+    !sameDigestRef(nextSession.currentFocusRef, {
+      id: focus.id,
+      digest: focus.focusDigest,
+    })
+  ) {
+    throw new DomainInvariantError(
+      'Interaction Focus update does not bind the exact observed Session version',
+    );
+  }
 }
 
 const goalCandidateRoutes = new Set<FrontstageCandidateRoute>([
@@ -1927,6 +2045,69 @@ export function assertInteractionOperationInvariant(operation: InteractionOperat
     }
   }
   sha256Digest(operation.operationDigest);
+}
+
+/**
+ * Owns the creation shape of an Interaction Operation. External Assistant work
+ * can enter persistence only as a reserved version-1 operation; deterministic
+ * local bookkeeping may be committed terminally in one transaction.
+ */
+export function assertInitialInteractionOperationInvariant(operation: InteractionOperation): void {
+  assertInteractionOperationInvariant(operation);
+  if (operation.version !== 1) {
+    throw new DomainInvariantError('An initial Interaction Operation must use version 1');
+  }
+  if (
+    operation.assistantProfile !== undefined &&
+    operation.state !== InteractionOperationState.RESERVED
+  ) {
+    throw new DomainInvariantError(
+      'An Assistant-bound Interaction Operation must be reserved before terminalization',
+    );
+  }
+  if (operation.state === InteractionOperationState.INTERRUPTED) {
+    throw new DomainInvariantError(
+      'An Interaction Operation cannot be created directly as interrupted',
+    );
+  }
+}
+
+export interface InteractionOperationReservationChain {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly operation: ReservedInteractionOperation;
+}
+
+/** Owns the Session and Message binding for one reserved operation. */
+export function assertInteractionOperationReservationChain(
+  chain: InteractionOperationReservationChain,
+): void {
+  const { session, message, operation } = chain;
+  assertInteractionSessionInvariant(session);
+  assertInteractionMessageInvariant(message);
+  assertInitialInteractionOperationInvariant(operation);
+
+  if (
+    session.state !== InteractionSessionState.OPEN ||
+    session.version <= 1 ||
+    message.role !== InteractionMessageRole.USER ||
+    message.retention !== InteractionContentRetention.RETAINED ||
+    operation.sessionId !== session.id ||
+    operation.expectedSessionVersion !== session.version ||
+    message.sessionId !== session.id ||
+    message.principalRef !== session.principalRef ||
+    !sameDigestRef(operation.messageRef, {
+      id: message.id,
+      digest: message.messageDigest,
+    }) ||
+    message.createdAt !== session.updatedAt ||
+    operation.reservedAt < message.createdAt ||
+    operation.reservedAt < session.updatedAt
+  ) {
+    throw new DomainInvariantError(
+      'Interaction Operation reservation does not bind the exact current Session and Message',
+    );
+  }
 }
 
 /**
