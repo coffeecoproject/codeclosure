@@ -199,9 +199,11 @@ through ADR 0039 are accepted and its executable Slice 0 decision/proof
 contract passed bounded review on 2026-08-14. Slice 1's Interaction Domain,
 strict codecs, lifecycle and relationship invariants, canonical digest
 projections, and deterministic Runtime policy passed bounded review on
-2026-08-14. Slice 2 implementation is in progress: its initial bounded batch
-adds the append-only Interaction schema and exact policy-install/reopen
-foundation, but does not complete Slice 2 or claim its frozen acceptance rows.
+2026-08-14. Slice 2 implementation is in progress: its bounded SQLite work now
+includes the append-only Interaction schema, exact policy installation, atomic
+Session create/lifecycle and user-message admission, typed replay/conflict,
+ordered audit membership, and strict reopen for that implemented subset. It
+does not complete Slice 2 or claim its frozen acceptance rows.
 A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
@@ -260,7 +262,7 @@ accepted, its formal domain/implementation/acceptance documents and executable
 Slice 0 decision/proof contract exist, and the bounded Slice 0 review passed on
 2026-08-14. Slice 1's bounded Interaction Domain and deterministic-policy
 review passed on 2026-08-14. Slice 2 implementation is in progress through its
-initial SQLite authority and policy-install foundation; later Slice 2
+policy, Session lifecycle, and user-message SQLite authority; later Slice 2
 transactions and Slice 3 onward have not started.
 The bounded
 candidate keeps one foreground CLI frontstage available while the process is

@@ -846,8 +846,8 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
   if (admittedReserved.state !== InteractionOperationState.RESERVED) {
     throw new TypeError('Admitted reservation fixture must remain reserved');
   }
-  const reserveForMessage = (message: InteractionMessage) =>
-    decodeOperation({
+  const reserveForMessage = (message: InteractionMessage) => {
+    const operation = decodeOperation({
       ...admittedReservedBase,
       messageRef: { id: message.id, digest: message.messageDigest },
       reservedAt:
@@ -855,6 +855,11 @@ function assertInteractionLifecycleTransitions(fixtures: ReturnType<typeof creat
           ? message.createdAt
           : admittedReserved.reservedAt,
     });
+    if (operation.state !== InteractionOperationState.RESERVED) {
+      throw new TypeError('Message reservation fixture must remain reserved');
+    }
+    return operation;
+  };
   assert.doesNotThrow(() =>
     assertInteractionOperationReservationChain({
       session: admittedSession,

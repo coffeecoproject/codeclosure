@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,18 +10,36 @@ import Database from 'better-sqlite3';
 import {
   auditEventId,
   decodeDirectActionGrammar,
+  decodeInteractionMessage,
   decodeInteractionRoutingPolicy,
+  decodeInteractionSession,
   directActionGrammarProjection,
+  InteractionContentRetention,
+  InteractionMessageRole,
+  InteractionSessionState,
   interactionRoutingPolicyProjection,
+  interactionMessageId,
+  interactionMessageProjection,
+  interactionSessionId,
+  interactionSessionProjection,
+  interactionSessionVersion,
   isoTimestamp,
+  principalId,
+  type InteractionMessage,
+  type InteractionSessionProjectionInput,
+  type InteractionSession,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
   InteractionAuditAggregateType,
   InteractionAuditEventType,
   createM26InteractionPolicies,
+  type AdmitInteractionUserMessage,
+  type CreateInteractionSession,
   type InstallInteractionPolicies,
+  type InteractionAuditWrite,
   type InteractionPolicySet,
+  type TransitionInteractionSession,
 } from '@codeclosure/runtime';
 import {
   InteractionTransactionStep,
@@ -31,6 +50,20 @@ import {
 
 const digests = new CanonicalJsonSha256DigestProvider();
 const INSTALLED_AT = isoTimestamp('2026-08-14T01:00:00.000Z');
+
+function fixtureIdentifierSuffix(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+}
+
+function decodeSessionProjection(base: InteractionSessionProjectionInput): InteractionSession {
+  return decodeInteractionSession(
+    { ...base, sessionDigest: digests.digest(interactionSessionProjection(base)) },
+    digests,
+  );
+}
 
 function temporaryDatabase(t: TestContext): string {
   const directory = mkdtempSync(join(tmpdir(), 'codeclosure-interaction-store-'));
@@ -73,6 +106,179 @@ function installInput(policies: InteractionPolicySet): InstallInteractionPolicie
         policies.confirmationPolicy.digest,
       ),
     }),
+  });
+}
+
+function createInitialSession(
+  policies: InteractionPolicySet,
+  suffix: string,
+  options: Readonly<{ idSuffix?: string; projectSuffix?: string }> = {},
+): InteractionSession {
+  const idSuffix = fixtureIdentifierSuffix(options.idSuffix ?? suffix);
+  const id = interactionSessionId(`interaction-session_${idSuffix}`);
+  const projectPath = `/fixture/frontstage/${options.projectSuffix ?? suffix}`;
+  const configuration = Object.freeze({
+    id: 'codeclosure-m2-6-frontstage-configuration',
+    version: 'codeclosure-m2-6-frontstage-configuration-v1',
+    digest: digests.digest({ kind: 'frontstage-configuration', version: 1 }),
+  });
+  const retentionProfile = Object.freeze({
+    id: 'codeclosure-m2-6-frontstage-retention',
+    version: 'codeclosure-m2-6-frontstage-retention-v1',
+    digest: digests.digest({ kind: 'frontstage-retention', version: 1 }),
+  });
+  const base = {
+    id,
+    schemaVersion: 1 as const,
+    version: interactionSessionVersion(1),
+    principalRef: principalId('principal_frontstage-fixture'),
+    projectRef: Object.freeze({
+      schemaVersion: 1 as const,
+      normalizedPath: projectPath,
+      identityDigest: digests.digest({ projectPath }),
+    }),
+    state: InteractionSessionState.OPEN,
+    configuration,
+    routingPolicy: Object.freeze({
+      id: policies.routingPolicy.id,
+      version: policies.routingPolicy.version,
+      digest: policies.routingPolicy.digest,
+    }),
+    confirmationPolicy: Object.freeze({
+      id: policies.confirmationPolicy.id,
+      version: policies.confirmationPolicy.version,
+      digest: policies.confirmationPolicy.digest,
+    }),
+    retentionProfile,
+    openedAt: INSTALLED_AT,
+    updatedAt: INSTALLED_AT,
+  } satisfies InteractionSessionProjectionInput;
+  return decodeSessionProjection(base);
+}
+
+function transitionSession(
+  current: InteractionSession,
+  state: InteractionSession['state'],
+  updatedAt: string,
+): InteractionSession {
+  const common = {
+    id: current.id,
+    schemaVersion: 1 as const,
+    version: interactionSessionVersion(current.version + 1),
+    principalRef: current.principalRef,
+    projectRef: current.projectRef,
+    configuration: current.configuration,
+    routingPolicy: current.routingPolicy,
+    confirmationPolicy: current.confirmationPolicy,
+    retentionProfile: current.retentionProfile,
+    ...(current.currentFocusRef === undefined ? {} : { currentFocusRef: current.currentFocusRef }),
+    openedAt: current.openedAt,
+    updatedAt: isoTimestamp(updatedAt),
+  };
+  if (state === InteractionSessionState.INTERRUPTED) {
+    return decodeSessionProjection({ ...common, state: InteractionSessionState.INTERRUPTED });
+  }
+  if (state === InteractionSessionState.CLOSED) {
+    return decodeSessionProjection({ ...common, state: InteractionSessionState.CLOSED });
+  }
+  return decodeSessionProjection({ ...common, state });
+}
+
+function createUserMessage(
+  session: InteractionSession,
+  suffix: string,
+  content: string,
+  createdAt: string,
+): InteractionMessage {
+  const retainedAt = isoTimestamp(createdAt);
+  const id = interactionMessageId(`interaction-message_${fixtureIdentifierSuffix(suffix)}`);
+  const base = {
+    id,
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    principalRef: session.principalRef,
+    role: InteractionMessageRole.USER,
+    retention: InteractionContentRetention.RETAINED,
+    content,
+    contentDigest: digests.digestUtf8(content),
+    contentByteLength: Buffer.byteLength(content, 'utf8'),
+    createdAt: retainedAt,
+  };
+  return decodeInteractionMessage(
+    { ...base, messageDigest: digests.digest(interactionMessageProjection(base)) },
+    digests,
+  );
+}
+
+function createSessionInput(session: InteractionSession, suffix: string): CreateInteractionSession {
+  const auditSuffix = fixtureIdentifierSuffix(suffix);
+  return Object.freeze({
+    session,
+    auditWrite: Object.freeze({
+      id: auditEventId(`audit_interaction-session-opened-${auditSuffix}`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+      aggregateId: session.id,
+      eventType: InteractionAuditEventType.INTERACTION_SESSION_OPENED,
+      payloadDigest: session.sessionDigest,
+      occurredAt: session.openedAt,
+      afterVersion: session.version,
+    }),
+  });
+}
+
+function createSessionTransitionInput(
+  currentSession: InteractionSession,
+  nextSession: InteractionSession,
+  suffix: string,
+): TransitionInteractionSession {
+  const auditSuffix = fixtureIdentifierSuffix(suffix);
+  return Object.freeze({
+    currentSession,
+    nextSession,
+    auditWrite: Object.freeze({
+      id: auditEventId(`audit_interaction-session-transition-${auditSuffix}`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+      aggregateId: nextSession.id,
+      eventType: InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+      payloadDigest: nextSession.sessionDigest,
+      occurredAt: nextSession.updatedAt,
+      beforeVersion: currentSession.version,
+      afterVersion: nextSession.version,
+    }),
+  });
+}
+
+function createUserMessageAdmissionInput(
+  currentSession: InteractionSession,
+  message: InteractionMessage,
+  nextSession: InteractionSession,
+  suffix: string,
+): AdmitInteractionUserMessage {
+  const auditSuffix = fixtureIdentifierSuffix(suffix);
+  const messageAuditWrite: InteractionAuditWrite = Object.freeze({
+    id: auditEventId(`audit_interaction-message-admitted-${auditSuffix}`),
+    aggregateType: InteractionAuditAggregateType.INTERACTION_MESSAGE,
+    aggregateId: message.id,
+    eventType: InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
+    payloadDigest: message.messageDigest,
+    occurredAt: message.createdAt,
+  });
+  const sessionAuditWrite: InteractionAuditWrite = Object.freeze({
+    id: auditEventId(`audit_interaction-session-message-${auditSuffix}`),
+    aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+    aggregateId: nextSession.id,
+    eventType: InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+    payloadDigest: nextSession.sessionDigest,
+    occurredAt: nextSession.updatedAt,
+    beforeVersion: currentSession.version,
+    afterVersion: nextSession.version,
+  });
+  return Object.freeze({
+    currentSession,
+    message,
+    nextSession,
+    messageAuditWrite,
+    sessionAuditWrite,
   });
 }
 
@@ -610,9 +816,19 @@ void test('Slice 2 policy install rejects unknown envelope fields and types reta
   }
 });
 
-const rollbackSteps = Object.freeze(Object.values(InteractionTransactionStep));
+const policyRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_DIRECT_ACTION_GRAMMAR_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_DIRECT_ACTION_GRAMMAR_WRITE,
+  InteractionTransactionStep.AFTER_CONFIRMATION_GRAMMAR_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_CONFIRMATION_GRAMMAR_WRITE,
+  InteractionTransactionStep.AFTER_ROUTING_POLICY_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ROUTING_POLICY_WRITE,
+  InteractionTransactionStep.AFTER_CONFIRMATION_POLICY_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_CONFIRMATION_POLICY_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
 
-for (const step of rollbackSteps) {
+for (const step of policyRollbackSteps) {
   void test(`Slice 2 policy install rolls back at ${step}`, (t) => {
     const filename = temporaryDatabase(t);
     const policies = createM26InteractionPolicies(digests);
@@ -636,6 +852,529 @@ for (const step of rollbackSteps) {
     }
   });
 }
+
+void test('Slice 2 Session create replays exactly, types conflicts, and strictly reopens', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const session = createInitialSession(policies, 'create');
+  const input = createSessionInput(session, 'create');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+
+  assert.deepEqual(store.createInteractionSession(input), {
+    status: 'CREATED',
+    session,
+  });
+  assert.deepEqual(store.createInteractionSession(input), {
+    status: 'REPLAYED',
+    session,
+  });
+  assert.deepEqual(store.getInteractionSession(session.id), session);
+
+  const conflicting = createInitialSession(policies, 'create-conflict', {
+    idSuffix: 'create',
+    projectSuffix: 'substituted-project',
+  });
+  assert.deepEqual(
+    store.createInteractionSession(createSessionInput(conflicting, 'create-conflict')),
+    { status: 'SESSION_CONFLICT', currentSession: session },
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionSession(session.id), session);
+  } finally {
+    reopened.close();
+  }
+});
+
+const sessionCreateRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_SESSION_OPEN_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_SESSION_WRITE,
+  InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of sessionCreateRollbackSteps) {
+  void test(`Slice 2 Session create rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const session = createInitialSession(policies, `create-rollback-${step}`);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.close();
+
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () => store.createInteractionSession(createSessionInput(session, `rollback-${step}`)),
+      new RegExp(step),
+    );
+    assert.equal(store.getInteractionSession(session.id), undefined);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.equal(reopened.getInteractionSession(session.id), undefined);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 Session lifecycle applies once, types stale writers, and survives reopen', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'lifecycle');
+  const closing = transitionSession(
+    initial,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:01.000Z',
+  );
+  const closeInput = createSessionTransitionInput(initial, closing, 'closing');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'lifecycle'));
+
+  assert.deepEqual(store.transitionInteractionSession(closeInput), {
+    status: 'APPLIED',
+    session: closing,
+  });
+  assert.deepEqual(store.transitionInteractionSession(closeInput), {
+    status: 'REPLAYED',
+    session: closing,
+  });
+
+  const staleAlternative = transitionSession(
+    initial,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:01.000Z',
+  );
+  assert.deepEqual(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(initial, staleAlternative, 'stale-interrupted'),
+    ),
+    { status: 'VERSION_CONFLICT', currentSession: closing },
+  );
+
+  const closed = transitionSession(
+    closing,
+    InteractionSessionState.CLOSED,
+    '2026-08-14T01:00:02.000Z',
+  );
+  assert.equal(
+    store.transitionInteractionSession(createSessionTransitionInput(closing, closed, 'closed'))
+      .status,
+    'APPLIED',
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionSession(initial.id), closed);
+  } finally {
+    reopened.close();
+  }
+});
+
+const sessionTransitionRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_SESSION_TRANSITION_WRITE,
+  InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of sessionTransitionRollbackSteps) {
+  void test(`Slice 2 Session lifecycle transition rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `transition-rollback-${step}`);
+    const closing = transitionSession(
+      initial,
+      InteractionSessionState.CLOSING,
+      '2026-08-14T01:00:01.000Z',
+    );
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(createSessionInput(initial, `transition-rollback-${step}`));
+    setup.close();
+
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.transitionInteractionSession(
+          createSessionTransitionInput(initial, closing, `transition-rollback-${step}`),
+        ),
+      new RegExp(step),
+    );
+    assert.deepEqual(store.getInteractionSession(initial.id), initial);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.deepEqual(reopened.getInteractionSession(initial.id), initial);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 user-message admission is atomic, replayable, and CAS-bound', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'message');
+  const message = createUserMessage(
+    initial,
+    'message-first',
+    '请解释当前项目状态',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const afterMessage = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const input = createUserMessageAdmissionInput(initial, message, afterMessage, 'message-first');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'message'));
+
+  assert.deepEqual(store.admitInteractionUserMessage(input), {
+    status: 'ADMITTED',
+    message,
+    session: afterMessage,
+  });
+  assert.deepEqual(store.admitInteractionUserMessage(input), {
+    status: 'REPLAYED',
+    message,
+    session: afterMessage,
+  });
+  assert.deepEqual(store.getInteractionMessage(message.id), message);
+
+  const otherSession = createInitialSession(policies, 'message-other-session');
+  store.createInteractionSession(createSessionInput(otherSession, 'message-other-session'));
+  const otherNext = transitionSession(
+    otherSession,
+    InteractionSessionState.OPEN,
+    message.createdAt,
+  );
+  assert.throws(
+    () =>
+      store.admitInteractionUserMessage(
+        createUserMessageAdmissionInput(
+          otherSession,
+          message,
+          otherNext,
+          'message-cross-session-replay',
+        ),
+      ),
+    /does not bind one current OPEN Session/u,
+  );
+
+  const conflictingMessage = createUserMessage(
+    initial,
+    'message-first',
+    '替换内容',
+    '2026-08-14T01:00:01.000Z',
+  );
+  assert.deepEqual(
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(
+        initial,
+        conflictingMessage,
+        afterMessage,
+        'message-conflict',
+      ),
+    ),
+    { status: 'MESSAGE_CONFLICT', currentMessage: message },
+  );
+
+  const staleMessage = createUserMessage(
+    initial,
+    'message-stale',
+    '这是并发写入',
+    '2026-08-14T01:00:02.000Z',
+  );
+  const staleNext = transitionSession(
+    initial,
+    InteractionSessionState.OPEN,
+    staleMessage.createdAt,
+  );
+  assert.deepEqual(
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(initial, staleMessage, staleNext, 'message-stale'),
+    ),
+    { status: 'VERSION_CONFLICT', currentSession: afterMessage },
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionSession(initial.id), afterMessage);
+    assert.deepEqual(reopened.getInteractionMessage(message.id), message);
+    assert.equal(reopened.getInteractionMessage(staleMessage.id), undefined);
+  } finally {
+    reopened.close();
+  }
+});
+
+const messageAdmissionRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_MESSAGE_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_MESSAGE_WRITE,
+  InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_SESSION_TRANSITION_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of messageAdmissionRollbackSteps) {
+  void test(`Slice 2 user-message admission rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `message-rollback-${step}`);
+    const message = createUserMessage(
+      initial,
+      `message-rollback-${step}`,
+      '原子写入探针',
+      '2026-08-14T01:00:01.000Z',
+    );
+    const afterMessage = transitionSession(
+      initial,
+      InteractionSessionState.OPEN,
+      message.createdAt,
+    );
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(createSessionInput(initial, `message-rollback-${step}`));
+    setup.close();
+
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.admitInteractionUserMessage(
+          createUserMessageAdmissionInput(
+            initial,
+            message,
+            afterMessage,
+            `message-rollback-${step}`,
+          ),
+        ),
+      new RegExp(step),
+    );
+    assert.deepEqual(store.getInteractionSession(initial.id), initial);
+    assert.equal(store.getInteractionMessage(message.id), undefined);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    try {
+      assert.deepEqual(reopened.getInteractionSession(initial.id), initial);
+      assert.equal(reopened.getInteractionMessage(message.id), undefined);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
+void test('Slice 2 concurrent message consumers produce one winner and one typed loser', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'concurrent-message');
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  setup.createInteractionSession(createSessionInput(initial, 'concurrent-message'));
+  setup.close();
+
+  const firstMessage = createUserMessage(
+    initial,
+    'concurrent-first',
+    '第一个写入',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const secondMessage = createUserMessage(
+    initial,
+    'concurrent-second',
+    '第二个写入',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const firstNext = transitionSession(
+    initial,
+    InteractionSessionState.OPEN,
+    firstMessage.createdAt,
+  );
+  const secondNext = transitionSession(
+    initial,
+    InteractionSessionState.OPEN,
+    secondMessage.createdAt,
+  );
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(
+      firstStore.admitInteractionUserMessage(
+        createUserMessageAdmissionInput(initial, firstMessage, firstNext, 'concurrent-first'),
+      ).status,
+      'ADMITTED',
+    );
+    assert.deepEqual(
+      secondStore.admitInteractionUserMessage(
+        createUserMessageAdmissionInput(initial, secondMessage, secondNext, 'concurrent-second'),
+      ),
+      { status: 'VERSION_CONFLICT', currentSession: firstNext },
+    );
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
+void test('Slice 2 strict reopen rejects an orphan Session audit', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const session = createInitialSession(policies, 'orphan-session-audit');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(session, 'orphan-session-audit'));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database
+      .prepare(
+        `INSERT INTO audit_events(
+           id, aggregate_type, aggregate_id, event_type, actor_type,
+           before_version, after_version, payload_digest, occurred_at
+         ) VALUES (?, ?, ?, ?, 'RUNTIME', 1, 2, ?, ?)`,
+      )
+      .run(
+        auditEventId('audit_interaction-session-orphan-transition'),
+        InteractionAuditAggregateType.INTERACTION_SESSION,
+        session.id,
+        InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+        digests.digest({ orphan: true }),
+        '2026-08-14T01:00:01.000Z',
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /orphan or substituted audit/u);
+});
+
+void test('Slice 2 strict reopen rejects missing Session audit membership', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const session = createInitialSession(policies, 'missing-session-audit-membership');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(session, 'missing-session-audit-membership'));
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER interaction_audit_events_no_delete');
+    database
+      .prepare('DELETE FROM interaction_audit_events WHERE session_id = ? AND position = 0')
+      .run(session.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(() => SqliteControlStore.open({ filename }), /orphan or substituted audit/u);
+});
+
+void test('Slice 2 strict reopen rejects retained Message content substitution', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'message-substitution');
+  const message = createUserMessage(
+    initial,
+    'message-substitution',
+    '原始内容',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const afterMessage = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'message-substitution'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, afterMessage, 'message-substitution'),
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER interaction_messages_no_update');
+    database
+      .prepare(
+        `UPDATE interaction_messages
+            SET record_json = json_set(record_json, '$.content', '替换内容')
+          WHERE id = ?`,
+      )
+      .run(message.id);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /Interaction Session\/Message authority failed strict reopen/u,
+  );
+});
+
+void test('Slice 2 strict reopen rejects later-slice rows without an owning Store path', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'unimplemented-operation');
+  const message = createUserMessage(
+    initial,
+    'unimplemented-operation',
+    '尚未实现的操作',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const afterMessage = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'unimplemented-operation'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, afterMessage, 'unimplemented-operation'),
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    insertReservedOperation(
+      database,
+      initial.id,
+      message.id,
+      message.messageDigest,
+      'interaction-operation_unimplemented-path',
+    );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /interaction_operations rows have no implemented M2\.6 Store authority path/u,
+  );
+});
 
 void test('Slice 2 strict reopen rejects partial Interaction Policy authority', (t) => {
   const filename = temporaryDatabase(t);

@@ -151,8 +151,11 @@ lifecycle and relationship invariants, and deterministic Runtime policy passed
 bounded review under [Frontstage Interaction](frontstage-interaction.md). They
 reuse the M2.5 declared-project reference, keep cross-record and transition
 meaning in Domain invariants, and do not change existing Intake, Goal,
-Workflow, Evidence, or Acceptance authority. SQLite persistence and Frontstage
-composition remain later M2.6 slices.
+Workflow, Evidence, or Acceptance authority. Slice 2 SQLite persistence now
+implements policy installation plus atomic Session create/lifecycle and
+user-message admission, typed replay/conflict, ordered audit membership, and
+strict reopen for that subset. The remaining Interaction transactions and
+Frontstage composition remain later M2.6 work.
 Proposed M2.7 separately adds Host/epoch, project control-lease/epoch, and
 project execution-slot records under [Local Runtime Host](runtime-host.md).
 They remain planned and cannot replace Goal, Workflow, command, or Acceptance

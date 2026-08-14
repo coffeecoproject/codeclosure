@@ -4,7 +4,11 @@ import type {
   ConfirmationGrammar,
   DirectActionGrammar,
   InteractionConfirmationPolicy,
+  InteractionMessage,
+  InteractionMessageId,
   InteractionRoutingPolicy,
+  InteractionSession,
+  InteractionSessionId,
   IsoTimestamp,
   Sha256Digest,
 } from '@codeclosure/domain';
@@ -94,6 +98,62 @@ export type InteractionPolicyInstallResult =
       message: string;
     }>;
 
+export interface CreateInteractionSession {
+  readonly session: InteractionSession;
+  readonly auditWrite: InteractionAuditWrite;
+}
+
+export type InteractionSessionCreateResult =
+  | Readonly<{
+      status: 'CREATED' | 'REPLAYED';
+      session: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'SESSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>;
+
+export interface TransitionInteractionSession {
+  readonly currentSession: InteractionSession;
+  readonly nextSession: InteractionSession;
+  readonly auditWrite: InteractionAuditWrite;
+}
+
+export type InteractionSessionTransitionResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      session: InteractionSession;
+    }>
+  | Readonly<{ status: 'SESSION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>;
+
+export interface AdmitInteractionUserMessage {
+  readonly currentSession: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly nextSession: InteractionSession;
+  readonly messageAuditWrite: InteractionAuditWrite;
+  readonly sessionAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionUserMessageAdmissionResult =
+  | Readonly<{
+      status: 'ADMITTED' | 'REPLAYED';
+      message: InteractionMessage;
+      session: InteractionSession;
+    }>
+  | Readonly<{ status: 'SESSION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_CONFLICT';
+      currentMessage: InteractionMessage;
+    }>;
+
 /**
  * Runtime owns the policy definitions. The Store owns only atomic installation,
  * exact replay/conflict classification, audit, and strict retained validation.
@@ -101,4 +161,21 @@ export type InteractionPolicyInstallResult =
 export interface InteractionPolicyControlStore {
   installInteractionPolicies(input: InstallInteractionPolicies): InteractionPolicyInstallResult;
   getInstalledInteractionPolicies(): InteractionPolicySet | undefined;
+}
+
+/**
+ * The Store owns durable CAS, replay/conflict classification, atomic audit
+ * membership, and strict reopen. Domain validators remain the sole lifecycle
+ * and aggregate-rule owners.
+ */
+export interface InteractionSessionControlStore extends InteractionPolicyControlStore {
+  createInteractionSession(input: CreateInteractionSession): InteractionSessionCreateResult;
+  transitionInteractionSession(
+    input: TransitionInteractionSession,
+  ): InteractionSessionTransitionResult;
+  admitInteractionUserMessage(
+    input: AdmitInteractionUserMessage,
+  ): InteractionUserMessageAdmissionResult;
+  getInteractionSession(sessionId: InteractionSessionId): InteractionSession | undefined;
+  getInteractionMessage(messageId: InteractionMessageId): InteractionMessage | undefined;
 }

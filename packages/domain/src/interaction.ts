@@ -1015,23 +1015,19 @@ export interface InteractionUserMessageAdmission {
   readonly retainedContentBytesBefore: number;
 }
 
-/**
- * Owns the aggregate meaning of admitting one user message. Store code remains
- * responsible for CAS, counting retained rows, and committing record plus audit
- * atomically.
- */
-export function assertInteractionUserMessageAdmission(
-  input: InteractionUserMessageAdmission,
+export type InteractionUserMessageAdmissionBinding = Pick<
+  InteractionUserMessageAdmission,
+  'currentSession' | 'message' | 'nextSession'
+>;
+
+/** Owns the exact Session/Message relationship independently of Store totals. */
+export function assertInteractionUserMessageAdmissionBinding(
+  input: InteractionUserMessageAdmissionBinding,
 ): void {
   const { currentSession, message, nextSession } = input;
   assertInteractionSessionInvariant(currentSession);
   assertInteractionMessageInvariant(message);
   assertInteractionSessionTransition(currentSession, nextSession);
-  assertNonNegativeInteger(input.retainedMessageCountBefore, 'Retained Interaction Message count');
-  assertNonNegativeInteger(
-    input.retainedContentBytesBefore,
-    'Retained Interaction Message content bytes',
-  );
 
   if (
     currentSession.state !== InteractionSessionState.OPEN ||
@@ -1047,6 +1043,23 @@ export function assertInteractionUserMessageAdmission(
       'Interaction user-message admission does not bind one current OPEN Session',
     );
   }
+}
+
+/**
+ * Owns the aggregate meaning of admitting one user message. Store code remains
+ * responsible for CAS, counting retained rows, and committing record plus audit
+ * atomically.
+ */
+export function assertInteractionUserMessageAdmission(
+  input: InteractionUserMessageAdmission,
+): void {
+  const { message, nextSession } = input;
+  assertInteractionUserMessageAdmissionBinding(input);
+  assertNonNegativeInteger(input.retainedMessageCountBefore, 'Retained Interaction Message count');
+  assertNonNegativeInteger(
+    input.retainedContentBytesBefore,
+    'Retained Interaction Message content bytes',
+  );
 
   const retainedMessageCountAfter = input.retainedMessageCountBefore + 1;
   const retainedContentBytesAfter = input.retainedContentBytesBefore + message.contentByteLength;
