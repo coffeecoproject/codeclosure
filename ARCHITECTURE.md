@@ -255,10 +255,11 @@ contracts passed bounded P0 review on 2026-08-15. B1's result-specific
 deterministic and Assistant Route transactions, exact retained
 Manifest/Proposal/Decision authority, typed conflict results, SQLite guards,
 and strict reopen passed bounded review and were committed as `35280f5` on
-2026-08-15. B2's Pending Action authority-prefix, persisted-chain closure, and
-result-specific Domain relationship alignment is in progress; its Store
-transactions and B3 onward have not started. All M2.7 implementation remains
-unstarted.
+2026-08-15. B2's Pending Action, Resolution, Reservation, result-specific
+Operation, atomic audit, replay/conflict, rollback, SQLite-backstop, and strict-
+reopen authority passed bounded review and was committed across `2da38eb` and
+`c61489e` on 2026-08-15; it invokes no public capability. B3 onward and all
+M2.7 implementation remain unstarted.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not
