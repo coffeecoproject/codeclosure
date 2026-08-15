@@ -37,7 +37,9 @@ import {
   InteractionOperationKind,
   InteractionOperationResultKind,
   InteractionOperationState,
+  InteractionContentRetention,
   InteractionMessageHandoffKind,
+  InteractionMessageRole,
   InteractionPublicCapability,
   PendingActionResolutionDisposition,
   InteractionSessionState,
@@ -54,6 +56,7 @@ import {
   applyWorkflowCancellationToAttempt,
   applyWorkflowEvent,
   assertIntentProjectionAmbiguityClosure,
+  assertIntakeCommandClosureInvariant,
   acceptanceDecisionProjection,
   acceptanceInputManifestProjection,
   acceptanceCriticalVerificationPlanProjection,
@@ -120,6 +123,7 @@ import {
   decodeIntentAnalysisProposal,
   decodeIntentProjectionRevision,
   decodeInteractionConfirmationPolicy,
+  decodeFrontstageAnswer,
   decodeFrontstageContextManifest,
   decodeInteractionMessage,
   decodeInteractionOperation,
@@ -153,6 +157,8 @@ import {
   assertInteractionFocusUpdate,
   assertInteractionActionPersistenceChainInvariant,
   assertAuthorizedIntakeActionHandoffOperationResultInvariant,
+  assertFrontstageAnswerChainInvariant,
+  assertInteractionClarificationHandoffChainInvariant,
   assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
   assertInteractionRouteResultChainInvariant,
@@ -171,6 +177,7 @@ import {
   intakeRunId,
   intentAdmissionPolicyId,
   interactionOperationId,
+  interactionMessageHandoffId,
   interactionActionReservationId,
   interactionActionOutcomeId,
   interactionActionOutcomeProjection,
@@ -240,6 +247,8 @@ import {
   type ExecutionProfileId,
   type FocusBinding,
   type FocusBindingId,
+  type FrontstageAnswer,
+  type FrontstageAnswerId,
   type FrontstageContextManifest,
   type FrontstageContextManifestId,
   type ExternalBackendCapabilityRecord,
@@ -277,6 +286,7 @@ import {
   type IntentAnalysisProposal,
   type IntentProjectionRevisionRecord,
   type InteractionMessage,
+  type InteractionMessageHandoff,
   type InteractionMessageId,
   type InteractionOperation,
   type InteractionOperationId,
@@ -288,6 +298,7 @@ import {
   type InteractionActionOutcome,
   type InteractionActionOutcomeId,
   type InteractionMessageHandoffId,
+  type IntakeClarificationMessageHandoff,
   type InteractionActionReservationId,
   type PendingAction,
   type PendingActionId,
@@ -454,6 +465,7 @@ import {
   type InteractionFocusBindingRecordResult,
   type InteractionFocusControlStore,
   type InteractionPendingActionControlStore,
+  type InteractionPresentationResultControlStore,
   type InteractionPublicActionControlStore,
   type InteractionOperationControlStore,
   type InteractionRouteResultControlStore,
@@ -462,12 +474,20 @@ import {
   type CommitInteractionActionConfirmation,
   type CommitAuthorizedIntakeActionHandoff,
   type CommitInteractionActionOutcome,
+  type CommitFrontstageAnswerResult,
+  type CommitInteractionClarificationResult,
+  type CommitInteractionGoalViewResult,
+  type CommitInteractionResultProjection,
   type CommitInteractionPendingActionProposal,
   type CompanionFreeReservedInteractionOperation,
   type InteractionRouteResultCommitResult,
   type InteractionActionConfirmationCommitResult,
   type AuthorizedIntakeActionHandoffCommitResult,
   type InteractionActionOutcomeCommitResult,
+  type FrontstageAnswerResultCommitResult,
+  type InteractionClarificationOperationReservationResult,
+  type InteractionPresentationResultCommitResult,
+  type InteractionUnresolvedClarificationOperationDescriptor,
   type InteractionUnresolvedActionReservationDescriptor,
   type InteractionPendingActionProposalCommitResult,
   type InteractionPendingActionTerminalResolutionRecordResult,
@@ -481,6 +501,7 @@ import {
   type RecordInteractionFocusBinding,
   type RecordInteractionPendingActionTerminalResolution,
   type ReserveAssistantRouteOperation,
+  type ReserveInteractionClarificationOperation,
   type ReserveInteractionOperation,
   type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
@@ -745,6 +766,15 @@ export const InteractionTransactionStep = {
   AFTER_ACTION_OUTCOME_AUDIT_WRITE: 'AFTER_INTERACTION_ACTION_OUTCOME_AUDIT_WRITE',
   AFTER_ACTION_OUTCOME_WRITE: 'AFTER_INTERACTION_ACTION_OUTCOME_WRITE',
   AFTER_ACTION_OUTCOME_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_ACTION_OUTCOME_MEMBERSHIP_WRITE',
+  AFTER_FRONTSTAGE_ANSWER_AUDIT_WRITE: 'AFTER_INTERACTION_FRONTSTAGE_ANSWER_AUDIT_WRITE',
+  AFTER_FRONTSTAGE_ANSWER_WRITE: 'AFTER_INTERACTION_FRONTSTAGE_ANSWER_WRITE',
+  AFTER_RESULT_MESSAGE_AUDIT_WRITE: 'AFTER_INTERACTION_RESULT_MESSAGE_AUDIT_WRITE',
+  AFTER_RESULT_MESSAGE_WRITE: 'AFTER_INTERACTION_RESULT_MESSAGE_WRITE',
+  AFTER_PRESENTATION_COMPLETION_AUDIT_WRITE:
+    'AFTER_INTERACTION_PRESENTATION_COMPLETION_AUDIT_WRITE',
+  AFTER_PRESENTATION_COMPLETION_WRITE: 'AFTER_INTERACTION_PRESENTATION_COMPLETION_WRITE',
+  AFTER_PRESENTATION_COMPLETION_MEMBERSHIP_WRITE:
+    'AFTER_INTERACTION_PRESENTATION_COMPLETION_MEMBERSHIP_WRITE',
   AFTER_FOCUS_AUDIT_WRITE: 'AFTER_INTERACTION_FOCUS_AUDIT_WRITE',
   AFTER_FOCUS_WRITE: 'AFTER_INTERACTION_FOCUS_WRITE',
   AFTER_AUDIT_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_AUDIT_MEMBERSHIP_WRITE',
@@ -1474,6 +1504,24 @@ const retainedInteractionMessageHandoffRowSchema = z
   })
   .strict();
 
+const retainedFrontstageAnswerRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    originating_message_id: z.string().min(1),
+    originating_message_digest: z.string().min(1),
+    route_decision_id: z.string().min(1),
+    route_decision_digest: z.string().min(1),
+    proposal_id: z.string().min(1),
+    proposal_digest: z.string().min(1),
+    answer_content_digest: z.string().min(1),
+    created_at: z.string().min(1),
+    answer_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
 const retainedInteractionAuditMembershipRowSchema = z
   .object({
     session_id: z.string().min(1),
@@ -1538,6 +1586,8 @@ const INTERACTION_MIGRATION_NAME = '0037_frontstage_interaction.sql';
 const INTERACTION_ROUTE_RESULT_MIGRATION_NAME = '0039_interaction_route_result_authority.sql';
 const INTERACTION_PENDING_ACTION_MIGRATION_NAME = '0040_interaction_pending_action_authority.sql';
 const INTERACTION_PUBLIC_ACTION_MIGRATION_NAME = '0041_interaction_public_action_authority.sql';
+const INTERACTION_PRESENTATION_RESULT_MIGRATION_NAME =
+  '0042_interaction_presentation_result_authority.sql';
 
 interface NormalizedInteractionPolicyInstall {
   readonly policies: InteractionPolicySet;
@@ -1657,6 +1707,43 @@ interface NormalizedInteractionActionOutcomeCommit {
   readonly reservationId: InteractionActionReservationId;
   readonly outcomeId: InteractionActionOutcomeId;
   readonly auditEventId: AuditEventId;
+}
+
+interface NormalizedInteractionClarificationOperationReservation {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus: FocusBinding;
+  readonly handoff: IntakeClarificationMessageHandoff;
+  readonly operation: ReservedInteractionOperation;
+  readonly handoffAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedFrontstageAnswerResultCommit {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly routeOperation: CompletedInteractionOperation;
+  readonly proposal: RouteProposal;
+  readonly routeDecision: RouteDecision;
+  readonly answer: FrontstageAnswer;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly resultMessage: InteractionMessage;
+  readonly answerAuditWrite: InteractionAuditWrite;
+  readonly messageAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionPresentationResultCommit {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly handoff?: IntakeClarificationMessageHandoff;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly resultMessage?: InteractionMessage;
+  readonly messageAuditWrite?: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
 }
 
 interface NormalizedInteractionOperationTerminalization {
@@ -2209,13 +2296,13 @@ function normalizeInteractionActionReservationAuditWrite(
   });
 }
 
-function normalizePendingActionOperationCompletionAuditWrite(
+function normalizeInteractionOperationCompletionAuditWrite(
   auditWrite: InteractionAuditWrite,
   currentOperation: ReservedInteractionOperation,
   nextOperation: CompletedInteractionOperation,
 ): InteractionAuditWrite {
   return normalizeExactInteractionAuditWrite(auditWrite, {
-    recordType: 'Pending Action Operation completion audit',
+    recordType: 'Interaction Operation completion audit',
     aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
     aggregateId: nextOperation.id,
     eventType: InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
@@ -2309,7 +2396,7 @@ function normalizeInteractionPendingActionProposalCommit(
     reservation === undefined || input.reservationAuditWrite === undefined
       ? undefined
       : normalizeInteractionActionReservationAuditWrite(input.reservationAuditWrite, reservation);
-  const operationAuditWrite = normalizePendingActionOperationCompletionAuditWrite(
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
     input.operationAuditWrite,
     currentOperation,
     nextOperation,
@@ -2429,7 +2516,7 @@ function normalizeInteractionActionConfirmationCommit(
     reservation === undefined || input.reservationAuditWrite === undefined
       ? undefined
       : normalizeInteractionActionReservationAuditWrite(input.reservationAuditWrite, reservation);
-  const operationAuditWrite = normalizePendingActionOperationCompletionAuditWrite(
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
     input.operationAuditWrite,
     currentOperation,
     nextOperation,
@@ -2607,7 +2694,7 @@ function normalizeAuthorizedIntakeActionHandoffCommit(
     payloadDigest: decodedHandoff.handoffDigest,
     occurredAt: decodedHandoff.createdAt,
   });
-  const operationAuditWrite = normalizePendingActionOperationCompletionAuditWrite(
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
     input.operationAuditWrite,
     currentOperation,
     nextOperation,
@@ -2646,6 +2733,385 @@ function normalizeInteractionActionOutcomeCommit(
     reservationId: interactionActionReservationId(input.reservationId),
     outcomeId: interactionActionOutcomeId(input.outcomeId),
     auditEventId: auditEventId(input.auditEventId),
+  });
+}
+
+function normalizeInteractionClarificationOperationReservation(
+  input: ReserveInteractionClarificationOperation,
+): NormalizedInteractionClarificationOperationReservation {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'message',
+      'focus',
+      'handoff',
+      'operation',
+      'handoffAuditWrite',
+      'operationAuditWrite',
+    ],
+    [],
+    'Interaction clarification reservation input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const focus = decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const decodedHandoff = decodeInteractionMessageHandoff(input.handoff, canonicalAuthorityDigests);
+  if (decodedHandoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+    throw new StoreInvariantError(
+      'Interaction clarification reservation accepts only a clarification Handoff',
+    );
+  }
+  const operation = decodeInteractionOperation(input.operation, canonicalAuthorityDigests);
+  if (
+    operation.state !== InteractionOperationState.RESERVED ||
+    operation.operationKind !== InteractionOperationKind.INTAKE_CLARIFICATION
+  ) {
+    throw new StoreInvariantError(
+      'Interaction clarification reservation requires one reserved clarification Operation',
+    );
+  }
+  assertInteractionClarificationHandoffChainInvariant({
+    session,
+    message,
+    focus,
+    handoff: decodedHandoff,
+  });
+  assertInteractionOperationReservationChain({ session, message, operation });
+  if (
+    operation.messageRef.id !== decodedHandoff.messageRef.id ||
+    operation.messageRef.digest !== decodedHandoff.messageRef.digest ||
+    operation.reservedAt < decodedHandoff.createdAt
+  ) {
+    throw new StoreInvariantError(
+      'Interaction clarification Operation does not bind its exact Handoff reservation point',
+    );
+  }
+  const handoffAuditWrite = normalizeExactInteractionAuditWrite(input.handoffAuditWrite, {
+    recordType: 'Interaction clarification Handoff audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_MESSAGE_HANDOFF,
+    aggregateId: decodedHandoff.id,
+    eventType: InteractionAuditEventType.INTERACTION_MESSAGE_HANDOFF_RECORDED,
+    payloadDigest: decodedHandoff.handoffDigest,
+    occurredAt: decodedHandoff.createdAt,
+  });
+  const operationAuditWrite = normalizeExactInteractionAuditWrite(input.operationAuditWrite, {
+    recordType: 'Interaction clarification Operation reservation audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+    aggregateId: operation.id,
+    eventType: InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+    payloadDigest: operation.operationDigest,
+    occurredAt: operation.reservedAt,
+    afterVersion: operation.version,
+  });
+  assertDistinctInteractionAuditWrites(
+    [handoffAuditWrite, operationAuditWrite],
+    'Interaction clarification reservation',
+  );
+  return Object.freeze({
+    session,
+    message,
+    focus,
+    handoff: decodedHandoff,
+    operation,
+    handoffAuditWrite,
+    operationAuditWrite,
+  });
+}
+
+function assertProducedInteractionResultMessage(
+  session: InteractionSession,
+  operation: CompletedInteractionOperation,
+  message: InteractionMessage,
+): asserts message is Extract<
+  InteractionMessage,
+  { readonly retention: typeof InteractionContentRetention.RETAINED }
+> {
+  if (
+    message.sessionId !== session.id ||
+    message.principalRef !== session.principalRef ||
+    message.role === InteractionMessageRole.USER ||
+    message.retention !== InteractionContentRetention.RETAINED ||
+    message.contentByteLength === 0 ||
+    message.causedByOperationRef.id !== operation.id ||
+    message.causedByOperationRef.digest !== operation.operationDigest ||
+    message.createdAt !== operation.completedAt
+  ) {
+    throw new StoreInvariantError(
+      'Produced Interaction Message must bind the exact completed result Operation',
+    );
+  }
+}
+
+function normalizeFrontstageAnswerResultCommit(
+  input: CommitFrontstageAnswerResult,
+): NormalizedFrontstageAnswerResultCommit {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'originatingMessage',
+      'routeOperation',
+      'proposal',
+      'routeDecision',
+      'answer',
+      'currentOperation',
+      'nextOperation',
+      'resultMessage',
+      'answerAuditWrite',
+      'messageAuditWrite',
+      'operationAuditWrite',
+    ],
+    [],
+    'Frontstage Answer result input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const originatingMessage = decodeInteractionMessage(
+    input.originatingMessage,
+    canonicalAuthorityDigests,
+  );
+  const routeOperation = decodeInteractionOperation(
+    input.routeOperation,
+    canonicalAuthorityDigests,
+  );
+  const proposal = decodeRouteProposal(input.proposal, canonicalAuthorityDigests);
+  const routeDecision = decodeRouteDecision(input.routeDecision, canonicalAuthorityDigests);
+  const answer = decodeFrontstageAnswer(input.answer, canonicalAuthorityDigests);
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  const resultMessage = decodeInteractionMessage(input.resultMessage, canonicalAuthorityDigests);
+  if (
+    routeOperation.state !== InteractionOperationState.COMPLETED ||
+    currentOperation.state !== InteractionOperationState.RESERVED ||
+    nextOperation.state !== InteractionOperationState.COMPLETED
+  ) {
+    throw new StoreInvariantError('Frontstage Answer requires completed Route and Answer results');
+  }
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  assertFrontstageAnswerChainInvariant({
+    session,
+    originatingMessage,
+    routeOperation,
+    proposal,
+    routeDecision,
+    answer,
+    answerOperation: nextOperation,
+  });
+  assertProducedInteractionResultMessage(session, nextOperation, resultMessage);
+  if (
+    resultMessage.role !== InteractionMessageRole.FRONTSTAGE ||
+    resultMessage.content !== answer.answerContent ||
+    resultMessage.contentDigest !== answer.answerContentDigest ||
+    resultMessage.createdAt < answer.createdAt
+  ) {
+    throw new StoreInvariantError(
+      'Frontstage Answer Message must retain the exact Answer content and causality',
+    );
+  }
+  const answerAuditWrite = normalizeExactInteractionAuditWrite(input.answerAuditWrite, {
+    recordType: 'Frontstage Answer audit',
+    aggregateType: InteractionAuditAggregateType.FRONTSTAGE_ANSWER,
+    aggregateId: answer.id,
+    eventType: InteractionAuditEventType.FRONTSTAGE_ANSWER_RECORDED,
+    payloadDigest: answer.answerDigest,
+    occurredAt: answer.createdAt,
+  });
+  const messageAuditWrite = normalizeExactInteractionAuditWrite(input.messageAuditWrite, {
+    recordType: 'Frontstage Answer Message audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_MESSAGE,
+    aggregateId: resultMessage.id,
+    eventType: InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+    payloadDigest: resultMessage.messageDigest,
+    occurredAt: resultMessage.createdAt,
+  });
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
+    input.operationAuditWrite,
+    currentOperation,
+    nextOperation,
+  );
+  assertDistinctInteractionAuditWrites(
+    [answerAuditWrite, messageAuditWrite, operationAuditWrite],
+    'Frontstage Answer result',
+  );
+  return Object.freeze({
+    session,
+    originatingMessage,
+    routeOperation,
+    proposal,
+    routeDecision,
+    answer,
+    currentOperation,
+    nextOperation,
+    resultMessage,
+    answerAuditWrite,
+    messageAuditWrite,
+    operationAuditWrite,
+  });
+}
+
+function normalizeInteractionGoalViewResultCommit(
+  input: CommitInteractionGoalViewResult,
+): NormalizedInteractionPresentationResultCommit {
+  assertExactObjectKeys(
+    input,
+    ['session', 'message', 'currentOperation', 'nextOperation', 'operationAuditWrite'],
+    [],
+    'Interaction Goal view result input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  if (
+    currentOperation.state !== InteractionOperationState.RESERVED ||
+    nextOperation.state !== InteractionOperationState.COMPLETED ||
+    (currentOperation.operationKind !== InteractionOperationKind.GOAL_LIST &&
+      currentOperation.operationKind !== InteractionOperationKind.GOAL_STATUS)
+  ) {
+    throw new StoreInvariantError('Interaction Goal view result has an incompatible Operation');
+  }
+  assertInteractionOperationReservationChain({ session, message, operation: currentOperation });
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
+    input.operationAuditWrite,
+    currentOperation,
+    nextOperation,
+  );
+  return Object.freeze({ session, message, currentOperation, nextOperation, operationAuditWrite });
+}
+
+function normalizeInteractionClarificationResultCommit(
+  input: CommitInteractionClarificationResult,
+): NormalizedInteractionPresentationResultCommit {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'message',
+      'focus',
+      'handoff',
+      'currentOperation',
+      'nextOperation',
+      'operationAuditWrite',
+    ],
+    [],
+    'Interaction clarification result input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const focus = decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const decodedHandoff = decodeInteractionMessageHandoff(input.handoff, canonicalAuthorityDigests);
+  if (decodedHandoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+    throw new StoreInvariantError('Interaction clarification result requires its Handoff member');
+  }
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  if (
+    currentOperation.state !== InteractionOperationState.RESERVED ||
+    currentOperation.operationKind !== InteractionOperationKind.INTAKE_CLARIFICATION ||
+    nextOperation.state !== InteractionOperationState.COMPLETED ||
+    nextOperation.result.kind !== InteractionOperationResultKind.PUBLIC_COMMAND_RECORDED ||
+    nextOperation.result.commandId !== decodedHandoff.intakeCommandId
+  ) {
+    throw new StoreInvariantError(
+      'Interaction clarification result must bind its exact public Command result',
+    );
+  }
+  assertInteractionClarificationHandoffChainInvariant({
+    session,
+    message,
+    focus,
+    handoff: decodedHandoff,
+  });
+  assertInteractionOperationReservationChain({ session, message, operation: currentOperation });
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
+    input.operationAuditWrite,
+    currentOperation,
+    nextOperation,
+  );
+  return Object.freeze({
+    session,
+    message,
+    focus,
+    handoff: decodedHandoff,
+    currentOperation,
+    nextOperation,
+    operationAuditWrite,
+  });
+}
+
+function normalizeInteractionResultProjectionCommit(
+  input: CommitInteractionResultProjection,
+): NormalizedInteractionPresentationResultCommit {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'message',
+      'currentOperation',
+      'nextOperation',
+      'resultMessage',
+      'messageAuditWrite',
+      'operationAuditWrite',
+    ],
+    [],
+    'Interaction result projection input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  const resultMessage = decodeInteractionMessage(input.resultMessage, canonicalAuthorityDigests);
+  if (
+    currentOperation.state !== InteractionOperationState.RESERVED ||
+    currentOperation.operationKind !== InteractionOperationKind.RESULT_PROJECTION ||
+    nextOperation.state !== InteractionOperationState.COMPLETED
+  ) {
+    throw new StoreInvariantError(
+      'Interaction result projection has an incompatible Operation transition',
+    );
+  }
+  assertInteractionOperationReservationChain({ session, message, operation: currentOperation });
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  assertProducedInteractionResultMessage(session, nextOperation, resultMessage);
+  const messageAuditWrite = normalizeExactInteractionAuditWrite(input.messageAuditWrite, {
+    recordType: 'Interaction result projection Message audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_MESSAGE,
+    aggregateId: resultMessage.id,
+    eventType: InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+    payloadDigest: resultMessage.messageDigest,
+    occurredAt: resultMessage.createdAt,
+  });
+  const operationAuditWrite = normalizeInteractionOperationCompletionAuditWrite(
+    input.operationAuditWrite,
+    currentOperation,
+    nextOperation,
+  );
+  assertDistinctInteractionAuditWrites(
+    [messageAuditWrite, operationAuditWrite],
+    'Interaction result projection',
+  );
+  return Object.freeze({
+    session,
+    message,
+    currentOperation,
+    nextOperation,
+    resultMessage,
+    messageAuditWrite,
+    operationAuditWrite,
   });
 }
 
@@ -4251,6 +4717,7 @@ export class SqliteControlStore
     InteractionRouteResultControlStore,
     InteractionPendingActionControlStore,
     InteractionPublicActionControlStore,
+    InteractionPresentationResultControlStore,
     InteractionFocusControlStore
 {
   readonly #database: Database.Database;
@@ -5859,6 +6326,415 @@ export class SqliteControlStore
     });
   }
 
+  public reserveInteractionClarificationOperation(
+    rawInput: ReserveInteractionClarificationOperation,
+  ): InteractionClarificationOperationReservationResult {
+    this.assertOpen();
+    const input = normalizeInteractionClarificationOperationReservation(rawInput);
+    return this.runImmediate(() => {
+      const retainedOperation = this.getInteractionOperationInsideTransaction(input.operation.id);
+      const retainedHandoffById = this.getInteractionMessageHandoffInsideTransaction(
+        input.handoff.id,
+      );
+      const retainedHandoffByCommand = this.getIntakeClarificationHandoffByCommandInsideTransaction(
+        input.handoff.intakeCommandId,
+      );
+      if (
+        retainedOperation?.state === InteractionOperationState.RESERVED &&
+        sameCanonicalAuthority(retainedOperation, input.operation) &&
+        retainedHandoffById?.kind === InteractionMessageHandoffKind.INTAKE_CLARIFICATION &&
+        sameCanonicalAuthority(retainedHandoffById, input.handoff)
+      ) {
+        return {
+          status: 'REPLAYED',
+          handoff: retainedHandoffById,
+          operation: retainedOperation,
+        };
+      }
+      if (retainedOperation !== undefined) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
+      }
+      const conflictingHandoff = retainedHandoffById ?? retainedHandoffByCommand;
+      if (conflictingHandoff !== undefined) {
+        return { status: 'MESSAGE_HANDOFF_CONFLICT', currentHandoff: conflictingHandoff };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        return { status: 'SESSION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
+      if (retainedMessage === undefined) {
+        return { status: 'MESSAGE_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedMessage, input.message)) {
+        return { status: 'MESSAGE_CONFLICT', currentMessage: retainedMessage };
+      }
+      const retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+      if (retainedFocus === undefined) {
+        return { status: 'FOCUS_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedFocus, input.focus)) {
+        return { status: 'FOCUS_CONFLICT', currentFocus: retainedFocus };
+      }
+      assertInteractionClarificationHandoffChainInvariant({
+        session: retainedSession,
+        message: retainedMessage,
+        focus: retainedFocus,
+        handoff: input.handoff,
+      });
+      assertInteractionOperationReservationChain({
+        session: retainedSession,
+        message: retainedMessage,
+        operation: input.operation,
+      });
+      const active = this.getReservedInteractionOperationInsideTransaction(input.session.id);
+      if (active !== undefined) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: active };
+      }
+
+      this.insertAuditEvent(input.handoffAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_AUDIT_WRITE);
+      this.insertIntakeClarificationHandoff(input.handoff);
+      this.probe(InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.handoffAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_MEMBERSHIP_WRITE);
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE);
+      this.insertInteractionOperation(input.operation);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE);
+
+      const persistedHandoff = this.getInteractionMessageHandoffInsideTransaction(input.handoff.id);
+      const persistedOperation = this.getInteractionOperationInsideTransaction(input.operation.id);
+      if (
+        persistedHandoff?.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION ||
+        !sameCanonicalAuthority(persistedHandoff, input.handoff) ||
+        persistedOperation?.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(persistedOperation, input.operation)
+      ) {
+        throw new StoreInvariantError(
+          'The Interaction clarification reservation was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'RESERVED',
+        handoff: persistedHandoff,
+        operation: persistedOperation,
+      };
+    });
+  }
+
+  public commitFrontstageAnswerResult(
+    rawInput: CommitFrontstageAnswerResult,
+  ): FrontstageAnswerResultCommitResult {
+    this.assertOpen();
+    const input = normalizeFrontstageAnswerResultCommit(rawInput);
+    return this.runImmediate(() => {
+      const retainedOperation = this.getInteractionOperationInsideTransaction(
+        input.currentOperation.id,
+      );
+      const retainedAnswer = this.getFrontstageAnswerInsideTransaction(input.answer.id);
+      const retainedResultMessage = this.getInteractionMessageInsideTransaction(
+        input.resultMessage.id,
+      );
+      if (
+        retainedOperation?.state === InteractionOperationState.COMPLETED &&
+        sameCanonicalAuthority(retainedOperation, input.nextOperation) &&
+        retainedAnswer !== undefined &&
+        sameCanonicalAuthority(retainedAnswer, input.answer) &&
+        retainedResultMessage !== undefined &&
+        sameCanonicalAuthority(retainedResultMessage, input.resultMessage)
+      ) {
+        return {
+          status: 'REPLAYED',
+          answer: retainedAnswer,
+          message: retainedResultMessage,
+          operation: retainedOperation,
+        };
+      }
+      if (retainedOperation === undefined) {
+        return { status: 'OPERATION_NOT_FOUND' };
+      }
+      if (
+        retainedOperation.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(retainedOperation, input.currentOperation)
+      ) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
+      }
+      if (retainedAnswer !== undefined) {
+        return { status: 'FRONTSTAGE_ANSWER_CONFLICT', currentAnswer: retainedAnswer };
+      }
+      if (retainedResultMessage !== undefined) {
+        return { status: 'MESSAGE_CONFLICT', currentMessage: retainedResultMessage };
+      }
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        throw new StoreInvariantError(
+          `Retained Frontstage Answer Operation ${retainedOperation.id} lost its Session`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedOriginatingMessage = this.getInteractionMessageInsideTransaction(
+        input.originatingMessage.id,
+      );
+      const retainedRouteOperation = this.getInteractionOperationInsideTransaction(
+        input.routeOperation.id,
+      );
+      const retainedProposal = this.getInteractionRouteProposalInsideTransaction(input.proposal.id);
+      const retainedDecision = this.getInteractionRouteDecisionInsideTransaction(
+        input.routeDecision.id,
+      );
+      if (retainedDecision === undefined) {
+        return { status: 'ROUTE_DECISION_NOT_FOUND' };
+      }
+      if (
+        retainedOriginatingMessage === undefined ||
+        !sameCanonicalAuthority(retainedOriginatingMessage, input.originatingMessage) ||
+        retainedRouteOperation?.state !== InteractionOperationState.COMPLETED ||
+        !sameCanonicalAuthority(retainedRouteOperation, input.routeOperation) ||
+        retainedProposal === undefined ||
+        !sameCanonicalAuthority(retainedProposal, input.proposal) ||
+        !sameCanonicalAuthority(retainedDecision, input.routeDecision)
+      ) {
+        throw new StoreInvariantError(
+          `Retained Frontstage Answer Operation ${retainedOperation.id} lost its exact Route authority`,
+        );
+      }
+      assertFrontstageAnswerChainInvariant({
+        session: retainedSession,
+        originatingMessage: retainedOriginatingMessage,
+        routeOperation: retainedRouteOperation,
+        proposal: retainedProposal,
+        routeDecision: retainedDecision,
+        answer: input.answer,
+        answerOperation: input.nextOperation,
+      });
+
+      this.insertAuditEvent(input.answerAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_FRONTSTAGE_ANSWER_AUDIT_WRITE);
+      this.insertFrontstageAnswer(input.answer);
+      this.probe(InteractionTransactionStep.AFTER_FRONTSTAGE_ANSWER_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.answerAuditWrite);
+      this.insertAuditEvent(input.messageAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_RESULT_MESSAGE_AUDIT_WRITE);
+      this.insertInteractionMessage(input.resultMessage);
+      this.probe(InteractionTransactionStep.AFTER_RESULT_MESSAGE_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.messageAuditWrite);
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_AUDIT_WRITE);
+      this.updateInteractionOperation(retainedOperation, input.nextOperation);
+      this.probe(InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_MEMBERSHIP_WRITE);
+
+      const persistedAnswer = this.getFrontstageAnswerInsideTransaction(input.answer.id);
+      const persistedMessage = this.getInteractionMessageInsideTransaction(input.resultMessage.id);
+      const persistedOperation = this.getInteractionOperationInsideTransaction(
+        input.nextOperation.id,
+      );
+      if (
+        persistedAnswer === undefined ||
+        !sameCanonicalAuthority(persistedAnswer, input.answer) ||
+        persistedMessage === undefined ||
+        !sameCanonicalAuthority(persistedMessage, input.resultMessage) ||
+        persistedOperation?.state !== InteractionOperationState.COMPLETED ||
+        !sameCanonicalAuthority(persistedOperation, input.nextOperation)
+      ) {
+        throw new StoreInvariantError('The Frontstage Answer result was not immediately readable');
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'APPLIED',
+        answer: persistedAnswer,
+        message: persistedMessage,
+        operation: persistedOperation,
+      };
+    });
+  }
+
+  public commitInteractionGoalViewResult(
+    rawInput: CommitInteractionGoalViewResult,
+  ): InteractionPresentationResultCommitResult {
+    this.assertOpen();
+    return this.commitNormalizedInteractionPresentationResult(
+      normalizeInteractionGoalViewResultCommit(rawInput),
+    );
+  }
+
+  public commitInteractionClarificationResult(
+    rawInput: CommitInteractionClarificationResult,
+  ): InteractionPresentationResultCommitResult {
+    this.assertOpen();
+    return this.commitNormalizedInteractionPresentationResult(
+      normalizeInteractionClarificationResultCommit(rawInput),
+    );
+  }
+
+  public commitInteractionResultProjection(
+    rawInput: CommitInteractionResultProjection,
+  ): InteractionPresentationResultCommitResult {
+    this.assertOpen();
+    return this.commitNormalizedInteractionPresentationResult(
+      normalizeInteractionResultProjectionCommit(rawInput),
+    );
+  }
+
+  private commitNormalizedInteractionPresentationResult(
+    input: NormalizedInteractionPresentationResultCommit,
+  ): InteractionPresentationResultCommitResult {
+    return this.runImmediate(() => {
+      const retainedOperation = this.getInteractionOperationInsideTransaction(
+        input.currentOperation.id,
+      );
+      const retainedResultMessage =
+        input.resultMessage === undefined
+          ? undefined
+          : this.getInteractionMessageInsideTransaction(input.resultMessage.id);
+      if (
+        retainedOperation?.state === InteractionOperationState.COMPLETED &&
+        sameCanonicalAuthority(retainedOperation, input.nextOperation) &&
+        (input.resultMessage === undefined ||
+          (retainedResultMessage !== undefined &&
+            sameCanonicalAuthority(retainedResultMessage, input.resultMessage)))
+      ) {
+        return {
+          status: 'REPLAYED',
+          operation: retainedOperation,
+          ...(retainedResultMessage === undefined ? {} : { message: retainedResultMessage }),
+        };
+      }
+      if (retainedOperation === undefined) {
+        return { status: 'OPERATION_NOT_FOUND' };
+      }
+      if (
+        retainedOperation.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(retainedOperation, input.currentOperation)
+      ) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
+      }
+      if (retainedResultMessage !== undefined) {
+        return { status: 'MESSAGE_CONFLICT', currentMessage: retainedResultMessage };
+      }
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        throw new StoreInvariantError(
+          `Retained Interaction Operation ${retainedOperation.id} lost its Session`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
+      if (
+        retainedMessage === undefined ||
+        !sameCanonicalAuthority(retainedMessage, input.message)
+      ) {
+        throw new StoreInvariantError(
+          `Retained Interaction Operation ${retainedOperation.id} lost its exact Message`,
+        );
+      }
+      if (input.focus !== undefined) {
+        const retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+        if (retainedFocus === undefined || !sameCanonicalAuthority(retainedFocus, input.focus)) {
+          throw new StoreInvariantError(
+            `Retained Interaction clarification Operation ${retainedOperation.id} lost its Focus`,
+          );
+        }
+      }
+      if (input.handoff !== undefined) {
+        const retainedHandoff = this.getInteractionMessageHandoffInsideTransaction(
+          input.handoff.id,
+        );
+        if (
+          retainedHandoff?.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION ||
+          !sameCanonicalAuthority(retainedHandoff, input.handoff)
+        ) {
+          throw new StoreInvariantError(
+            `Retained Interaction clarification Operation ${retainedOperation.id} lost its Handoff`,
+          );
+        }
+        const reservation = this.getIntakeCommandReservationInsideTransaction(
+          input.handoff.intakeCommandId,
+        );
+        const outcome = this.getIntakeCommandOutcomeInsideTransaction(
+          input.handoff.intakeCommandId,
+        );
+        if (outcome === undefined) {
+          return { status: 'PUBLIC_COMMAND_OUTCOME_NOT_RETAINED' };
+        }
+        if (
+          reservation?.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS ||
+          reservation.commandId !== input.handoff.intakeCommandId ||
+          reservation.intakeRunId !== input.handoff.questionTarget.intakeRunId ||
+          reservation.expectedIntakeRunVersion !== input.handoff.questionTarget.intakeRunVersion ||
+          reservation.canonicalCommandInputDigest !== input.handoff.canonicalCommandInputDigest ||
+          reservation.clarificationBinding.clarificationQuestionId !==
+            input.handoff.questionTarget.clarificationQuestionId ||
+          reservation.clarificationBinding.questionSpecDigest !==
+            input.handoff.questionTarget.questionSpecDigest ||
+          reservation.clarificationBinding.questionDigest !==
+            input.handoff.questionTarget.questionDigest ||
+          input.nextOperation.result.kind !==
+            InteractionOperationResultKind.PUBLIC_COMMAND_RECORDED ||
+          input.nextOperation.result.publicCommandOutcomeDigest !== outcome.outcomeDigest ||
+          input.nextOperation.completedAt !== outcome.completedAt
+        ) {
+          throw new StoreInvariantError(
+            `Retained Intake clarification ${input.handoff.intakeCommandId} differs from its Interaction Handoff`,
+          );
+        }
+        assertIntakeCommandClosureInvariant(reservation, outcome);
+      }
+
+      if (input.resultMessage !== undefined && input.messageAuditWrite !== undefined) {
+        this.insertAuditEvent(input.messageAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_RESULT_MESSAGE_AUDIT_WRITE);
+        this.insertInteractionMessage(input.resultMessage);
+        this.probe(InteractionTransactionStep.AFTER_RESULT_MESSAGE_WRITE);
+        this.appendInteractionAuditMembership(input.session.id, input.messageAuditWrite);
+      }
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_AUDIT_WRITE);
+      this.updateInteractionOperation(retainedOperation, input.nextOperation);
+      this.probe(InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_MEMBERSHIP_WRITE);
+
+      const persistedOperation = this.getInteractionOperationInsideTransaction(
+        input.nextOperation.id,
+      );
+      const persistedMessage =
+        input.resultMessage === undefined
+          ? undefined
+          : this.getInteractionMessageInsideTransaction(input.resultMessage.id);
+      if (
+        persistedOperation?.state !== InteractionOperationState.COMPLETED ||
+        !sameCanonicalAuthority(persistedOperation, input.nextOperation) ||
+        (input.resultMessage !== undefined &&
+          (persistedMessage === undefined ||
+            !sameCanonicalAuthority(persistedMessage, input.resultMessage)))
+      ) {
+        throw new StoreInvariantError(
+          'The Interaction presentation result was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'APPLIED',
+        operation: persistedOperation,
+        ...(persistedMessage === undefined ? {} : { message: persistedMessage }),
+      };
+    });
+  }
+
   public terminalizeInteractionOperation(
     rawInput: TerminalizeInteractionOperation,
   ): InteractionOperationTerminalResult {
@@ -5963,11 +6839,67 @@ export class SqliteControlStore
 
   public getInteractionMessageHandoff(
     handoffIdentifier: InteractionMessageHandoffId,
-  ): AuthorizedIntakeActionMessageHandoff | undefined {
+  ): InteractionMessageHandoff | undefined {
     this.assertOpen();
     return this.runRead(() =>
-      this.getAuthorizedIntakeActionHandoffInsideTransaction(handoffIdentifier),
+      this.getInteractionMessageHandoffInsideTransaction(handoffIdentifier),
     );
+  }
+
+  public getFrontstageAnswer(answerIdentifier: FrontstageAnswerId): FrontstageAnswer | undefined {
+    this.assertOpen();
+    return this.runRead(() => this.getFrontstageAnswerInsideTransaction(answerIdentifier));
+  }
+
+  public getUnresolvedInteractionClarificationOperation(
+    rawOperationIdentifier: InteractionOperationId,
+  ): InteractionUnresolvedClarificationOperationDescriptor | undefined {
+    this.assertOpen();
+    const operationIdentifier = interactionOperationId(rawOperationIdentifier);
+    return this.runRead(() => {
+      const operation = this.getInteractionOperationInsideTransaction(operationIdentifier);
+      if (
+        operation?.state !== InteractionOperationState.RESERVED ||
+        operation.operationKind !== InteractionOperationKind.INTAKE_CLARIFICATION
+      ) {
+        return undefined;
+      }
+      const handoffRows = z.array(z.object({ id: z.string().min(1) }).strict()).parse(
+        this.#database
+          .prepare(
+            `SELECT id
+               FROM interaction_message_handoffs
+              WHERE session_id = ? AND message_id = ? AND message_digest = ?
+                AND handoff_kind = 'INTAKE_CLARIFICATION'
+              ORDER BY id`,
+          )
+          .all(operation.sessionId, operation.messageRef.id, operation.messageRef.digest),
+      );
+      if (handoffRows.length !== 1 || handoffRows[0] === undefined) {
+        throw new StoreInvariantError(
+          `Reserved Interaction clarification Operation ${operation.id} has no exact Handoff`,
+        );
+      }
+      const handoff = this.getInteractionMessageHandoffInsideTransaction(
+        interactionMessageHandoffId(handoffRows[0].id),
+      );
+      if (handoff?.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+        throw new StoreInvariantError(
+          `Reserved Interaction clarification Operation ${operation.id} has no clarification Handoff`,
+        );
+      }
+      return Object.freeze({
+        operationRef: Object.freeze({ id: operation.id, digest: operation.operationDigest }),
+        handoffRef: Object.freeze({ id: handoff.id, digest: handoff.handoffDigest }),
+        questionTarget: handoff.questionTarget,
+        commandId: handoff.intakeCommandId,
+        canonicalCommandInputDigest: handoff.canonicalCommandInputDigest,
+        publicOutcomeState:
+          this.getIntakeCommandOutcomeInsideTransaction(handoff.intakeCommandId) === undefined
+            ? InteractionPublicOutcomeRetentionState.NOT_RETAINED
+            : InteractionPublicOutcomeRetentionState.RETAINED,
+      });
+    });
   }
 
   public getInteractionActionOutcome(
@@ -8574,11 +9506,26 @@ export class SqliteControlStore
     if (
       message.principalRef !== session.principalRef ||
       message.createdAt < session.openedAt ||
-      message.createdAt > session.updatedAt
+      (message.role === InteractionMessageRole.USER && message.createdAt > session.updatedAt)
     ) {
       throw new StoreInvariantError(
         `Retained Interaction Message ${message.id} does not bind its Session`,
       );
+    }
+    if (message.role !== InteractionMessageRole.USER) {
+      const operation = this.getInteractionOperationInsideTransaction(
+        message.causedByOperationRef.id,
+      );
+      if (
+        operation?.state !== InteractionOperationState.COMPLETED ||
+        operation.sessionId !== message.sessionId ||
+        operation.operationDigest !== message.causedByOperationRef.digest ||
+        operation.completedAt !== message.createdAt
+      ) {
+        throw new StoreInvariantError(
+          `Retained produced Interaction Message ${message.id} has no exact result Operation`,
+        );
+      }
     }
     return message;
   }
@@ -9138,19 +10085,13 @@ export class SqliteControlStore
       : this.decodeRetainedInteractionActionOutcomeRow(rawRow);
   }
 
-  private decodeRetainedAuthorizedIntakeActionHandoffRow(
-    rawRow: unknown,
-  ): AuthorizedIntakeActionMessageHandoff {
+  private decodeRetainedInteractionMessageHandoffRow(rawRow: unknown): InteractionMessageHandoff {
     const row = retainedInteractionMessageHandoffRowSchema.parse(rawRow);
     const handoff = decodeInteractionMessageHandoff(
       parseJson(row.record_json, 'Interaction Message Handoff'),
       canonicalAuthorityDigests,
     );
-    if (handoff.kind !== InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
-      throw new StoreInvariantError(
-        `Retained Interaction Message Handoff ${handoff.id} has no B3 Store owner`,
-      );
-    }
+    const actionMember = handoff.kind === InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION;
     if (
       handoff.id !== row.id ||
       handoff.schemaVersion !== row.schema_version ||
@@ -9158,28 +10099,67 @@ export class SqliteControlStore
       handoff.sessionId !== row.session_id ||
       handoff.messageRef.id !== row.message_id ||
       handoff.messageRef.digest !== row.message_digest ||
-      handoff.pendingActionRef.id !== row.pending_action_id ||
-      handoff.pendingActionRef.digest !== row.pending_action_digest ||
-      handoff.resolutionRef.id !== row.resolution_id ||
-      handoff.resolutionRef.digest !== row.resolution_digest ||
-      handoff.reservationRef.id !== row.reservation_id ||
-      handoff.reservationRef.digest !== row.reservation_digest ||
-      row.focus_id !== null ||
-      row.focus_digest !== null ||
-      row.intake_run_id !== null ||
-      row.intake_run_version !== null ||
-      row.clarification_question_id !== null ||
-      row.question_spec_digest !== null ||
-      row.question_digest !== null ||
-      row.canonical_command_input_digest !== null ||
       handoff.intakeCommandId !== row.intake_command_id ||
       handoff.admittedUserContent !== row.admitted_user_content ||
       handoff.admittedContentDigest !== row.admitted_content_digest ||
       handoff.createdAt !== row.created_at ||
-      handoff.handoffDigest !== row.handoff_digest
+      handoff.handoffDigest !== row.handoff_digest ||
+      (actionMember
+        ? handoff.pendingActionRef.id !== row.pending_action_id ||
+          handoff.pendingActionRef.digest !== row.pending_action_digest ||
+          handoff.resolutionRef.id !== row.resolution_id ||
+          handoff.resolutionRef.digest !== row.resolution_digest ||
+          handoff.reservationRef.id !== row.reservation_id ||
+          handoff.reservationRef.digest !== row.reservation_digest ||
+          row.focus_id !== null ||
+          row.focus_digest !== null ||
+          row.intake_run_id !== null ||
+          row.intake_run_version !== null ||
+          row.clarification_question_id !== null ||
+          row.question_spec_digest !== null ||
+          row.question_digest !== null ||
+          row.canonical_command_input_digest !== null
+        : row.pending_action_id !== null ||
+          row.pending_action_digest !== null ||
+          row.resolution_id !== null ||
+          row.resolution_digest !== null ||
+          row.reservation_id !== null ||
+          row.reservation_digest !== null ||
+          handoff.focusRef.id !== row.focus_id ||
+          handoff.focusRef.digest !== row.focus_digest ||
+          handoff.questionTarget.intakeRunId !== row.intake_run_id ||
+          handoff.questionTarget.intakeRunVersion !== row.intake_run_version ||
+          handoff.questionTarget.clarificationQuestionId !== row.clarification_question_id ||
+          handoff.questionTarget.questionSpecDigest !== row.question_spec_digest ||
+          handoff.questionTarget.questionDigest !== row.question_digest ||
+          handoff.canonicalCommandInputDigest !== row.canonical_command_input_digest)
     ) {
       throw new StoreInvariantError(
         `Retained Interaction Message Handoff ${handoff.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return handoff;
+  }
+
+  private decodeRetainedAuthorizedIntakeActionHandoffRow(
+    rawRow: unknown,
+  ): AuthorizedIntakeActionMessageHandoff {
+    const handoff = this.decodeRetainedInteractionMessageHandoffRow(rawRow);
+    if (handoff.kind !== InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
+      throw new StoreInvariantError(
+        `Retained Interaction Message Handoff ${handoff.id} is not an action member`,
+      );
+    }
+    return handoff;
+  }
+
+  private decodeRetainedIntakeClarificationHandoffRow(
+    rawRow: unknown,
+  ): IntakeClarificationMessageHandoff {
+    const handoff = this.decodeRetainedInteractionMessageHandoffRow(rawRow);
+    if (handoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+      throw new StoreInvariantError(
+        `Retained Interaction Message Handoff ${handoff.id} is not a clarification member`,
       );
     }
     return handoff;
@@ -9246,6 +10226,91 @@ export class SqliteControlStore
     return rawRow === undefined
       ? undefined
       : this.decodeRetainedAuthorizedIntakeActionHandoffRow(rawRow);
+  }
+
+  private getInteractionMessageHandoffInsideTransaction(
+    handoffIdentifier: InteractionMessageHandoffId,
+  ): InteractionMessageHandoff | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, handoff_kind, session_id, message_id, message_digest,
+                pending_action_id, pending_action_digest, resolution_id, resolution_digest,
+                reservation_id, reservation_digest, focus_id, focus_digest, intake_run_id,
+                intake_run_version, clarification_question_id, question_spec_digest,
+                question_digest, canonical_command_input_digest, intake_command_id,
+                admitted_user_content, admitted_content_digest, created_at, handoff_digest,
+                record_json
+           FROM interaction_message_handoffs
+          WHERE id = ?`,
+      )
+      .get(handoffIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionMessageHandoffRow(rawRow);
+  }
+
+  private getIntakeClarificationHandoffByCommandInsideTransaction(
+    commandIdentifier: CommandId,
+  ): IntakeClarificationMessageHandoff | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, handoff_kind, session_id, message_id, message_digest,
+                pending_action_id, pending_action_digest, resolution_id, resolution_digest,
+                reservation_id, reservation_digest, focus_id, focus_digest, intake_run_id,
+                intake_run_version, clarification_question_id, question_spec_digest,
+                question_digest, canonical_command_input_digest, intake_command_id,
+                admitted_user_content, admitted_content_digest, created_at, handoff_digest,
+                record_json
+           FROM interaction_message_handoffs
+          WHERE intake_command_id = ? AND handoff_kind = 'INTAKE_CLARIFICATION'`,
+      )
+      .get(commandIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedIntakeClarificationHandoffRow(rawRow);
+  }
+
+  private decodeRetainedFrontstageAnswerRow(rawRow: unknown): FrontstageAnswer {
+    const row = retainedFrontstageAnswerRowSchema.parse(rawRow);
+    const answer = decodeFrontstageAnswer(
+      parseJson(row.record_json, 'Frontstage Answer'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      answer.id !== row.id ||
+      answer.schemaVersion !== row.schema_version ||
+      answer.sessionId !== row.session_id ||
+      answer.originatingMessageRef.id !== row.originating_message_id ||
+      answer.originatingMessageRef.digest !== row.originating_message_digest ||
+      answer.routeDecisionRef.id !== row.route_decision_id ||
+      answer.routeDecisionRef.digest !== row.route_decision_digest ||
+      answer.proposalRef.id !== row.proposal_id ||
+      answer.proposalRef.digest !== row.proposal_digest ||
+      answer.answerContentDigest !== row.answer_content_digest ||
+      answer.createdAt !== row.created_at ||
+      answer.answerDigest !== row.answer_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Frontstage Answer ${answer.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return answer;
+  }
+
+  private getFrontstageAnswerInsideTransaction(
+    answerIdentifier: FrontstageAnswerId,
+  ): FrontstageAnswer | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, originating_message_id,
+                originating_message_digest, route_decision_id, route_decision_digest,
+                proposal_id, proposal_digest, answer_content_digest, created_at,
+                answer_digest, record_json
+           FROM frontstage_answers
+          WHERE id = ?`,
+      )
+      .get(answerIdentifier);
+    return rawRow === undefined ? undefined : this.decodeRetainedFrontstageAnswerRow(rawRow);
   }
 
   private decodeRetainedInteractionOperationRow(rawRow: unknown): InteractionOperation {
@@ -9759,6 +10824,71 @@ export class SqliteControlStore
       );
   }
 
+  private insertIntakeClarificationHandoff(handoff: IntakeClarificationMessageHandoff): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_message_handoffs(
+           id, schema_version, handoff_kind, session_id, message_id, message_digest,
+           pending_action_id, pending_action_digest, resolution_id, resolution_digest,
+           reservation_id, reservation_digest, focus_id, focus_digest, intake_run_id,
+           intake_run_version, clarification_question_id, question_spec_digest,
+           question_digest, canonical_command_input_digest, intake_command_id,
+           admitted_user_content, admitted_content_digest, created_at, handoff_digest,
+           record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?,
+                   ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        handoff.id,
+        handoff.schemaVersion,
+        handoff.kind,
+        handoff.sessionId,
+        handoff.messageRef.id,
+        handoff.messageRef.digest,
+        handoff.focusRef.id,
+        handoff.focusRef.digest,
+        handoff.questionTarget.intakeRunId,
+        handoff.questionTarget.intakeRunVersion,
+        handoff.questionTarget.clarificationQuestionId,
+        handoff.questionTarget.questionSpecDigest,
+        handoff.questionTarget.questionDigest,
+        handoff.canonicalCommandInputDigest,
+        handoff.intakeCommandId,
+        handoff.admittedUserContent,
+        handoff.admittedContentDigest,
+        handoff.createdAt,
+        handoff.handoffDigest,
+        serializeJson(decodeJsonValue(handoff)),
+      );
+  }
+
+  private insertFrontstageAnswer(answer: FrontstageAnswer): void {
+    this.#database
+      .prepare(
+        `INSERT INTO frontstage_answers(
+           id, schema_version, session_id, originating_message_id,
+           originating_message_digest, route_decision_id, route_decision_digest,
+           proposal_id, proposal_digest, answer_content_digest, created_at,
+           answer_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        answer.id,
+        answer.schemaVersion,
+        answer.sessionId,
+        answer.originatingMessageRef.id,
+        answer.originatingMessageRef.digest,
+        answer.routeDecisionRef.id,
+        answer.routeDecisionRef.digest,
+        answer.proposalRef.id,
+        answer.proposalRef.digest,
+        answer.answerContentDigest,
+        answer.createdAt,
+        answer.answerDigest,
+        serializeJson(decodeJsonValue(answer)),
+      );
+  }
+
   private insertInteractionActionOutcome(
     sessionIdentifier: InteractionSessionId,
     outcome: InteractionActionOutcome,
@@ -9896,6 +11026,9 @@ export class SqliteControlStore
     const publicActionMigrationApplied = this.#appliedMigrations.some(
       (migration) => migration.name === INTERACTION_PUBLIC_ACTION_MIGRATION_NAME,
     );
+    const presentationResultMigrationApplied = this.#appliedMigrations.some(
+      (migration) => migration.name === INTERACTION_PRESENTATION_RESULT_MIGRATION_NAME,
+    );
     const unimplementedTableNames = [
       ...(routeResultMigrationApplied
         ? []
@@ -9910,7 +11043,7 @@ export class SqliteControlStore
       ...(publicActionMigrationApplied
         ? []
         : ['interaction_action_outcomes', 'interaction_message_handoffs']),
-      'frontstage_answers',
+      ...(presentationResultMigrationApplied ? [] : ['frontstage_answers']),
     ] as const;
     for (const tableName of unimplementedTableNames) {
       const row = z
@@ -10012,12 +11145,12 @@ export class SqliteControlStore
       for (const message of messages) {
         const session = sessionById.get(message.sessionId);
         if (
-          session === undefined ||
-          message.role !== 'USER' ||
-          message.retention !== 'RETAINED' ||
-          message.principalRef !== session.principalRef ||
+          message.principalRef !== session?.principalRef ||
           message.createdAt < session.openedAt ||
-          message.createdAt > session.updatedAt
+          (message.role === InteractionMessageRole.USER &&
+            (message.retention !== InteractionContentRetention.RETAINED ||
+              message.createdAt > session.updatedAt)) ||
+          (message.role !== InteractionMessageRole.USER && !presentationResultMigrationApplied)
         ) {
           throw new StoreInvariantError(
             `Retained Interaction Message ${message.id} has no valid Session admission`,
@@ -10044,6 +11177,29 @@ export class SqliteControlStore
       const operationById = new Map<string, InteractionOperation>(
         operations.map((operation) => [operation.id, operation]),
       );
+      const producedMessageOperationIds = new Set<string>();
+      for (const message of messages) {
+        if (message.role === InteractionMessageRole.USER) {
+          continue;
+        }
+        const operation = operationById.get(message.causedByOperationRef.id);
+        if (
+          message.retention !== InteractionContentRetention.RETAINED ||
+          message.contentByteLength === 0 ||
+          operation?.state !== InteractionOperationState.COMPLETED ||
+          operation.sessionId !== message.sessionId ||
+          operation.operationDigest !== message.causedByOperationRef.digest ||
+          operation.completedAt !== message.createdAt ||
+          (operation.operationKind !== InteractionOperationKind.FRONTSTAGE_ANSWER &&
+            operation.operationKind !== InteractionOperationKind.RESULT_PROJECTION) ||
+          producedMessageOperationIds.has(operation.id)
+        ) {
+          throw new StoreInvariantError(
+            `Retained produced Interaction Message ${message.id} has no unique result Operation`,
+          );
+        }
+        producedMessageOperationIds.add(operation.id);
+      }
       const manifestRows = routeResultMigrationApplied
         ? z.array(retainedFrontstageContextManifestRowSchema).parse(
             this.#database
@@ -10206,10 +11362,38 @@ export class SqliteControlStore
           )
         : [];
       const handoffs = handoffRows.map((row) =>
-        this.decodeRetainedAuthorizedIntakeActionHandoffRow(row),
+        this.decodeRetainedInteractionMessageHandoffRow(row),
       );
-      const handoffById = new Map<string, AuthorizedIntakeActionMessageHandoff>(
+      const handoffById = new Map<string, InteractionMessageHandoff>(
         handoffs.map((handoff) => [handoff.id, handoff]),
+      );
+      const actionHandoffs = handoffs.filter(
+        (handoff): handoff is AuthorizedIntakeActionMessageHandoff =>
+          handoff.kind === InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION,
+      );
+      const clarificationHandoffs = handoffs.filter(
+        (handoff): handoff is IntakeClarificationMessageHandoff =>
+          handoff.kind === InteractionMessageHandoffKind.INTAKE_CLARIFICATION,
+      );
+      const frontstageAnswerRows = presentationResultMigrationApplied
+        ? z.array(retainedFrontstageAnswerRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, originating_message_id,
+                        originating_message_digest, route_decision_id, route_decision_digest,
+                        proposal_id, proposal_digest, answer_content_digest, created_at,
+                        answer_digest, record_json
+                   FROM frontstage_answers
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const frontstageAnswers = frontstageAnswerRows.map((row) =>
+        this.decodeRetainedFrontstageAnswerRow(row),
+      );
+      const frontstageAnswerById = new Map<string, FrontstageAnswer>(
+        frontstageAnswers.map((answer) => [answer.id, answer]),
       );
       const actionOutcomeRows = publicActionMigrationApplied
         ? z.array(retainedInteractionActionOutcomeRowSchema).parse(
@@ -10234,6 +11418,7 @@ export class SqliteControlStore
       const operationOwnedResolutionIds = new Set<string>();
       const referencedReservationIds = new Set<string>();
       const referencedHandoffIds = new Set<string>();
+      const referencedFrontstageAnswerIds = new Set<string>();
       const routeMessageIds = new Set<string>();
       for (const operation of operations) {
         const session = sessionById.get(operation.sessionId);
@@ -10291,6 +11476,38 @@ export class SqliteControlStore
           throw new StoreInvariantError(
             `Retained proposal-free Operation ${operation.id} has an unexpected Context Manifest`,
           );
+        }
+        if (operation.operationKind === InteractionOperationKind.INTAKE_CLARIFICATION) {
+          const matchingHandoffs = clarificationHandoffs.filter(
+            (handoff) =>
+              handoff.sessionId === operation.sessionId &&
+              handoff.messageRef.id === operation.messageRef.id &&
+              handoff.messageRef.digest === operation.messageRef.digest,
+          );
+          const handoff = matchingHandoffs[0];
+          const focus = handoff === undefined ? undefined : focusById.get(handoff.focusRef.id);
+          if (
+            matchingHandoffs.length !== 1 ||
+            handoff === undefined ||
+            focus === undefined ||
+            operation.reservedAt < handoff.createdAt
+          ) {
+            throw new StoreInvariantError(
+              `Retained Intake clarification Operation ${operation.id} lost its reservation Handoff`,
+            );
+          }
+          assertInteractionClarificationHandoffChainInvariant({
+            session,
+            message,
+            focus,
+            handoff,
+          });
+          if (referencedHandoffIds.has(handoff.id)) {
+            throw new StoreInvariantError(
+              `Retained Interaction Message Handoff ${handoff.id} has multiple Operation owners`,
+            );
+          }
+          referencedHandoffIds.add(handoff.id);
         }
         if (operation.state === InteractionOperationState.COMPLETED) {
           if (
@@ -10456,7 +11673,11 @@ export class SqliteControlStore
             operation.operationKind === InteractionOperationKind.INTAKE_HANDOFF &&
             operation.result.kind === InteractionOperationResultKind.INTAKE_HANDOFF_RECORDED
           ) {
-            const handoff = handoffById.get(operation.result.handoffRef.id);
+            const retainedHandoff = handoffById.get(operation.result.handoffRef.id);
+            const handoff =
+              retainedHandoff?.kind === InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION
+                ? retainedHandoff
+                : undefined;
             const reservation =
               handoff === undefined ? undefined : reservationById.get(handoff.reservationRef.id);
             const resolution =
@@ -10510,6 +11731,112 @@ export class SqliteControlStore
             }
             referencedHandoffIds.add(handoff.id);
             referencedReservationIds.add(reservation.id);
+          } else if (
+            operation.operationKind === InteractionOperationKind.FRONTSTAGE_ANSWER &&
+            operation.result.kind === InteractionOperationResultKind.ANSWER_RECORDED
+          ) {
+            const answer = frontstageAnswerById.get(operation.result.answerRef.id);
+            const proposal =
+              answer === undefined ? undefined : proposalById.get(answer.proposalRef.id);
+            const decision =
+              answer === undefined ? undefined : decisionById.get(answer.routeDecisionRef.id);
+            const routeOperation =
+              proposal === undefined ? undefined : operationById.get(proposal.operationId);
+            const producedMessage = messages.find(
+              (candidate) =>
+                candidate.role !== InteractionMessageRole.USER &&
+                candidate.causedByOperationRef.id === operation.id,
+            );
+            if (
+              answer === undefined ||
+              proposal === undefined ||
+              decision === undefined ||
+              routeOperation?.state !== InteractionOperationState.COMPLETED ||
+              producedMessage?.role !== InteractionMessageRole.FRONTSTAGE ||
+              producedMessage.retention !== InteractionContentRetention.RETAINED ||
+              producedMessage.content !== answer.answerContent ||
+              producedMessage.contentDigest !== answer.answerContentDigest
+            ) {
+              throw new StoreInvariantError(
+                `Retained Frontstage Answer Operation ${operation.id} lost its exact result authority`,
+              );
+            }
+            assertFrontstageAnswerChainInvariant({
+              session,
+              originatingMessage: message,
+              routeOperation,
+              proposal,
+              routeDecision: decision,
+              answer,
+              answerOperation: operation,
+            });
+            if (referencedFrontstageAnswerIds.has(answer.id)) {
+              throw new StoreInvariantError(
+                `Retained Frontstage Answer ${answer.id} has multiple Operation owners`,
+              );
+            }
+            referencedFrontstageAnswerIds.add(answer.id);
+          } else if (
+            (operation.operationKind === InteractionOperationKind.GOAL_LIST ||
+              operation.operationKind === InteractionOperationKind.GOAL_STATUS) &&
+            operation.result.kind === InteractionOperationResultKind.GOAL_VIEW_RECORDED
+          ) {
+            sha256Digest(operation.result.projectionDigest);
+          } else if (
+            operation.operationKind === InteractionOperationKind.INTAKE_CLARIFICATION &&
+            operation.result.kind === InteractionOperationResultKind.PUBLIC_COMMAND_RECORDED
+          ) {
+            const clarificationCommandId = operation.result.commandId;
+            const handoff = clarificationHandoffs.find(
+              (candidate) => candidate.intakeCommandId === clarificationCommandId,
+            );
+            const focus = handoff === undefined ? undefined : focusById.get(handoff.focusRef.id);
+            const reservation =
+              this.getIntakeCommandReservationInsideTransaction(clarificationCommandId);
+            const outcome = this.getIntakeCommandOutcomeInsideTransaction(clarificationCommandId);
+            if (
+              handoff === undefined ||
+              focus === undefined ||
+              reservation?.operationKind !== IntakeCommandOperationKind.CLARIFICATION_ANALYSIS ||
+              outcome === undefined ||
+              reservation.intakeRunId !== handoff.questionTarget.intakeRunId ||
+              reservation.expectedIntakeRunVersion !== handoff.questionTarget.intakeRunVersion ||
+              reservation.canonicalCommandInputDigest !== handoff.canonicalCommandInputDigest ||
+              reservation.clarificationBinding.clarificationQuestionId !==
+                handoff.questionTarget.clarificationQuestionId ||
+              reservation.clarificationBinding.questionSpecDigest !==
+                handoff.questionTarget.questionSpecDigest ||
+              reservation.clarificationBinding.questionDigest !==
+                handoff.questionTarget.questionDigest ||
+              operation.result.publicCommandOutcomeDigest !== outcome.outcomeDigest ||
+              operation.completedAt !== outcome.completedAt
+            ) {
+              throw new StoreInvariantError(
+                `Retained Intake clarification Operation ${operation.id} lost its exact public outcome`,
+              );
+            }
+            assertInteractionClarificationHandoffChainInvariant({
+              session,
+              message,
+              focus,
+              handoff,
+            });
+            assertIntakeCommandClosureInvariant(reservation, outcome);
+          } else if (
+            operation.operationKind === InteractionOperationKind.RESULT_PROJECTION &&
+            operation.result.kind === InteractionOperationResultKind.RESULT_PROJECTED
+          ) {
+            const producedMessage = messages.find(
+              (candidate) =>
+                candidate.role !== InteractionMessageRole.USER &&
+                candidate.causedByOperationRef.id === operation.id,
+            );
+            if (producedMessage === undefined) {
+              throw new StoreInvariantError(
+                `Retained Result Projection Operation ${operation.id} lost its Message`,
+              );
+            }
+            sha256Digest(operation.result.projectionDigest);
           } else {
             throw new StoreInvariantError(
               `Retained completed Interaction Operation ${operation.id} has no result-specific owner`,
@@ -10584,7 +11911,8 @@ export class SqliteControlStore
             !responseFreePendingActionResolutionDispositions.has(resolution.disposition),
         ) ||
         reservations.some((reservation) => !referencedReservationIds.has(reservation.id)) ||
-        handoffs.some((handoff) => !referencedHandoffIds.has(handoff.id))
+        handoffs.some((handoff) => !referencedHandoffIds.has(handoff.id)) ||
+        frontstageAnswers.some((answer) => !referencedFrontstageAnswerIds.has(answer.id))
       ) {
         throw new StoreInvariantError(
           'Retained Interaction result authority has no exact Operation owner',
@@ -10635,7 +11963,7 @@ export class SqliteControlStore
           resolution?.disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
             ? messageById.get(resolution.authorizingMessageRef.id)
             : undefined;
-        const handoff = handoffs.find(
+        const handoff = actionHandoffs.find(
           (candidate) => candidate.reservationRef.id === reservation.id,
         );
         if (
@@ -10681,8 +12009,8 @@ export class SqliteControlStore
             .prepare(
               `SELECT id
                  FROM audit_events
-                WHERE aggregate_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                WHERE aggregate_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ORDER BY id`,
             )
             .all(
@@ -10698,6 +12026,7 @@ export class SqliteControlStore
               InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION,
               InteractionAuditAggregateType.INTERACTION_ACTION_OUTCOME,
               InteractionAuditAggregateType.INTERACTION_MESSAGE_HANDOFF,
+              InteractionAuditAggregateType.FRONTSTAGE_ANSWER,
               InteractionAuditEventType.INTERACTION_SESSION_OPENED,
               InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
               InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
@@ -10715,6 +12044,7 @@ export class SqliteControlStore
               InteractionAuditEventType.INTERACTION_ACTION_RESERVED,
               InteractionAuditEventType.INTERACTION_ACTION_OUTCOME_RECORDED,
               InteractionAuditEventType.INTERACTION_MESSAGE_HANDOFF_RECORDED,
+              InteractionAuditEventType.FRONTSTAGE_ANSWER_RECORDED,
             ),
         )
         .map((row) => auditEventId(row.id));
@@ -10778,6 +12108,9 @@ export class SqliteControlStore
             pendingActionById.get(reservation.pendingActionRef.id)?.sessionId === session.id,
         );
         const sessionHandoffs = handoffs.filter((handoff) => handoff.sessionId === session.id);
+        const sessionFrontstageAnswers = frontstageAnswers.filter(
+          (answer) => answer.sessionId === session.id,
+        );
         const sessionActionOutcomes = actionOutcomes.filter(
           (outcome) =>
             pendingActionById.get(
@@ -10803,6 +12136,7 @@ export class SqliteControlStore
               sessionResolutions.length +
               sessionReservations.length +
               sessionHandoffs.length +
+              sessionFrontstageAnswers.length +
               sessionActionOutcomes.length
         ) {
           throw new StoreInvariantError(
@@ -10856,33 +12190,36 @@ export class SqliteControlStore
           const messageAudit = messageAudits[0];
           if (messageAudits.length !== 1 || messageAudit === undefined) {
             throw new StoreInvariantError(
-              `Retained Interaction Message ${message.id} lost its exact admission audit`,
+              `Retained Interaction Message ${message.id} lost its exact audit`,
             );
           }
           if (
-            messageAudit.event_type !== InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED ||
             messageAudit.before_version !== null ||
             messageAudit.after_version !== null ||
             messageAudit.payload_digest !== message.messageDigest ||
-            messageAudit.occurred_at !== message.createdAt
+            messageAudit.occurred_at !== message.createdAt ||
+            messageAudit.event_type !==
+              (message.role === InteractionMessageRole.USER
+                ? InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED
+                : InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED)
           ) {
             throw new StoreInvariantError(
-              `Retained Interaction Message ${message.id} lost its exact admission audit`,
+              `Retained Interaction Message ${message.id} lost its exact audit`,
             );
           }
           const following = sessionMembership[messageAudit.position + 1];
-          if (following === undefined) {
+          const exactFollowing =
+            message.role === InteractionMessageRole.USER
+              ? following?.aggregate_type === InteractionAuditAggregateType.INTERACTION_SESSION &&
+                following.event_type ===
+                  InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED &&
+                following.occurred_at === message.createdAt
+              : following?.aggregate_type === InteractionAuditAggregateType.INTERACTION_OPERATION &&
+                following.aggregate_id === message.causedByOperationRef.id &&
+                following.event_type === InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED;
+          if (!exactFollowing) {
             throw new StoreInvariantError(
-              `Retained Interaction Message ${message.id} lost its atomic Session transition`,
-            );
-          }
-          if (
-            following.aggregate_type !== InteractionAuditAggregateType.INTERACTION_SESSION ||
-            following.event_type !== InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED ||
-            following.occurred_at !== message.createdAt
-          ) {
-            throw new StoreInvariantError(
-              `Retained Interaction Message ${message.id} lost its atomic Session transition`,
+              `Retained Interaction Message ${message.id} lost its atomic causal completion`,
             );
           }
         }
@@ -11162,13 +12499,26 @@ export class SqliteControlStore
           const handoffAudit = handoffAudits[0];
           const following =
             handoffAudit === undefined ? undefined : sessionMembership[handoffAudit.position + 1];
-          const owningOperation = sessionOperations.find(
-            (operation) =>
-              operation.state === InteractionOperationState.COMPLETED &&
-              operation.operationKind === InteractionOperationKind.INTAKE_HANDOFF &&
-              operation.result.kind === InteractionOperationResultKind.INTAKE_HANDOFF_RECORDED &&
-              operation.result.handoffRef.id === handoff.id,
-          );
+          const owningOperation =
+            handoff.kind === InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION
+              ? sessionOperations.find(
+                  (operation) =>
+                    operation.state === InteractionOperationState.COMPLETED &&
+                    operation.operationKind === InteractionOperationKind.INTAKE_HANDOFF &&
+                    operation.result.kind ===
+                      InteractionOperationResultKind.INTAKE_HANDOFF_RECORDED &&
+                    operation.result.handoffRef.id === handoff.id,
+                )
+              : sessionOperations.find(
+                  (operation) =>
+                    operation.operationKind === InteractionOperationKind.INTAKE_CLARIFICATION &&
+                    operation.messageRef.id === handoff.messageRef.id &&
+                    operation.messageRef.digest === handoff.messageRef.digest,
+                );
+          const expectedFollowingEvent =
+            handoff.kind === InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION
+              ? InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED
+              : InteractionAuditEventType.INTERACTION_OPERATION_RESERVED;
           if (
             handoffAudits.length !== 1 ||
             handoffAudit?.event_type !==
@@ -11180,10 +12530,51 @@ export class SqliteControlStore
             owningOperation === undefined ||
             following?.aggregate_type !== InteractionAuditAggregateType.INTERACTION_OPERATION ||
             following.aggregate_id !== owningOperation.id ||
-            following.event_type !== InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED
+            following.event_type !== expectedFollowingEvent
           ) {
             throw new StoreInvariantError(
               `Retained Interaction Message Handoff ${handoff.id} lost its exact atomic audit`,
+            );
+          }
+        }
+
+        for (const answer of sessionFrontstageAnswers) {
+          const answerAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.FRONTSTAGE_ANSWER &&
+              row.aggregate_id === answer.id,
+          );
+          const answerAudit = answerAudits[0];
+          const following =
+            answerAudit === undefined ? undefined : sessionMembership[answerAudit.position + 1];
+          const owningOperation = sessionOperations.find(
+            (operation) =>
+              operation.state === InteractionOperationState.COMPLETED &&
+              operation.operationKind === InteractionOperationKind.FRONTSTAGE_ANSWER &&
+              operation.result.kind === InteractionOperationResultKind.ANSWER_RECORDED &&
+              operation.result.answerRef.id === answer.id &&
+              operation.result.answerRef.digest === answer.answerDigest,
+          );
+          const producedMessage = sessionMessages.find(
+            (message) =>
+              message.role !== InteractionMessageRole.USER &&
+              message.causedByOperationRef.id === owningOperation?.id,
+          );
+          if (
+            answerAudits.length !== 1 ||
+            answerAudit?.event_type !== InteractionAuditEventType.FRONTSTAGE_ANSWER_RECORDED ||
+            answerAudit.before_version !== null ||
+            answerAudit.after_version !== null ||
+            answerAudit.payload_digest !== answer.answerDigest ||
+            answerAudit.occurred_at !== answer.createdAt ||
+            owningOperation === undefined ||
+            producedMessage === undefined ||
+            following?.aggregate_type !== InteractionAuditAggregateType.INTERACTION_MESSAGE ||
+            following.aggregate_id !== producedMessage.id ||
+            following.event_type !== InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED
+          ) {
+            throw new StoreInvariantError(
+              `Retained Frontstage Answer ${answer.id} lost its exact atomic audit`,
             );
           }
         }
@@ -11244,12 +12635,24 @@ export class SqliteControlStore
           );
           const messageSessionTransition =
             messageAudit === undefined ? undefined : sessionMembership[messageAudit.position + 1];
+          const reservationSessionTransition = sessionMembership.find(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.INTERACTION_SESSION &&
+              row.aggregate_id === operation.sessionId &&
+              row.after_version === operation.expectedSessionVersion,
+          );
           if (
             messageSessionTransition?.aggregate_type !==
               InteractionAuditAggregateType.INTERACTION_SESSION ||
-            messageSessionTransition.after_version !== operation.expectedSessionVersion ||
+            messageSessionTransition.aggregate_id !== operation.sessionId ||
+            messageSessionTransition.after_version === null ||
+            messageSessionTransition.after_version > operation.expectedSessionVersion ||
             messageSessionTransition.occurred_at !== message?.createdAt ||
-            reservationAudit.position <= messageSessionTransition.position
+            reservationSessionTransition?.event_type !==
+              InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED ||
+            reservationSessionTransition.occurred_at > operation.reservedAt ||
+            reservationSessionTransition.position < messageSessionTransition.position ||
+            reservationAudit.position <= reservationSessionTransition.position
           ) {
             throw new StoreInvariantError(
               `Retained Interaction Operation ${operation.id} lost its exact Session/Message reservation point`,
@@ -11395,6 +12798,13 @@ export class SqliteControlStore
           if (pendingAction?.sessionId !== membership.session_id) {
             throw new StoreInvariantError(
               `Retained Interaction Action Outcome audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (membership.aggregate_type === InteractionAuditAggregateType.FRONTSTAGE_ANSWER) {
+          const answer = frontstageAnswerById.get(membership.aggregate_id);
+          if (answer?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Frontstage Answer audit ${membership.id} crosses Session authority`,
             );
           }
         } else if (

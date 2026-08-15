@@ -13,6 +13,7 @@ import {
   createGoal,
   createWorkflow,
   decodeFrontstageContextManifest,
+  decodeFrontstageAnswer,
   decodeDirectActionGrammar,
   decodeFocusBinding,
   decodeInteractionMessage,
@@ -32,6 +33,8 @@ import {
   goalRevision,
   frontstageContextManifestId,
   frontstageContextManifestProjection,
+  frontstageAnswerId,
+  frontstageAnswerProjection,
   FrontstageContextOmissionReason,
   FrontstageContextOmissionSourceClass,
   FrontstageNoActionReason,
@@ -88,6 +91,8 @@ import {
   type FrontstageContextManifest,
   type FrontstageContextManifestId,
   type FrontstageContextManifestProjectionInput,
+  type FrontstageAnswer,
+  type FrontstageAnswerProjectionInput,
   type InteractionMessage,
   type RetainedInteractionMessage,
   type InteractionMessageHandoffProjectionInput,
@@ -121,6 +126,9 @@ import {
   type CommitInteractionPendingActionProposal,
   type CommitInteractionActionConfirmation,
   type CommitAuthorizedIntakeActionHandoff,
+  type CommitFrontstageAnswerResult,
+  type CommitInteractionGoalViewResult,
+  type CommitInteractionResultProjection,
   type CreateInteractionSession,
   type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
@@ -601,6 +609,90 @@ function createReservedClarificationOperation(
   return operation;
 }
 
+function createReservedPresentationOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  operationKind:
+    | typeof InteractionOperationKind.FRONTSTAGE_ANSWER
+    | typeof InteractionOperationKind.GOAL_LIST
+    | typeof InteractionOperationKind.GOAL_STATUS
+    | typeof InteractionOperationKind.RESULT_PROJECTION,
+  reservedAt = '2026-08-14T01:00:04.000Z',
+): CompanionFreeReservedInteractionOperation {
+  const base = {
+    id: interactionOperationId(`interaction-operation_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: Object.freeze({ id: message.id, digest: message.messageDigest }),
+    operationKind,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: isoTimestamp(reservedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const operation = decodeOperationProjection(base);
+  assertCompanionFreeReservedFixtureOperation(operation);
+  return operation;
+}
+
+function completePresentationOperation(
+  operation: ReservedInteractionOperation,
+  result: CompletedInteractionOperation['result'],
+  completedAt = '2026-08-14T01:00:05.000Z',
+): CompletedInteractionOperation {
+  const base = {
+    id: operation.id,
+    schemaVersion: operation.schemaVersion,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    state: InteractionOperationState.COMPLETED,
+    result,
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp(completedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeOperationProjection(base);
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Fixture presentation Operation did not complete');
+  }
+  return completed;
+}
+
+function createProducedMessage(
+  session: InteractionSession,
+  operation: CompletedInteractionOperation,
+  suffix: string,
+  content: string,
+  role:
+    | typeof InteractionMessageRole.FRONTSTAGE
+    | typeof InteractionMessageRole.SYSTEM = InteractionMessageRole.FRONTSTAGE,
+): RetainedInteractionMessage {
+  const base = {
+    id: interactionMessageId(`interaction-message_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    principalRef: session.principalRef,
+    role,
+    retention: InteractionContentRetention.RETAINED,
+    content,
+    contentDigest: digests.digestUtf8(content),
+    contentByteLength: Buffer.byteLength(content, 'utf8'),
+    causedByOperationRef: { id: operation.id, digest: operation.operationDigest },
+    createdAt: operation.completedAt,
+  };
+  const message = decodeInteractionMessage(
+    { ...base, messageDigest: digests.digest(interactionMessageProjection(base)) },
+    digests,
+  );
+  if (message.retention !== InteractionContentRetention.RETAINED) {
+    throw new TypeError('Fixture produced Message must retain its content');
+  }
+  return message;
+}
+
 function createAssistantRouteReservation(
   session: InteractionSession,
   message: InteractionMessage,
@@ -769,6 +861,67 @@ function createAssistantNoActionProposal(
   } satisfies RouteProposalProjectionInput;
   return decodeRouteProposal(
     { ...base, proposalDigest: digests.digest(routeProposalProjection(base)) },
+    digests,
+  );
+}
+
+function createAssistantAnswerProposal(
+  reservation: Readonly<{
+    manifest: FrontstageContextManifest;
+    operation: ReservedInteractionOperation;
+  }>,
+  suffix: string,
+  answerContent: string,
+): RouteProposal {
+  const base = {
+    id: routeProposalId(`route-proposal_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: reservation.operation.sessionId,
+    operationId: reservation.operation.id,
+    messageRef: reservation.operation.messageRef,
+    contextManifestRef: {
+      id: reservation.manifest.id,
+      digest: reservation.manifest.manifestDigest,
+    },
+    assistantProfile: reservation.manifest.assistantProfile,
+    assistantAdapter: reservation.manifest.assistantAdapter,
+    responseContract: reservation.manifest.responseContract,
+    kind: FrontstageProposalKind.ANSWER_PROPOSAL,
+    answerContent,
+    observedAt: isoTimestamp('2026-08-14T01:00:02.500Z'),
+  } satisfies RouteProposalProjectionInput;
+  return decodeRouteProposal(
+    { ...base, proposalDigest: digests.digest(routeProposalProjection(base)) },
+    digests,
+  );
+}
+
+function createFrontstageAnswer(
+  session: InteractionSession,
+  message: InteractionMessage,
+  proposal: RouteProposal,
+  decision: RouteDecision,
+  suffix: string,
+): FrontstageAnswer {
+  if (proposal.kind !== FrontstageProposalKind.ANSWER_PROPOSAL) {
+    throw new TypeError('Fixture Frontstage Answer requires an Answer Proposal');
+  }
+  const base = {
+    id: frontstageAnswerId(`frontstage-answer_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    originatingMessageRef: { id: message.id, digest: message.messageDigest },
+    routeDecisionRef: { id: decision.id, digest: decision.decisionDigest },
+    proposalRef: { id: proposal.id, digest: proposal.proposalDigest },
+    assistantProfile: proposal.assistantProfile,
+    responseContract: proposal.responseContract,
+    retentionProfile: session.retentionProfile,
+    answerContent: proposal.answerContent,
+    answerContentDigest: digests.digestUtf8(proposal.answerContent),
+    createdAt: isoTimestamp('2026-08-14T01:00:04.500Z'),
+  } satisfies FrontstageAnswerProjectionInput;
+  return decodeFrontstageAnswer(
+    { ...base, answerDigest: digests.digest(frontstageAnswerProjection(base)) },
     digests,
   );
 }
@@ -5866,7 +6019,7 @@ for (const step of terminalResolutionRollbackSteps) {
   });
 }
 
-void test('B1 historical Intake Clarification replays and failure-closes without reopening creation', (t) => {
+void test('B4 strict reopen rejects an Intake Clarification Operation without its Handoff', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const initial = createInitialSession(policies, 'b1-historical-clarification');
@@ -5921,79 +6074,13 @@ void test('B1 historical Intake Clarification replays and failure-closes without
     database.close();
   }
 
-  const store = SqliteControlStore.open({ filename });
-  const replayInput = {
-    session,
-    message,
-    operation,
-    auditWrite: createInteractionAuditWrite(
-      'b1-historical-clarification-replay',
-      'operation-reserved',
-      InteractionAuditAggregateType.INTERACTION_OPERATION,
-      operation.id,
-      InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
-      operation.operationDigest,
-      operation.reservedAt,
-      undefined,
-      operation.version,
-    ),
-  } as unknown as ReserveInteractionOperation;
-  assert.deepEqual(store.reserveInteractionOperation(replayInput), {
-    status: 'REPLAYED',
-    operation,
-  });
-
-  const failed = terminalizeOperation(operation, InteractionOperationState.FAILED);
-  const terminalInput = createOperationTerminalInput(
-    operation,
-    failed,
-    'b1-historical-clarification',
-  );
-  assert.deepEqual(store.terminalizeInteractionOperation(terminalInput), {
-    status: 'APPLIED',
-    operation: failed,
-  });
-  assert.deepEqual(store.terminalizeInteractionOperation(terminalInput), {
-    status: 'REPLAYED',
-    operation: failed,
-  });
-
-  const newClarification = createReservedClarificationOperation(
-    session,
-    message,
-    'b1-new-clarification-rejected',
-  );
   assert.throws(
-    () =>
-      store.reserveInteractionOperation({
-        session,
-        message,
-        operation: newClarification,
-        auditWrite: createInteractionAuditWrite(
-          'b1-new-clarification-rejected',
-          'operation-reserved',
-          InteractionAuditAggregateType.INTERACTION_OPERATION,
-          newClarification.id,
-          InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
-          newClarification.operationDigest,
-          newClarification.reservedAt,
-          undefined,
-          newClarification.version,
-        ),
-      } as unknown as ReserveInteractionOperation),
-    /cannot create a companion-bound Operation/u,
+    () => SqliteControlStore.open({ filename }),
+    /clarification Operation .* lost its reservation Handoff/u,
   );
-  store.close();
-
-  const reopened = SqliteControlStore.open({ filename });
-  try {
-    assert.deepEqual(reopened.getInteractionOperation(operation.id), failed);
-  } finally {
-    reopened.close();
-  }
 });
 
-void test('B1 SQLite rejects a new Intake Clarification without its B4 creation owner', (t) => {
+void test('B4 SQLite rejects a new Intake Clarification without its exact Handoff', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const initial = createInitialSession(policies, 'b1-clarification-sql-guard');
@@ -6021,7 +6108,7 @@ void test('B1 SQLite rejects a new Intake Clarification without its B4 creation 
   try {
     assert.throws(
       () => insertRawReservedInteractionOperation(database, operation),
-      /Intake Clarification requires its result-specific creation owner/u,
+      /Intake Clarification Operation lacks its exact Handoff/u,
     );
   } finally {
     database.close();
@@ -7500,7 +7587,7 @@ void test('Slice 2 Message causal backstop rejects absent and cross-Session Oper
             'interaction-message_missing-operation',
           );
         })(),
-      /FOREIGN KEY constraint failed|exact retained public authority/u,
+      /FOREIGN KEY constraint failed|exact retained public authority|Produced Interaction Message lacks its reserved result Operation/u,
     );
 
     const userMessageId = 'interaction-message_causal-user';
@@ -7524,7 +7611,7 @@ void test('Slice 2 Message causal backstop rejects absent and cross-Session Oper
             'interaction-message_cross-session-operation',
           );
         })(),
-      /FOREIGN KEY constraint failed|exact retained public authority/u,
+      /FOREIGN KEY constraint failed|exact retained public authority|Produced Interaction Message lacks its reserved result Operation/u,
     );
   } finally {
     database.close();
@@ -7585,7 +7672,7 @@ void test('B3 separately confirmed Intake Handoff preserves the originating requ
   reopened.close();
 });
 
-void test('B3 SQLite keeps the clarification Handoff writer closed until B4', (t) => {
+void test('B4 SQLite rejects a clarification Handoff without exact Question authority', (t) => {
   const filename = temporaryDatabase(t);
   const database = new Database(filename);
   try {
@@ -7626,7 +7713,7 @@ void test('B3 SQLite keeps the clarification Handoff writer closed until B4', (t
             digests.digest({ kind: 'handoff' }),
             JSON.stringify({ kind: InteractionMessageHandoffKind.INTAKE_CLARIFICATION }),
           ),
-      /Intake clarification Handoff has no B3 Store owner/u,
+      /Intake clarification Handoff lacks exact Question authority/u,
     );
   } finally {
     database.close();
@@ -7854,4 +7941,485 @@ void test('Slice 2 Action Outcome binds the exact Reservation Session', (t) => {
   } finally {
     database.close();
   }
+});
+
+function prepareFrontstageAnswerCommit(
+  store: SqliteControlStore,
+  policies: InteractionPolicySet,
+  suffix: string,
+): Readonly<{
+  input: CommitFrontstageAnswerResult;
+  answer: FrontstageAnswer;
+  resultMessage: InteractionMessage;
+  currentOperation: CompanionFreeReservedInteractionOperation;
+}> {
+  const initial = createInitialSession(policies, suffix);
+  const message = createUserMessage(
+    initial,
+    suffix,
+    '请解释这里的控制边界',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.createInteractionSession(createSessionInput(initial, suffix));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, suffix),
+  );
+  const routeReservation = createAssistantRouteReservation(session, message, suffix);
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(session, message, routeReservation, suffix),
+  );
+  const proposal = createAssistantAnswerProposal(
+    routeReservation,
+    suffix,
+    '控制运行时保留决定权，模型只提供受验证的建议。',
+  );
+  const decision = createAnswerRouteDecision(session, message, proposal, suffix);
+  const routeOperation = completeRouteOperation(routeReservation.operation, decision, proposal);
+  store.commitInteractionRouteResult(
+    createRouteResultCommitInput(
+      session,
+      message,
+      routeReservation.operation,
+      decision,
+      routeOperation,
+      suffix,
+      { manifest: routeReservation.manifest, proposal },
+    ),
+  );
+  const currentOperation = createReservedPresentationOperation(
+    session,
+    message,
+    `${suffix}-result`,
+    InteractionOperationKind.FRONTSTAGE_ANSWER,
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, currentOperation, `${suffix}-result`),
+  );
+  const answer = createFrontstageAnswer(session, message, proposal, decision, suffix);
+  const nextOperation = completePresentationOperation(currentOperation, {
+    kind: InteractionOperationResultKind.ANSWER_RECORDED,
+    answerRef: { id: answer.id, digest: answer.answerDigest },
+  });
+  const resultMessage = createProducedMessage(
+    session,
+    nextOperation,
+    `${suffix}-result`,
+    answer.answerContent,
+  );
+  const input: CommitFrontstageAnswerResult = Object.freeze({
+    session,
+    originatingMessage: message,
+    routeOperation,
+    proposal,
+    routeDecision: decision,
+    answer,
+    currentOperation,
+    nextOperation,
+    resultMessage,
+    answerAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'answer',
+      InteractionAuditAggregateType.FRONTSTAGE_ANSWER,
+      answer.id,
+      InteractionAuditEventType.FRONTSTAGE_ANSWER_RECORDED,
+      answer.answerDigest,
+      answer.createdAt,
+    ),
+    messageAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'answer-message',
+      InteractionAuditAggregateType.INTERACTION_MESSAGE,
+      resultMessage.id,
+      InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+      resultMessage.messageDigest,
+      resultMessage.createdAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'answer-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      nextOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      nextOperation.operationDigest,
+      nextOperation.completedAt,
+      currentOperation.version,
+      nextOperation.version,
+    ),
+  });
+  return Object.freeze({ input, answer, resultMessage, currentOperation });
+}
+
+void test('B4 Frontstage Answer commits its exact Route chain, Message, replay, and reopen', (t) => {
+  const filename = temporaryDatabase(t);
+  const suffix = 'b4-frontstage-answer';
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const initial = createInitialSession(policies, suffix);
+  const message = createUserMessage(
+    initial,
+    suffix,
+    '请解释这里的控制边界',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.createInteractionSession(createSessionInput(initial, suffix));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, suffix),
+  );
+
+  const routeReservation = createAssistantRouteReservation(session, message, suffix);
+  assert.equal(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(session, message, routeReservation, suffix),
+    ).status,
+    'RESERVED',
+  );
+  const proposal = createAssistantAnswerProposal(
+    routeReservation,
+    suffix,
+    '控制运行时保留决定权，模型只提供受验证的建议。',
+  );
+  const decision = createAnswerRouteDecision(session, message, proposal, suffix);
+  const routeOperation = completeRouteOperation(routeReservation.operation, decision, proposal);
+  assert.equal(
+    store.commitInteractionRouteResult(
+      createRouteResultCommitInput(
+        session,
+        message,
+        routeReservation.operation,
+        decision,
+        routeOperation,
+        suffix,
+        { manifest: routeReservation.manifest, proposal },
+      ),
+    ).status,
+    'APPLIED',
+  );
+
+  const currentOperation = createReservedPresentationOperation(
+    session,
+    message,
+    `${suffix}-result`,
+    InteractionOperationKind.FRONTSTAGE_ANSWER,
+  );
+  assert.equal(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(session, message, currentOperation, `${suffix}-result`),
+    ).status,
+    'RESERVED',
+  );
+  const answer = createFrontstageAnswer(session, message, proposal, decision, suffix);
+  const nextOperation = completePresentationOperation(currentOperation, {
+    kind: InteractionOperationResultKind.ANSWER_RECORDED,
+    answerRef: { id: answer.id, digest: answer.answerDigest },
+  });
+  const resultMessage = createProducedMessage(
+    session,
+    nextOperation,
+    `${suffix}-result`,
+    answer.answerContent,
+  );
+  const input: CommitFrontstageAnswerResult = Object.freeze({
+    session,
+    originatingMessage: message,
+    routeOperation,
+    proposal,
+    routeDecision: decision,
+    answer,
+    currentOperation,
+    nextOperation,
+    resultMessage,
+    answerAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'answer',
+      InteractionAuditAggregateType.FRONTSTAGE_ANSWER,
+      answer.id,
+      InteractionAuditEventType.FRONTSTAGE_ANSWER_RECORDED,
+      answer.answerDigest,
+      answer.createdAt,
+    ),
+    messageAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'answer-message',
+      InteractionAuditAggregateType.INTERACTION_MESSAGE,
+      resultMessage.id,
+      InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+      resultMessage.messageDigest,
+      resultMessage.createdAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'answer-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      nextOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      nextOperation.operationDigest,
+      nextOperation.completedAt,
+      currentOperation.version,
+      nextOperation.version,
+    ),
+  });
+  assert.deepEqual(store.commitFrontstageAnswerResult(input), {
+    status: 'APPLIED',
+    answer,
+    message: resultMessage,
+    operation: nextOperation,
+  });
+  assert.deepEqual(store.commitFrontstageAnswerResult(input), {
+    status: 'REPLAYED',
+    answer,
+    message: resultMessage,
+    operation: nextOperation,
+  });
+  assert.deepEqual(store.getFrontstageAnswer(answer.id), answer);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getFrontstageAnswer(answer.id), answer);
+  assert.deepEqual(reopened.getInteractionMessage(resultMessage.id), resultMessage);
+  assert.deepEqual(reopened.getInteractionOperation(nextOperation.id), nextOperation);
+  reopened.close();
+});
+
+for (const rollbackStep of [
+  InteractionTransactionStep.AFTER_FRONTSTAGE_ANSWER_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_FRONTSTAGE_ANSWER_WRITE,
+  InteractionTransactionStep.AFTER_RESULT_MESSAGE_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_RESULT_MESSAGE_WRITE,
+  InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_WRITE,
+  InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+] as const) {
+  void test(`B4 Frontstage Answer rolls back at ${rollbackStep}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const suffix = `b4-answer-rollback-${fixtureIdentifierSuffix(rollbackStep)}`;
+    const policies = createM26InteractionPolicies(digests);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    const prepared = prepareFrontstageAnswerCommit(setup, policies, suffix);
+    setup.close();
+
+    const failing = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === rollbackStep) {
+          throw new Error(`fixture failure at ${rollbackStep}`);
+        }
+      },
+    });
+    assert.throws(
+      () => failing.commitFrontstageAnswerResult(prepared.input),
+      new RegExp(`fixture failure at ${rollbackStep}`, 'u'),
+    );
+    failing.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.equal(reopened.getFrontstageAnswer(prepared.answer.id), undefined);
+    assert.equal(reopened.getInteractionMessage(prepared.resultMessage.id), undefined);
+    assert.deepEqual(
+      reopened.getInteractionOperation(prepared.currentOperation.id),
+      prepared.currentOperation,
+    );
+    reopened.close();
+  });
+}
+
+void test('B4 Operation codecs reject result kinds owned by another Operation kind', () => {
+  const policies = createM26InteractionPolicies(digests);
+  const session = createInitialSession(policies, 'b4-result-kind-matrix');
+  const message = createUserMessage(
+    session,
+    'b4-result-kind-matrix',
+    '检查结果类型',
+    '2026-08-14T01:00:01.000Z',
+  );
+  for (const operationKind of [
+    InteractionOperationKind.FRONTSTAGE_ANSWER,
+    InteractionOperationKind.GOAL_LIST,
+    InteractionOperationKind.GOAL_STATUS,
+  ] as const) {
+    const operation = createReservedPresentationOperation(
+      session,
+      message,
+      `b4-wrong-${operationKind}`,
+      operationKind,
+    );
+    assert.throws(
+      () =>
+        completePresentationOperation(operation, {
+          kind: InteractionOperationResultKind.RESULT_PROJECTED,
+          projectionDigest: digests.digest({ wrongFor: operationKind }),
+        }),
+      /Interaction Operation result does not match its kind/u,
+    );
+  }
+  const resultProjection = createReservedPresentationOperation(
+    session,
+    message,
+    'b4-wrong-result-projection',
+    InteractionOperationKind.RESULT_PROJECTION,
+  );
+  assert.throws(
+    () =>
+      completePresentationOperation(resultProjection, {
+        kind: InteractionOperationResultKind.GOAL_VIEW_RECORDED,
+        projectionDigest: digests.digest({ wrongFor: InteractionOperationKind.RESULT_PROJECTION }),
+      }),
+    /Interaction Operation result does not match its kind/u,
+  );
+});
+
+for (const operationKind of [
+  InteractionOperationKind.GOAL_LIST,
+  InteractionOperationKind.GOAL_STATUS,
+] as const) {
+  void test(`B4 ${operationKind} commits one exact projection digest and reopens`, (t) => {
+    const filename = temporaryDatabase(t);
+    const suffix = `b4-${operationKind.toLowerCase()}`;
+    const policies = createM26InteractionPolicies(digests);
+    const store = SqliteControlStore.open({ filename });
+    store.installInteractionPolicies(installInput(policies));
+    const initial = createInitialSession(policies, suffix);
+    const message = createUserMessage(
+      initial,
+      suffix,
+      operationKind === InteractionOperationKind.GOAL_LIST ? '列出 Goal' : '查看 Goal 状态',
+      '2026-08-14T01:00:01.000Z',
+    );
+    const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+    store.createInteractionSession(createSessionInput(initial, suffix));
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(initial, message, session, suffix),
+    );
+    const currentOperation = createReservedPresentationOperation(
+      session,
+      message,
+      suffix,
+      operationKind,
+    );
+    store.reserveInteractionOperation(
+      createOperationReservationInput(session, message, currentOperation, suffix),
+    );
+    const nextOperation = completePresentationOperation(currentOperation, {
+      kind: InteractionOperationResultKind.GOAL_VIEW_RECORDED,
+      projectionDigest: digests.digest({ operationKind, goals: [] }),
+    });
+    const input: CommitInteractionGoalViewResult = Object.freeze({
+      session,
+      message,
+      currentOperation,
+      nextOperation,
+      operationAuditWrite: createInteractionAuditWrite(
+        suffix,
+        'goal-view-completed',
+        InteractionAuditAggregateType.INTERACTION_OPERATION,
+        nextOperation.id,
+        InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+        nextOperation.operationDigest,
+        nextOperation.completedAt,
+        currentOperation.version,
+        nextOperation.version,
+      ),
+    });
+    assert.deepEqual(store.commitInteractionGoalViewResult(input), {
+      status: 'APPLIED',
+      operation: nextOperation,
+    });
+    assert.deepEqual(store.commitInteractionGoalViewResult(input), {
+      status: 'REPLAYED',
+      operation: nextOperation,
+    });
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.deepEqual(reopened.getInteractionOperation(nextOperation.id), nextOperation);
+    reopened.close();
+  });
+}
+
+void test('B4 Result Projection atomically records its retained Message and exact digest', (t) => {
+  const filename = temporaryDatabase(t);
+  const suffix = 'b4-result-projection';
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const initial = createInitialSession(policies, suffix);
+  const message = createUserMessage(
+    initial,
+    suffix,
+    '显示刚刚的操作结果',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.createInteractionSession(createSessionInput(initial, suffix));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, suffix),
+  );
+  const currentOperation = createReservedPresentationOperation(
+    session,
+    message,
+    suffix,
+    InteractionOperationKind.RESULT_PROJECTION,
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, currentOperation, suffix),
+  );
+  const projectionDigest = digests.digest({ disposition: 'APPLIED', target: 'fixture' });
+  const nextOperation = completePresentationOperation(currentOperation, {
+    kind: InteractionOperationResultKind.RESULT_PROJECTED,
+    projectionDigest,
+  });
+  const resultMessage = createProducedMessage(
+    session,
+    nextOperation,
+    `${suffix}-message`,
+    '操作已完成。',
+    InteractionMessageRole.SYSTEM,
+  );
+  const input: CommitInteractionResultProjection = Object.freeze({
+    session,
+    message,
+    currentOperation,
+    nextOperation,
+    resultMessage,
+    messageAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'result-message',
+      InteractionAuditAggregateType.INTERACTION_MESSAGE,
+      resultMessage.id,
+      InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+      resultMessage.messageDigest,
+      resultMessage.createdAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'result-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      nextOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      nextOperation.operationDigest,
+      nextOperation.completedAt,
+      currentOperation.version,
+      nextOperation.version,
+    ),
+  });
+  assert.deepEqual(store.commitInteractionResultProjection(input), {
+    status: 'APPLIED',
+    operation: nextOperation,
+    message: resultMessage,
+  });
+  assert.deepEqual(store.commitInteractionResultProjection(input), {
+    status: 'REPLAYED',
+    operation: nextOperation,
+    message: resultMessage,
+  });
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionMessage(resultMessage.id), resultMessage);
+  assert.deepEqual(reopened.getInteractionOperation(nextOperation.id), nextOperation);
+  reopened.close();
 });

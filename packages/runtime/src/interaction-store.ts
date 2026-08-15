@@ -7,8 +7,11 @@ import type {
   DirectActionGrammar,
   FocusBinding,
   FocusBindingId,
+  FrontstageAnswer,
+  FrontstageAnswerId,
   FrontstageContextManifest,
   FrontstageContextManifestId,
+  IntakeClarificationMessageHandoff,
   InteractionConfirmationPolicy,
   InteractionMessage,
   InteractionMessageId,
@@ -20,6 +23,7 @@ import type {
   InteractionActionOutcome,
   InteractionActionOutcomeId,
   InteractionMessageHandoffId,
+  InteractionMessageHandoff,
   InteractionPublicCapability,
   InteractionRoutingPolicy,
   InteractionSession,
@@ -633,13 +637,182 @@ export interface InteractionPublicActionControlStore extends InteractionPendingA
   ): InteractionActionOutcomeCommitResult;
   getInteractionMessageHandoff(
     handoffId: InteractionMessageHandoffId,
-  ): AuthorizedIntakeActionMessageHandoff | undefined;
+  ): InteractionMessageHandoff | undefined;
   getInteractionActionOutcome(
     outcomeId: InteractionActionOutcomeId,
   ): InteractionActionOutcome | undefined;
   getUnresolvedInteractionActionReservation(
     reservationId: InteractionActionReservationId,
   ): InteractionUnresolvedActionReservationDescriptor | undefined;
+}
+
+export interface ReserveInteractionClarificationOperation {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus: FocusBinding;
+  readonly handoff: IntakeClarificationMessageHandoff;
+  readonly operation: ReservedInteractionOperation;
+  readonly handoffAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionClarificationOperationReservationResult =
+  | Readonly<{
+      status: 'RESERVED' | 'REPLAYED';
+      handoff: IntakeClarificationMessageHandoff;
+      operation: ReservedInteractionOperation;
+    }>
+  | Readonly<{ status: 'SESSION_NOT_FOUND' | 'MESSAGE_NOT_FOUND' | 'FOCUS_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_CONFLICT';
+      currentMessage: InteractionMessage;
+    }>
+  | Readonly<{
+      status: 'FOCUS_CONFLICT';
+      currentFocus: FocusBinding;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_HANDOFF_CONFLICT';
+      currentHandoff: InteractionMessageHandoff;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | InteractionSessionOperationBusyResult;
+
+export interface CommitFrontstageAnswerResult {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly routeOperation: CompletedInteractionOperation;
+  readonly proposal: RouteProposal;
+  readonly routeDecision: RouteDecision;
+  readonly answer: FrontstageAnswer;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly resultMessage: InteractionMessage;
+  readonly answerAuditWrite: InteractionAuditWrite;
+  readonly messageAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type FrontstageAnswerResultCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      answer: FrontstageAnswer;
+      message: InteractionMessage;
+      operation: CompletedInteractionOperation;
+    }>
+  | Readonly<{ status: 'OPERATION_NOT_FOUND' | 'ROUTE_DECISION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'FRONTSTAGE_ANSWER_CONFLICT';
+      currentAnswer: FrontstageAnswer;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_CONFLICT';
+      currentMessage: InteractionMessage;
+    }>;
+
+export interface CommitInteractionGoalViewResult {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export interface CommitInteractionClarificationResult {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus: FocusBinding;
+  readonly handoff: IntakeClarificationMessageHandoff;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export interface CommitInteractionResultProjection {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly resultMessage: InteractionMessage;
+  readonly messageAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionPresentationResultCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      operation: CompletedInteractionOperation;
+      message?: InteractionMessage;
+    }>
+  | Readonly<{ status: 'OPERATION_NOT_FOUND' | 'PUBLIC_COMMAND_OUTCOME_NOT_RETAINED' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_CONFLICT';
+      currentMessage: InteractionMessage;
+    }>;
+
+export interface InteractionUnresolvedClarificationOperationDescriptor {
+  readonly operationRef: Readonly<{
+    id: InteractionOperationId;
+    digest: Sha256Digest;
+  }>;
+  readonly handoffRef: Readonly<{
+    id: InteractionMessageHandoffId;
+    digest: Sha256Digest;
+  }>;
+  readonly questionTarget: IntakeClarificationMessageHandoff['questionTarget'];
+  readonly commandId: CommandId;
+  readonly canonicalCommandInputDigest: Sha256Digest;
+  readonly publicOutcomeState: InteractionPublicOutcomeRetentionState;
+}
+
+/**
+ * Presentation results complete through their own atomic owner. Projection
+ * digests and produced messages remain non-authoritative views, while an
+ * Intake clarification completion binds the existing public Intake outcome.
+ */
+export interface InteractionPresentationResultControlStore extends InteractionPublicActionControlStore {
+  reserveInteractionClarificationOperation(
+    input: ReserveInteractionClarificationOperation,
+  ): InteractionClarificationOperationReservationResult;
+  commitFrontstageAnswerResult(
+    input: CommitFrontstageAnswerResult,
+  ): FrontstageAnswerResultCommitResult;
+  commitInteractionGoalViewResult(
+    input: CommitInteractionGoalViewResult,
+  ): InteractionPresentationResultCommitResult;
+  commitInteractionClarificationResult(
+    input: CommitInteractionClarificationResult,
+  ): InteractionPresentationResultCommitResult;
+  commitInteractionResultProjection(
+    input: CommitInteractionResultProjection,
+  ): InteractionPresentationResultCommitResult;
+  getFrontstageAnswer(answerId: FrontstageAnswerId): FrontstageAnswer | undefined;
+  getUnresolvedInteractionClarificationOperation(
+    operationId: InteractionOperationId,
+  ): InteractionUnresolvedClarificationOperationDescriptor | undefined;
 }
 
 export interface RecordInteractionFocusBinding {

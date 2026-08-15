@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -22,6 +23,14 @@ import {
   IntentAdmissionRuleTraceOutcome,
   IntentExecutionDisposition,
   IntentProjectionField,
+  InteractionContentRetention,
+  InteractionFocusKind,
+  InteractionMessageHandoffKind,
+  InteractionMessageRole,
+  InteractionOperationKind,
+  InteractionOperationResultKind,
+  InteractionOperationState,
+  InteractionSessionState,
   MaterialAmbiguityReasonCode,
   MaterialAmbiguityStatus,
   SourceAuthorityClass,
@@ -39,6 +48,11 @@ import {
   decodeClarificationAnswerBinding,
   decodeClarificationQuestion,
   decodeClarificationQuestionSpec,
+  decodeFocusBinding,
+  decodeInteractionMessage,
+  decodeInteractionMessageHandoff,
+  decodeInteractionOperation,
+  decodeInteractionSession,
   decodeIntakeCommandReservation,
   decodeIntakeCommandOutcome,
   decodeIntakeCommandResult,
@@ -62,6 +76,16 @@ import {
   intakeOperationId,
   intakeRunId,
   intakeRunVersion,
+  interactionMessageHandoffId,
+  interactionMessageHandoffProjection,
+  interactionMessageId,
+  interactionMessageProjection,
+  interactionOperationId,
+  interactionOperationProjection,
+  interactionOperationVersion,
+  interactionSessionId,
+  interactionSessionProjection,
+  interactionSessionVersion,
   intakeCommandReservationProjection,
   intakeCommandOutcomeProjection,
   intakeCommandResultProjection,
@@ -71,6 +95,8 @@ import {
   goalRevision,
   goalStartAuthorizationId,
   goalStartAuthorizationProjection,
+  focusBindingId,
+  focusBindingProjection,
   intentAdmissionDecisionId,
   intentAdmissionDecisionProjection,
   intentAnalysisProposalId,
@@ -107,21 +133,31 @@ import {
   type MaterialAmbiguitySet,
   type RawRequestRevisionRecord,
   type SourceBinding,
+  type FocusBindingProjectionInput,
+  type InteractionMessageHandoffProjectionInput,
+  type InteractionOperationProjectionInput,
+  type InteractionSessionProjectionInput,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
+  InteractionAuditAggregateType,
+  InteractionAuditEventType,
+  InteractionPublicOutcomeRetentionState,
   IntakeAuditAggregateType,
   IntakeAuditEventType,
+  createM26InteractionPolicies,
   createM25AdmissionPolicy,
   createM25LocalAdmissionPolicyDefinition,
   createM25TestUnsupportedAdmissionPolicyDefinition,
   goalAndWorkflowCreationPayloadProjection,
   type IntakeAuditWrite,
   type IntakeAuditEventType as RuntimeIntakeAuditEventType,
+  type InteractionAuditWrite,
 } from '@codeclosure/runtime';
 
 import {
   IntakeTransactionStep,
+  InteractionTransactionStep,
   SqliteControlStore,
   SqliteAuthorityDatabaseState,
   defaultMigrationsDirectory,
@@ -3046,6 +3082,500 @@ void test('[I-006][I-008][I-009] clarification reservation binds one exact Quest
   assert.equal(authority.questions.length, 1);
   assert.equal(authority.reservations.length, 2);
   assert.equal(authority.outcomes.length, 1);
+});
+
+void test('B4 Intake clarification preserves one Message, Question, Command, and public Outcome chain', (t) => {
+  const filename = temporaryDatabase(t);
+  const namespace = 'b4-interaction-clarification';
+  const completedAt = isoTimestamp('2026-08-03T06:00:00.003Z');
+  const base = fixtures(namespace);
+  const clarify = clarifyFixtures(base, namespace);
+  const answer = clarificationAnswerFixtures(base, clarify, namespace);
+  let store = openStore(filename);
+  installPolicy(store, namespace, base.policy);
+  persistClarification(store, base, clarify);
+
+  const interactionPolicies = createM26InteractionPolicies(digests);
+  const policyAudit = (
+    part: string,
+    aggregateId: string,
+    payloadDigest: ReturnType<typeof sha256Digest>,
+  ): InteractionAuditWrite => ({
+    id: auditEventId(`audit_interaction-${namespace}-${part}`),
+    aggregateType: InteractionAuditAggregateType.INTERACTION_POLICY,
+    aggregateId,
+    eventType: InteractionAuditEventType.INTERACTION_POLICY_INSTALLED,
+    payloadDigest,
+    occurredAt: NOW,
+  });
+  assert.equal(
+    store.installInteractionPolicies({
+      policies: interactionPolicies,
+      installedAt: NOW,
+      auditWrites: {
+        directActionGrammar: policyAudit(
+          'direct-action-policy',
+          interactionPolicies.directActionGrammar.id,
+          interactionPolicies.directActionGrammar.digest,
+        ),
+        confirmationGrammar: policyAudit(
+          'confirmation-grammar',
+          interactionPolicies.confirmationGrammar.id,
+          interactionPolicies.confirmationGrammar.digest,
+        ),
+        routingPolicy: policyAudit(
+          'routing-policy',
+          interactionPolicies.routingPolicy.id,
+          interactionPolicies.routingPolicy.digest,
+        ),
+        confirmationPolicy: policyAudit(
+          'confirmation-policy',
+          interactionPolicies.confirmationPolicy.id,
+          interactionPolicies.confirmationPolicy.digest,
+        ),
+      },
+    }).status,
+    'INSTALLED',
+  );
+
+  const sessionBase = {
+    id: interactionSessionId(`interaction-session_${namespace}`),
+    schemaVersion: 1 as const,
+    version: interactionSessionVersion(1),
+    principalRef: base.principal,
+    projectRef: base.projectRef,
+    state: InteractionSessionState.OPEN,
+    configuration: {
+      id: 'codeclosure-m2-6-frontstage-configuration',
+      version: 'codeclosure-m2-6-frontstage-configuration-v1',
+      digest: digests.digest({ configuration: 'm2.6-v1' }),
+    },
+    routingPolicy: {
+      id: interactionPolicies.routingPolicy.id,
+      version: interactionPolicies.routingPolicy.version,
+      digest: interactionPolicies.routingPolicy.digest,
+    },
+    confirmationPolicy: {
+      id: interactionPolicies.confirmationPolicy.id,
+      version: interactionPolicies.confirmationPolicy.version,
+      digest: interactionPolicies.confirmationPolicy.digest,
+    },
+    retentionProfile: {
+      id: 'codeclosure-m2-6-frontstage-retention',
+      version: 'codeclosure-m2-6-frontstage-retention-v1',
+      digest: digests.digest({ retention: 'm2.6-v1' }),
+    },
+    openedAt: NOW,
+    updatedAt: NOW,
+  } satisfies InteractionSessionProjectionInput;
+  const initialSession = decodeInteractionSession(
+    { ...sessionBase, sessionDigest: digests.digest(interactionSessionProjection(sessionBase)) },
+    digests,
+  );
+  assert.equal(
+    store.createInteractionSession({
+      session: initialSession,
+      auditWrite: {
+        id: auditEventId(`audit_interaction-${namespace}-session-opened`),
+        aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+        aggregateId: initialSession.id,
+        eventType: InteractionAuditEventType.INTERACTION_SESSION_OPENED,
+        payloadDigest: initialSession.sessionDigest,
+        occurredAt: initialSession.openedAt,
+        afterVersion: initialSession.version,
+      },
+    }).status,
+    'CREATED',
+  );
+
+  const messageBase = {
+    id: interactionMessageId(`interaction-message_${namespace}`),
+    schemaVersion: 1 as const,
+    sessionId: initialSession.id,
+    principalRef: initialSession.principalRef,
+    role: InteractionMessageRole.USER,
+    retention: InteractionContentRetention.RETAINED,
+    content: answer.revision.admittedUserContent,
+    contentDigest: answer.revision.admittedContentDigest,
+    contentByteLength: Buffer.byteLength(answer.revision.admittedUserContent, 'utf8'),
+    createdAt: LAST,
+  };
+  const message = decodeInteractionMessage(
+    { ...messageBase, messageDigest: digests.digest(interactionMessageProjection(messageBase)) },
+    digests,
+  );
+  if (message.retention !== InteractionContentRetention.RETAINED) {
+    throw new Error('Fixture clarification Message did not retain its content');
+  }
+  const admittedSessionBase = {
+    ...sessionBase,
+    version: interactionSessionVersion(2),
+    updatedAt: LAST,
+  } satisfies InteractionSessionProjectionInput;
+  const admittedSession = decodeInteractionSession(
+    {
+      ...admittedSessionBase,
+      sessionDigest: digests.digest(interactionSessionProjection(admittedSessionBase)),
+    },
+    digests,
+  );
+  assert.equal(
+    store.admitInteractionUserMessage({
+      currentSession: initialSession,
+      message,
+      nextSession: admittedSession,
+      messageAuditWrite: {
+        id: auditEventId(`audit_interaction-${namespace}-message-admitted`),
+        aggregateType: InteractionAuditAggregateType.INTERACTION_MESSAGE,
+        aggregateId: message.id,
+        eventType: InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
+        payloadDigest: message.messageDigest,
+        occurredAt: message.createdAt,
+      },
+      sessionAuditWrite: {
+        id: auditEventId(`audit_interaction-${namespace}-message-session`),
+        aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+        aggregateId: admittedSession.id,
+        eventType: InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+        payloadDigest: admittedSession.sessionDigest,
+        occurredAt: admittedSession.updatedAt,
+        beforeVersion: initialSession.version,
+        afterVersion: admittedSession.version,
+      },
+    }).status,
+    'ADMITTED',
+  );
+
+  const questionTarget = {
+    intakeRunId: clarify.needsRun.id,
+    intakeRunVersion: clarify.needsRun.version,
+    clarificationQuestionId: clarify.question.id,
+    questionSpecDigest: clarify.question.questionSpecDigest,
+    questionDigest: clarify.question.questionDigest,
+  };
+  const focusBase = {
+    id: focusBindingId(`focus-binding_${namespace}`),
+    schemaVersion: 1 as const,
+    sessionId: admittedSession.id,
+    basedOnSessionVersion: admittedSession.version,
+    kind: InteractionFocusKind.INTAKE_QUESTION,
+    questionTarget,
+    createdAt: LAST,
+  } satisfies FocusBindingProjectionInput;
+  const focus = decodeFocusBinding(
+    { ...focusBase, focusDigest: digests.digest(focusBindingProjection(focusBase)) },
+    digests,
+  );
+  const focusedSessionBase = {
+    ...admittedSessionBase,
+    version: interactionSessionVersion(3),
+    currentFocusRef: { id: focus.id, digest: focus.focusDigest },
+  } satisfies InteractionSessionProjectionInput;
+  const focusedSession = decodeInteractionSession(
+    {
+      ...focusedSessionBase,
+      sessionDigest: digests.digest(interactionSessionProjection(focusedSessionBase)),
+    },
+    digests,
+  );
+  assert.equal(
+    store.recordInteractionFocusBinding({
+      currentSession: admittedSession,
+      focus,
+      nextSession: focusedSession,
+      focusAuditWrite: {
+        id: auditEventId(`audit_interaction-${namespace}-focus`),
+        aggregateType: InteractionAuditAggregateType.FOCUS_BINDING,
+        aggregateId: focus.id,
+        eventType: InteractionAuditEventType.FOCUS_BINDING_RECORDED,
+        payloadDigest: focus.focusDigest,
+        occurredAt: focus.createdAt,
+      },
+      sessionAuditWrite: {
+        id: auditEventId(`audit_interaction-${namespace}-focus-session`),
+        aggregateType: InteractionAuditAggregateType.INTERACTION_SESSION,
+        aggregateId: focusedSession.id,
+        eventType: InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
+        payloadDigest: focusedSession.sessionDigest,
+        occurredAt: focusedSession.updatedAt,
+        beforeVersion: admittedSession.version,
+        afterVersion: focusedSession.version,
+      },
+    }).status,
+    'APPLIED',
+  );
+
+  const handoffBase = {
+    id: interactionMessageHandoffId(`interaction-message-handoff_${namespace}`),
+    schemaVersion: 1 as const,
+    kind: InteractionMessageHandoffKind.INTAKE_CLARIFICATION,
+    sessionId: focusedSession.id,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    focusRef: { id: focus.id, digest: focus.focusDigest },
+    questionTarget,
+    canonicalCommandInputDigest: answer.reservation.canonicalCommandInputDigest,
+    admittedUserContent: message.content,
+    admittedContentDigest: message.contentDigest,
+    intakeCommandId: answer.reservation.commandId,
+    createdAt: LAST,
+  } satisfies InteractionMessageHandoffProjectionInput;
+  const handoff = decodeInteractionMessageHandoff(
+    {
+      ...handoffBase,
+      handoffDigest: digests.digest(interactionMessageHandoffProjection(handoffBase)),
+    },
+    digests,
+  );
+  if (handoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+    throw new Error('Fixture did not retain an Intake clarification Handoff');
+  }
+  const operationBase = {
+    id: interactionOperationId(`interaction-operation_${namespace}`),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: focusedSession.id,
+    expectedSessionVersion: focusedSession.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    operationKind: InteractionOperationKind.INTAKE_CLARIFICATION,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: LAST,
+  } satisfies InteractionOperationProjectionInput;
+  const operation = decodeInteractionOperation(
+    {
+      ...operationBase,
+      operationDigest: digests.digest(interactionOperationProjection(operationBase)),
+    },
+    digests,
+  );
+  if (operation.state !== InteractionOperationState.RESERVED) {
+    throw new Error('Fixture clarification Operation was not reserved');
+  }
+  const clarificationReservation = {
+    session: focusedSession,
+    message,
+    focus,
+    handoff,
+    operation,
+    handoffAuditWrite: {
+      id: auditEventId(`audit_interaction-${namespace}-handoff`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_MESSAGE_HANDOFF,
+      aggregateId: handoff.id,
+      eventType: InteractionAuditEventType.INTERACTION_MESSAGE_HANDOFF_RECORDED,
+      payloadDigest: handoff.handoffDigest,
+      occurredAt: handoff.createdAt,
+    },
+    operationAuditWrite: {
+      id: auditEventId(`audit_interaction-${namespace}-operation-reserved`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+      aggregateId: operation.id,
+      eventType: InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+      payloadDigest: operation.operationDigest,
+      occurredAt: operation.reservedAt,
+      afterVersion: operation.version,
+    },
+  } as const;
+  store.close();
+  for (const rollbackStep of [
+    InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_AUDIT_WRITE,
+    InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_WRITE,
+    InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_MEMBERSHIP_WRITE,
+    InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE,
+    InteractionTransactionStep.AFTER_OPERATION_WRITE,
+    InteractionTransactionStep.AFTER_AUDIT_MEMBERSHIP_WRITE,
+    InteractionTransactionStep.BEFORE_COMMIT,
+  ] as const) {
+    const failingStore = openStore(filename, {
+      transactionProbe(observed) {
+        if (observed === rollbackStep) {
+          throw new Error(`fixture failure at ${rollbackStep}`);
+        }
+      },
+    });
+    assert.throws(
+      () => failingStore.reserveInteractionClarificationOperation(clarificationReservation),
+      new RegExp(`fixture failure at ${rollbackStep}`, 'u'),
+    );
+    failingStore.close();
+    const rollbackReopen = openStore(filename);
+    assert.equal(rollbackReopen.getInteractionMessageHandoff(handoff.id), undefined);
+    assert.equal(rollbackReopen.getInteractionOperation(operation.id), undefined);
+    rollbackReopen.close();
+  }
+  store = openStore(filename);
+  assert.deepEqual(store.reserveInteractionClarificationOperation(clarificationReservation), {
+    status: 'RESERVED',
+    handoff,
+    operation,
+  });
+  assert.deepEqual(store.getUnresolvedInteractionClarificationOperation(operation.id), {
+    operationRef: { id: operation.id, digest: operation.operationDigest },
+    handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+    questionTarget,
+    commandId: answer.reservation.commandId,
+    canonicalCommandInputDigest: answer.reservation.canonicalCommandInputDigest,
+    publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+  });
+
+  assert.equal(
+    store.reserveClarificationIntake({
+      rawRequestRevision: answer.revision,
+      answerBinding: answer.answerBinding,
+      intakeRun: answer.analyzingRun,
+      manifest: answer.manifest,
+      reservation: answer.reservation,
+      auditEvents: answer.audits,
+    }).status,
+    'RESERVED',
+  );
+  const failureBase: IntakeFailureRecord = {
+    id: intakeFailureRecordId(`intake-failure_${namespace}-answer`),
+    schemaVersion: 1,
+    commandId: answer.reservation.commandId,
+    intakeRunId: answer.analyzingRun.id,
+    intakeRunVersion: answer.analyzingRun.version,
+    rawRequestRevision: answer.revision.revision,
+    rawRequestDigest: answer.revision.rawRequestDigest,
+    failedOperation: IntakeFailedOperation.INTENT_ANALYSIS,
+    assistantAdapterId: answer.manifest.assistantAdapter.id,
+    assistantAdapterVersion: answer.manifest.assistantAdapter.version,
+    responseContractDigest: answer.manifest.responseContract.digest,
+    reasonCode: IntakeFailureReasonCode.ASSISTANT_TIMEOUT,
+    retryDisposition: 'NEW_INTAKE_RUN_REQUIRED',
+    failedAt: completedAt,
+    failureDigest: FIXTURE_DIGEST,
+  };
+  const failure = decodeIntakeFailureRecord(
+    {
+      ...failureBase,
+      failureDigest: digests.digest(intakeFailureRecordProjection(failureBase)),
+    },
+    digests,
+  );
+  const failedRun = decodeIntakeRun({
+    ...answer.analyzingRun,
+    version: intakeRunVersion(answer.analyzingRun.version + 1),
+    status: IntakeRunStatus.FAILED,
+    terminalFailureRef: { id: failure.id, digest: failure.failureDigest },
+    updatedAt: completedAt,
+  });
+  if (failedRun.status !== IntakeRunStatus.FAILED) {
+    throw new Error('Fixture did not create a FAILED Intake Run');
+  }
+  assert.equal(
+    store.commitIntakeFailure({
+      commandId: answer.reservation.commandId,
+      failure,
+      intakeRun: failedRun,
+      completedAt,
+      auditEvents: [
+        audit(
+          `${namespace}-answer-failure`,
+          IntakeAuditEventType.INTAKE_FAILURE_RECORDED,
+          failedRun.id,
+          completedAt,
+        ),
+        audit(
+          `${namespace}-answer-failed-run`,
+          IntakeAuditEventType.INTAKE_RUN_UPDATED,
+          failedRun.id,
+          completedAt,
+        ),
+        audit(
+          `${namespace}-answer-complete`,
+          IntakeAuditEventType.INTAKE_COMMAND_COMPLETED,
+          failedRun.id,
+          completedAt,
+        ),
+      ],
+    }).status,
+    'APPLIED',
+  );
+  const publicOutcome = store.getIntakeCommandOutcome(answer.reservation.commandId);
+  assert.ok(publicOutcome);
+  const completedOperationBase = {
+    ...operationBase,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.PUBLIC_COMMAND_RECORDED,
+      commandId: answer.reservation.commandId,
+      publicCommandOutcomeDigest: publicOutcome.outcomeDigest,
+    },
+    completedAt: publicOutcome.completedAt,
+  } satisfies InteractionOperationProjectionInput;
+  const completedOperation = decodeInteractionOperation(
+    {
+      ...completedOperationBase,
+      operationDigest: digests.digest(interactionOperationProjection(completedOperationBase)),
+    },
+    digests,
+  );
+  if (completedOperation.state !== InteractionOperationState.COMPLETED) {
+    throw new Error('Fixture clarification Operation did not complete');
+  }
+  const completionInput = {
+    session: focusedSession,
+    message,
+    focus,
+    handoff,
+    currentOperation: operation,
+    nextOperation: completedOperation,
+    operationAuditWrite: {
+      id: auditEventId(`audit_interaction-${namespace}-operation-completed`),
+      aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+      aggregateId: completedOperation.id,
+      eventType: InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      payloadDigest: completedOperation.operationDigest,
+      occurredAt: completedOperation.completedAt,
+      beforeVersion: operation.version,
+      afterVersion: completedOperation.version,
+    },
+  } as const;
+  store.close();
+  for (const rollbackStep of [
+    InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_AUDIT_WRITE,
+    InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_WRITE,
+    InteractionTransactionStep.AFTER_PRESENTATION_COMPLETION_MEMBERSHIP_WRITE,
+    InteractionTransactionStep.BEFORE_COMMIT,
+  ] as const) {
+    const failingStore = openStore(filename, {
+      transactionProbe(observed) {
+        if (observed === rollbackStep) {
+          throw new Error(`fixture failure at ${rollbackStep}`);
+        }
+      },
+    });
+    assert.throws(
+      () => failingStore.commitInteractionClarificationResult(completionInput),
+      new RegExp(`fixture failure at ${rollbackStep}`, 'u'),
+    );
+    failingStore.close();
+    const rollbackReopen = openStore(filename);
+    assert.deepEqual(rollbackReopen.getInteractionOperation(operation.id), operation);
+    assert.equal(
+      rollbackReopen.getUnresolvedInteractionClarificationOperation(operation.id)
+        ?.publicOutcomeState,
+      InteractionPublicOutcomeRetentionState.RETAINED,
+    );
+    rollbackReopen.close();
+  }
+  store = openStore(filename);
+  assert.deepEqual(store.commitInteractionClarificationResult(completionInput), {
+    status: 'APPLIED',
+    operation: completedOperation,
+  });
+  assert.deepEqual(store.commitInteractionClarificationResult(completionInput), {
+    status: 'REPLAYED',
+    operation: completedOperation,
+  });
+  assert.equal(store.getUnresolvedInteractionClarificationOperation(operation.id), undefined);
+  store.close();
+
+  const reopened = openStore(filename);
+  assert.deepEqual(reopened.getInteractionMessageHandoff(handoff.id), handoff);
+  assert.deepEqual(reopened.getInteractionOperation(operation.id), completedOperation);
+  assert.equal(reopened.getUnresolvedInteractionClarificationOperation(operation.id), undefined);
+  reopened.close();
 });
 
 void test('[I-006][I-008][I-009][I-032] project-identity clarification retains historical Manifest authority across correction', (t) => {
