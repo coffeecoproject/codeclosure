@@ -262,9 +262,12 @@ discriminated Handoff migration, action-authorized Intake Handoff,
 Runtime-owned exhaustive public-outcome mapper, Store-authored Action Outcome,
 typed unresolved-Reservation descriptor, rollback, SQLite backstops, and
 strict reopen passed bounded review and were committed as `679ad5d` on
-2026-08-15. It invokes or re-enters no public capability, and the clarification
-writer remains closed until B4. B4 onward and all M2.7 implementation remain
-unstarted.
+2026-08-15. It invokes or re-enters no public capability. B4's clarification
+Handoff and result-specific presentation owners, typed crash-window
+descriptor, rollback, concurrency, SQLite backstops, and strict reopen passed
+bounded review and were committed across `0e0b562` and `128a5c2` on
+2026-08-15. It invokes no Assistant or public facade. B5 and all M2.7
+implementation remain unstarted.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not
