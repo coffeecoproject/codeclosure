@@ -17,11 +17,11 @@ The pre-B1 retained Context Manifest and discriminated Intake Handoff Domain
 contracts passed bounded P0 review on 2026-08-15. B1's result-specific
 deterministic and Assistant Route transactions, exact retained
 Manifest/Proposal/Decision authority, typed conflict results, SQLite guards,
-and strict reopen are implemented in the working tree and are in bounded
-review. B1 is not yet committed; all other successful Operation results and
-the remaining Slice 2 transactions, Assistant Adapter, routing composition,
-Goal query/control, and CLI work remain later. The M2.5.1 milestone prerequisite
-has passed, and the completed M2.5 Goal Intake boundary remains unchanged.
+and strict reopen passed bounded review and were committed as `35280f5` on
+2026-08-15. All other successful Operation results and the remaining Slice 2
+transactions, Assistant Adapter, routing composition, Goal query/control, and
+CLI work remain later. The M2.5.1 milestone prerequisite has passed, and the
+completed M2.5 Goal Intake boundary remains unchanged.
 
 ## Purpose
 
