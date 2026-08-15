@@ -21,10 +21,15 @@ and strict reopen passed bounded review and were committed as `35280f5` on
 2026-08-15. B2's Pending Action, Resolution, Reservation, result-specific
 Operation, atomic audit, replay/conflict, rollback, SQLite-backstop, and strict-
 reopen authority passed bounded review and was committed across `2da38eb` and
-`c61489e` on 2026-08-15; it invokes no public capability. All other successful
-Operation results and the remaining Slice 2 transactions, Assistant Adapter,
-routing composition, Goal query/control, and CLI work remain later. The M2.5.1
-milestone prerequisite has
+`c61489e` on 2026-08-15; it invokes no public capability. B3's
+guarded discriminated Handoff migration, action-authorized Intake Handoff,
+Runtime-owned exhaustive public-outcome mapper, Store-authored Action Outcome,
+typed unresolved-Reservation descriptor, rollback, SQLite backstops, and
+strict reopen passed bounded review and were committed as `679ad5d` on
+2026-08-15. It invokes or re-enters no public capability, and the clarification
+Handoff writer remains closed until B4. B4's clarification/presentation result
+owners, B5's Slice 2 closure, Assistant Adapter, routing composition, Goal
+query/control, and CLI work remain later. The M2.5.1 milestone prerequisite has
 passed, and the completed M2.5 Goal Intake boundary remains unchanged.
 
 ## Purpose

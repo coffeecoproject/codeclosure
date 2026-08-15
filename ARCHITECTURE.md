@@ -248,8 +248,7 @@ on 2026-08-14. Slice 2 implementation is in progress through its policy,
 Session lifecycle, and user-message SQLite authority with atomic audit,
 typed replay/conflict, Operation reservation and failure/interruption closure,
 unresolved-operation detection, exact Focus/Session CAS with one Focus write
-owner, and strict reopen. Later successful Operation result,
-Pending-Action/action-chain, and recovery transactions remain incomplete. The
+owner, and strict reopen. The
 pre-B1 retained Context Manifest and discriminated Intake Handoff Domain
 contracts passed bounded P0 review on 2026-08-15. B1's result-specific
 deterministic and Assistant Route transactions, exact retained
@@ -258,8 +257,14 @@ and strict reopen passed bounded review and were committed as `35280f5` on
 2026-08-15. B2's Pending Action, Resolution, Reservation, result-specific
 Operation, atomic audit, replay/conflict, rollback, SQLite-backstop, and strict-
 reopen authority passed bounded review and was committed across `2da38eb` and
-`c61489e` on 2026-08-15; it invokes no public capability. B3 onward and all
-M2.7 implementation remain unstarted.
+`c61489e` on 2026-08-15; it invokes no public capability. B3's guarded
+discriminated Handoff migration, action-authorized Intake Handoff,
+Runtime-owned exhaustive public-outcome mapper, Store-authored Action Outcome,
+typed unresolved-Reservation descriptor, rollback, SQLite backstops, and
+strict reopen passed bounded review and were committed as `679ad5d` on
+2026-08-15. It invokes or re-enters no public capability, and the clarification
+writer remains closed until B4. B4 onward and all M2.7 implementation remain
+unstarted.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not
