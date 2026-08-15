@@ -266,8 +266,11 @@ strict reopen passed bounded review and were committed as `679ad5d` on
 Handoff and result-specific presentation owners, typed crash-window
 descriptor, rollback, concurrency, SQLite backstops, and strict reopen passed
 bounded review and were committed across `0e0b562` and `128a5c2` on
-2026-08-15. It invokes no Assistant or public facade. B5 and all M2.7
-implementation remain unstarted.
+2026-08-15. It invokes no Assistant or public facade. B5 is in progress through
+exact principal/project-scoped startup detection, terminal unresolved-work
+closure, append-only migration/schema freeze, and frozen proof-owner
+correction. The complete current-source quality gate passed; independent
+bounded review remains. All M2.7 implementation remains unstarted.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not

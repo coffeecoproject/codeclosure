@@ -137,6 +137,7 @@ import {
   type InteractionMessageHandoffProjectionInput,
   type InteractionOperationProjectionInput,
   type InteractionSessionProjectionInput,
+  type InteractionSession,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
@@ -172,6 +173,13 @@ const NOW = isoTimestamp('2026-08-03T06:00:00.000Z');
 const LATER = isoTimestamp('2026-08-03T06:00:00.001Z');
 const LAST = isoTimestamp('2026-08-03T06:00:00.002Z');
 const FIXTURE_DIGEST = sha256Digest(`sha256:${'a'.repeat(64)}`);
+
+function startupDetectionScope(session: InteractionSession) {
+  return Object.freeze({
+    principalRef: session.principalRef,
+    projectRef: session.projectRef,
+  });
+}
 
 function temporaryDatabase(t: TestContext): string {
   const directory = mkdtempSync(join(tmpdir(), 'codeclosure-intake-store-'));
@@ -3467,6 +3475,7 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
     publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
   });
   const startupCatalog = {
+    sessions: [focusedSession],
     reservedOperations: [],
     clarificationOperations: [
       {
@@ -3483,10 +3492,16 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
     pendingActions: [],
     actionReservations: [],
   } as const;
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(focusedSession)),
+    startupCatalog,
+  );
   store.close();
   store = openStore(filename);
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(focusedSession)),
+    startupCatalog,
+  );
 
   assert.equal(
     store.reserveClarificationIntake({
@@ -3565,7 +3580,8 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
   const publicOutcome = store.getIntakeCommandOutcome(answer.reservation.commandId);
   assert.ok(publicOutcome);
   assert.equal(
-    store.getInteractionStartupDetectionCatalog().clarificationOperations[0]?.publicOutcomeState,
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(focusedSession))
+      .clarificationOperations[0]?.publicOutcomeState,
     InteractionPublicOutcomeRetentionState.RETAINED,
   );
   const completedOperationBase = {
@@ -3645,12 +3661,16 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
     operation: completedOperation,
   });
   assert.equal(store.getUnresolvedInteractionClarificationOperation(operation.id), undefined);
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), {
-    reservedOperations: [],
-    clarificationOperations: [],
-    pendingActions: [],
-    actionReservations: [],
-  });
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(focusedSession)),
+    {
+      sessions: [focusedSession],
+      reservedOperations: [],
+      clarificationOperations: [],
+      pendingActions: [],
+      actionReservations: [],
+    },
+  );
   store.close();
 
   const reopened = openStore(filename);

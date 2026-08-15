@@ -59,6 +59,7 @@ const migrationNames = Object.freeze([
   '0040_interaction_pending_action_authority.sql',
   '0041_interaction_public_action_authority.sql',
   '0042_interaction_presentation_result_authority.sql',
+  '0043_interaction_session_terminal_closure.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -173,12 +174,12 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
     })),
   );
   assert.deepEqual(firstInspection, {
-    counts: { table: 86, index: 40, trigger: 292, view: 0 },
+    counts: { table: 86, index: 40, trigger: 295, view: 0 },
     foreignKeyViolationCount: 0,
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:ac63bc781eafcf096fecb55c8cbc48ba7c08adf390eb36fb1e672d474157a148',
+    schemaDigest: 'sha256:dae62acc1d81a467e3d51148f38c21f311a7552b0730cbaab6e2eebec4f385a7',
   });
 
   const reopened = new Database(filename);
@@ -200,7 +201,10 @@ void test('0041 rejects a non-empty F1 Handoff skeleton without changing its pri
   t.after(() => rmSync(temporaryRoot, { force: true, recursive: true }));
   const migrationsDirectory = join(temporaryRoot, 'migrations');
   mkdirSync(migrationsDirectory);
-  for (const name of migrationNames.slice(0, -2)) {
+  const migration0041 = '0041_interaction_public_action_authority.sql';
+  const migration0041Index = migrationNames.indexOf(migration0041);
+  assert.notEqual(migration0041Index, -1);
+  for (const name of migrationNames.slice(0, migration0041Index)) {
     copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
   }
 
@@ -243,7 +247,6 @@ void test('0041 rejects a non-empty F1 Handoff skeleton without changing its pri
       }),
     );
   database.pragma('foreign_keys = ON');
-  const migration0041 = '0041_interaction_public_action_authority.sql';
   copyFileSync(join(sourceDirectory, migration0041), join(migrationsDirectory, migration0041));
 
   assert.throws(
@@ -253,7 +256,7 @@ void test('0041 rejects a non-empty F1 Handoff skeleton without changing its pri
   assert.equal(
     countRowSchema.parse(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
       .count,
-    migrationNames.length - 2,
+    migration0041Index,
   );
   assert.equal(
     countRowSchema.parse(
@@ -276,6 +279,137 @@ void test('0041 rejects a non-empty F1 Handoff skeleton without changing its pri
       database
         .prepare(
           "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'interaction_handoff_migration_guard'",
+        )
+        .get(),
+    ).count,
+    0,
+  );
+  database.close();
+});
+
+void test('0043 rejects retained terminal unresolved work without changing migration authority', (t) => {
+  const sourceDirectory = defaultMigrationsDirectory();
+  const temporaryRoot = mkdtempSync(join(tmpdir(), 'codeclosure-m26-b5-migration-guard-'));
+  t.after(() => rmSync(temporaryRoot, { force: true, recursive: true }));
+  const migrationsDirectory = join(temporaryRoot, 'migrations');
+  mkdirSync(migrationsDirectory);
+  const migration0043 = '0043_interaction_session_terminal_closure.sql';
+  const migration0043Index = migrationNames.indexOf(migration0043);
+  assert.notEqual(migration0043Index, -1);
+  for (const name of migrationNames.slice(0, migration0043Index)) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+
+  const filename = join(temporaryRoot, 'state.sqlite');
+  const database = new Database(filename);
+  database.pragma('foreign_keys = ON');
+  applyMigrations(database, migrationsDirectory, () => appliedAt);
+  database.pragma('foreign_keys = OFF');
+
+  const sessionId = 'interaction-session_0043-illegal-terminal';
+  const sessionDigest = `sha256:${'1'.repeat(64)}`;
+  const projectDigest = `sha256:${'2'.repeat(64)}`;
+  database
+    .prepare(
+      `INSERT INTO interaction_sessions(
+         id, schema_version, version, principal_ref, project_path, project_identity_digest,
+         state, terminal_reason, configuration_id, configuration_version,
+         configuration_digest, routing_policy_id, routing_policy_version,
+         routing_policy_digest, confirmation_policy_id, confirmation_policy_version,
+         confirmation_policy_digest, retention_profile_id, retention_profile_version,
+         retention_profile_digest, current_focus_id, current_focus_digest, opened_at,
+         updated_at, session_digest, record_json
+       ) VALUES (
+         ?, 1, 1, 'principal_0043-illegal-terminal', '/fixture/0043-illegal-terminal', ?,
+         'INTERRUPTED', NULL, 'configuration_0043', 'v1', ?, 'routing-policy_0043', 'v1', ?,
+         'confirmation-policy_0043', 'v1', ?, 'retention-profile_0043', 'v1', ?, NULL, NULL,
+         ?, ?, ?, ?
+       )`,
+    )
+    .run(
+      sessionId,
+      projectDigest,
+      `sha256:${'3'.repeat(64)}`,
+      `sha256:${'4'.repeat(64)}`,
+      `sha256:${'5'.repeat(64)}`,
+      `sha256:${'6'.repeat(64)}`,
+      appliedAt,
+      appliedAt,
+      sessionDigest,
+      JSON.stringify({
+        id: sessionId,
+        schemaVersion: 1,
+        version: 1,
+        principalRef: 'principal_0043-illegal-terminal',
+        projectRef: {
+          schemaVersion: 1,
+          normalizedPath: '/fixture/0043-illegal-terminal',
+          identityDigest: projectDigest,
+        },
+        state: 'INTERRUPTED',
+        sessionDigest,
+      }),
+    );
+
+  const operationId = 'interaction-operation_0043-illegal-terminal';
+  const messageId = 'interaction-message_0043-illegal-terminal';
+  const messageDigest = `sha256:${'7'.repeat(64)}`;
+  const operationDigest = `sha256:${'8'.repeat(64)}`;
+  database
+    .prepare(
+      `INSERT INTO interaction_operations(
+         id, schema_version, version, session_id, expected_session_version, message_id,
+         message_digest, operation_kind, state, context_manifest_id, context_manifest_digest,
+         assistant_profile_id, assistant_profile_version, assistant_profile_digest,
+         reserved_at, completed_at, operation_digest, record_json
+       ) VALUES (?, 1, 1, ?, 1, ?, ?, 'GOAL_LIST', 'RESERVED', NULL, NULL, NULL, NULL, NULL,
+         ?, NULL, ?, ?)`,
+    )
+    .run(
+      operationId,
+      sessionId,
+      messageId,
+      messageDigest,
+      appliedAt,
+      operationDigest,
+      JSON.stringify({
+        id: operationId,
+        schemaVersion: 1,
+        version: 1,
+        sessionId,
+        expectedSessionVersion: 1,
+        messageRef: { id: messageId, digest: messageDigest },
+        operationKind: 'GOAL_LIST',
+        state: 'RESERVED',
+        reservedAt: appliedAt,
+        operationDigest,
+      }),
+    );
+  database.pragma('foreign_keys = ON');
+  const priorInspection = inspectDatabase(database);
+  copyFileSync(join(sourceDirectory, migration0043), join(migrationsDirectory, migration0043));
+
+  assert.throws(
+    () => applyMigrations(database, migrationsDirectory, () => appliedAt),
+    /CHECK constraint failed/u,
+  );
+  assert.deepEqual(inspectDatabase(database), priorInspection);
+  assert.equal(
+    countRowSchema.parse(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
+      .count,
+    migration0043Index,
+  );
+  assert.equal(
+    countRowSchema.parse(
+      database.prepare('SELECT COUNT(*) AS count FROM interaction_operations').get(),
+    ).count,
+    1,
+  );
+  assert.equal(
+    countRowSchema.parse(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_schema WHERE name = 'interaction_session_terminal_closure_migration_guard'",
         )
         .get(),
     ).count,

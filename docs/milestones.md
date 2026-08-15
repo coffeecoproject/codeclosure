@@ -789,8 +789,12 @@ and strict reopen passed bounded review and were committed as `679ad5d` on
 Handoff and result-specific presentation owners, typed crash-window
 descriptor, rollback, concurrency, SQLite backstops, and strict reopen passed
 bounded review and were committed across `0e0b562` and `128a5c2` on
-2026-08-15. It invokes no Assistant or public facade. B5 has not started. This
-does not complete Slice 2 or claim `M26-D03` through `M26-D07`. The M2.5.1 entry
+2026-08-15. It invokes no Assistant or public facade. B5 is in progress through
+exact principal/project-scoped startup detection, terminal unresolved-work
+closure, append-only migration/schema freeze, and frozen proof-owner
+correction. The complete current-source quality gate passed; independent
+bounded review remains. This does not complete Slice 2 or claim `M26-D03`
+through `M26-D07`. The M2.5.1 entry
 condition has been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction

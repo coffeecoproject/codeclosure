@@ -136,6 +136,7 @@ import {
   type ReserveAssistantRouteOperation,
   type InteractionAuditWrite,
   type InteractionPolicySet,
+  type InteractionStartupDetectionScope,
   type ReserveInteractionOperation,
   type RecordInteractionFocusBinding,
   type RecordInteractionPendingActionTerminalResolution,
@@ -274,10 +275,16 @@ function createReadyGoalAuthority(store: SqliteControlStore, suffix: string): Wo
   return workflow;
 }
 
+type InteractionSessionFixtureOptions = Readonly<{
+  idSuffix?: string;
+  projectSuffix?: string;
+  principalSuffix?: string;
+}>;
+
 function createInitialSession(
   policies: InteractionPolicySet,
   suffix: string,
-  options: Readonly<{ idSuffix?: string; projectSuffix?: string }> = {},
+  options: InteractionSessionFixtureOptions = {},
 ): InteractionSession {
   const idSuffix = fixtureIdentifierSuffix(options.idSuffix ?? suffix);
   const id = interactionSessionId(`interaction-session_${idSuffix}`);
@@ -296,7 +303,11 @@ function createInitialSession(
     id,
     schemaVersion: 1 as const,
     version: interactionSessionVersion(1),
-    principalRef: principalId('principal_frontstage-fixture'),
+    principalRef: principalId(
+      options.principalSuffix === undefined
+        ? 'principal_frontstage-fixture'
+        : `principal_${fixtureIdentifierSuffix(options.principalSuffix)}`,
+    ),
     projectRef: Object.freeze({
       schemaVersion: 1 as const,
       normalizedPath: projectPath,
@@ -319,6 +330,13 @@ function createInitialSession(
     updatedAt: INSTALLED_AT,
   } satisfies InteractionSessionProjectionInput;
   return decodeSessionProjection(base);
+}
+
+function startupDetectionScope(session: InteractionSession) {
+  return Object.freeze({
+    principalRef: session.principalRef,
+    projectRef: session.projectRef,
+  });
 }
 
 function transitionSession(
@@ -1742,6 +1760,7 @@ function preparePendingActionProposal(
   policies: InteractionPolicySet,
   suffix: string,
   confirmationRequirement: InteractionConfirmationRequirement,
+  sessionOptions: InteractionSessionFixtureOptions = {},
 ): Readonly<{
   session: InteractionSession;
   message: RetainedInteractionMessage;
@@ -1750,7 +1769,7 @@ function preparePendingActionProposal(
   operation: ReservedInteractionOperation;
   completedOperation: CompletedInteractionOperation;
 }> {
-  const initial = createInitialSession(policies, suffix);
+  const initial = createInitialSession(policies, suffix, sessionOptions);
   store.createInteractionSession(createSessionInput(initial, `${suffix}-session`));
   const message = createUserMessage(
     initial,
@@ -2065,12 +2084,13 @@ function prepareConfirmedCancelAction(
   store: SqliteControlStore,
   policies: InteractionPolicySet,
   suffix: string,
+  sessionOptions: InteractionSessionFixtureOptions = {},
 ): Readonly<{
   workflow: WorkflowInstance;
   reservation: InteractionActionReservation;
 }> {
   const workflow = createReadyGoalAuthority(store, suffix);
-  const initial = createInitialSession(policies, suffix);
+  const initial = createInitialSession(policies, suffix, sessionOptions);
   store.createInteractionSession(createSessionInput(initial, `${suffix}-session`));
   const message = createUserMessage(
     initial,
@@ -2447,7 +2467,7 @@ function insertRawInteractionAuditMembership(
     .run(session.id, auditWrite.id, session.id);
 }
 
-type StoredSessionState = 'OPEN' | 'CLOSING';
+type StoredSessionState = 'OPEN' | 'CLOSING' | 'INTERRUPTED';
 
 function insertSession(
   database: Database.Database,
@@ -3105,8 +3125,8 @@ const sessionCreateRollbackSteps = Object.freeze([
   InteractionTransactionStep.BEFORE_COMMIT,
 ]);
 
-for (const step of sessionCreateRollbackSteps) {
-  void test(`Slice 2 Session create rolls back at ${step}`, (t) => {
+function assertSessionCreateRollback(t: TestContext): void {
+  for (const step of sessionCreateRollbackSteps) {
     const filename = temporaryDatabase(t);
     const policies = createM26InteractionPolicies(digests);
     const session = createInitialSession(policies, `create-rollback-${step}`);
@@ -3135,7 +3155,7 @@ for (const step of sessionCreateRollbackSteps) {
     } finally {
       reopened.close();
     }
-  });
+  }
 }
 
 void test('Slice 2 Session lifecycle applies once, types stale writers, and survives reopen', (t) => {
@@ -3200,8 +3220,8 @@ const sessionTransitionRollbackSteps = Object.freeze([
   InteractionTransactionStep.BEFORE_COMMIT,
 ]);
 
-for (const step of sessionTransitionRollbackSteps) {
-  void test(`Slice 2 Session lifecycle transition rolls back at ${step}`, (t) => {
+function assertSessionTransitionRollback(t: TestContext): void {
+  for (const step of sessionTransitionRollbackSteps) {
     const filename = temporaryDatabase(t);
     const policies = createM26InteractionPolicies(digests);
     const initial = createInitialSession(policies, `transition-rollback-${step}`);
@@ -3239,7 +3259,7 @@ for (const step of sessionTransitionRollbackSteps) {
     } finally {
       reopened.close();
     }
-  });
+  }
 }
 
 void test('[M26-D03] session and message atomic writes', (t) => {
@@ -3335,6 +3355,160 @@ void test('[M26-D03] session and message atomic writes', (t) => {
   } finally {
     reopened.close();
   }
+  assertSessionCreateRollback(t);
+  assertSessionTransitionRollback(t);
+  assertMessageAdmissionRollback(t);
+});
+
+void test('B5 startup detection is one exact principal/project snapshot of nonterminal Sessions', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const primary = createInitialSession(policies, 'startup-scope-primary', {
+    projectSuffix: 'startup-shared-project',
+  });
+  const sibling = createInitialSession(policies, 'startup-scope-sibling', {
+    projectSuffix: 'startup-shared-project',
+  });
+  const terminalInitial = createInitialSession(policies, 'startup-scope-terminal', {
+    projectSuffix: 'startup-shared-project',
+  });
+  const terminalClosing = transitionSession(
+    terminalInitial,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:01.000Z',
+  );
+  const terminal = transitionSession(
+    terminalClosing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:02.000Z',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  for (const session of [primary, sibling, terminalInitial]) {
+    assert.equal(
+      store.createInteractionSession(createSessionInput(session, session.id)).status,
+      'CREATED',
+    );
+  }
+  assert.equal(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(terminalInitial, terminalClosing, 'startup-terminal-closing'),
+    ).status,
+    'APPLIED',
+  );
+  assert.equal(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(terminalClosing, terminal, 'startup-terminal-interrupted'),
+    ).status,
+    'APPLIED',
+  );
+
+  const foreignOperationInitial = createInitialSession(policies, 'startup-scope-foreign-operation');
+  assert.equal(
+    store.createInteractionSession(
+      createSessionInput(foreignOperationInitial, 'startup-scope-foreign-operation'),
+    ).status,
+    'CREATED',
+  );
+  const foreignOperationMessage = createUserMessage(
+    foreignOperationInitial,
+    'startup-scope-foreign-operation',
+    '查询另一个项目',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const foreignOperationSession = transitionSession(
+    foreignOperationInitial,
+    InteractionSessionState.OPEN,
+    foreignOperationMessage.createdAt,
+  );
+  assert.equal(
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(
+        foreignOperationInitial,
+        foreignOperationMessage,
+        foreignOperationSession,
+        'startup-scope-foreign-operation',
+      ),
+    ).status,
+    'ADMITTED',
+  );
+  const foreignOperation = createReservedOperation(
+    foreignOperationSession,
+    foreignOperationMessage,
+    'startup-scope-foreign-operation',
+  );
+  assert.equal(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        foreignOperationSession,
+        foreignOperationMessage,
+        foreignOperation,
+        'startup-scope-foreign-operation',
+      ),
+    ).status,
+    'RESERVED',
+  );
+
+  const foreignPending = preparePendingActionProposal(
+    store,
+    policies,
+    'startup-scope-foreign-pending',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    {
+      projectSuffix: 'startup-shared-project',
+      principalSuffix: 'startup-other-principal',
+    },
+  );
+  assert.equal(
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        foreignPending.session,
+        foreignPending.message,
+        foreignPending.decision,
+        foreignPending.pendingAction,
+        foreignPending.operation,
+        foreignPending.completedOperation,
+        'startup-scope-foreign-pending',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  prepareConfirmedCancelAction(store, policies, 'startup-scope-foreign-reservation', {
+    projectSuffix: 'startup-other-reservation-project',
+  });
+
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(startupDetectionScope(primary)), {
+    sessions: [primary, sibling],
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [],
+  });
+  assert.throws(
+    () =>
+      store.getInteractionStartupDetectionCatalog({
+        principalRef: primary.principalRef,
+        projectRef: { ...primary.projectRef, schemaVersion: 2 },
+      } as unknown as InteractionStartupDetectionScope),
+    /schemaVersion|expected 1/iu,
+  );
+  assert.throws(
+    () =>
+      store.getInteractionStartupDetectionCatalog({
+        principalRef: primary.principalRef,
+        projectRef: { ...primary.projectRef, unexpected: true },
+      } as unknown as InteractionStartupDetectionScope),
+    /unrecognized|unexpected/iu,
+  );
+  assert.throws(
+    () =>
+      store.getInteractionStartupDetectionCatalog({
+        principalRef: primary.principalRef,
+        projectRef: { ...primary.projectRef, normalizedPath: 'relative/project' },
+      }),
+    /normalized and absolute/iu,
+  );
+  store.close();
 });
 
 const messageAdmissionRollbackSteps = Object.freeze([
@@ -3346,8 +3520,8 @@ const messageAdmissionRollbackSteps = Object.freeze([
   InteractionTransactionStep.BEFORE_COMMIT,
 ]);
 
-for (const step of messageAdmissionRollbackSteps) {
-  void test(`Slice 2 user-message admission rolls back at ${step}`, (t) => {
+function assertMessageAdmissionRollback(t: TestContext): void {
+  for (const step of messageAdmissionRollbackSteps) {
     const filename = temporaryDatabase(t);
     const policies = createM26InteractionPolicies(digests);
     const initial = createInitialSession(policies, `message-rollback-${step}`);
@@ -3398,7 +3572,7 @@ for (const step of messageAdmissionRollbackSteps) {
     } finally {
       reopened.close();
     }
-  });
+  }
 }
 
 void test('Slice 2 concurrent message consumers produce one winner and one typed loser', (t) => {
@@ -3824,6 +3998,7 @@ void test('Slice 2 Operation reservation replays exactly, closes same-Session bu
   });
   assert.deepEqual(store.listReservedInteractionOperations(session.id), [operation]);
   const startupCatalog = {
+    sessions: [session],
     reservedOperations: [
       {
         sessionRef: { id: session.id, digest: session.sessionDigest },
@@ -3835,7 +4010,10 @@ void test('Slice 2 Operation reservation replays exactly, closes same-Session bu
     pendingActions: [],
     actionReservations: [],
   } as const;
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(session)),
+    startupCatalog,
+  );
 
   const conflicting = createReservedOperation(
     session,
@@ -3881,7 +4059,10 @@ void test('Slice 2 Operation reservation replays exactly, closes same-Session bu
   try {
     assert.deepEqual(reopened.getInteractionOperation(operation.id), operation);
     assert.deepEqual(reopened.listReservedInteractionOperations(session.id), [operation]);
-    assert.deepEqual(reopened.getInteractionStartupDetectionCatalog(), startupCatalog);
+    assert.deepEqual(
+      reopened.getInteractionStartupDetectionCatalog(startupDetectionScope(session)),
+      startupCatalog,
+    );
     assert.equal(reopened.getInteractionMessage(nextMessage.id), undefined);
   } finally {
     reopened.close();
@@ -4382,8 +4563,50 @@ void test('[M26-D04] operation reservation and outcome replay', (t) => {
     assert.deepEqual(reopened.getInteractionRouteProposal(proposal.id), proposal);
     assert.deepEqual(reopened.getInteractionRouteDecision(decision.id), decision);
     assert.deepEqual(reopened.getInteractionOperation(reservation.operation.id), completed);
+    const authorized = prepareConfirmedCancelAction(
+      reopened,
+      policies,
+      'd04-authorized-action-recovery',
+    );
+    const pendingAction = reopened.getInteractionPendingAction(
+      authorized.reservation.pendingActionRef.id,
+    );
+    assert.ok(pendingAction);
+    const actionSession = reopened.getInteractionSession(pendingAction.sessionId);
+    assert.ok(actionSession);
+    const startup = reopened.getInteractionStartupDetectionCatalog(
+      startupDetectionScope(actionSession),
+    );
+    assert.equal(startup.actionReservations.length, 1);
+    assert.deepEqual(startup.actionReservations[0], {
+      sessionRef: { id: actionSession.id, digest: actionSession.sessionDigest },
+      reservationRef: {
+        id: authorized.reservation.id,
+        digest: authorized.reservation.reservationDigest,
+      },
+      publicCapability: authorized.reservation.publicCapability,
+      commandId: authorized.reservation.commandId,
+      canonicalCommandInputDigest: authorized.reservation.canonicalCommandInputDigest,
+      publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+      handoff: { state: InteractionStartupHandoffState.NOT_APPLICABLE },
+    });
   } finally {
     reopened.close();
+  }
+
+  const recoveryReopen = SqliteControlStore.open({ filename });
+  try {
+    const recoveredSession = recoveryReopen.getInteractionSession(
+      interactionSessionId('interaction-session_d04-authorized-action-recovery'),
+    );
+    assert.ok(recoveredSession);
+    const recovered = recoveryReopen.getInteractionStartupDetectionCatalog(
+      startupDetectionScope(recoveredSession),
+    ).actionReservations[0];
+    assert.ok(recovered);
+    assert.equal(recovered.commandId, commandId('command_d04-authorized-action-recovery'));
+  } finally {
+    recoveryReopen.close();
   }
 });
 
@@ -5141,6 +5364,7 @@ void test('B2 direct Pending Action proposal atomically authorizes, reserves, re
   assert.deepEqual(store.getInteractionActionReservation(reservation.id), reservation);
   assert.equal(store.getUnresolvedInteractionPendingAction(prepared.session.id), undefined);
   const startupCatalog = {
+    sessions: [prepared.session],
     reservedOperations: [],
     clarificationOperations: [],
     pendingActions: [],
@@ -5159,7 +5383,10 @@ void test('B2 direct Pending Action proposal atomically authorizes, reserves, re
       },
     ],
   } as const;
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(prepared.session)),
+    startupCatalog,
+  );
   store.close();
 
   const reopened = SqliteControlStore.open({ filename });
@@ -5169,7 +5396,10 @@ void test('B2 direct Pending Action proposal atomically authorizes, reserves, re
   );
   assert.deepEqual(reopened.getInteractionPendingActionResolution(resolution.id), resolution);
   assert.deepEqual(reopened.getInteractionActionReservation(reservation.id), reservation);
-  assert.deepEqual(reopened.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    reopened.getInteractionStartupDetectionCatalog(startupDetectionScope(prepared.session)),
+    startupCatalog,
+  );
   reopened.close();
 });
 
@@ -5199,6 +5429,7 @@ void test('B2 separate confirmation preserves one unresolved Action until its ex
     prepared.pendingAction,
   );
   const startupCatalog = {
+    sessions: [prepared.session],
     reservedOperations: [],
     clarificationOperations: [],
     pendingActions: [
@@ -5215,10 +5446,16 @@ void test('B2 separate confirmation preserves one unresolved Action until its ex
     ],
     actionReservations: [],
   } as const;
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(prepared.session)),
+    startupCatalog,
+  );
   store.close();
   store = SqliteControlStore.open({ filename });
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(prepared.session)),
+    startupCatalog,
+  );
 
   const responseMessage = createUserMessage(
     prepared.session,
@@ -5599,10 +5836,146 @@ void test('[M26-D05] pending-action resolution concurrency', (t) => {
       ),
       winning.reservation,
     );
+    assert.equal(
+      secondStore.getInteractionPendingActionResolution(competingResolution.id),
+      undefined,
+    );
+    assert.equal(secondStore.getInteractionActionReservation(competingReservation.id), undefined);
   } finally {
     firstStore.close();
     secondStore.close();
   }
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(
+      reopened.getInteractionPendingActionResolution(winning.resolution.id),
+      winning.resolution,
+    );
+    assert.deepEqual(
+      reopened.getInteractionActionReservation(winning.reservation?.id ?? competingReservation.id),
+      winning.reservation,
+    );
+    assert.equal(reopened.getInteractionPendingActionResolution(competingResolution.id), undefined);
+    assert.equal(reopened.getInteractionActionReservation(competingReservation.id), undefined);
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('B5 terminal Session transitions retain unresolved action authority for recovery', (t) => {
+  const pendingFilename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const pendingStore = SqliteControlStore.open({ filename: pendingFilename });
+  pendingStore.installInteractionPolicies(installInput(policies));
+  const pending = preparePendingActionProposal(
+    pendingStore,
+    policies,
+    'terminal-pending-action',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  assert.equal(
+    pendingStore.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        pending.session,
+        pending.message,
+        pending.decision,
+        pending.pendingAction,
+        pending.operation,
+        pending.completedOperation,
+        'terminal-pending-action',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const pendingClosing = transitionSession(
+    pending.session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:10.000Z',
+  );
+  assert.equal(
+    pendingStore.transitionInteractionSession(
+      createSessionTransitionInput(
+        pending.session,
+        pendingClosing,
+        'terminal-pending-action-closing',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const pendingTerminal = transitionSession(
+    pendingClosing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:11.000Z',
+  );
+  assert.deepEqual(
+    pendingStore.transitionInteractionSession(
+      createSessionTransitionInput(
+        pendingClosing,
+        pendingTerminal,
+        'terminal-pending-action-interrupted',
+      ),
+    ),
+    {
+      status: 'SESSION_PENDING_ACTION_BUSY',
+      currentPendingAction: pending.pendingAction,
+    },
+  );
+  assert.deepEqual(pendingStore.getInteractionSession(pending.session.id), pendingClosing);
+  pendingStore.close();
+
+  const reservationFilename = temporaryDatabase(t);
+  const reservationStore = SqliteControlStore.open({ filename: reservationFilename });
+  reservationStore.installInteractionPolicies(installInput(policies));
+  const { reservation } = prepareConfirmedCancelAction(
+    reservationStore,
+    policies,
+    'terminal-action-reservation',
+  );
+  const pendingAction = reservationStore.getInteractionPendingAction(
+    reservation.pendingActionRef.id,
+  );
+  assert.ok(pendingAction);
+  const reservationSession = reservationStore.getInteractionSession(pendingAction.sessionId);
+  assert.ok(reservationSession);
+  const reservationClosing = transitionSession(
+    reservationSession,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:10.000Z',
+  );
+  assert.equal(
+    reservationStore.transitionInteractionSession(
+      createSessionTransitionInput(
+        reservationSession,
+        reservationClosing,
+        'terminal-action-reservation-closing',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const reservationTerminal = transitionSession(
+    reservationClosing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:11.000Z',
+  );
+  assert.deepEqual(
+    reservationStore.transitionInteractionSession(
+      createSessionTransitionInput(
+        reservationClosing,
+        reservationTerminal,
+        'terminal-action-reservation-interrupted',
+      ),
+    ),
+    {
+      status: 'SESSION_ACTION_RESERVATION_BUSY',
+      currentActionReservation: reservation,
+    },
+  );
+  assert.deepEqual(
+    reservationStore.getInteractionSession(reservationSession.id),
+    reservationClosing,
+  );
+  reservationStore.close();
 });
 
 void test('B2 competing response-free Resolutions produce one winner and one typed conflict', (t) => {
@@ -6692,7 +7065,7 @@ void test('B1 strict reopen binds a Proposal audit to its exact owning Decision'
   );
 });
 
-void test('Slice 2 strict reopen rejects a standalone successful Operation without its result owner', (t) => {
+function assertStrictReopenRejectsUnownedSuccessfulOperation(t: TestContext): void {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const initial = createInitialSession(policies, 'unowned-operation-result');
@@ -6738,7 +7111,7 @@ void test('Slice 2 strict reopen rejects a standalone successful Operation witho
   }
 
   assert.throws(() => SqliteControlStore.open({ filename }), /lost its exact Decision/u);
-});
+}
 
 void test('Slice 2 strict reopen rejects a terminal Session with an unresolved Operation', (t) => {
   const filename = temporaryDatabase(t);
@@ -6799,6 +7172,11 @@ void test('Slice 2 strict reopen rejects a terminal Session with an unresolved O
   );
   const database = new Database(filename);
   try {
+    assert.throws(
+      () => updateSessionDirectly(database, closed),
+      /terminal Interaction Session has a reserved Operation/u,
+    );
+    database.exec('DROP TRIGGER interaction_sessions_terminal_work_guard');
     database
       .prepare(
         `UPDATE interaction_sessions
@@ -7010,7 +7388,7 @@ void test('Slice 2 strict reopen rejects an orphan Session audit', (t) => {
   assert.throws(() => SqliteControlStore.open({ filename }), /orphan or substituted audit/u);
 });
 
-void test('Slice 2 strict reopen rejects missing Session audit membership', (t) => {
+function assertStrictReopenRejectsMissingSessionAuditMembership(t: TestContext): void {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const session = createInitialSession(policies, 'missing-session-audit-membership');
@@ -7030,9 +7408,9 @@ void test('Slice 2 strict reopen rejects missing Session audit membership', (t) 
   }
 
   assert.throws(() => SqliteControlStore.open({ filename }), /orphan or substituted audit/u);
-});
+}
 
-void test('Slice 2 strict reopen rejects retained Message content substitution', (t) => {
+function assertStrictReopenRejectsMessageContentSubstitution(t: TestContext): void {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const initial = createInitialSession(policies, 'message-substitution');
@@ -7069,7 +7447,7 @@ void test('Slice 2 strict reopen rejects retained Message content substitution',
     () => SqliteControlStore.open({ filename }),
     /Interaction Session\/Message\/Operation\/Focus authority failed strict reopen/u,
   );
-});
+}
 
 void test('Slice 2 strict reopen rejects a Focus without its atomic audit membership', (t) => {
   const filename = temporaryDatabase(t);
@@ -7265,7 +7643,7 @@ void test('Slice 2 strict reopen rejects an orphan Route Proposal', (t) => {
   );
 });
 
-void test('Slice 2 strict reopen rejects partial Interaction Policy authority', (t) => {
+function assertStrictReopenRejectsPartialPolicyAuthority(t: TestContext): void {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const store = SqliteControlStore.open({ filename });
@@ -7314,7 +7692,7 @@ void test('Slice 2 strict reopen rejects partial Interaction Policy authority', 
     () => SqliteControlStore.open({ filename }),
     /Interaction Policy authority is partial or duplicated/u,
   );
-});
+}
 
 void test('Slice 2 strict reopen cannot treat a missing policy anchor table as absent', (t) => {
   const filename = temporaryDatabase(t);
@@ -7491,12 +7869,252 @@ void test('[M26-D06] migration and strict reopen', (t) => {
       sessionTriggerSql as string,
       /interaction_focus_bindings AS focus.*focus\.based_on_session_version = OLD\.version.*focus\.created_at = NEW\.updated_at/su,
     );
+    const terminalWorkTriggerSql = database
+      .prepare(
+        "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'interaction_sessions_terminal_work_guard'",
+      )
+      .pluck()
+      .get();
+    assert.equal(typeof terminalWorkTriggerSql, 'string');
+    assert.match(
+      terminalWorkTriggerSql as string,
+      /reserved Operation.*unresolved Pending Action.*unresolved Action Reservation/su,
+    );
+    for (const triggerName of [
+      'interaction_operations_open_session_insert_guard',
+      'interaction_action_reservations_open_session_insert_guard',
+    ]) {
+      const triggerSql = database
+        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
+        .pluck()
+        .get(triggerName);
+      assert.equal(typeof triggerSql, 'string');
+      assert.match(triggerSql as string, /session\.state = 'OPEN'/u);
+    }
   } finally {
     database.close();
   }
   const reopened = SqliteControlStore.open({ filename });
   reopened.close();
+  assertTerminalSessionClosureBackstops(t);
+  assertTerminalSessionChildInsertBackstops(t);
+  assertStrictReopenRejectsUnownedSuccessfulOperation(t);
+  assertStrictReopenRejectsPartialPolicyAuthority(t);
+  assertStrictReopenRejectsMissingSessionAuditMembership(t);
+  assertMessageCausalBackstopRejectsCrossSessionOperation(t);
+  assertStrictReopenRejectsMessageContentSubstitution(t);
 });
+
+function updateSessionDirectly(database: Database.Database, session: InteractionSession): void {
+  database
+    .prepare(
+      `UPDATE interaction_sessions
+          SET version = ?, state = ?, terminal_reason = ?, updated_at = ?,
+              session_digest = ?, record_json = ?
+        WHERE id = ?`,
+    )
+    .run(
+      session.version,
+      session.state,
+      'terminalReason' in session ? (session.terminalReason ?? null) : null,
+      session.updatedAt,
+      session.sessionDigest,
+      JSON.stringify(session),
+      session.id,
+    );
+}
+
+function assertTerminalSessionClosureBackstops(t: TestContext): void {
+  const policies = createM26InteractionPolicies(digests);
+  const filename = temporaryDatabase(t);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    'terminal-closure-backstop',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  assert.equal(
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        'terminal-closure-backstop',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const closing = transitionSession(
+    prepared.session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:10.000Z',
+  );
+  assert.equal(
+    store.transitionInteractionSession(
+      createSessionTransitionInput(prepared.session, closing, 'terminal-closure-backstop-closing'),
+    ).status,
+    'APPLIED',
+  );
+  const terminal = transitionSession(
+    closing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:11.000Z',
+  );
+  store.close();
+
+  const database = new Database(filename);
+  database.pragma('foreign_keys = ON');
+  assert.throws(
+    () => updateSessionDirectly(database, terminal),
+    /terminal Interaction Session has an unresolved Pending Action/u,
+  );
+  database.exec('DROP TRIGGER interaction_sessions_terminal_work_guard');
+  updateSessionDirectly(database, terminal);
+  database.close();
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /terminal Interaction Session .* has unresolved action authority/u,
+  );
+
+  const reservationFilename = temporaryDatabase(t);
+  const reservationStore = SqliteControlStore.open({ filename: reservationFilename });
+  reservationStore.installInteractionPolicies(installInput(policies));
+  const { reservation } = prepareConfirmedCancelAction(
+    reservationStore,
+    policies,
+    'terminal-reservation-closure-backstop',
+  );
+  const reservationAction = reservationStore.getInteractionPendingAction(
+    reservation.pendingActionRef.id,
+  );
+  assert.ok(reservationAction);
+  const reservationSession = reservationStore.getInteractionSession(reservationAction.sessionId);
+  assert.ok(reservationSession);
+  const reservationClosing = transitionSession(
+    reservationSession,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:10.000Z',
+  );
+  assert.equal(
+    reservationStore.transitionInteractionSession(
+      createSessionTransitionInput(
+        reservationSession,
+        reservationClosing,
+        'terminal-reservation-closure-backstop-closing',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const reservationTerminal = transitionSession(
+    reservationClosing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:11.000Z',
+  );
+  reservationStore.close();
+
+  const reservationDatabase = new Database(reservationFilename);
+  reservationDatabase.pragma('foreign_keys = ON');
+  assert.throws(
+    () => updateSessionDirectly(reservationDatabase, reservationTerminal),
+    /terminal Interaction Session has an unresolved Action Reservation/u,
+  );
+  reservationDatabase.exec('DROP TRIGGER interaction_sessions_terminal_work_guard');
+  updateSessionDirectly(reservationDatabase, reservationTerminal);
+  reservationDatabase.close();
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename: reservationFilename }),
+    /terminal Interaction Session .* has unresolved action authority/u,
+  );
+}
+
+function assertTerminalSessionChildInsertBackstops(t: TestContext): void {
+  const policies = createM26InteractionPolicies(digests);
+  const operationFilename = temporaryDatabase(t);
+  const operationStore = SqliteControlStore.open({ filename: operationFilename });
+  operationStore.installInteractionPolicies(installInput(policies));
+  const initial = createInitialSession(policies, 'terminal-operation-insert-backstop');
+  const message = createUserMessage(
+    initial,
+    'terminal-operation-insert-backstop',
+    '终态会话不能创建操作',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const open = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(open, message, 'terminal-operation-insert-backstop');
+  assert.equal(
+    operationStore.createInteractionSession(
+      createSessionInput(initial, 'terminal-operation-insert-backstop'),
+    ).status,
+    'CREATED',
+  );
+  assert.equal(
+    operationStore.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(initial, message, open, 'terminal-operation-insert-backstop'),
+    ).status,
+    'ADMITTED',
+  );
+  const closing = transitionSession(
+    open,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:02.000Z',
+  );
+  assert.equal(
+    operationStore.transitionInteractionSession(
+      createSessionTransitionInput(open, closing, 'terminal-operation-insert-backstop-closing'),
+    ).status,
+    'APPLIED',
+  );
+  const terminal = transitionSession(
+    closing,
+    InteractionSessionState.INTERRUPTED,
+    '2026-08-14T01:00:03.000Z',
+  );
+  assert.equal(
+    operationStore.transitionInteractionSession(
+      createSessionTransitionInput(
+        closing,
+        terminal,
+        'terminal-operation-insert-backstop-terminal',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  operationStore.close();
+
+  const operationDatabase = new Database(operationFilename);
+  operationDatabase.pragma('foreign_keys = ON');
+  assert.throws(
+    () => insertRawReservedInteractionOperation(operationDatabase, operation),
+    /Interaction Operation requires an OPEN Session/u,
+  );
+  operationDatabase.close();
+
+  const reservationFilename = temporaryDatabase(t);
+  const reservationStore = SqliteControlStore.open({ filename: reservationFilename });
+  reservationStore.installInteractionPolicies(installInput(policies));
+  reservationStore.close();
+  const reservationDatabase = new Database(reservationFilename);
+  reservationDatabase.pragma('foreign_keys = ON');
+  const terminalSessionId = 'interaction-session_terminal-reservation-insert-backstop';
+  insertSession(reservationDatabase, policies, terminalSessionId, 'INTERRUPTED');
+  assert.throws(
+    () =>
+      insertActionReservationChain(
+        reservationDatabase,
+        terminalSessionId,
+        'terminal-reservation-insert-backstop',
+      ),
+    /Interaction Action Reservation requires an OPEN Session/u,
+  );
+  reservationDatabase.close();
+}
 
 void test('Slice 2 Session lifecycle backstops reject both illegal direct-close forms', (t) => {
   const filename = temporaryDatabase(t);
@@ -7586,6 +8204,7 @@ void test('Slice 2 Reservation storage rejects capabilities outside the Domain e
     // This test isolates the column-level enum backstop. The relational chain
     // remains owned by its separate schema and Store transaction tests.
     database.pragma('foreign_keys = OFF');
+    database.exec('DROP TRIGGER interaction_action_reservations_open_session_insert_guard');
     const invalidCapability = 'UNKNOWN_CAPABILITY';
     assert.throws(
       () =>
@@ -7632,7 +8251,7 @@ void test('Slice 2 Reservation storage rejects capabilities outside the Domain e
   }
 });
 
-void test('Slice 2 Message causal backstop rejects absent and cross-Session Operations', (t) => {
+function assertMessageCausalBackstopRejectsCrossSessionOperation(t: TestContext): void {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const store = SqliteControlStore.open({ filename });
@@ -7687,7 +8306,7 @@ void test('Slice 2 Message causal backstop rejects absent and cross-Session Oper
   } finally {
     database.close();
   }
-});
+}
 
 void test('B3 commits one authorized Intake Handoff, replays exactly, and detects its unresolved Reservation', (t) => {
   const filename = temporaryDatabase(t);
@@ -7717,48 +8336,56 @@ void test('B3 commits one authorized Intake Handoff, replays exactly, and detect
     canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
     publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
   });
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), {
-    reservedOperations: [],
-    clarificationOperations: [],
-    pendingActions: [],
-    actionReservations: [
-      {
-        sessionRef: { id: input.session.id, digest: input.session.sessionDigest },
-        reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
-        publicCapability: reservation.publicCapability,
-        commandId: reservation.commandId,
-        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
-        publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
-        handoff: {
-          state: InteractionStartupHandoffState.RETAINED,
-          handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(input.session)),
+    {
+      sessions: [input.session],
+      reservedOperations: [],
+      clarificationOperations: [],
+      pendingActions: [],
+      actionReservations: [
+        {
+          sessionRef: { id: input.session.id, digest: input.session.sessionDigest },
+          reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+          publicCapability: reservation.publicCapability,
+          commandId: reservation.commandId,
+          canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+          publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+          handoff: {
+            state: InteractionStartupHandoffState.RETAINED,
+            handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+          },
         },
-      },
-    ],
-  });
+      ],
+    },
+  );
   store.close();
 
   const reopened = SqliteControlStore.open({ filename });
   assert.deepEqual(reopened.getInteractionMessageHandoff(handoff.id), handoff);
-  assert.deepEqual(reopened.getInteractionStartupDetectionCatalog(), {
-    reservedOperations: [],
-    clarificationOperations: [],
-    pendingActions: [],
-    actionReservations: [
-      {
-        sessionRef: { id: input.session.id, digest: input.session.sessionDigest },
-        reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
-        publicCapability: reservation.publicCapability,
-        commandId: reservation.commandId,
-        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
-        publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
-        handoff: {
-          state: InteractionStartupHandoffState.RETAINED,
-          handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+  assert.deepEqual(
+    reopened.getInteractionStartupDetectionCatalog(startupDetectionScope(input.session)),
+    {
+      sessions: [input.session],
+      reservedOperations: [],
+      clarificationOperations: [],
+      pendingActions: [],
+      actionReservations: [
+        {
+          sessionRef: { id: input.session.id, digest: input.session.sessionDigest },
+          reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+          publicCapability: reservation.publicCapability,
+          commandId: reservation.commandId,
+          canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+          publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+          handoff: {
+            state: InteractionStartupHandoffState.RETAINED,
+            handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+          },
         },
-      },
-    ],
-  });
+      ],
+    },
+  );
   reopened.close();
 });
 
@@ -7893,6 +8520,7 @@ void test('[M26-D07] public-action crash windows', (t) => {
       | typeof InteractionPublicOutcomeRetentionState.NOT_RETAINED
       | typeof InteractionPublicOutcomeRetentionState.RETAINED,
   ) => ({
+    sessions: [interactionSession],
     reservedOperations: [],
     clarificationOperations: [],
     pendingActions: [],
@@ -7916,7 +8544,7 @@ void test('[M26-D07] public-action crash windows', (t) => {
     InteractionPublicOutcomeRetentionState.NOT_RETAINED,
   );
   assert.deepEqual(
-    store.getInteractionStartupDetectionCatalog(),
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(interactionSession)),
     expectedStartupReservation(InteractionPublicOutcomeRetentionState.NOT_RETAINED),
   );
   store.close();
@@ -7932,7 +8560,7 @@ void test('[M26-D07] public-action crash windows', (t) => {
     InteractionPublicOutcomeRetentionState.RETAINED,
   );
   assert.deepEqual(
-    store.getInteractionStartupDetectionCatalog(),
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(interactionSession)),
     expectedStartupReservation(InteractionPublicOutcomeRetentionState.RETAINED),
   );
   store.close();
@@ -7956,12 +8584,16 @@ void test('[M26-D07] public-action crash windows', (t) => {
   );
   assert.equal(committed.outcome.disposition, InteractionActionOutcomeDisposition.APPLIED);
   assert.equal(store.getUnresolvedInteractionActionReservation(reservation.id), undefined);
-  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), {
-    reservedOperations: [],
-    clarificationOperations: [],
-    pendingActions: [],
-    actionReservations: [],
-  });
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(startupDetectionScope(interactionSession)),
+    {
+      sessions: [interactionSession],
+      reservedOperations: [],
+      clarificationOperations: [],
+      pendingActions: [],
+      actionReservations: [],
+    },
+  );
   assert.deepEqual(store.commitInteractionActionOutcome(outcomeInput), {
     status: 'REPLAYED',
     outcome: committed.outcome,

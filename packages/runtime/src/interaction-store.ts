@@ -28,6 +28,7 @@ import type {
   InteractionRoutingPolicy,
   InteractionSession,
   InteractionSessionId,
+  InteractionProjectRef,
   IsoTimestamp,
   FailedInteractionOperation,
   InterruptedInteractionOperation,
@@ -36,6 +37,8 @@ import type {
   PendingActionId,
   PendingActionResolution,
   PendingActionResolutionId,
+  PrincipalId,
+  NonTerminalInteractionSession,
   RouteDecision,
   RouteDecisionId,
   RouteProposal,
@@ -156,6 +159,16 @@ export type InteractionSessionOperationBusyResult = Readonly<{
   currentOperation: ReservedInteractionOperation;
 }>;
 
+export type InteractionSessionPendingActionBusyResult = Readonly<{
+  status: 'SESSION_PENDING_ACTION_BUSY';
+  currentPendingAction: PendingAction;
+}>;
+
+export type InteractionSessionActionReservationBusyResult = Readonly<{
+  status: 'SESSION_ACTION_RESERVATION_BUSY';
+  currentActionReservation: InteractionActionReservation;
+}>;
+
 export type InteractionSessionTransitionResult =
   | Readonly<{
       status: 'APPLIED' | 'REPLAYED';
@@ -166,7 +179,9 @@ export type InteractionSessionTransitionResult =
       status: 'VERSION_CONFLICT';
       currentSession: InteractionSession;
     }>
-  | InteractionSessionOperationBusyResult;
+  | InteractionSessionOperationBusyResult
+  | InteractionSessionPendingActionBusyResult
+  | InteractionSessionActionReservationBusyResult;
 
 export interface AdmitInteractionUserMessage {
   readonly currentSession: InteractionSession;
@@ -850,10 +865,16 @@ export interface InteractionStartupActionReservationDescriptor extends Interacti
  * detects startup work but cannot terminalize, replay, or invoke anything.
  */
 export interface InteractionStartupDetectionCatalog {
+  readonly sessions: readonly NonTerminalInteractionSession[];
   readonly reservedOperations: readonly InteractionStartupReservedOperationDescriptor[];
   readonly clarificationOperations: readonly InteractionStartupClarificationOperationDescriptor[];
   readonly pendingActions: readonly InteractionStartupPendingActionDescriptor[];
   readonly actionReservations: readonly InteractionStartupActionReservationDescriptor[];
+}
+
+export interface InteractionStartupDetectionScope {
+  readonly principalRef: PrincipalId;
+  readonly projectRef: InteractionProjectRef;
 }
 
 /**
@@ -889,7 +910,9 @@ export interface InteractionPresentationResultControlStore extends InteractionPu
  * responsibilities.
  */
 export interface InteractionStartupDetectionControlStore extends InteractionPresentationResultControlStore {
-  getInteractionStartupDetectionCatalog(): InteractionStartupDetectionCatalog;
+  getInteractionStartupDetectionCatalog(
+    scope: InteractionStartupDetectionScope,
+  ): InteractionStartupDetectionCatalog;
 }
 
 export interface RecordInteractionFocusBinding {

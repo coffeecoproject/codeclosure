@@ -695,6 +695,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0040_interaction_pending_action_authority.sql',
       '0041_interaction_public_action_authority.sql',
       '0042_interaction_presentation_result_authority.sql',
+      '0043_interaction_session_terminal_closure.sql',
     ],
   );
   store.close();

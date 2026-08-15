@@ -127,6 +127,7 @@ import {
   decodeFrontstageContextManifest,
   decodeInteractionMessage,
   decodeInteractionOperation,
+  decodeInteractionProjectRef,
   decodeInteractionActionReservation,
   decodeInteractionActionOutcome,
   decodeInteractionMessageHandoff,
@@ -177,10 +178,12 @@ import {
   intakeRunId,
   intentAdmissionPolicyId,
   interactionOperationId,
+  interactionSessionId,
   interactionMessageHandoffId,
   interactionActionReservationId,
   interactionActionOutcomeId,
   pendingActionId,
+  principalId,
   interactionActionOutcomeProjection,
   interactionOperationReservationProjection,
   hasExactWorkflowActiveAttemptAuthority,
@@ -293,6 +296,7 @@ import {
   type InteractionOperationId,
   type InteractionSession,
   type InteractionSessionId,
+  type NonTerminalInteractionSession,
   type CompletedInteractionOperation,
   type ReservedInteractionOperation,
   type InteractionActionReservation,
@@ -305,6 +309,8 @@ import {
   type PendingActionId,
   type PendingActionResolution,
   type PendingActionResolutionId,
+  type PrincipalId,
+  type InteractionProjectRef,
   type RouteDecision,
   type RouteDecisionId,
   type RouteProposal,
@@ -492,6 +498,7 @@ import {
   type InteractionStartupActionReservationDescriptor,
   type InteractionStartupClarificationOperationDescriptor,
   type InteractionStartupDetectionCatalog,
+  type InteractionStartupDetectionScope,
   type InteractionStartupPendingActionDescriptor,
   type InteractionStartupReservedOperationDescriptor,
   type InteractionUnresolvedClarificationOperationDescriptor,
@@ -1613,6 +1620,11 @@ interface NormalizedInteractionSessionTransition {
   readonly auditWrite: InteractionAuditWrite;
 }
 
+interface NormalizedInteractionStartupDetectionScope {
+  readonly principalRef: PrincipalId;
+  readonly projectRef: InteractionProjectRef;
+}
+
 interface NormalizedInteractionUserMessageAdmission {
   readonly currentSession: InteractionSession;
   readonly message: InteractionMessage;
@@ -2003,6 +2015,23 @@ function normalizeInteractionSessionTransition(
     afterVersion: nextSession.version,
   });
   return Object.freeze({ currentSession, nextSession, auditWrite });
+}
+
+function normalizeInteractionStartupDetectionScope(
+  input: InteractionStartupDetectionScope,
+): NormalizedInteractionStartupDetectionScope {
+  assertExactObjectKeys(
+    input,
+    ['principalRef', 'projectRef'],
+    [],
+    'Interaction startup detection scope',
+  );
+  const normalizedPrincipalRef = principalId(input.principalRef);
+  const normalizedProjectRef = decodeInteractionProjectRef(input.projectRef);
+  return Object.freeze({
+    principalRef: normalizedPrincipalRef,
+    projectRef: normalizedProjectRef,
+  });
 }
 
 function normalizeInteractionUserMessageAdmission(
@@ -5086,6 +5115,25 @@ export class SqliteControlStore
       ) {
         return { status: 'SESSION_OPERATION_BUSY', currentOperation: activeOperation };
       }
+      if (
+        input.nextSession.state === InteractionSessionState.CLOSED ||
+        input.nextSession.state === InteractionSessionState.INTERRUPTED
+      ) {
+        const pendingAction = this.getUnresolvedInteractionPendingActionInsideTransaction(
+          retained.id,
+        );
+        if (pendingAction !== undefined) {
+          return { status: 'SESSION_PENDING_ACTION_BUSY', currentPendingAction: pendingAction };
+        }
+        const actionReservation =
+          this.getUnresolvedInteractionActionReservationForSessionInsideTransaction(retained.id);
+        if (actionReservation !== undefined) {
+          return {
+            status: 'SESSION_ACTION_RESERVATION_BUSY',
+            currentActionReservation: actionReservation,
+          };
+        }
+      }
       this.assertInteractionSessionPolicyBindings(input.nextSession);
       this.insertAuditEvent(input.auditWrite);
       this.probe(InteractionTransactionStep.AFTER_SESSION_TRANSITION_AUDIT_WRITE);
@@ -6885,9 +6933,13 @@ export class SqliteControlStore
     );
   }
 
-  public getInteractionStartupDetectionCatalog(): InteractionStartupDetectionCatalog {
+  public getInteractionStartupDetectionCatalog(
+    rawScope: InteractionStartupDetectionScope,
+  ): InteractionStartupDetectionCatalog {
     this.assertOpen();
-    return this.runRead(() => this.buildInteractionStartupDetectionCatalogInsideTransaction());
+    const scope = normalizeInteractionStartupDetectionScope(rawScope);
+    this.#authorityIsolationLease?.assertProjectPathAllowed(scope.projectRef.normalizedPath);
+    return this.runRead(() => this.buildInteractionStartupDetectionCatalogInsideTransaction(scope));
   }
 
   public getUnresolvedInteractionPendingAction(
@@ -9875,19 +9927,78 @@ export class SqliteControlStore
     });
   }
 
-  private buildInteractionStartupDetectionCatalogInsideTransaction(): InteractionStartupDetectionCatalog {
+  private getUnresolvedInteractionActionReservationForSessionInsideTransaction(
+    sessionIdentifier: InteractionSessionId,
+  ): InteractionActionReservation | undefined {
+    const row = z
+      .object({ id: z.string().min(1) })
+      .strict()
+      .optional()
+      .parse(
+        this.#database
+          .prepare(
+            `SELECT reservation.id
+               FROM interaction_action_reservations AS reservation
+               LEFT JOIN interaction_action_outcomes AS outcome
+                 ON outcome.reservation_id = reservation.id
+              WHERE reservation.session_id = ?
+                AND outcome.id IS NULL
+              ORDER BY reservation.id
+              LIMIT 1`,
+          )
+          .get(sessionIdentifier),
+      );
+    return row === undefined
+      ? undefined
+      : this.getInteractionActionReservationInsideTransaction(
+          interactionActionReservationId(row.id),
+        );
+  }
+
+  private buildInteractionStartupDetectionCatalogInsideTransaction(
+    scope: NormalizedInteractionStartupDetectionScope,
+  ): InteractionStartupDetectionCatalog {
     const identifierRows = z.array(z.object({ id: z.string().min(1) }).strict());
+    const sessions: NonTerminalInteractionSession[] = [];
+    for (const row of identifierRows.parse(
+      this.#database
+        .prepare(
+          `SELECT id
+             FROM interaction_sessions
+            WHERE principal_ref = ?
+              AND project_path = ?
+              AND project_identity_digest = ?
+              AND state IN ('OPEN', 'CLOSING')
+            ORDER BY opened_at, id`,
+        )
+        .all(scope.principalRef, scope.projectRef.normalizedPath, scope.projectRef.identityDigest),
+    )) {
+      const session = this.getInteractionSessionInsideTransaction(interactionSessionId(row.id));
+      if (
+        session === undefined ||
+        (session.state !== InteractionSessionState.OPEN &&
+          session.state !== InteractionSessionState.CLOSING)
+      ) {
+        throw new StoreInvariantError(`Startup detection lost nonterminal Session ${row.id}`);
+      }
+      sessions.push(session);
+    }
     const reservedOperations: InteractionStartupReservedOperationDescriptor[] = [];
     const clarificationOperations: InteractionStartupClarificationOperationDescriptor[] = [];
     for (const row of identifierRows.parse(
       this.#database
         .prepare(
-          `SELECT id
-             FROM interaction_operations
-            WHERE state = 'RESERVED'
-            ORDER BY session_id, id`,
+          `SELECT operation.id
+             FROM interaction_operations AS operation
+             JOIN interaction_sessions AS session ON session.id = operation.session_id
+            WHERE operation.state = 'RESERVED'
+              AND session.principal_ref = ?
+              AND session.project_path = ?
+              AND session.project_identity_digest = ?
+              AND session.state IN ('OPEN', 'CLOSING')
+            ORDER BY operation.session_id, operation.id`,
         )
-        .all(),
+        .all(scope.principalRef, scope.projectRef.normalizedPath, scope.projectRef.identityDigest),
     )) {
       const operation = this.getInteractionOperationInsideTransaction(
         interactionOperationId(row.id),
@@ -9940,12 +10051,17 @@ export class SqliteControlStore
         .prepare(
           `SELECT action.id
              FROM interaction_pending_actions AS action
+             JOIN interaction_sessions AS session ON session.id = action.session_id
              LEFT JOIN interaction_pending_action_resolutions AS resolution
                ON resolution.pending_action_id = action.id
             WHERE resolution.id IS NULL
+              AND session.principal_ref = ?
+              AND session.project_path = ?
+              AND session.project_identity_digest = ?
+              AND session.state IN ('OPEN', 'CLOSING')
             ORDER BY action.session_id, action.id`,
         )
-        .all(),
+        .all(scope.principalRef, scope.projectRef.normalizedPath, scope.projectRef.identityDigest),
     )) {
       const pendingAction = this.getInteractionPendingActionInsideTransaction(
         pendingActionId(row.id),
@@ -9974,12 +10090,17 @@ export class SqliteControlStore
         .prepare(
           `SELECT reservation.id
              FROM interaction_action_reservations AS reservation
+             JOIN interaction_sessions AS session ON session.id = reservation.session_id
              LEFT JOIN interaction_action_outcomes AS outcome
                ON outcome.reservation_id = reservation.id
             WHERE outcome.id IS NULL
+              AND session.principal_ref = ?
+              AND session.project_path = ?
+              AND session.project_identity_digest = ?
+              AND session.state IN ('OPEN', 'CLOSING')
             ORDER BY reservation.session_id, reservation.id`,
         )
-        .all(),
+        .all(scope.principalRef, scope.projectRef.normalizedPath, scope.projectRef.identityDigest),
     )) {
       const reservationIdentifier = interactionActionReservationId(row.id);
       const descriptor =
@@ -10028,6 +10149,7 @@ export class SqliteControlStore
     }
 
     return Object.freeze({
+      sessions: Object.freeze(sessions),
       reservedOperations: Object.freeze(reservedOperations),
       clarificationOperations: Object.freeze(clarificationOperations),
       pendingActions: Object.freeze(pendingActions),
@@ -11596,6 +11718,9 @@ export class SqliteControlStore
       const actionOutcomes = actionOutcomeRows.map((row) =>
         this.decodeRetainedInteractionActionOutcomeRow(row),
       );
+      const actionOutcomeReservationIds = new Set(
+        actionOutcomes.map((outcome) => outcome.reservationRef.id),
+      );
       const referencedProposalIds = new Set<string>();
       const referencedDecisionIds = new Set<string>();
       const referencedPendingActionIds = new Set<string>();
@@ -12301,6 +12426,20 @@ export class SqliteControlStore
               reservationById.get(outcome.reservationRef.id)?.pendingActionRef.id ?? '',
             )?.sessionId === session.id,
         );
+        if (
+          (session.state === InteractionSessionState.CLOSED ||
+            session.state === InteractionSessionState.INTERRUPTED) &&
+          (sessionPendingActions.some(
+            (pendingAction) => !resolutionByActionId.has(pendingAction.id),
+          ) ||
+            sessionReservations.some(
+              (reservation) => !actionOutcomeReservationIds.has(reservation.id),
+            ))
+        ) {
+          throw new StoreInvariantError(
+            `Retained terminal Interaction Session ${session.id} has unresolved action authority`,
+          );
+        }
         const operationAuditCount = sessionOperations.reduce(
           (count, operation) =>
             count + (operation.state === InteractionOperationState.RESERVED ? 1 : 2),

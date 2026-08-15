@@ -92,6 +92,7 @@ import {
   assertInteractionMessageHandoffInvariant,
   assertInteractionMessageInvariant,
   assertInteractionOperationInvariant,
+  assertInteractionProjectRefInvariant,
   assertInteractionSessionInvariant,
   assertPendingActionInvariant,
   assertPendingActionResolutionInvariant,
@@ -118,6 +119,7 @@ import {
   type InteractionMessage,
   type InteractionMessageHandoff,
   type InteractionOperation,
+  type InteractionProjectRef,
   type InteractionSession,
   type PendingAction,
   type PendingActionResolution,
@@ -934,6 +936,12 @@ export function decodeFrontstageContextManifest(
     'Frontstage Context Manifest digest',
   );
   return record;
+}
+
+export function decodeInteractionProjectRef(value: unknown): InteractionProjectRef {
+  const reference = parse(projectRefSchema, value);
+  assertInteractionProjectRefInvariant(reference);
+  return reference;
 }
 
 export function decodeInteractionSession(
