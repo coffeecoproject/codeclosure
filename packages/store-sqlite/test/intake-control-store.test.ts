@@ -3466,6 +3466,27 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
     canonicalCommandInputDigest: answer.reservation.canonicalCommandInputDigest,
     publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
   });
+  const startupCatalog = {
+    reservedOperations: [],
+    clarificationOperations: [
+      {
+        sessionRef: { id: focusedSession.id, digest: focusedSession.sessionDigest },
+        operationKind: InteractionOperationKind.INTAKE_CLARIFICATION,
+        operationRef: { id: operation.id, digest: operation.operationDigest },
+        handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+        questionTarget,
+        commandId: answer.reservation.commandId,
+        canonicalCommandInputDigest: answer.reservation.canonicalCommandInputDigest,
+        publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+      },
+    ],
+    pendingActions: [],
+    actionReservations: [],
+  } as const;
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  store.close();
+  store = openStore(filename);
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
 
   assert.equal(
     store.reserveClarificationIntake({
@@ -3543,6 +3564,10 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
   );
   const publicOutcome = store.getIntakeCommandOutcome(answer.reservation.commandId);
   assert.ok(publicOutcome);
+  assert.equal(
+    store.getInteractionStartupDetectionCatalog().clarificationOperations[0]?.publicOutcomeState,
+    InteractionPublicOutcomeRetentionState.RETAINED,
+  );
   const completedOperationBase = {
     ...operationBase,
     version: interactionOperationVersion(2),
@@ -3620,6 +3645,12 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
     operation: completedOperation,
   });
   assert.equal(store.getUnresolvedInteractionClarificationOperation(operation.id), undefined);
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), {
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [],
+  });
   store.close();
 
   const reopened = openStore(filename);

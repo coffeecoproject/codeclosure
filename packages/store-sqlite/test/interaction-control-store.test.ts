@@ -117,6 +117,7 @@ import {
   InteractionAuditAggregateType,
   InteractionAuditEventType,
   InteractionPublicOutcomeRetentionState,
+  InteractionStartupHandoffState,
   RuntimeErrorCode,
   createM26InteractionPolicies,
   goalAndWorkflowCreationPayloadProjection,
@@ -3241,7 +3242,7 @@ for (const step of sessionTransitionRollbackSteps) {
   });
 }
 
-void test('Slice 2 user-message admission is atomic, replayable, and CAS-bound', (t) => {
+void test('[M26-D03] session and message atomic writes', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const initial = createInitialSession(policies, 'message');
@@ -3822,6 +3823,19 @@ void test('Slice 2 Operation reservation replays exactly, closes same-Session bu
     operation,
   });
   assert.deepEqual(store.listReservedInteractionOperations(session.id), [operation]);
+  const startupCatalog = {
+    reservedOperations: [
+      {
+        sessionRef: { id: session.id, digest: session.sessionDigest },
+        operationRef: { id: operation.id, digest: operation.operationDigest },
+        operationKind: operation.operationKind,
+      },
+    ],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [],
+  } as const;
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
 
   const conflicting = createReservedOperation(
     session,
@@ -3867,6 +3881,7 @@ void test('Slice 2 Operation reservation replays exactly, closes same-Session bu
   try {
     assert.deepEqual(reopened.getInteractionOperation(operation.id), operation);
     assert.deepEqual(reopened.listReservedInteractionOperations(session.id), [operation]);
+    assert.deepEqual(reopened.getInteractionStartupDetectionCatalog(), startupCatalog);
     assert.equal(reopened.getInteractionMessage(nextMessage.id), undefined);
   } finally {
     reopened.close();
@@ -4253,7 +4268,7 @@ void test('B1 deterministic Route result applies once and strictly reopens witho
   }
 });
 
-void test('B1 Assistant Route reserves its Manifest, rejects generic bypass, and completes exact Proposal chain', (t) => {
+void test('[M26-D04] operation reservation and outcome replay', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const initial = createInitialSession(policies, 'b1-assistant-route');
@@ -4291,6 +4306,12 @@ void test('B1 Assistant Route reserves its Manifest, rejects generic bypass, and
       createAssistantRouteReservationInput(session, message, reservation, 'b1-assistant-route'),
     ),
     { status: 'RESERVED', manifest: reservation.manifest, operation: reservation.operation },
+  );
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(session, message, reservation, 'b1-assistant-route'),
+    ),
+    { status: 'REPLAYED', manifest: reservation.manifest, operation: reservation.operation },
   );
   const proposal = createAssistantNoActionProposal(reservation, 'b1-assistant-route');
   const invalidAnswerDecision = createAnswerRouteDecision(
@@ -4335,6 +4356,12 @@ void test('B1 Assistant Route reserves its Manifest, rejects generic bypass, and
   );
   assert.deepEqual(store.commitInteractionRouteResult(resultInput), {
     status: 'APPLIED',
+    proposal,
+    decision,
+    operation: completed,
+  });
+  assert.deepEqual(store.commitInteractionRouteResult(resultInput), {
+    status: 'REPLAYED',
     proposal,
     decision,
     operation: completed,
@@ -5113,6 +5140,26 @@ void test('B2 direct Pending Action proposal atomically authorizes, reserves, re
   assert.deepEqual(store.getInteractionPendingActionResolution(resolution.id), resolution);
   assert.deepEqual(store.getInteractionActionReservation(reservation.id), reservation);
   assert.equal(store.getUnresolvedInteractionPendingAction(prepared.session.id), undefined);
+  const startupCatalog = {
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [
+      {
+        sessionRef: {
+          id: prepared.session.id,
+          digest: prepared.session.sessionDigest,
+        },
+        reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+        publicCapability: reservation.publicCapability,
+        commandId: reservation.commandId,
+        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+        publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+        handoff: { state: InteractionStartupHandoffState.NOT_RETAINED },
+      },
+    ],
+  } as const;
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
   store.close();
 
   const reopened = SqliteControlStore.open({ filename });
@@ -5122,13 +5169,14 @@ void test('B2 direct Pending Action proposal atomically authorizes, reserves, re
   );
   assert.deepEqual(reopened.getInteractionPendingActionResolution(resolution.id), resolution);
   assert.deepEqual(reopened.getInteractionActionReservation(reservation.id), reservation);
+  assert.deepEqual(reopened.getInteractionStartupDetectionCatalog(), startupCatalog);
   reopened.close();
 });
 
 void test('B2 separate confirmation preserves one unresolved Action until its exact response commits', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
-  const store = SqliteControlStore.open({ filename });
+  let store = SqliteControlStore.open({ filename });
   store.installInteractionPolicies(installInput(policies));
   const prepared = preparePendingActionProposal(
     store,
@@ -5150,6 +5198,27 @@ void test('B2 separate confirmation preserves one unresolved Action until its ex
     store.getUnresolvedInteractionPendingAction(prepared.session.id),
     prepared.pendingAction,
   );
+  const startupCatalog = {
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [
+      {
+        sessionRef: {
+          id: prepared.session.id,
+          digest: prepared.session.sessionDigest,
+        },
+        pendingActionRef: {
+          id: prepared.pendingAction.id,
+          digest: prepared.pendingAction.pendingActionDigest,
+        },
+      },
+    ],
+    actionReservations: [],
+  } as const;
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
+  store.close();
+  store = SqliteControlStore.open({ filename });
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), startupCatalog);
 
   const responseMessage = createUserMessage(
     prepared.session,
@@ -5454,7 +5523,7 @@ void test('B2 competing Pending Action proposals produce one winner and one type
   }
 });
 
-void test('B2 competing Action Confirmations retain one exact Resolution and Reservation winner', (t) => {
+void test('[M26-D05] pending-action resolution concurrency', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
   const setup = SqliteControlStore.open({ filename });
@@ -7309,7 +7378,7 @@ void test('Slice 2 strict reopen rejects an extra Interaction Policy install aud
   assert.throws(() => SqliteControlStore.open({ filename }), /extra or substituted install audit/u);
 });
 
-void test('Slice 2 migration establishes the bounded Interaction authority skeleton only', (t) => {
+void test('[M26-D06] migration and strict reopen', (t) => {
   const filename = temporaryDatabase(t);
   const database = new Database(filename);
   try {
@@ -7425,6 +7494,8 @@ void test('Slice 2 migration establishes the bounded Interaction authority skele
   } finally {
     database.close();
   }
+  const reopened = SqliteControlStore.open({ filename });
+  reopened.close();
 });
 
 void test('Slice 2 Session lifecycle backstops reject both illegal direct-close forms', (t) => {
@@ -7646,10 +7717,48 @@ void test('B3 commits one authorized Intake Handoff, replays exactly, and detect
     canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
     publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
   });
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), {
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [
+      {
+        sessionRef: { id: input.session.id, digest: input.session.sessionDigest },
+        reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+        publicCapability: reservation.publicCapability,
+        commandId: reservation.commandId,
+        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+        publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+        handoff: {
+          state: InteractionStartupHandoffState.RETAINED,
+          handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+        },
+      },
+    ],
+  });
   store.close();
 
   const reopened = SqliteControlStore.open({ filename });
   assert.deepEqual(reopened.getInteractionMessageHandoff(handoff.id), handoff);
+  assert.deepEqual(reopened.getInteractionStartupDetectionCatalog(), {
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [
+      {
+        sessionRef: { id: input.session.id, digest: input.session.sessionDigest },
+        reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+        publicCapability: reservation.publicCapability,
+        commandId: reservation.commandId,
+        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+        publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+        handoff: {
+          state: InteractionStartupHandoffState.RETAINED,
+          handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+        },
+      },
+    ],
+  });
   reopened.close();
 });
 
@@ -7765,22 +7874,69 @@ for (const step of [
   });
 }
 
-void test('B3 derives one Goal-control Action Outcome from retained public authority and strictly reopens', (t) => {
+void test('[M26-D07] public-action crash windows', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
-  const store = SqliteControlStore.open({ filename });
+  let store = SqliteControlStore.open({ filename });
   store.installInteractionPolicies(installInput(policies));
   const { workflow, reservation } = prepareConfirmedCancelAction(
     store,
     policies,
     'b3-cancel-outcome',
   );
+  const pendingAction = store.getInteractionPendingAction(reservation.pendingActionRef.id);
+  assert.ok(pendingAction);
+  const interactionSession = store.getInteractionSession(pendingAction.sessionId);
+  assert.ok(interactionSession);
+  const expectedStartupReservation = (
+    publicOutcomeState:
+      | typeof InteractionPublicOutcomeRetentionState.NOT_RETAINED
+      | typeof InteractionPublicOutcomeRetentionState.RETAINED,
+  ) => ({
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [
+      {
+        sessionRef: {
+          id: interactionSession.id,
+          digest: interactionSession.sessionDigest,
+        },
+        reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+        publicCapability: reservation.publicCapability,
+        commandId: reservation.commandId,
+        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+        publicOutcomeState,
+        handoff: { state: InteractionStartupHandoffState.NOT_APPLICABLE },
+      },
+    ],
+  });
+  assert.equal(
+    store.getUnresolvedInteractionActionReservation(reservation.id)?.publicOutcomeState,
+    InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+  );
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(),
+    expectedStartupReservation(InteractionPublicOutcomeRetentionState.NOT_RETAINED),
+  );
+  store.close();
+  store = SqliteControlStore.open({ filename });
   assert.equal(
     store.getUnresolvedInteractionActionReservation(reservation.id)?.publicOutcomeState,
     InteractionPublicOutcomeRetentionState.NOT_RETAINED,
   );
 
   commitCancellationPublicOutcome(store, workflow, reservation);
+  assert.equal(
+    store.getUnresolvedInteractionActionReservation(reservation.id)?.publicOutcomeState,
+    InteractionPublicOutcomeRetentionState.RETAINED,
+  );
+  assert.deepEqual(
+    store.getInteractionStartupDetectionCatalog(),
+    expectedStartupReservation(InteractionPublicOutcomeRetentionState.RETAINED),
+  );
+  store.close();
+  store = SqliteControlStore.open({ filename });
   assert.equal(
     store.getUnresolvedInteractionActionReservation(reservation.id)?.publicOutcomeState,
     InteractionPublicOutcomeRetentionState.RETAINED,
@@ -7800,6 +7956,12 @@ void test('B3 derives one Goal-control Action Outcome from retained public autho
   );
   assert.equal(committed.outcome.disposition, InteractionActionOutcomeDisposition.APPLIED);
   assert.equal(store.getUnresolvedInteractionActionReservation(reservation.id), undefined);
+  assert.deepEqual(store.getInteractionStartupDetectionCatalog(), {
+    reservedOperations: [],
+    clarificationOperations: [],
+    pendingActions: [],
+    actionReservations: [],
+  });
   assert.deepEqual(store.commitInteractionActionOutcome(outcomeInput), {
     status: 'REPLAYED',
     outcome: committed.outcome,

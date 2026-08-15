@@ -180,6 +180,7 @@ import {
   interactionMessageHandoffId,
   interactionActionReservationId,
   interactionActionOutcomeId,
+  pendingActionId,
   interactionActionOutcomeProjection,
   interactionOperationReservationProjection,
   hasExactWorkflowActiveAttemptAuthority,
@@ -457,6 +458,7 @@ import {
   InteractionAuditAggregateType,
   InteractionAuditEventType,
   InteractionPublicOutcomeRetentionState,
+  InteractionStartupHandoffState,
   type AdmitInteractionUserMessage,
   type CreateInteractionSession,
   type FailedOrInterruptedInteractionOperation,
@@ -465,7 +467,7 @@ import {
   type InteractionFocusBindingRecordResult,
   type InteractionFocusControlStore,
   type InteractionPendingActionControlStore,
-  type InteractionPresentationResultControlStore,
+  type InteractionStartupDetectionControlStore,
   type InteractionPublicActionControlStore,
   type InteractionOperationControlStore,
   type InteractionRouteResultControlStore,
@@ -487,6 +489,11 @@ import {
   type FrontstageAnswerResultCommitResult,
   type InteractionClarificationOperationReservationResult,
   type InteractionPresentationResultCommitResult,
+  type InteractionStartupActionReservationDescriptor,
+  type InteractionStartupClarificationOperationDescriptor,
+  type InteractionStartupDetectionCatalog,
+  type InteractionStartupPendingActionDescriptor,
+  type InteractionStartupReservedOperationDescriptor,
   type InteractionUnresolvedClarificationOperationDescriptor,
   type InteractionUnresolvedActionReservationDescriptor,
   type InteractionPendingActionProposalCommitResult,
@@ -4717,7 +4724,7 @@ export class SqliteControlStore
     InteractionRouteResultControlStore,
     InteractionPendingActionControlStore,
     InteractionPublicActionControlStore,
-    InteractionPresentationResultControlStore,
+    InteractionStartupDetectionControlStore,
     InteractionFocusControlStore
 {
   readonly #database: Database.Database;
@@ -6856,50 +6863,9 @@ export class SqliteControlStore
   ): InteractionUnresolvedClarificationOperationDescriptor | undefined {
     this.assertOpen();
     const operationIdentifier = interactionOperationId(rawOperationIdentifier);
-    return this.runRead(() => {
-      const operation = this.getInteractionOperationInsideTransaction(operationIdentifier);
-      if (
-        operation?.state !== InteractionOperationState.RESERVED ||
-        operation.operationKind !== InteractionOperationKind.INTAKE_CLARIFICATION
-      ) {
-        return undefined;
-      }
-      const handoffRows = z.array(z.object({ id: z.string().min(1) }).strict()).parse(
-        this.#database
-          .prepare(
-            `SELECT id
-               FROM interaction_message_handoffs
-              WHERE session_id = ? AND message_id = ? AND message_digest = ?
-                AND handoff_kind = 'INTAKE_CLARIFICATION'
-              ORDER BY id`,
-          )
-          .all(operation.sessionId, operation.messageRef.id, operation.messageRef.digest),
-      );
-      if (handoffRows.length !== 1 || handoffRows[0] === undefined) {
-        throw new StoreInvariantError(
-          `Reserved Interaction clarification Operation ${operation.id} has no exact Handoff`,
-        );
-      }
-      const handoff = this.getInteractionMessageHandoffInsideTransaction(
-        interactionMessageHandoffId(handoffRows[0].id),
-      );
-      if (handoff?.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
-        throw new StoreInvariantError(
-          `Reserved Interaction clarification Operation ${operation.id} has no clarification Handoff`,
-        );
-      }
-      return Object.freeze({
-        operationRef: Object.freeze({ id: operation.id, digest: operation.operationDigest }),
-        handoffRef: Object.freeze({ id: handoff.id, digest: handoff.handoffDigest }),
-        questionTarget: handoff.questionTarget,
-        commandId: handoff.intakeCommandId,
-        canonicalCommandInputDigest: handoff.canonicalCommandInputDigest,
-        publicOutcomeState:
-          this.getIntakeCommandOutcomeInsideTransaction(handoff.intakeCommandId) === undefined
-            ? InteractionPublicOutcomeRetentionState.NOT_RETAINED
-            : InteractionPublicOutcomeRetentionState.RETAINED,
-      });
-    });
+    return this.runRead(() =>
+      this.getUnresolvedInteractionClarificationOperationInsideTransaction(operationIdentifier),
+    );
   }
 
   public getInteractionActionOutcome(
@@ -6914,31 +6880,14 @@ export class SqliteControlStore
   ): InteractionUnresolvedActionReservationDescriptor | undefined {
     this.assertOpen();
     const reservationIdentifier = interactionActionReservationId(rawReservationIdentifier);
-    return this.runRead(() => {
-      const reservation =
-        this.getInteractionActionReservationInsideTransaction(reservationIdentifier);
-      if (
-        reservation === undefined ||
-        this.getInteractionActionOutcomeByReservationInsideTransaction(reservation.id) !== undefined
-      ) {
-        return undefined;
-      }
-      const retainedPublicAuthority =
-        this.resolveRetainedInteractionPublicOutcomeAuthority(reservation);
-      return Object.freeze({
-        reservationRef: Object.freeze({
-          id: reservation.id,
-          digest: reservation.reservationDigest,
-        }),
-        publicCapability: reservation.publicCapability,
-        commandId: reservation.commandId,
-        canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
-        publicOutcomeState:
-          retainedPublicAuthority === undefined
-            ? InteractionPublicOutcomeRetentionState.NOT_RETAINED
-            : InteractionPublicOutcomeRetentionState.RETAINED,
-      });
-    });
+    return this.runRead(() =>
+      this.getUnresolvedInteractionActionReservationInsideTransaction(reservationIdentifier),
+    );
+  }
+
+  public getInteractionStartupDetectionCatalog(): InteractionStartupDetectionCatalog {
+    this.assertOpen();
+    return this.runRead(() => this.buildInteractionStartupDetectionCatalogInsideTransaction());
   }
 
   public getUnresolvedInteractionPendingAction(
@@ -9849,6 +9798,241 @@ export class SqliteControlStore
     }
     const row = rows[0];
     return row === undefined ? undefined : this.decodeRetainedInteractionPendingActionRow(row);
+  }
+
+  private getUnresolvedInteractionClarificationOperationInsideTransaction(
+    operationIdentifier: InteractionOperationId,
+  ): InteractionUnresolvedClarificationOperationDescriptor | undefined {
+    const operation = this.getInteractionOperationInsideTransaction(operationIdentifier);
+    if (
+      operation?.state !== InteractionOperationState.RESERVED ||
+      operation.operationKind !== InteractionOperationKind.INTAKE_CLARIFICATION
+    ) {
+      return undefined;
+    }
+    const handoffRows = z.array(z.object({ id: z.string().min(1) }).strict()).parse(
+      this.#database
+        .prepare(
+          `SELECT id
+             FROM interaction_message_handoffs
+            WHERE session_id = ? AND message_id = ? AND message_digest = ?
+              AND handoff_kind = 'INTAKE_CLARIFICATION'
+            ORDER BY id`,
+        )
+        .all(operation.sessionId, operation.messageRef.id, operation.messageRef.digest),
+    );
+    if (handoffRows.length !== 1 || handoffRows[0] === undefined) {
+      throw new StoreInvariantError(
+        `Reserved Interaction clarification Operation ${operation.id} has no exact Handoff`,
+      );
+    }
+    const handoff = this.getInteractionMessageHandoffInsideTransaction(
+      interactionMessageHandoffId(handoffRows[0].id),
+    );
+    if (handoff?.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+      throw new StoreInvariantError(
+        `Reserved Interaction clarification Operation ${operation.id} has no clarification Handoff`,
+      );
+    }
+    return Object.freeze({
+      operationRef: Object.freeze({ id: operation.id, digest: operation.operationDigest }),
+      handoffRef: Object.freeze({ id: handoff.id, digest: handoff.handoffDigest }),
+      questionTarget: handoff.questionTarget,
+      commandId: handoff.intakeCommandId,
+      canonicalCommandInputDigest: handoff.canonicalCommandInputDigest,
+      publicOutcomeState:
+        this.getIntakeCommandOutcomeInsideTransaction(handoff.intakeCommandId) === undefined
+          ? InteractionPublicOutcomeRetentionState.NOT_RETAINED
+          : InteractionPublicOutcomeRetentionState.RETAINED,
+    });
+  }
+
+  private getUnresolvedInteractionActionReservationInsideTransaction(
+    reservationIdentifier: InteractionActionReservationId,
+  ): InteractionUnresolvedActionReservationDescriptor | undefined {
+    const reservation =
+      this.getInteractionActionReservationInsideTransaction(reservationIdentifier);
+    if (
+      reservation === undefined ||
+      this.getInteractionActionOutcomeByReservationInsideTransaction(reservation.id) !== undefined
+    ) {
+      return undefined;
+    }
+    const retainedPublicAuthority =
+      this.resolveRetainedInteractionPublicOutcomeAuthority(reservation);
+    return Object.freeze({
+      reservationRef: Object.freeze({
+        id: reservation.id,
+        digest: reservation.reservationDigest,
+      }),
+      publicCapability: reservation.publicCapability,
+      commandId: reservation.commandId,
+      canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+      publicOutcomeState:
+        retainedPublicAuthority === undefined
+          ? InteractionPublicOutcomeRetentionState.NOT_RETAINED
+          : InteractionPublicOutcomeRetentionState.RETAINED,
+    });
+  }
+
+  private buildInteractionStartupDetectionCatalogInsideTransaction(): InteractionStartupDetectionCatalog {
+    const identifierRows = z.array(z.object({ id: z.string().min(1) }).strict());
+    const reservedOperations: InteractionStartupReservedOperationDescriptor[] = [];
+    const clarificationOperations: InteractionStartupClarificationOperationDescriptor[] = [];
+    for (const row of identifierRows.parse(
+      this.#database
+        .prepare(
+          `SELECT id
+             FROM interaction_operations
+            WHERE state = 'RESERVED'
+            ORDER BY session_id, id`,
+        )
+        .all(),
+    )) {
+      const operation = this.getInteractionOperationInsideTransaction(
+        interactionOperationId(row.id),
+      );
+      if (operation?.state !== InteractionOperationState.RESERVED) {
+        throw new StoreInvariantError(
+          `Startup detection lost reserved Interaction Operation ${row.id}`,
+        );
+      }
+      const session = this.getInteractionSessionInsideTransaction(operation.sessionId);
+      if (session === undefined) {
+        throw new StoreInvariantError(
+          `Startup detection Operation ${operation.id} lost its Session`,
+        );
+      }
+      const sessionRef = Object.freeze({ id: session.id, digest: session.sessionDigest });
+      if (operation.operationKind === InteractionOperationKind.INTAKE_CLARIFICATION) {
+        const clarification = this.getUnresolvedInteractionClarificationOperationInsideTransaction(
+          operation.id,
+        );
+        if (clarification === undefined) {
+          throw new StoreInvariantError(
+            `Startup detection lost Intake clarification Operation ${operation.id}`,
+          );
+        }
+        clarificationOperations.push(
+          Object.freeze({
+            sessionRef,
+            operationKind: InteractionOperationKind.INTAKE_CLARIFICATION,
+            ...clarification,
+          }),
+        );
+      } else {
+        reservedOperations.push(
+          Object.freeze({
+            sessionRef,
+            operationRef: Object.freeze({
+              id: operation.id,
+              digest: operation.operationDigest,
+            }),
+            operationKind: operation.operationKind,
+          }),
+        );
+      }
+    }
+
+    const pendingActions: InteractionStartupPendingActionDescriptor[] = [];
+    for (const row of identifierRows.parse(
+      this.#database
+        .prepare(
+          `SELECT action.id
+             FROM interaction_pending_actions AS action
+             LEFT JOIN interaction_pending_action_resolutions AS resolution
+               ON resolution.pending_action_id = action.id
+            WHERE resolution.id IS NULL
+            ORDER BY action.session_id, action.id`,
+        )
+        .all(),
+    )) {
+      const pendingAction = this.getInteractionPendingActionInsideTransaction(
+        pendingActionId(row.id),
+      );
+      const session =
+        pendingAction === undefined
+          ? undefined
+          : this.getInteractionSessionInsideTransaction(pendingAction.sessionId);
+      if (pendingAction === undefined || session === undefined) {
+        throw new StoreInvariantError(`Startup detection lost Pending Action ${row.id}`);
+      }
+      pendingActions.push(
+        Object.freeze({
+          sessionRef: Object.freeze({ id: session.id, digest: session.sessionDigest }),
+          pendingActionRef: Object.freeze({
+            id: pendingAction.id,
+            digest: pendingAction.pendingActionDigest,
+          }),
+        }),
+      );
+    }
+
+    const actionReservations: InteractionStartupActionReservationDescriptor[] = [];
+    for (const row of identifierRows.parse(
+      this.#database
+        .prepare(
+          `SELECT reservation.id
+             FROM interaction_action_reservations AS reservation
+             LEFT JOIN interaction_action_outcomes AS outcome
+               ON outcome.reservation_id = reservation.id
+            WHERE outcome.id IS NULL
+            ORDER BY reservation.session_id, reservation.id`,
+        )
+        .all(),
+    )) {
+      const reservationIdentifier = interactionActionReservationId(row.id);
+      const descriptor =
+        this.getUnresolvedInteractionActionReservationInsideTransaction(reservationIdentifier);
+      const reservation =
+        this.getInteractionActionReservationInsideTransaction(reservationIdentifier);
+      const pendingAction =
+        reservation === undefined
+          ? undefined
+          : this.getInteractionPendingActionInsideTransaction(reservation.pendingActionRef.id);
+      const session =
+        pendingAction === undefined
+          ? undefined
+          : this.getInteractionSessionInsideTransaction(pendingAction.sessionId);
+      if (
+        descriptor === undefined ||
+        reservation === undefined ||
+        pendingAction === undefined ||
+        session === undefined
+      ) {
+        throw new StoreInvariantError(`Startup detection lost Action Reservation ${row.id}`);
+      }
+      const retainedHandoff =
+        reservation.publicCapability === InteractionPublicCapability.SUBMIT_INTAKE
+          ? this.getAuthorizedIntakeActionHandoffByReservationInsideTransaction(reservation.id)
+          : undefined;
+      const handoff =
+        reservation.publicCapability !== InteractionPublicCapability.SUBMIT_INTAKE
+          ? Object.freeze({ state: InteractionStartupHandoffState.NOT_APPLICABLE })
+          : retainedHandoff === undefined
+            ? Object.freeze({ state: InteractionStartupHandoffState.NOT_RETAINED })
+            : Object.freeze({
+                state: InteractionStartupHandoffState.RETAINED,
+                handoffRef: Object.freeze({
+                  id: retainedHandoff.id,
+                  digest: retainedHandoff.handoffDigest,
+                }),
+              });
+      actionReservations.push(
+        Object.freeze({
+          sessionRef: Object.freeze({ id: session.id, digest: session.sessionDigest }),
+          ...descriptor,
+          handoff,
+        }),
+      );
+    }
+
+    return Object.freeze({
+      reservedOperations: Object.freeze(reservedOperations),
+      clarificationOperations: Object.freeze(clarificationOperations),
+      pendingActions: Object.freeze(pendingActions),
+      actionReservations: Object.freeze(actionReservations),
+    });
   }
 
   private decodeRetainedInteractionPendingActionResolutionRow(

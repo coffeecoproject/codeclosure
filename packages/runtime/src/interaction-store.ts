@@ -788,6 +788,74 @@ export interface InteractionUnresolvedClarificationOperationDescriptor {
   readonly publicOutcomeState: InteractionPublicOutcomeRetentionState;
 }
 
+export interface InteractionStartupReservedOperationDescriptor {
+  readonly sessionRef: Readonly<{
+    id: InteractionSessionId;
+    digest: Sha256Digest;
+  }>;
+  readonly operationRef: Readonly<{
+    id: InteractionOperationId;
+    digest: Sha256Digest;
+  }>;
+  readonly operationKind: Exclude<InteractionOperationKind, 'INTAKE_CLARIFICATION'>;
+}
+
+export interface InteractionStartupClarificationOperationDescriptor extends InteractionUnresolvedClarificationOperationDescriptor {
+  readonly sessionRef: Readonly<{
+    id: InteractionSessionId;
+    digest: Sha256Digest;
+  }>;
+  readonly operationKind: 'INTAKE_CLARIFICATION';
+}
+
+export interface InteractionStartupPendingActionDescriptor {
+  readonly sessionRef: Readonly<{
+    id: InteractionSessionId;
+    digest: Sha256Digest;
+  }>;
+  readonly pendingActionRef: Readonly<{
+    id: PendingActionId;
+    digest: Sha256Digest;
+  }>;
+}
+
+export const InteractionStartupHandoffState = {
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
+  NOT_RETAINED: 'NOT_RETAINED',
+  RETAINED: 'RETAINED',
+} as const;
+export type InteractionStartupHandoffState =
+  (typeof InteractionStartupHandoffState)[keyof typeof InteractionStartupHandoffState];
+
+export type InteractionStartupHandoffDescriptor =
+  | Readonly<{ state: 'NOT_APPLICABLE' | 'NOT_RETAINED' }>
+  | Readonly<{
+      state: 'RETAINED';
+      handoffRef: Readonly<{
+        id: InteractionMessageHandoffId;
+        digest: Sha256Digest;
+      }>;
+    }>;
+
+export interface InteractionStartupActionReservationDescriptor extends InteractionUnresolvedActionReservationDescriptor {
+  readonly sessionRef: Readonly<{
+    id: InteractionSessionId;
+    digest: Sha256Digest;
+  }>;
+  readonly handoff: InteractionStartupHandoffDescriptor;
+}
+
+/**
+ * This catalog is a read-only projection over retained Store authority. It
+ * detects startup work but cannot terminalize, replay, or invoke anything.
+ */
+export interface InteractionStartupDetectionCatalog {
+  readonly reservedOperations: readonly InteractionStartupReservedOperationDescriptor[];
+  readonly clarificationOperations: readonly InteractionStartupClarificationOperationDescriptor[];
+  readonly pendingActions: readonly InteractionStartupPendingActionDescriptor[];
+  readonly actionReservations: readonly InteractionStartupActionReservationDescriptor[];
+}
+
 /**
  * Presentation results complete through their own atomic owner. Projection
  * digests and produced messages remain non-authoritative views, while an
@@ -813,6 +881,15 @@ export interface InteractionPresentationResultControlStore extends InteractionPu
   getUnresolvedInteractionClarificationOperation(
     operationId: InteractionOperationId,
   ): InteractionUnresolvedClarificationOperationDescriptor | undefined;
+}
+
+/**
+ * Startup detection reads one complete catalog from retained Interaction
+ * authority. Reconciliation and capability re-entry remain separate Runtime
+ * responsibilities.
+ */
+export interface InteractionStartupDetectionControlStore extends InteractionPresentationResultControlStore {
+  getInteractionStartupDetectionCatalog(): InteractionStartupDetectionCatalog;
 }
 
 export interface RecordInteractionFocusBinding {
