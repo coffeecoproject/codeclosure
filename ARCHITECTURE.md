@@ -244,11 +244,8 @@ final canonical run then passed 13/13 stages and 68/68 rows on exact source
 2026-08-13. M2.6 Slice 0 decision/proof closure passed on 2026-08-14. Slice 1
 Interaction Domain, strict-codec, lifecycle/relationship invariant, canonical
 digest, and deterministic Runtime-policy implementation passed bounded review
-on 2026-08-14. Slice 2 implementation is in progress through its policy,
-Session lifecycle, and user-message SQLite authority with atomic audit,
-typed replay/conflict, Operation reservation and failure/interruption closure,
-unresolved-operation detection, exact Focus/Session CAS with one Focus write
-owner, and strict reopen. The
+on 2026-08-14. Slice 2's bounded SQLite Interaction authority passed
+independent review on 2026-08-16. The
 pre-B1 retained Context Manifest and discriminated Intake Handoff Domain
 contracts passed bounded P0 review on 2026-08-15. B1's result-specific
 deterministic and Assistant Route transactions, exact retained
@@ -266,11 +263,12 @@ strict reopen passed bounded review and were committed as `679ad5d` on
 Handoff and result-specific presentation owners, typed crash-window
 descriptor, rollback, concurrency, SQLite backstops, and strict reopen passed
 bounded review and were committed across `0e0b562` and `128a5c2` on
-2026-08-15. It invokes no Assistant or public facade. B5 is in progress through
-exact principal/project-scoped startup detection, terminal unresolved-work
-closure, append-only migration/schema freeze, and frozen proof-owner
-correction. The complete current-source quality gate passed; independent
-bounded review remains. All M2.7 implementation remains unstarted.
+2026-08-15. It invokes no Assistant or public facade. B5 then closed exact
+principal/project-scoped startup detection, terminal unresolved-work closure,
+append-only migration/schema freeze, and the frozen proof owners. The complete
+quality gate passed on committed source `ce84e67`, and the independent bounded
+Slice 2 review issued `PASS` on 2026-08-16. Slice 3 and all M2.7 implementation
+remain unstarted.
 Accepted
 ADR 0036 through ADR 0039 bind the planned M2.6 boundary. ADR 0043 is accepted
 only for the M2.5.1 boundary; proposed ADR 0040 through ADR 0042 are not

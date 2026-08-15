@@ -767,12 +767,7 @@ ADR 0039 are accepted and the executable [Slice 0
 contract](plans/m2.6-slice0-contract.md) freezes the implementation inputs;
 Slice 1 Interaction Domain, strict-codec, lifecycle/relationship invariant,
 canonical-digest, and deterministic Runtime-policy implementation passed
-bounded review on 2026-08-14. Slice 2 implementation is in progress through
-its policy, Session lifecycle, and user-message SQLite authority with atomic
-audit, typed replay/conflict, serialized Operation reservation,
-failure/interruption closure, unresolved-reservation detection, exact
-Focus/Session CAS with one Focus write owner, and strict reopen for that
-implemented subset. The pre-B1 retained Context Manifest and discriminated
+bounded review on 2026-08-14. The pre-B1 retained Context Manifest and discriminated
 Intake Handoff Domain contracts passed bounded P0 review on 2026-08-15. B1's
 result-specific deterministic and Assistant Route transactions, exact
 retained Manifest/Proposal/Decision authority, typed conflict results, SQLite
@@ -789,12 +784,12 @@ and strict reopen passed bounded review and were committed as `679ad5d` on
 Handoff and result-specific presentation owners, typed crash-window
 descriptor, rollback, concurrency, SQLite backstops, and strict reopen passed
 bounded review and were committed across `0e0b562` and `128a5c2` on
-2026-08-15. It invokes no Assistant or public facade. B5 is in progress through
-exact principal/project-scoped startup detection, terminal unresolved-work
-closure, append-only migration/schema freeze, and frozen proof-owner
-correction. The complete current-source quality gate passed; independent
-bounded review remains. This does not complete Slice 2 or claim `M26-D03`
-through `M26-D07`. The M2.5.1 entry
+2026-08-15. It invokes no Assistant or public facade. B5 then closed exact
+principal/project-scoped startup detection, terminal unresolved-work closure,
+append-only migration/schema freeze, and the frozen proof owners. The complete
+quality gate passed on committed source `ce84e67`, and the independent bounded
+Slice 2 review issued `PASS` on 2026-08-16. This completes Slice 2 only; Slice
+3, the M2.6 milestone assessment, and M2.6 completion remain later. The M2.5.1 entry
 condition has been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction

@@ -30,11 +30,12 @@ strict reopen passed bounded review and were committed as `679ad5d` on
 Handoff and result-specific presentation owners, typed crash-window
 descriptor, rollback, concurrency, SQLite backstops, and strict reopen passed
 bounded review and were committed across `0e0b562` and `128a5c2` on
-2026-08-15. It invokes no Assistant or public facade. B5 closure is in progress
-through one exact principal/project startup snapshot, terminal unresolved-work
-closure, migration/schema freeze, and frozen proof-owner correction; its full
-current-source quality gate passed, while independent review remains. Assistant
-Adapter, routing composition, Goal query/control, and CLI work remain later. The M2.5.1
+2026-08-15. It invokes no Assistant or public facade. B5 then closed one exact
+principal/project startup snapshot, terminal unresolved-work closure,
+migration/schema freeze, and the frozen proof owners. The full quality gate
+passed on committed source `ce84e67`, and the independent bounded Slice 2
+review issued `PASS` on 2026-08-16. Assistant Adapter, routing composition,
+Goal query/control, and CLI work remain later. The M2.5.1
 milestone prerequisite has passed, and the completed M2.5
 Goal Intake boundary remains unchanged.
 

@@ -199,14 +199,14 @@ through ADR 0039 are accepted and its executable Slice 0 decision/proof
 contract passed bounded review on 2026-08-14. Slice 1's Interaction Domain,
 strict codecs, lifecycle and relationship invariants, canonical digest
 projections, and deterministic Runtime policy passed bounded review on
-2026-08-14. Slice 2 implementation is in progress: its bounded SQLite work now
-includes the append-only Interaction schema, exact policy installation, atomic
-Session create/lifecycle and user-message admission, typed replay/conflict,
-Operation reservation plus failure/interruption closure, unresolved-operation
-detection, ordered audit membership, and strict reopen for that implemented
-subset. Successful Operation results remain owned by later result-specific
-transactions. This does not complete Slice 2 or claim its frozen acceptance
-rows.
+2026-08-14. Slice 2's bounded SQLite Interaction authority passed independent
+review on 2026-08-16. It implements the append-only schema, exact policy
+installation, atomic Session/Message/Focus and result-specific Operation
+transactions, immutable Pending Action/Resolution/Reservation/Outcome and
+Handoff authority, strict reopen, exact-project startup detection, terminal
+unresolved-work closure, and the frozen `M26-D03` through `M26-D07` proof
+owners. It invokes no Assistant or public facade and does not claim M2.6
+completion. Slice 3 has not started.
 A real pinned-version
 integration test found that
 the M2.5 Intake Observer rejects valid disabled remote-control and rate-limit
@@ -264,10 +264,9 @@ milestone. Its M2.5.1 prerequisite has passed. ADR 0036 through ADR 0039 are
 accepted, its formal domain/implementation/acceptance documents and executable
 Slice 0 decision/proof contract exist, and the bounded Slice 0 review passed on
 2026-08-14. Slice 1's bounded Interaction Domain and deterministic-policy
-review passed on 2026-08-14. Slice 2 implementation is in progress through its
-policy, Session lifecycle, user-message, and bounded Operation SQLite
-authority; later result-specific, Focus, Pending-Action/action-chain, and
-recovery transactions and Slice 3 onward have not started.
+review passed on 2026-08-14. Slice 2's bounded SQLite Interaction authority
+passed independent review on 2026-08-16. Slice 3 and later work have not
+started.
 The bounded
 candidate keeps one foreground CLI frontstage available while the process is
 alive, accepts natural-language user input, routes the closed new-Intake and

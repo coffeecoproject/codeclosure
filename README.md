@@ -38,9 +38,9 @@ and its exact decision and proof contract passed bounded closure review on
 2026-08-14. The first implementation boundary—Interaction Domain, strict
 codecs, lifecycle and relationship invariants, canonical digest projections,
 and deterministic Runtime policy—also passed bounded review on 2026-08-14.
-SQLite interaction-authority implementation is in progress but does not yet
-complete the persistence boundary. Assistant Adapter, routing composition,
-Goal query/control, and Frontstage CLI work have not started.
+The bounded SQLite Interaction authority passed independent review on
+2026-08-16. Assistant Adapter, routing composition, Goal query/control, and
+Frontstage CLI work have not started.
 The candidate scope is one foreground CLI frontstage, natural-language user
 input, an exact immutable pending-action/authorization/dispatch chain for the
 closed new-Intake and Goal-control action set, deterministic direct-or-separate
