@@ -1,15 +1,19 @@
 import type {
   AuditEventId,
   CommandId,
+  CompletedInteractionOperation,
   ConfirmationGrammar,
   DirectActionGrammar,
   FocusBinding,
   FocusBindingId,
+  FrontstageContextManifest,
+  FrontstageContextManifestId,
   InteractionConfirmationPolicy,
   InteractionMessage,
   InteractionMessageId,
   InteractionOperation,
   InteractionOperationId,
+  InteractionOperationKind,
   InteractionRoutingPolicy,
   InteractionSession,
   InteractionSessionId,
@@ -17,6 +21,10 @@ import type {
   FailedInteractionOperation,
   InterruptedInteractionOperation,
   ReservedInteractionOperation,
+  RouteDecision,
+  RouteDecisionId,
+  RouteProposal,
+  RouteProposalId,
   Sha256Digest,
 } from '@codeclosure/domain';
 
@@ -26,6 +34,7 @@ export const InteractionAuditAggregateType = {
   INTERACTION_MESSAGE: 'INTERACTION_MESSAGE',
   INTERACTION_OPERATION: 'INTERACTION_OPERATION',
   FOCUS_BINDING: 'FOCUS_BINDING',
+  FRONTSTAGE_CONTEXT_MANIFEST: 'FRONTSTAGE_CONTEXT_MANIFEST',
   ROUTE_PROPOSAL: 'ROUTE_PROPOSAL',
   ROUTE_DECISION: 'ROUTE_DECISION',
   PENDING_ACTION: 'PENDING_ACTION',
@@ -49,6 +58,7 @@ export const InteractionAuditEventType = {
   INTERACTION_OPERATION_FAILED: 'INTERACTION_OPERATION_FAILED',
   INTERACTION_OPERATION_INTERRUPTED: 'INTERACTION_OPERATION_INTERRUPTED',
   FOCUS_BINDING_RECORDED: 'FOCUS_BINDING_RECORDED',
+  FRONTSTAGE_CONTEXT_MANIFEST_RECORDED: 'FRONTSTAGE_CONTEXT_MANIFEST_RECORDED',
   ROUTE_PROPOSAL_RECORDED: 'ROUTE_PROPOSAL_RECORDED',
   ROUTE_DECISION_RECORDED: 'ROUTE_DECISION_RECORDED',
   PENDING_ACTION_RECORDED: 'PENDING_ACTION_RECORDED',
@@ -194,10 +204,20 @@ export interface InteractionSessionControlStore extends InteractionPolicyControl
   getInteractionMessage(messageId: InteractionMessageId): InteractionMessage | undefined;
 }
 
+export type CompanionFreeReservedInteractionOperation = Omit<
+  ReservedInteractionOperation,
+  'operationKind' | 'contextManifestRef' | 'assistantProfile'
+> &
+  Readonly<{
+    operationKind: Exclude<InteractionOperationKind, 'INTAKE_CLARIFICATION'>;
+    contextManifestRef?: never;
+    assistantProfile?: never;
+  }>;
+
 export interface ReserveInteractionOperation {
   readonly session: InteractionSession;
   readonly message: InteractionMessage;
-  readonly operation: ReservedInteractionOperation;
+  readonly operation: CompanionFreeReservedInteractionOperation;
   readonly auditWrite: InteractionAuditWrite;
 }
 
@@ -261,6 +281,103 @@ export interface InteractionOperationControlStore extends InteractionSessionCont
   listReservedInteractionOperations(
     sessionId: InteractionSessionId,
   ): readonly ReservedInteractionOperation[];
+}
+
+export interface ReserveAssistantRouteOperation {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly manifest: FrontstageContextManifest;
+  readonly operation: ReservedInteractionOperation;
+  readonly manifestAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type AssistantRouteOperationReservationResult =
+  | Readonly<{
+      status: 'RESERVED' | 'REPLAYED';
+      manifest: FrontstageContextManifest;
+      operation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'SESSION_NOT_FOUND' | 'MESSAGE_NOT_FOUND';
+    }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_CONFLICT';
+      currentMessage: InteractionMessage;
+    }>
+  | Readonly<{
+      status: 'CONTEXT_MANIFEST_CONFLICT';
+      currentManifest: FrontstageContextManifest;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | InteractionSessionOperationBusyResult;
+
+export interface CommitInteractionRouteResult {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly manifest?: FrontstageContextManifest;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly proposal?: RouteProposal;
+  readonly decision: RouteDecision;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly proposalAuditWrite?: InteractionAuditWrite;
+  readonly decisionAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionRouteResultCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      proposal?: RouteProposal;
+      decision: RouteDecision;
+      operation: CompletedInteractionOperation;
+    }>
+  | Readonly<{
+      status: 'OPERATION_NOT_FOUND';
+    }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'ROUTE_PROPOSAL_CONFLICT';
+      currentProposal: RouteProposal;
+    }>
+  | Readonly<{
+      status: 'ROUTE_DECISION_CONFLICT';
+      currentDecision: RouteDecision;
+    }>;
+
+/**
+ * Successful Route completion has one result-specific owner. It never exposes
+ * a generic successful Operation transition and never treats a Proposal as a
+ * trusted Decision.
+ */
+export interface InteractionRouteResultControlStore extends InteractionOperationControlStore {
+  reserveAssistantRouteOperation(
+    input: ReserveAssistantRouteOperation,
+  ): AssistantRouteOperationReservationResult;
+  commitInteractionRouteResult(
+    input: CommitInteractionRouteResult,
+  ): InteractionRouteResultCommitResult;
+  getFrontstageContextManifest(
+    manifestId: FrontstageContextManifestId,
+  ): FrontstageContextManifest | undefined;
+  getInteractionRouteProposal(proposalId: RouteProposalId): RouteProposal | undefined;
+  getInteractionRouteDecision(decisionId: RouteDecisionId): RouteDecision | undefined;
 }
 
 export interface RecordInteractionFocusBinding {

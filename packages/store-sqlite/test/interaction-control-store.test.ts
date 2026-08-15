@@ -9,16 +9,24 @@ import Database from 'better-sqlite3';
 
 import {
   auditEventId,
+  decodeFrontstageContextManifest,
   decodeDirectActionGrammar,
   decodeFocusBinding,
   decodeInteractionMessage,
   decodeInteractionOperation,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
+  decodeRouteDecision,
+  decodeRouteProposal,
   directActionGrammarProjection,
   focusBindingId,
   focusBindingProjection,
   frontstageContextManifestId,
+  frontstageContextManifestProjection,
+  FrontstageContextOmissionReason,
+  FrontstageContextOmissionSourceClass,
+  FrontstageNoActionReason,
+  FrontstageProposalKind,
   InteractionContentRetention,
   InteractionFocusKind,
   InteractionMessageRole,
@@ -26,6 +34,8 @@ import {
   InteractionOperationKind,
   InteractionOperationResultKind,
   InteractionOperationState,
+  InteractionRouteDecisionOutcome,
+  InteractionRouteDecisionSource,
   InteractionSessionState,
   interactionRoutingPolicyProjection,
   interactionMessageId,
@@ -39,14 +49,26 @@ import {
   isoTimestamp,
   principalId,
   routeDecisionId,
+  routeDecisionProjection,
+  routeProposalId,
+  routeProposalProjection,
   type CompletedInteractionOperation,
   type FocusBinding,
   type FocusBindingProjectionInput,
+  type FrontstageContextManifest,
+  type FrontstageContextManifestId,
+  type FrontstageContextManifestProjectionInput,
   type InteractionMessage,
   type InteractionOperationProjectionInput,
   type ReservedInteractionOperation,
   type InteractionSessionProjectionInput,
   type InteractionSession,
+  type RouteDecision,
+  type RouteDecisionId,
+  type RouteDecisionProjectionInput,
+  type RouteProposal,
+  type RouteProposalId,
+  type RouteProposalProjectionInput,
 } from '@codeclosure/domain';
 import {
   CanonicalJsonSha256DigestProvider,
@@ -54,9 +76,12 @@ import {
   InteractionAuditEventType,
   createM26InteractionPolicies,
   type AdmitInteractionUserMessage,
+  type CompanionFreeReservedInteractionOperation,
+  type CommitInteractionRouteResult,
   type CreateInteractionSession,
   type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
+  type ReserveAssistantRouteOperation,
   type InteractionAuditWrite,
   type InteractionPolicySet,
   type ReserveInteractionOperation,
@@ -79,6 +104,31 @@ function fixtureIdentifierSuffix(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
+}
+
+function createInteractionAuditWrite(
+  suffix: string,
+  part: string,
+  aggregateType: InteractionAuditWrite['aggregateType'],
+  aggregateId: string,
+  eventType: InteractionAuditWrite['eventType'],
+  payloadDigest: InteractionAuditWrite['payloadDigest'],
+  occurredAt: InteractionAuditWrite['occurredAt'],
+  beforeVersion?: number,
+  afterVersion?: number,
+): InteractionAuditWrite {
+  return Object.freeze({
+    id: auditEventId(
+      `audit_interaction-${fixtureIdentifierSuffix(suffix)}-${fixtureIdentifierSuffix(part)}`,
+    ),
+    aggregateType,
+    aggregateId,
+    eventType,
+    payloadDigest,
+    occurredAt,
+    ...(beforeVersion === undefined ? {} : { beforeVersion }),
+    ...(afterVersion === undefined ? {} : { afterVersion }),
+  });
 }
 
 function decodeSessionProjection(base: InteractionSessionProjectionInput): InteractionSession {
@@ -387,6 +437,22 @@ function createReservedOperation(
   session: InteractionSession,
   message: InteractionMessage,
   suffix: string,
+  reservedAt?: string,
+): CompanionFreeReservedInteractionOperation;
+function createReservedOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  reservedAt: string,
+  assistantBinding: Readonly<{
+    contextManifestRef: NonNullable<ReservedInteractionOperation['contextManifestRef']>;
+    assistantProfile: NonNullable<ReservedInteractionOperation['assistantProfile']>;
+  }>,
+): ReservedInteractionOperation;
+function createReservedOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
   reservedAt = '2026-08-14T01:00:02.000Z',
   assistantBinding?: Readonly<{
     contextManifestRef: NonNullable<ReservedInteractionOperation['contextManifestRef']>;
@@ -410,6 +476,381 @@ function createReservedOperation(
     throw new TypeError('Fixture Operation did not remain reserved');
   }
   return operation;
+}
+
+function createReservedClarificationOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+): ReservedInteractionOperation {
+  const base = {
+    id: interactionOperationId(`interaction-operation_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: Object.freeze({ id: message.id, digest: message.messageDigest }),
+    operationKind: InteractionOperationKind.INTAKE_CLARIFICATION,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: isoTimestamp('2026-08-14T01:00:02.000Z'),
+  } satisfies InteractionOperationProjectionInput;
+  const operation = decodeOperationProjection(base);
+  if (operation.state !== InteractionOperationState.RESERVED) {
+    throw new TypeError('Fixture Clarification Operation did not remain reserved');
+  }
+  return operation;
+}
+
+function createAssistantRouteReservation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  reservedAt = '2026-08-14T01:00:02.000Z',
+  assistantProfileVersion = 'frontstage-assistant-profile-v1',
+  manifestIdentifier?: FrontstageContextManifestId,
+): Readonly<{
+  manifest: FrontstageContextManifest;
+  operation: ReservedInteractionOperation;
+}> {
+  const operationId = interactionOperationId(
+    `interaction-operation_${fixtureIdentifierSuffix(suffix)}`,
+  );
+  const assistantProfile = Object.freeze({
+    id: `frontstage-assistant-profile_${fixtureIdentifierSuffix(suffix)}`,
+    version: assistantProfileVersion,
+    digest: digests.digest({ suffix, assistantProfileVersion }),
+  });
+  const manifestBase = {
+    id:
+      manifestIdentifier ??
+      frontstageContextManifestId(`frontstage-context-manifest_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    operationId,
+    reservedOperationVersion: interactionOperationVersion(1),
+    currentMessageRef: { id: message.id, digest: message.messageDigest },
+    currentMessageContentDigest: message.contentDigest,
+    currentMessageContentByteLength: message.contentByteLength,
+    selectedPriorMessages: [],
+    ...(session.currentFocusRef === undefined ? {} : { focusRef: session.currentFocusRef }),
+    selectedGoalSummaries: [],
+    omissions: [
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.PRIOR_MESSAGE,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+      ...(session.currentFocusRef === undefined
+        ? [
+            {
+              sourceClass: FrontstageContextOmissionSourceClass.FOCUS,
+              reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+              omittedSourceDigests: [],
+            } as const,
+          ]
+        : []),
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.GOAL_SUMMARY,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+      {
+        sourceClass: FrontstageContextOmissionSourceClass.ACTIVE_INTAKE_QUESTION,
+        reasonCode: FrontstageContextOmissionReason.NOT_PRESENT,
+        omittedSourceDigests: [],
+      },
+    ],
+    configuration: session.configuration,
+    contextCompiler: {
+      id: 'frontstage-context-compiler_fixture',
+      version: 'frontstage-context-compiler-v1',
+      digest: digests.digest({ contextCompiler: 'v1' }),
+    },
+    assistantProfile,
+    assistantAdapter: {
+      id: 'frontstage-assistant-adapter_fixture',
+      version: 'frontstage-assistant-adapter-v1',
+      digest: digests.digest({ assistantAdapter: 'v1' }),
+    },
+    responseContract: {
+      id: 'frontstage-response-contract_fixture',
+      version: 'frontstage-response-contract-v1',
+      digest: digests.digest({ responseContract: 'v1' }),
+    },
+    routingPolicy: session.routingPolicy,
+    retentionProfile: session.retentionProfile,
+    budgetProfile: {
+      id: 'frontstage-context-budget_fixture',
+      version: 'frontstage-context-budget-v1',
+      digest: digests.digest({ budgetProfile: 'v1' }),
+    },
+    packageDigest: digests.digest({ package: suffix, assistantProfileVersion }),
+    packageByteLength: 256,
+    createdAt: message.createdAt,
+  } satisfies FrontstageContextManifestProjectionInput;
+  const manifest = decodeFrontstageContextManifest(
+    {
+      ...manifestBase,
+      manifestDigest: digests.digest(frontstageContextManifestProjection(manifestBase)),
+    },
+    digests,
+  );
+  const operation = createReservedOperation(session, message, suffix, reservedAt, {
+    contextManifestRef: { id: manifest.id, digest: manifest.manifestDigest },
+    assistantProfile,
+  });
+  return Object.freeze({ manifest, operation });
+}
+
+function createAssistantRouteReservationInput(
+  session: InteractionSession,
+  message: InteractionMessage,
+  reservation: Readonly<{
+    manifest: FrontstageContextManifest;
+    operation: ReservedInteractionOperation;
+  }>,
+  suffix: string,
+  focus?: FocusBinding,
+): ReserveAssistantRouteOperation {
+  return Object.freeze({
+    session,
+    message,
+    ...(focus === undefined ? {} : { focus }),
+    manifest: reservation.manifest,
+    operation: reservation.operation,
+    manifestAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'context-manifest',
+      InteractionAuditAggregateType.FRONTSTAGE_CONTEXT_MANIFEST,
+      reservation.manifest.id,
+      InteractionAuditEventType.FRONTSTAGE_CONTEXT_MANIFEST_RECORDED,
+      reservation.manifest.manifestDigest,
+      reservation.manifest.createdAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'operation-reserved',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      reservation.operation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+      reservation.operation.operationDigest,
+      reservation.operation.reservedAt,
+      undefined,
+      reservation.operation.version,
+    ),
+  });
+}
+
+function createAssistantNoActionProposal(
+  reservation: Readonly<{
+    manifest: FrontstageContextManifest;
+    operation: ReservedInteractionOperation;
+  }>,
+  suffix: string,
+  observedAt = '2026-08-14T01:00:02.500Z',
+  proposalIdentifier?: RouteProposalId,
+): RouteProposal {
+  const base = {
+    id: proposalIdentifier ?? routeProposalId(`route-proposal_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: reservation.operation.sessionId,
+    operationId: reservation.operation.id,
+    messageRef: reservation.operation.messageRef,
+    contextManifestRef: {
+      id: reservation.manifest.id,
+      digest: reservation.manifest.manifestDigest,
+    },
+    assistantProfile: reservation.manifest.assistantProfile,
+    assistantAdapter: reservation.manifest.assistantAdapter,
+    responseContract: reservation.manifest.responseContract,
+    kind: FrontstageProposalKind.NO_ACTION_PROPOSAL,
+    reasonCode: FrontstageNoActionReason.NO_SAFE_PROPOSAL,
+    observedAt: isoTimestamp(observedAt),
+  } satisfies RouteProposalProjectionInput;
+  return decodeRouteProposal(
+    { ...base, proposalDigest: digests.digest(routeProposalProjection(base)) },
+    digests,
+  );
+}
+
+function createRouteDecision(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  proposal?: RouteProposal,
+  focus?: FocusBinding,
+  decidedAt = '2026-08-14T01:00:03.000Z',
+  decisionIdentifier?: RouteDecisionId,
+): RouteDecision {
+  const common = {
+    id: decisionIdentifier ?? routeDecisionId(`route-decision_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    ...(focus === undefined ? {} : { focusRef: { id: focus.id, digest: focus.focusDigest } }),
+    ...(proposal === undefined
+      ? { source: InteractionRouteDecisionSource.READ_ONLY_GOAL_QUERY }
+      : {
+          proposalRef: { id: proposal.id, digest: proposal.proposalDigest },
+          source: InteractionRouteDecisionSource.ASSISTANT_PROPOSAL,
+        }),
+    routingPolicy: session.routingPolicy,
+    allowedRoutes: [
+      proposal === undefined
+        ? InteractionRouteDecisionOutcome.LIST_GOALS
+        : InteractionRouteDecisionOutcome.NO_ACTION,
+    ],
+    reasonTrace: [
+      {
+        ruleId: 'fixture-route-result',
+        policyDigest: session.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [message.messageDigest],
+      },
+    ],
+    ...(proposal === undefined
+      ? { outcome: InteractionRouteDecisionOutcome.LIST_GOALS }
+      : {
+          outcome: InteractionRouteDecisionOutcome.NO_ACTION,
+          reasonCode: FrontstageNoActionReason.NO_SAFE_PROPOSAL,
+        }),
+    decidedAt: isoTimestamp(decidedAt),
+  } satisfies RouteDecisionProjectionInput;
+  return decodeRouteDecision(
+    { ...common, decisionDigest: digests.digest(routeDecisionProjection(common)) },
+    digests,
+  );
+}
+
+function createAnswerRouteDecision(
+  session: InteractionSession,
+  message: InteractionMessage,
+  proposal: RouteProposal,
+  suffix: string,
+): RouteDecision {
+  const base = {
+    id: routeDecisionId(`route-decision_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    proposalRef: { id: proposal.id, digest: proposal.proposalDigest },
+    source: InteractionRouteDecisionSource.ASSISTANT_PROPOSAL,
+    routingPolicy: session.routingPolicy,
+    allowedRoutes: [InteractionRouteDecisionOutcome.ANSWER],
+    reasonTrace: [
+      {
+        ruleId: 'fixture-answer-route-result',
+        policyDigest: session.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [message.messageDigest, proposal.proposalDigest],
+      },
+    ],
+    outcome: InteractionRouteDecisionOutcome.ANSWER,
+    answerProposalRef: { id: proposal.id, digest: proposal.proposalDigest },
+    decidedAt: isoTimestamp('2026-08-14T01:00:03.000Z'),
+  } satisfies RouteDecisionProjectionInput;
+  return decodeRouteDecision(
+    { ...base, decisionDigest: digests.digest(routeDecisionProjection(base)) },
+    digests,
+  );
+}
+
+function completeRouteOperation(
+  operation: ReservedInteractionOperation,
+  decision: RouteDecision,
+  proposal?: RouteProposal,
+  completedAt = '2026-08-14T01:00:03.500Z',
+): CompletedInteractionOperation {
+  const base = {
+    id: operation.id,
+    schemaVersion: operation.schemaVersion,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    ...(operation.contextManifestRef === undefined
+      ? {}
+      : { contextManifestRef: operation.contextManifestRef }),
+    ...(operation.assistantProfile === undefined
+      ? {}
+      : { assistantProfile: operation.assistantProfile }),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ROUTE_DECIDED,
+      routeDecisionRef: { id: decision.id, digest: decision.decisionDigest },
+      ...(proposal === undefined
+        ? {}
+        : { routeProposalRef: { id: proposal.id, digest: proposal.proposalDigest } }),
+    },
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp(completedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeOperationProjection(base);
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Fixture Route Operation did not complete');
+  }
+  return completed;
+}
+
+function createRouteResultCommitInput(
+  session: InteractionSession,
+  message: InteractionMessage,
+  currentOperation: ReservedInteractionOperation,
+  decision: RouteDecision,
+  nextOperation: CompletedInteractionOperation,
+  suffix: string,
+  options: Readonly<{
+    focus?: FocusBinding;
+    manifest?: FrontstageContextManifest;
+    proposal?: RouteProposal;
+  }> = {},
+): CommitInteractionRouteResult {
+  return Object.freeze({
+    session,
+    message,
+    ...(options.focus === undefined ? {} : { focus: options.focus }),
+    ...(options.manifest === undefined ? {} : { manifest: options.manifest }),
+    currentOperation,
+    ...(options.proposal === undefined ? {} : { proposal: options.proposal }),
+    decision,
+    nextOperation,
+    ...(options.proposal === undefined
+      ? {}
+      : {
+          proposalAuditWrite: createInteractionAuditWrite(
+            suffix,
+            'route-proposal',
+            InteractionAuditAggregateType.ROUTE_PROPOSAL,
+            options.proposal.id,
+            InteractionAuditEventType.ROUTE_PROPOSAL_RECORDED,
+            options.proposal.proposalDigest,
+            options.proposal.observedAt,
+          ),
+        }),
+    decisionAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'route-decision',
+      InteractionAuditAggregateType.ROUTE_DECISION,
+      decision.id,
+      InteractionAuditEventType.ROUTE_DECISION_RECORDED,
+      decision.decisionDigest,
+      decision.decidedAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'route-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      nextOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      nextOperation.operationDigest,
+      nextOperation.completedAt,
+      currentOperation.version,
+      nextOperation.version,
+    ),
+  });
 }
 
 function terminalizeOperation(
@@ -497,7 +938,7 @@ function completeOperationWithoutOwnedResult(
 function createOperationReservationInput(
   session: InteractionSession,
   message: InteractionMessage,
-  operation: ReservedInteractionOperation,
+  operation: CompanionFreeReservedInteractionOperation,
   suffix: string,
 ): ReserveInteractionOperation {
   return Object.freeze({
@@ -538,6 +979,153 @@ function createOperationTerminalInput(
       afterVersion: nextOperation.version,
     }),
   });
+}
+
+function insertRawReservedInteractionOperation(
+  database: Database.Database,
+  operation: ReservedInteractionOperation,
+): void {
+  database
+    .prepare(
+      `INSERT INTO interaction_operations(
+         id, schema_version, version, session_id, expected_session_version,
+         message_id, message_digest, operation_kind, state, context_manifest_id,
+         context_manifest_digest, assistant_profile_id, assistant_profile_version,
+         assistant_profile_digest, reserved_at, completed_at, operation_digest,
+         record_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+    )
+    .run(
+      operation.id,
+      operation.schemaVersion,
+      operation.version,
+      operation.sessionId,
+      operation.expectedSessionVersion,
+      operation.messageRef.id,
+      operation.messageRef.digest,
+      operation.operationKind,
+      operation.contextManifestRef?.id ?? null,
+      operation.contextManifestRef?.digest ?? null,
+      operation.assistantProfile?.id ?? null,
+      operation.assistantProfile?.version ?? null,
+      operation.assistantProfile?.digest ?? null,
+      operation.reservedAt,
+      operation.operationDigest,
+      JSON.stringify(operation),
+    );
+}
+
+function insertRawInteractionRouteProposal(
+  database: Database.Database,
+  proposal: RouteProposal,
+  overrides: Readonly<{ operationId?: string }> = {},
+): void {
+  database
+    .prepare(
+      `INSERT INTO interaction_route_proposals(
+         id, schema_version, session_id, operation_id, message_id, message_digest,
+         proposal_kind, proposal_digest, observed_at, record_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      proposal.id,
+      proposal.schemaVersion,
+      proposal.sessionId,
+      overrides.operationId ?? proposal.operationId,
+      proposal.messageRef.id,
+      proposal.messageRef.digest,
+      proposal.kind,
+      proposal.proposalDigest,
+      proposal.observedAt,
+      JSON.stringify(proposal),
+    );
+}
+
+function insertRawInteractionRouteDecision(
+  database: Database.Database,
+  decision: RouteDecision,
+  overrides: Readonly<{ expectedSessionVersion?: number }> = {},
+): void {
+  database
+    .prepare(
+      `INSERT INTO interaction_route_decisions(
+         id, schema_version, session_id, expected_session_version, message_id,
+         message_digest, proposal_id, proposal_digest, focus_id, focus_digest,
+         outcome, decided_at, decision_digest, record_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      decision.id,
+      decision.schemaVersion,
+      decision.sessionId,
+      overrides.expectedSessionVersion ?? decision.expectedSessionVersion,
+      decision.messageRef.id,
+      decision.messageRef.digest,
+      decision.proposalRef?.id ?? null,
+      decision.proposalRef?.digest ?? null,
+      decision.focusRef?.id ?? null,
+      decision.focusRef?.digest ?? null,
+      decision.outcome,
+      decision.decidedAt,
+      decision.decisionDigest,
+      JSON.stringify(decision),
+    );
+}
+
+function updateRawCompletedInteractionOperation(
+  database: Database.Database,
+  currentOperation: ReservedInteractionOperation,
+  nextOperation: CompletedInteractionOperation,
+): void {
+  const result = database
+    .prepare(
+      `UPDATE interaction_operations
+          SET version = ?, state = 'COMPLETED', completed_at = ?,
+              operation_digest = ?, record_json = ?
+        WHERE id = ? AND version = ? AND operation_digest = ? AND state = 'RESERVED'`,
+    )
+    .run(
+      nextOperation.version,
+      nextOperation.completedAt,
+      nextOperation.operationDigest,
+      JSON.stringify(nextOperation),
+      currentOperation.id,
+      currentOperation.version,
+      currentOperation.operationDigest,
+    );
+  assert.equal(result.changes, 1);
+}
+
+function insertRawInteractionAuditMembership(
+  database: Database.Database,
+  session: InteractionSession,
+  auditWrite: InteractionAuditWrite,
+): void {
+  database
+    .prepare(
+      `INSERT INTO audit_events(
+         id, aggregate_type, aggregate_id, event_type, actor_type,
+         before_version, after_version, payload_digest, occurred_at
+       ) VALUES (?, ?, ?, ?, 'RUNTIME', ?, ?, ?, ?)`,
+    )
+    .run(
+      auditWrite.id,
+      auditWrite.aggregateType,
+      auditWrite.aggregateId,
+      auditWrite.eventType,
+      auditWrite.beforeVersion ?? null,
+      auditWrite.afterVersion ?? null,
+      auditWrite.payloadDigest,
+      auditWrite.occurredAt,
+    );
+  database
+    .prepare(
+      `INSERT INTO interaction_audit_events(session_id, position, audit_event_id)
+       SELECT ?, COALESCE(MAX(position), -1) + 1, ?
+         FROM interaction_audit_events
+        WHERE session_id = ?`,
+    )
+    .run(session.id, auditWrite.id, session.id);
 }
 
 type StoredSessionState = 'OPEN' | 'CLOSING';
@@ -779,6 +1367,7 @@ function insertActionReservationChain(
   commandId: string;
   canonicalCommandInputDigest: string;
 }> {
+  database.exec('DROP TRIGGER IF EXISTS interaction_route_decisions_exact_authority_guard');
   const messageId = `interaction-message_${suffix}`;
   const messageDigest = insertUserMessage(database, sessionId, messageId);
   const decisionId = `route-decision_${suffix}`;
@@ -2224,6 +2813,1053 @@ for (const step of operationReservationRollbackSteps) {
   });
 }
 
+void test('B1 deterministic Route result applies once and strictly reopens without Proposal', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-deterministic-route');
+  const message = createUserMessage(
+    initial,
+    'b1-deterministic-route',
+    '列出目标',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'b1-deterministic-route');
+  const decision = createRouteDecision(session, message, 'b1-deterministic-route');
+  const completed = completeRouteOperation(operation, decision);
+  const input = createRouteResultCommitInput(
+    session,
+    message,
+    operation,
+    decision,
+    completed,
+    'b1-deterministic-route',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'b1-deterministic-route'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-deterministic-route'),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, 'b1-deterministic-route'),
+  );
+  assert.deepEqual(store.commitInteractionRouteResult(input), {
+    status: 'APPLIED',
+    decision,
+    operation: completed,
+  });
+  assert.deepEqual(store.commitInteractionRouteResult(input), {
+    status: 'REPLAYED',
+    decision,
+    operation: completed,
+  });
+  const duplicateOperation = createReservedOperation(
+    session,
+    message,
+    'b1-deterministic-route-duplicate',
+    '2026-08-14T01:00:04.000Z',
+  );
+  assert.deepEqual(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(
+        session,
+        message,
+        duplicateOperation,
+        'b1-deterministic-route-duplicate',
+      ),
+    ),
+    { status: 'OPERATION_CONFLICT', currentOperation: completed },
+  );
+  assert.deepEqual(store.getInteractionRouteDecision(decision.id), decision);
+  assert.equal(
+    store.getInteractionRouteProposal(routeProposalId('route-proposal_absent-b1')),
+    undefined,
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionOperation(operation.id), completed);
+    assert.deepEqual(reopened.getInteractionRouteDecision(decision.id), decision);
+    assert.deepEqual(reopened.commitInteractionRouteResult(input), {
+      status: 'REPLAYED',
+      decision,
+      operation: completed,
+    });
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('B1 Assistant Route reserves its Manifest, rejects generic bypass, and completes exact Proposal chain', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-assistant-route');
+  const message = createUserMessage(
+    initial,
+    'b1-assistant-route',
+    '帮我判断下一步',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const reservation = createAssistantRouteReservation(session, message, 'b1-assistant-route');
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'b1-assistant-route'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-assistant-route'),
+  );
+  assert.throws(
+    () =>
+      store.reserveInteractionOperation({
+        session,
+        message,
+        operation: reservation.operation,
+        auditWrite: createAssistantRouteReservationInput(
+          session,
+          message,
+          reservation,
+          'b1-assistant-generic-bypass',
+        ).operationAuditWrite,
+      } as unknown as ReserveInteractionOperation),
+    /cannot create a companion-bound Operation/u,
+  );
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(session, message, reservation, 'b1-assistant-route'),
+    ),
+    { status: 'RESERVED', manifest: reservation.manifest, operation: reservation.operation },
+  );
+  const proposal = createAssistantNoActionProposal(reservation, 'b1-assistant-route');
+  const invalidAnswerDecision = createAnswerRouteDecision(
+    session,
+    message,
+    proposal,
+    'b1-assistant-route-invalid-answer',
+  );
+  const invalidAnswerCompletion = completeRouteOperation(
+    reservation.operation,
+    invalidAnswerDecision,
+    proposal,
+  );
+  assert.throws(
+    () =>
+      store.commitInteractionRouteResult(
+        createRouteResultCommitInput(
+          session,
+          message,
+          reservation.operation,
+          invalidAnswerDecision,
+          invalidAnswerCompletion,
+          'b1-assistant-route-invalid-answer',
+          { manifest: reservation.manifest, proposal },
+        ),
+      ),
+    /exact Manifest, Proposal, Decision, and result/u,
+  );
+  assert.deepEqual(store.getInteractionOperation(reservation.operation.id), reservation.operation);
+  assert.equal(store.getInteractionRouteProposal(proposal.id), undefined);
+  assert.equal(store.getInteractionRouteDecision(invalidAnswerDecision.id), undefined);
+  const decision = createRouteDecision(session, message, 'b1-assistant-route', proposal);
+  const completed = completeRouteOperation(reservation.operation, decision, proposal);
+  const resultInput = createRouteResultCommitInput(
+    session,
+    message,
+    reservation.operation,
+    decision,
+    completed,
+    'b1-assistant-route-result',
+    { manifest: reservation.manifest, proposal },
+  );
+  assert.deepEqual(store.commitInteractionRouteResult(resultInput), {
+    status: 'APPLIED',
+    proposal,
+    decision,
+    operation: completed,
+  });
+  assert.deepEqual(
+    store.getFrontstageContextManifest(reservation.manifest.id),
+    reservation.manifest,
+  );
+  assert.deepEqual(store.getInteractionRouteProposal(proposal.id), proposal);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(
+      reopened.getFrontstageContextManifest(reservation.manifest.id),
+      reservation.manifest,
+    );
+    assert.deepEqual(reopened.getInteractionRouteProposal(proposal.id), proposal);
+    assert.deepEqual(reopened.getInteractionRouteDecision(decision.id), decision);
+    assert.deepEqual(reopened.getInteractionOperation(reservation.operation.id), completed);
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('B1 Assistant Route reservation returns each authority conflict as typed data', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const missingInitial = createInitialSession(policies, 'b1-assistant-reservation-missing');
+  const missingMessage = createUserMessage(
+    missingInitial,
+    'b1-assistant-reservation-missing',
+    '不存在的会话',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const missingSession = transitionSession(
+    missingInitial,
+    InteractionSessionState.OPEN,
+    missingMessage.createdAt,
+  );
+  const missingReservation = createAssistantRouteReservation(
+    missingSession,
+    missingMessage,
+    'b1-assistant-reservation-missing',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        missingSession,
+        missingMessage,
+        missingReservation,
+        'b1-assistant-reservation-missing',
+      ),
+    ),
+    { status: 'SESSION_NOT_FOUND' },
+  );
+
+  const missingMessageInitial = createInitialSession(
+    policies,
+    'b1-assistant-reservation-missing-message',
+  );
+  const unpersistedMessage = createUserMessage(
+    missingMessageInitial,
+    'b1-assistant-reservation-missing-message',
+    '尚未持久化的消息',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const missingMessageSession = transitionSession(
+    missingMessageInitial,
+    InteractionSessionState.OPEN,
+    unpersistedMessage.createdAt,
+  );
+  const missingMessageReservation = createAssistantRouteReservation(
+    missingMessageSession,
+    unpersistedMessage,
+    'b1-assistant-reservation-missing-message',
+  );
+  store.createInteractionSession(
+    createSessionInput(missingMessageInitial, 'b1-assistant-reservation-missing-message'),
+  );
+  store.transitionInteractionSession(
+    createSessionTransitionInput(
+      missingMessageInitial,
+      missingMessageSession,
+      'b1-assistant-reservation-missing-message',
+    ),
+  );
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        missingMessageSession,
+        unpersistedMessage,
+        missingMessageReservation,
+        'b1-assistant-reservation-missing-message',
+      ),
+    ),
+    { status: 'MESSAGE_NOT_FOUND' },
+  );
+
+  const initial = createInitialSession(policies, 'b1-assistant-reservation-conflicts');
+  const message = createUserMessage(
+    initial,
+    'b1-assistant-reservation-conflicts',
+    '保留的消息',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.createInteractionSession(createSessionInput(initial, 'b1-assistant-reservation-conflicts'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      initial,
+      message,
+      session,
+      'b1-assistant-reservation-conflicts',
+    ),
+  );
+
+  const substitutedContent = '替换后的消息';
+  const substitutedMessageBase = {
+    id: message.id,
+    schemaVersion: message.schemaVersion,
+    sessionId: message.sessionId,
+    principalRef: message.principalRef,
+    role: InteractionMessageRole.USER,
+    retention: InteractionContentRetention.RETAINED,
+    content: substitutedContent,
+    contentDigest: digests.digestUtf8(substitutedContent),
+    contentByteLength: Buffer.byteLength(substitutedContent, 'utf8'),
+    createdAt: message.createdAt,
+  };
+  const substitutedMessage = decodeInteractionMessage(
+    {
+      ...substitutedMessageBase,
+      messageDigest: digests.digest(interactionMessageProjection(substitutedMessageBase)),
+    },
+    digests,
+  );
+  const substitutedReservation = createAssistantRouteReservation(
+    session,
+    substitutedMessage,
+    'b1-assistant-reservation-message-conflict',
+  );
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        session,
+        substitutedMessage,
+        substitutedReservation,
+        'b1-assistant-reservation-message-conflict',
+      ),
+    ),
+    { status: 'MESSAGE_CONFLICT', currentMessage: message },
+  );
+
+  const reservation = createAssistantRouteReservation(
+    session,
+    message,
+    'b1-assistant-reservation-conflicts',
+  );
+  assert.equal(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        session,
+        message,
+        reservation,
+        'b1-assistant-reservation-conflicts',
+      ),
+    ).status,
+    'RESERVED',
+  );
+  const manifestConflict = createAssistantRouteReservation(
+    session,
+    message,
+    'b1-assistant-reservation-manifest-conflict',
+    '2026-08-14T01:00:02.100Z',
+    'frontstage-assistant-profile-v2',
+    reservation.manifest.id,
+  );
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        session,
+        message,
+        manifestConflict,
+        'b1-assistant-reservation-manifest-conflict',
+      ),
+    ),
+    { status: 'CONTEXT_MANIFEST_CONFLICT', currentManifest: reservation.manifest },
+  );
+
+  const closing = transitionSession(
+    session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:04.000Z',
+  );
+  store.transitionInteractionSession(
+    createSessionTransitionInput(session, closing, 'b1-assistant-reservation-closing'),
+  );
+  const staleReservation = createAssistantRouteReservation(
+    session,
+    message,
+    'b1-assistant-reservation-version-conflict',
+    '2026-08-14T01:00:05.000Z',
+  );
+  assert.deepEqual(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        session,
+        message,
+        staleReservation,
+        'b1-assistant-reservation-version-conflict',
+      ),
+    ),
+    { status: 'VERSION_CONFLICT', currentSession: closing },
+  );
+  store.close();
+});
+
+void test('B1 Route result commit returns missing and conflicting authority as typed data', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+
+  const createAdmittedSession = (suffix: string) => {
+    const initial = createInitialSession(policies, suffix);
+    const message = createUserMessage(
+      initial,
+      suffix,
+      `路由结果 ${suffix}`,
+      '2026-08-14T01:00:01.000Z',
+    );
+    const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+    store.createInteractionSession(createSessionInput(initial, suffix));
+    store.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(initial, message, session, suffix),
+    );
+    return Object.freeze({ initial, message, session });
+  };
+
+  const missing = createAdmittedSession('b1-route-result-missing');
+  const missingOperation = createReservedOperation(
+    missing.session,
+    missing.message,
+    'b1-route-result-missing',
+  );
+  const missingDecision = createRouteDecision(
+    missing.session,
+    missing.message,
+    'b1-route-result-missing',
+  );
+  const missingCompletion = completeRouteOperation(missingOperation, missingDecision);
+  assert.deepEqual(
+    store.commitInteractionRouteResult(
+      createRouteResultCommitInput(
+        missing.session,
+        missing.message,
+        missingOperation,
+        missingDecision,
+        missingCompletion,
+        'b1-route-result-missing',
+      ),
+    ),
+    { status: 'OPERATION_NOT_FOUND' },
+  );
+
+  const stale = createAdmittedSession('b1-route-result-version-conflict');
+  const staleOperation = createReservedOperation(
+    stale.session,
+    stale.message,
+    'b1-route-result-version-conflict',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      stale.session,
+      stale.message,
+      staleOperation,
+      'b1-route-result-version-conflict',
+    ),
+  );
+  const staleDecision = createRouteDecision(
+    stale.session,
+    stale.message,
+    'b1-route-result-version-conflict',
+  );
+  const staleCompletion = completeRouteOperation(staleOperation, staleDecision);
+  const closing = transitionSession(
+    stale.session,
+    InteractionSessionState.CLOSING,
+    '2026-08-14T01:00:04.000Z',
+  );
+  store.transitionInteractionSession(
+    createSessionTransitionInput(
+      stale.session,
+      closing,
+      'b1-route-result-version-conflict-closing',
+    ),
+  );
+  assert.deepEqual(
+    store.commitInteractionRouteResult(
+      createRouteResultCommitInput(
+        stale.session,
+        stale.message,
+        staleOperation,
+        staleDecision,
+        staleCompletion,
+        'b1-route-result-version-conflict',
+      ),
+    ),
+    { status: 'VERSION_CONFLICT', currentSession: closing },
+  );
+
+  const retained = createAdmittedSession('b1-route-result-retained-authority');
+  const retainedReservation = createAssistantRouteReservation(
+    retained.session,
+    retained.message,
+    'b1-route-result-retained-authority',
+  );
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(
+      retained.session,
+      retained.message,
+      retainedReservation,
+      'b1-route-result-retained-authority',
+    ),
+  );
+  const retainedProposal = createAssistantNoActionProposal(
+    retainedReservation,
+    'b1-route-result-retained-authority',
+  );
+  const retainedDecision = createRouteDecision(
+    retained.session,
+    retained.message,
+    'b1-route-result-retained-authority',
+    retainedProposal,
+  );
+  const retainedCompletion = completeRouteOperation(
+    retainedReservation.operation,
+    retainedDecision,
+    retainedProposal,
+  );
+  store.commitInteractionRouteResult(
+    createRouteResultCommitInput(
+      retained.session,
+      retained.message,
+      retainedReservation.operation,
+      retainedDecision,
+      retainedCompletion,
+      'b1-route-result-retained-authority',
+      { manifest: retainedReservation.manifest, proposal: retainedProposal },
+    ),
+  );
+
+  const proposalConflict = createAdmittedSession('b1-route-result-proposal-conflict');
+  const proposalConflictReservation = createAssistantRouteReservation(
+    proposalConflict.session,
+    proposalConflict.message,
+    'b1-route-result-proposal-conflict',
+  );
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(
+      proposalConflict.session,
+      proposalConflict.message,
+      proposalConflictReservation,
+      'b1-route-result-proposal-conflict',
+    ),
+  );
+  const conflictingProposal = createAssistantNoActionProposal(
+    proposalConflictReservation,
+    'b1-route-result-proposal-conflict',
+    '2026-08-14T01:00:02.500Z',
+    retainedProposal.id,
+  );
+  const proposalConflictDecision = createRouteDecision(
+    proposalConflict.session,
+    proposalConflict.message,
+    'b1-route-result-proposal-conflict',
+    conflictingProposal,
+  );
+  const proposalConflictCompletion = completeRouteOperation(
+    proposalConflictReservation.operation,
+    proposalConflictDecision,
+    conflictingProposal,
+  );
+  assert.deepEqual(
+    store.commitInteractionRouteResult(
+      createRouteResultCommitInput(
+        proposalConflict.session,
+        proposalConflict.message,
+        proposalConflictReservation.operation,
+        proposalConflictDecision,
+        proposalConflictCompletion,
+        'b1-route-result-proposal-conflict',
+        { manifest: proposalConflictReservation.manifest, proposal: conflictingProposal },
+      ),
+    ),
+    { status: 'ROUTE_PROPOSAL_CONFLICT', currentProposal: retainedProposal },
+  );
+
+  const decisionConflict = createAdmittedSession('b1-route-result-decision-conflict');
+  const decisionConflictOperation = createReservedOperation(
+    decisionConflict.session,
+    decisionConflict.message,
+    'b1-route-result-decision-conflict',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      decisionConflict.session,
+      decisionConflict.message,
+      decisionConflictOperation,
+      'b1-route-result-decision-conflict',
+    ),
+  );
+  const conflictingDecision = createRouteDecision(
+    decisionConflict.session,
+    decisionConflict.message,
+    'b1-route-result-decision-conflict',
+    undefined,
+    undefined,
+    '2026-08-14T01:00:03.000Z',
+    retainedDecision.id,
+  );
+  const decisionConflictCompletion = completeRouteOperation(
+    decisionConflictOperation,
+    conflictingDecision,
+  );
+  assert.deepEqual(
+    store.commitInteractionRouteResult(
+      createRouteResultCommitInput(
+        decisionConflict.session,
+        decisionConflict.message,
+        decisionConflictOperation,
+        conflictingDecision,
+        decisionConflictCompletion,
+        'b1-route-result-decision-conflict',
+      ),
+    ),
+    { status: 'ROUTE_DECISION_CONFLICT', currentDecision: retainedDecision },
+  );
+  store.close();
+});
+
+void test('B1 SQLite guards exact Manifest, Proposal parent, and Runtime Decision authority', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-route-result-sql-guards');
+  const message = createUserMessage(
+    initial,
+    'b1-route-result-sql-guards',
+    'SQL 守卫',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const reservation = createAssistantRouteReservation(
+    session,
+    message,
+    'b1-route-result-sql-guards',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'b1-route-result-sql-guards'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-route-result-sql-guards'),
+  );
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(
+      session,
+      message,
+      reservation,
+      'b1-route-result-sql-guards',
+    ),
+  );
+  store.close();
+
+  const proposal = createAssistantNoActionProposal(reservation, 'b1-route-result-sql-guards');
+  const decision = createRouteDecision(session, message, 'b1-route-result-sql-guards');
+  const substitutedOperation = createReservedOperation(
+    session,
+    message,
+    'b1-route-result-sql-guards-substituted-operation',
+    '2026-08-14T01:00:02.100Z',
+    {
+      contextManifestRef: {
+        id: reservation.manifest.id,
+        digest: reservation.manifest.manifestDigest,
+      },
+      assistantProfile: reservation.manifest.assistantProfile,
+    },
+  );
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    assert.throws(
+      () => insertRawReservedInteractionOperation(database, substitutedOperation),
+      /Assistant Route Operation lacks its exact Context Manifest/u,
+    );
+    assert.throws(
+      () =>
+        insertRawInteractionRouteProposal(database, proposal, {
+          operationId: interactionOperationId('interaction-operation_substituted-parent'),
+        }),
+      /Route Proposal lacks its exact Assistant reservation parent/u,
+    );
+    assert.throws(
+      () =>
+        insertRawInteractionRouteDecision(database, decision, {
+          expectedSessionVersion: decision.expectedSessionVersion + 1,
+        }),
+      /Route Decision lacks exact current Runtime authority/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+void test('B1 concurrent Route consumers produce one completion and one typed loser', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-concurrent-route');
+  const message = createUserMessage(
+    initial,
+    'b1-concurrent-route',
+    '列出当前目标',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedOperation(session, message, 'b1-concurrent-route');
+  const firstDecision = createRouteDecision(session, message, 'b1-concurrent-route-first');
+  const secondDecision = createRouteDecision(session, message, 'b1-concurrent-route-second');
+  const firstCompleted = completeRouteOperation(operation, firstDecision);
+  const secondCompleted = completeRouteOperation(operation, secondDecision);
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  setup.createInteractionSession(createSessionInput(initial, 'b1-concurrent-route'));
+  setup.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-concurrent-route'),
+  );
+  setup.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, 'b1-concurrent-route'),
+  );
+  setup.close();
+
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(
+      firstStore.commitInteractionRouteResult(
+        createRouteResultCommitInput(
+          session,
+          message,
+          operation,
+          firstDecision,
+          firstCompleted,
+          'b1-concurrent-route-first',
+        ),
+      ).status,
+      'APPLIED',
+    );
+    assert.deepEqual(
+      secondStore.commitInteractionRouteResult(
+        createRouteResultCommitInput(
+          session,
+          message,
+          operation,
+          secondDecision,
+          secondCompleted,
+          'b1-concurrent-route-second',
+        ),
+      ),
+      { status: 'OPERATION_CONFLICT', currentOperation: firstCompleted },
+    );
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
+const assistantRouteReservationRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_CONTEXT_MANIFEST_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_CONTEXT_MANIFEST_WRITE,
+  InteractionTransactionStep.AFTER_CONTEXT_MANIFEST_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_OPERATION_WRITE,
+  InteractionTransactionStep.AFTER_ASSISTANT_ROUTE_RESERVATION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of assistantRouteReservationRollbackSteps) {
+  void test(`B1 Assistant Route reservation rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `b1-assistant-reserve-${step}`);
+    const message = createUserMessage(
+      initial,
+      `b1-assistant-reserve-${step}`,
+      'Assistant 预约回滚',
+      '2026-08-14T01:00:01.000Z',
+    );
+    const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+    const reservation = createAssistantRouteReservation(
+      session,
+      message,
+      `b1-assistant-reserve-${step}`,
+    );
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(createSessionInput(initial, `b1-assistant-reserve-${step}`));
+    setup.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(initial, message, session, `b1-assistant-reserve-${step}`),
+    );
+    setup.close();
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.reserveAssistantRouteOperation(
+          createAssistantRouteReservationInput(
+            session,
+            message,
+            reservation,
+            `b1-assistant-reserve-${step}`,
+          ),
+        ),
+      new RegExp(step),
+    );
+    assert.equal(store.getFrontstageContextManifest(reservation.manifest.id), undefined);
+    assert.equal(store.getInteractionOperation(reservation.operation.id), undefined);
+    store.close();
+    const reopened = SqliteControlStore.open({ filename });
+    reopened.close();
+  });
+}
+
+const routeResultRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_ROUTE_PROPOSAL_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_PROPOSAL_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_PROPOSAL_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_DECISION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_DECISION_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_DECISION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_COMPLETION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_COMPLETION_WRITE,
+  InteractionTransactionStep.AFTER_ROUTE_COMPLETION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of routeResultRollbackSteps) {
+  void test(`B1 Route result rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const initial = createInitialSession(policies, `b1-route-result-${step}`);
+    const message = createUserMessage(
+      initial,
+      `b1-route-result-${step}`,
+      'Route 结果回滚',
+      '2026-08-14T01:00:01.000Z',
+    );
+    const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+    const reservation = createAssistantRouteReservation(
+      session,
+      message,
+      `b1-route-result-${step}`,
+    );
+    const proposal = createAssistantNoActionProposal(reservation, `b1-route-result-${step}`);
+    const decision = createRouteDecision(session, message, `b1-route-result-${step}`, proposal);
+    const completed = completeRouteOperation(reservation.operation, decision, proposal);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    setup.createInteractionSession(createSessionInput(initial, `b1-route-result-${step}`));
+    setup.admitInteractionUserMessage(
+      createUserMessageAdmissionInput(initial, message, session, `b1-route-result-${step}`),
+    );
+    setup.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
+        session,
+        message,
+        reservation,
+        `b1-route-result-reserve-${step}`,
+      ),
+    );
+    setup.close();
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        store.commitInteractionRouteResult(
+          createRouteResultCommitInput(
+            session,
+            message,
+            reservation.operation,
+            decision,
+            completed,
+            `b1-route-result-${step}`,
+            { manifest: reservation.manifest, proposal },
+          ),
+        ),
+      new RegExp(step),
+    );
+    assert.deepEqual(
+      store.getInteractionOperation(reservation.operation.id),
+      reservation.operation,
+    );
+    assert.equal(store.getInteractionRouteProposal(proposal.id), undefined);
+    assert.equal(store.getInteractionRouteDecision(decision.id), undefined);
+    store.close();
+    const reopened = SqliteControlStore.open({ filename });
+    reopened.close();
+  });
+}
+
+void test('B1 historical Intake Clarification replays and failure-closes without reopening creation', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-historical-clarification');
+  const message = createUserMessage(
+    initial,
+    'b1-historical-clarification',
+    '历史澄清回答',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedClarificationOperation(
+    session,
+    message,
+    'b1-historical-clarification',
+  );
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  setup.createInteractionSession(createSessionInput(initial, 'b1-historical-clarification'));
+  setup.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-historical-clarification'),
+  );
+  setup.close();
+
+  const reservationAudit = createInteractionAuditWrite(
+    'b1-historical-clarification',
+    'operation-reserved',
+    InteractionAuditAggregateType.INTERACTION_OPERATION,
+    operation.id,
+    InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+    operation.operationDigest,
+    operation.reservedAt,
+    undefined,
+    operation.version,
+  );
+  const database = new Database(filename);
+  try {
+    const clarificationCreationGuard = database
+      .prepare(
+        `SELECT sql
+           FROM sqlite_schema
+          WHERE type = 'trigger'
+            AND name = 'interaction_operations_clarification_creation_guard'`,
+      )
+      .pluck()
+      .get();
+    assert.equal(typeof clarificationCreationGuard, 'string');
+    database.exec('DROP TRIGGER interaction_operations_clarification_creation_guard');
+    insertRawReservedInteractionOperation(database, operation);
+    insertRawInteractionAuditMembership(database, session, reservationAudit);
+    database.exec(clarificationCreationGuard as string);
+  } finally {
+    database.close();
+  }
+
+  const store = SqliteControlStore.open({ filename });
+  const replayInput = {
+    session,
+    message,
+    operation,
+    auditWrite: createInteractionAuditWrite(
+      'b1-historical-clarification-replay',
+      'operation-reserved',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      operation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+      operation.operationDigest,
+      operation.reservedAt,
+      undefined,
+      operation.version,
+    ),
+  } as unknown as ReserveInteractionOperation;
+  assert.deepEqual(store.reserveInteractionOperation(replayInput), {
+    status: 'REPLAYED',
+    operation,
+  });
+
+  const failed = terminalizeOperation(operation, InteractionOperationState.FAILED);
+  const terminalInput = createOperationTerminalInput(
+    operation,
+    failed,
+    'b1-historical-clarification',
+  );
+  assert.deepEqual(store.terminalizeInteractionOperation(terminalInput), {
+    status: 'APPLIED',
+    operation: failed,
+  });
+  assert.deepEqual(store.terminalizeInteractionOperation(terminalInput), {
+    status: 'REPLAYED',
+    operation: failed,
+  });
+
+  const newClarification = createReservedClarificationOperation(
+    session,
+    message,
+    'b1-new-clarification-rejected',
+  );
+  assert.throws(
+    () =>
+      store.reserveInteractionOperation({
+        session,
+        message,
+        operation: newClarification,
+        auditWrite: createInteractionAuditWrite(
+          'b1-new-clarification-rejected',
+          'operation-reserved',
+          InteractionAuditAggregateType.INTERACTION_OPERATION,
+          newClarification.id,
+          InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+          newClarification.operationDigest,
+          newClarification.reservedAt,
+          undefined,
+          newClarification.version,
+        ),
+      } as unknown as ReserveInteractionOperation),
+    /cannot create a companion-bound Operation/u,
+  );
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  try {
+    assert.deepEqual(reopened.getInteractionOperation(operation.id), failed);
+  } finally {
+    reopened.close();
+  }
+});
+
+void test('B1 SQLite rejects a new Intake Clarification without its B4 creation owner', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-clarification-sql-guard');
+  const message = createUserMessage(
+    initial,
+    'b1-clarification-sql-guard',
+    '不能提前创建澄清',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const operation = createReservedClarificationOperation(
+    session,
+    message,
+    'b1-clarification-sql-guard',
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'b1-clarification-sql-guard'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-clarification-sql-guard'),
+  );
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    assert.throws(
+      () => insertRawReservedInteractionOperation(database, operation),
+      /Intake Clarification requires its result-specific creation owner/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
 void test('Slice 2 Operation failure/interruption terminalization replays and releases serialization', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
@@ -2239,24 +3875,13 @@ void test('Slice 2 Operation failure/interruption terminalization replays and re
     InteractionSessionState.OPEN,
     firstMessage.createdAt,
   );
-  const firstAssistantBinding = Object.freeze({
-    contextManifestRef: Object.freeze({
-      id: frontstageContextManifestId('frontstage-context-manifest_operation-terminal-first'),
-      digest: digests.digest({ manifest: 'operation-terminal-first' }),
-    }),
-    assistantProfile: Object.freeze({
-      id: 'frontstage-assistant-profile_operation-terminal-first',
-      version: 'frontstage-assistant-profile-v1',
-      digest: digests.digest({ profile: 'operation-terminal-first-v1' }),
-    }),
-  });
-  const firstOperation = createReservedOperation(
+  const firstAssistantReservation = createAssistantRouteReservation(
     firstSession,
     firstMessage,
     'operation-terminal-first',
     '2026-08-14T01:00:02.000Z',
-    firstAssistantBinding,
   );
+  const firstOperation = firstAssistantReservation.operation;
   const failed = terminalizeOperation(firstOperation, InteractionOperationState.FAILED);
   const store = SqliteControlStore.open({ filename });
   store.installInteractionPolicies(installInput(policies));
@@ -2269,11 +3894,11 @@ void test('Slice 2 Operation failure/interruption terminalization replays and re
       'operation-terminal-first',
     ),
   );
-  store.reserveInteractionOperation(
-    createOperationReservationInput(
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(
       firstSession,
       firstMessage,
-      firstOperation,
+      firstAssistantReservation,
       'operation-terminal-first',
     ),
   );
@@ -2292,33 +3917,26 @@ void test('Slice 2 Operation failure/interruption terminalization replays and re
     operation: failed,
   });
   assert.deepEqual(
-    store.reserveInteractionOperation(
-      createOperationReservationInput(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
         firstSession,
         firstMessage,
-        firstOperation,
+        firstAssistantReservation,
         'operation-terminal-first-reservation-replay',
       ),
     ),
-    { status: 'REPLAYED', operation: failed },
+    { status: 'REPLAYED', manifest: firstAssistantReservation.manifest, operation: failed },
   );
-  const conflictingReservation = createReservedOperation(
+  const conflictingReservation = createAssistantRouteReservation(
     firstSession,
     firstMessage,
     'operation-terminal-first',
     firstOperation.reservedAt,
-    Object.freeze({
-      contextManifestRef: firstAssistantBinding.contextManifestRef,
-      assistantProfile: Object.freeze({
-        ...firstAssistantBinding.assistantProfile,
-        version: 'frontstage-assistant-profile-v2',
-        digest: digests.digest({ profile: 'operation-terminal-first-v2' }),
-      }),
-    }),
+    'frontstage-assistant-profile-v2',
   );
   assert.deepEqual(
-    store.reserveInteractionOperation(
-      createOperationReservationInput(
+    store.reserveAssistantRouteOperation(
+      createAssistantRouteReservationInput(
         firstSession,
         firstMessage,
         conflictingReservation,
@@ -2437,15 +4055,15 @@ void test('Slice 2 Operation failure/interruption terminalization replays and re
     assert.deepEqual(reopened.getInteractionOperation(firstOperation.id), failed);
     assert.deepEqual(reopened.getInteractionOperation(secondOperation.id), interrupted);
     assert.deepEqual(
-      reopened.reserveInteractionOperation(
-        createOperationReservationInput(
+      reopened.reserveAssistantRouteOperation(
+        createAssistantRouteReservationInput(
           firstSession,
           firstMessage,
-          firstOperation,
+          firstAssistantReservation,
           'operation-terminal-first-reopen-replay',
         ),
       ),
-      { status: 'REPLAYED', operation: failed },
+      { status: 'REPLAYED', manifest: firstAssistantReservation.manifest, operation: failed },
     );
     assert.deepEqual(
       reopened.reserveInteractionOperation(
@@ -2592,6 +4210,164 @@ void test('Slice 2 concurrent Operation consumers produce one reservation and on
   }
 });
 
+void test('B1 strict reopen independently rejects two Route Operations for one Message', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-duplicate-decision-owner');
+  const message = createUserMessage(
+    initial,
+    'b1-duplicate-decision-owner',
+    '只允许一个路由结果所有者',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const firstOperation = createReservedOperation(
+    session,
+    message,
+    'b1-duplicate-decision-owner-first',
+  );
+  const decision = createRouteDecision(session, message, 'b1-duplicate-decision-owner');
+  const firstCompletion = completeRouteOperation(firstOperation, decision);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'b1-duplicate-decision-owner'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, 'b1-duplicate-decision-owner'),
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      session,
+      message,
+      firstOperation,
+      'b1-duplicate-decision-owner-first',
+    ),
+  );
+  store.commitInteractionRouteResult(
+    createRouteResultCommitInput(
+      session,
+      message,
+      firstOperation,
+      decision,
+      firstCompletion,
+      'b1-duplicate-decision-owner-first',
+    ),
+  );
+  store.close();
+
+  const secondOperation = createReservedOperation(
+    session,
+    message,
+    'b1-duplicate-decision-owner-second',
+    '2026-08-14T01:00:02.100Z',
+  );
+  const secondDecision = createRouteDecision(
+    session,
+    message,
+    'b1-duplicate-decision-owner-second',
+    undefined,
+    undefined,
+    '2026-08-14T01:00:03.100Z',
+  );
+  const secondCompletion = completeRouteOperation(
+    secondOperation,
+    secondDecision,
+    undefined,
+    '2026-08-14T01:00:03.600Z',
+  );
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    database.exec('DROP INDEX interaction_operations_one_route_per_message_idx');
+    insertRawReservedInteractionOperation(database, secondOperation);
+    insertRawInteractionRouteDecision(database, secondDecision);
+    updateRawCompletedInteractionOperation(database, secondOperation, secondCompletion);
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /Interaction Message .* has multiple Route Operations/u,
+  );
+});
+
+void test('B1 strict reopen binds a Proposal audit to its exact owning Decision', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const initial = createInitialSession(policies, 'b1-proposal-decision-audit-binding');
+  const message = createUserMessage(
+    initial,
+    'b1-proposal-decision-audit-binding',
+    '提案审计必须绑定自己的决策',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const reservation = createAssistantRouteReservation(
+    session,
+    message,
+    'b1-proposal-decision-audit-binding',
+  );
+  const proposal = createAssistantNoActionProposal(
+    reservation,
+    'b1-proposal-decision-audit-binding',
+  );
+  const decision = createRouteDecision(
+    session,
+    message,
+    'b1-proposal-decision-audit-binding',
+    proposal,
+  );
+  const completion = completeRouteOperation(reservation.operation, decision, proposal);
+  const commitInput = createRouteResultCommitInput(
+    session,
+    message,
+    reservation.operation,
+    decision,
+    completion,
+    'b1-proposal-decision-audit-binding',
+    { manifest: reservation.manifest, proposal },
+  );
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  store.createInteractionSession(createSessionInput(initial, 'b1-proposal-decision-audit-binding'));
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      initial,
+      message,
+      session,
+      'b1-proposal-decision-audit-binding',
+    ),
+  );
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(
+      session,
+      message,
+      reservation,
+      'b1-proposal-decision-audit-binding',
+    ),
+  );
+  store.commitInteractionRouteResult(commitInput);
+  store.close();
+
+  const database = new Database(filename);
+  try {
+    database.exec('DROP TRIGGER audit_events_no_update');
+    database
+      .prepare('UPDATE audit_events SET aggregate_id = ? WHERE id = ?')
+      .run(
+        routeDecisionId('route-decision_substituted-proposal-audit-owner'),
+        commitInput.decisionAuditWrite.id,
+      );
+  } finally {
+    database.close();
+  }
+
+  assert.throws(
+    () => SqliteControlStore.open({ filename }),
+    /Route Proposal .* lost its atomic Decision audit/u,
+  );
+});
+
 void test('Slice 2 strict reopen rejects a standalone successful Operation without its result owner', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
@@ -2618,6 +4394,7 @@ void test('Slice 2 strict reopen rejects a standalone successful Operation witho
   const completed = completeOperationWithoutOwnedResult(operation);
   const database = new Database(filename);
   try {
+    database.exec('DROP TRIGGER interaction_operations_route_completion_guard');
     database
       .prepare(
         `UPDATE interaction_operations
@@ -2636,7 +4413,7 @@ void test('Slice 2 strict reopen rejects a standalone successful Operation witho
     database.close();
   }
 
-  assert.throws(() => SqliteControlStore.open({ filename }), /has no implemented valid closure/u);
+  assert.throws(() => SqliteControlStore.open({ filename }), /lost its exact Decision/u);
 });
 
 void test('Slice 2 strict reopen rejects a terminal Session with an unresolved Operation', (t) => {
@@ -3109,64 +4886,50 @@ void test('Slice 2 strict reopen rejects a Session rebound to historical Focus',
   assert.throws(() => SqliteControlStore.open({ filename }), /has no exact current Focus/u);
 });
 
-void test('Slice 2 strict reopen rejects later-slice rows without an owning Store path', (t) => {
+void test('Slice 2 strict reopen rejects an orphan Route Proposal', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
-  const initial = createInitialSession(policies, 'unimplemented-operation');
+  const initial = createInitialSession(policies, 'orphan-route-proposal');
   const message = createUserMessage(
     initial,
-    'unimplemented-operation',
-    '尚未实现的操作',
+    'orphan-route-proposal',
+    '孤立路由提案',
     '2026-08-14T01:00:01.000Z',
   );
-  const afterMessage = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
-  const operation = createReservedOperation(afterMessage, message, 'unimplemented-route-proposal');
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  const reservation = createAssistantRouteReservation(session, message, 'orphan-route-proposal');
+  const proposal = createAssistantNoActionProposal(reservation, 'orphan-route-proposal');
   const store = SqliteControlStore.open({ filename });
   store.installInteractionPolicies(installInput(policies));
-  store.createInteractionSession(createSessionInput(initial, 'unimplemented-operation'));
+  store.createInteractionSession(createSessionInput(initial, 'orphan-route-proposal'));
   store.admitInteractionUserMessage(
-    createUserMessageAdmissionInput(initial, message, afterMessage, 'unimplemented-operation'),
+    createUserMessageAdmissionInput(initial, message, session, 'orphan-route-proposal'),
   );
-  store.reserveInteractionOperation(
-    createOperationReservationInput(
-      afterMessage,
-      message,
-      operation,
-      'unimplemented-route-proposal',
-    ),
+  store.reserveAssistantRouteOperation(
+    createAssistantRouteReservationInput(session, message, reservation, 'orphan-route-proposal'),
   );
   store.close();
 
   const database = new Database(filename);
   try {
-    const proposalId = 'route-proposal_unimplemented-path';
-    const proposalDigest = digests.digest({ proposalId, operationId: operation.id });
-    const record = {
-      id: proposalId,
-      schemaVersion: 1,
-      sessionId: initial.id,
-      operationId: operation.id,
-      messageRef: { id: message.id, digest: message.messageDigest },
-      kind: 'NO_ACTION_PROPOSAL',
-      observedAt: '2026-08-14T01:00:03.000Z',
-      proposalDigest,
-    };
     database
       .prepare(
         `INSERT INTO interaction_route_proposals(
            id, schema_version, session_id, operation_id, message_id, message_digest,
            proposal_kind, proposal_digest, observed_at, record_json
-         ) VALUES (?, 1, ?, ?, ?, ?, 'NO_ACTION_PROPOSAL', ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        proposalId,
-        initial.id,
-        operation.id,
-        message.id,
-        message.messageDigest,
-        proposalDigest,
-        record.observedAt,
-        JSON.stringify(record),
+        proposal.id,
+        proposal.schemaVersion,
+        proposal.sessionId,
+        proposal.operationId,
+        proposal.messageRef.id,
+        proposal.messageRef.digest,
+        proposal.kind,
+        proposal.proposalDigest,
+        proposal.observedAt,
+        JSON.stringify(proposal),
       );
   } finally {
     database.close();
@@ -3174,7 +4937,7 @@ void test('Slice 2 strict reopen rejects later-slice rows without an owning Stor
 
   assert.throws(
     () => SqliteControlStore.open({ filename }),
-    /interaction_route_proposals rows have no implemented M2\.6 Store authority path/u,
+    /Route Proposal, or Route Decision has no exact Operation owner/u,
   );
 });
 

@@ -34,6 +34,7 @@ import {
   IntentAdmissionReasonCode,
   IntentExecutionDisposition,
   IntentProjectionField,
+  InteractionOperationKind,
   InteractionOperationState,
   InteractionSessionState,
   RecoveryReconciliationDisposition,
@@ -115,10 +116,13 @@ import {
   decodeIntentAnalysisProposal,
   decodeIntentProjectionRevision,
   decodeInteractionConfirmationPolicy,
+  decodeFrontstageContextManifest,
   decodeInteractionMessage,
   decodeInteractionOperation,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
+  decodeRouteDecision,
+  decodeRouteProposal,
   decodeMaterialAmbiguity,
   decodeMaterialAmbiguitySet,
   decodeRawRequest,
@@ -135,9 +139,13 @@ import {
   deriveCapabilityGrant,
   deriveExternalPhaseResponseSchemaPolicy,
   assertInitialInteractionSessionInvariant,
+  assertFrontstageContextManifestAuthorityChainInvariant,
+  assertFrontstageContextManifestReservationChain,
   assertInteractionFocusUpdate,
   assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
+  assertInteractionRouteResultChainInvariant,
+  assertInteractionRouteResultAuthorityChainInvariant,
   assertInteractionSessionTransition,
   assertInteractionUserMessageAdmission,
   assertInteractionUserMessageAdmissionBinding,
@@ -147,6 +155,7 @@ import {
   intakeCommandResultProjection,
   intakeRunId,
   intentAdmissionPolicyId,
+  interactionOperationId,
   interactionOperationReservationProjection,
   hasExactWorkflowActiveAttemptAuthority,
   evidenceId,
@@ -212,6 +221,8 @@ import {
   type ExecutionProfileId,
   type FocusBinding,
   type FocusBindingId,
+  type FrontstageContextManifest,
+  type FrontstageContextManifestId,
   type ExternalBackendCapabilityRecord,
   type ExternalExecutionId,
   type ExternalExecutionPhaseDispatchEntry,
@@ -252,7 +263,12 @@ import {
   type InteractionOperationId,
   type InteractionSession,
   type InteractionSessionId,
+  type CompletedInteractionOperation,
   type ReservedInteractionOperation,
+  type RouteDecision,
+  type RouteDecisionId,
+  type RouteProposal,
+  type RouteProposalId,
   type MaterialAmbiguity,
   type MaterialAmbiguitySet,
   type RawRequest,
@@ -407,6 +423,11 @@ import {
   type InteractionFocusBindingRecordResult,
   type InteractionFocusControlStore,
   type InteractionOperationControlStore,
+  type InteractionRouteResultControlStore,
+  type AssistantRouteOperationReservationResult,
+  type CommitInteractionRouteResult,
+  type CompanionFreeReservedInteractionOperation,
+  type InteractionRouteResultCommitResult,
   type InteractionOperationReservationResult,
   type InteractionOperationTerminalResult,
   type InteractionPolicyInstallResult,
@@ -415,6 +436,7 @@ import {
   type InteractionSessionTransitionResult,
   type InteractionUserMessageAdmissionResult,
   type RecordInteractionFocusBinding,
+  type ReserveAssistantRouteOperation,
   type ReserveInteractionOperation,
   type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
@@ -644,6 +666,20 @@ export const InteractionTransactionStep = {
   AFTER_OPERATION_WRITE: 'AFTER_INTERACTION_OPERATION_WRITE',
   AFTER_OPERATION_TERMINAL_AUDIT_WRITE: 'AFTER_INTERACTION_OPERATION_TERMINAL_AUDIT_WRITE',
   AFTER_OPERATION_TERMINAL_WRITE: 'AFTER_INTERACTION_OPERATION_TERMINAL_WRITE',
+  AFTER_CONTEXT_MANIFEST_AUDIT_WRITE: 'AFTER_INTERACTION_CONTEXT_MANIFEST_AUDIT_WRITE',
+  AFTER_CONTEXT_MANIFEST_WRITE: 'AFTER_INTERACTION_CONTEXT_MANIFEST_WRITE',
+  AFTER_CONTEXT_MANIFEST_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_CONTEXT_MANIFEST_MEMBERSHIP_WRITE',
+  AFTER_ASSISTANT_ROUTE_RESERVATION_MEMBERSHIP_WRITE:
+    'AFTER_INTERACTION_ASSISTANT_ROUTE_RESERVATION_MEMBERSHIP_WRITE',
+  AFTER_ROUTE_PROPOSAL_AUDIT_WRITE: 'AFTER_INTERACTION_ROUTE_PROPOSAL_AUDIT_WRITE',
+  AFTER_ROUTE_PROPOSAL_WRITE: 'AFTER_INTERACTION_ROUTE_PROPOSAL_WRITE',
+  AFTER_ROUTE_PROPOSAL_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_ROUTE_PROPOSAL_MEMBERSHIP_WRITE',
+  AFTER_ROUTE_DECISION_AUDIT_WRITE: 'AFTER_INTERACTION_ROUTE_DECISION_AUDIT_WRITE',
+  AFTER_ROUTE_DECISION_WRITE: 'AFTER_INTERACTION_ROUTE_DECISION_WRITE',
+  AFTER_ROUTE_DECISION_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_ROUTE_DECISION_MEMBERSHIP_WRITE',
+  AFTER_ROUTE_COMPLETION_AUDIT_WRITE: 'AFTER_INTERACTION_ROUTE_COMPLETION_AUDIT_WRITE',
+  AFTER_ROUTE_COMPLETION_WRITE: 'AFTER_INTERACTION_ROUTE_COMPLETION_WRITE',
+  AFTER_ROUTE_COMPLETION_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_ROUTE_COMPLETION_MEMBERSHIP_WRITE',
   AFTER_FOCUS_AUDIT_WRITE: 'AFTER_INTERACTION_FOCUS_AUDIT_WRITE',
   AFTER_FOCUS_WRITE: 'AFTER_INTERACTION_FOCUS_WRITE',
   AFTER_AUDIT_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_AUDIT_MEMBERSHIP_WRITE',
@@ -1190,6 +1226,85 @@ const retainedInteractionOperationRowSchema = z
   })
   .strict();
 
+const retainedFrontstageContextManifestRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    operation_id: z.string().min(1),
+    reserved_operation_version: z.number().int().positive(),
+    current_message_id: z.string().min(1),
+    current_message_digest: z.string().min(1),
+    current_message_content_digest: z.string().min(1),
+    current_message_content_byte_length: z.number().int().positive(),
+    focus_id: z.string().nullable(),
+    focus_digest: z.string().nullable(),
+    configuration_id: z.string().min(1),
+    configuration_version: z.string().min(1),
+    configuration_digest: z.string().min(1),
+    context_compiler_id: z.string().min(1),
+    context_compiler_version: z.string().min(1),
+    context_compiler_digest: z.string().min(1),
+    assistant_profile_id: z.string().min(1),
+    assistant_profile_version: z.string().min(1),
+    assistant_profile_digest: z.string().min(1),
+    assistant_adapter_id: z.string().min(1),
+    assistant_adapter_version: z.string().min(1),
+    assistant_adapter_digest: z.string().min(1),
+    response_contract_id: z.string().min(1),
+    response_contract_version: z.string().min(1),
+    response_contract_digest: z.string().min(1),
+    routing_policy_id: z.string().min(1),
+    routing_policy_version: z.string().min(1),
+    routing_policy_digest: z.string().min(1),
+    retention_profile_id: z.string().min(1),
+    retention_profile_version: z.string().min(1),
+    retention_profile_digest: z.string().min(1),
+    budget_profile_id: z.string().min(1),
+    budget_profile_version: z.string().min(1),
+    budget_profile_digest: z.string().min(1),
+    package_digest: z.string().min(1),
+    package_byte_length: z.number().int().positive(),
+    created_at: z.string().min(1),
+    manifest_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
+const retainedInteractionRouteProposalRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    operation_id: z.string().min(1),
+    message_id: z.string().min(1),
+    message_digest: z.string().min(1),
+    proposal_kind: z.string().min(1),
+    proposal_digest: z.string().min(1),
+    observed_at: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
+const retainedInteractionRouteDecisionRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    expected_session_version: z.number().int().positive(),
+    message_id: z.string().min(1),
+    message_digest: z.string().min(1),
+    proposal_id: z.string().nullable(),
+    proposal_digest: z.string().nullable(),
+    focus_id: z.string().nullable(),
+    focus_digest: z.string().nullable(),
+    outcome: z.string().min(1),
+    decided_at: z.string().min(1),
+    decision_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
 const retainedInteractionAuditMembershipRowSchema = z
   .object({
     session_id: z.string().min(1),
@@ -1251,6 +1366,7 @@ function systemNow(): IsoTimestamp {
 
 const canonicalAuthorityDigests = new CanonicalJsonSha256DigestProvider();
 const INTERACTION_MIGRATION_NAME = '0037_frontstage_interaction.sql';
+const INTERACTION_ROUTE_RESULT_MIGRATION_NAME = '0039_interaction_route_result_authority.sql';
 
 interface NormalizedInteractionPolicyInstall {
   readonly policies: InteractionPolicySet;
@@ -1282,6 +1398,30 @@ interface NormalizedInteractionOperationReservation {
   readonly message: InteractionMessage;
   readonly operation: ReservedInteractionOperation;
   readonly auditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedAssistantRouteOperationReservation {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly manifest: FrontstageContextManifest;
+  readonly operation: ReservedInteractionOperation;
+  readonly manifestAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionRouteResultCommit {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly manifest?: FrontstageContextManifest;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly proposal?: RouteProposal;
+  readonly decision: RouteDecision;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly proposalAuditWrite?: InteractionAuditWrite;
+  readonly decisionAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
 }
 
 interface NormalizedInteractionOperationTerminalization {
@@ -1579,6 +1719,20 @@ function normalizeInteractionUserMessageAdmission(
   });
 }
 
+function assertCompanionFreeInteractionOperation(
+  operation: ReservedInteractionOperation,
+): asserts operation is CompanionFreeReservedInteractionOperation {
+  if (
+    operation.contextManifestRef !== undefined ||
+    operation.assistantProfile !== undefined ||
+    operation.operationKind === 'INTAKE_CLARIFICATION'
+  ) {
+    throw new StoreInvariantError(
+      'Generic Interaction Operation reservation cannot create a companion-bound Operation',
+    );
+  }
+}
+
 function normalizeInteractionOperationReservation(
   input: ReserveInteractionOperation,
 ): NormalizedInteractionOperationReservation {
@@ -1604,7 +1758,178 @@ function normalizeInteractionOperationReservation(
     occurredAt: operation.reservedAt,
     afterVersion: operation.version,
   });
-  return Object.freeze({ session, message, operation, auditWrite });
+  return Object.freeze({
+    session,
+    message,
+    operation,
+    auditWrite,
+  });
+}
+
+function normalizeAssistantRouteOperationReservation(
+  input: ReserveAssistantRouteOperation,
+): NormalizedAssistantRouteOperationReservation {
+  assertExactObjectKeys(
+    input,
+    ['session', 'message', 'manifest', 'operation', 'manifestAuditWrite', 'operationAuditWrite'],
+    ['focus'],
+    'Assistant Route Operation reservation input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const focus =
+    input.focus === undefined
+      ? undefined
+      : decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const manifest = decodeFrontstageContextManifest(input.manifest, canonicalAuthorityDigests);
+  const operation = decodeInteractionOperation(input.operation, canonicalAuthorityDigests);
+  if (operation.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Assistant Route Operation reservation must be RESERVED');
+  }
+  assertFrontstageContextManifestReservationChain({
+    session,
+    currentMessage: message,
+    ...(focus === undefined ? {} : { focus }),
+    manifest,
+    operation,
+  });
+  const manifestAuditWrite = normalizeExactInteractionAuditWrite(input.manifestAuditWrite, {
+    recordType: 'Frontstage Context Manifest audit',
+    aggregateType: InteractionAuditAggregateType.FRONTSTAGE_CONTEXT_MANIFEST,
+    aggregateId: manifest.id,
+    eventType: InteractionAuditEventType.FRONTSTAGE_CONTEXT_MANIFEST_RECORDED,
+    payloadDigest: manifest.manifestDigest,
+    occurredAt: manifest.createdAt,
+  });
+  const operationAuditWrite = normalizeExactInteractionAuditWrite(input.operationAuditWrite, {
+    recordType: 'Assistant Route Operation reservation audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+    aggregateId: operation.id,
+    eventType: InteractionAuditEventType.INTERACTION_OPERATION_RESERVED,
+    payloadDigest: operation.operationDigest,
+    occurredAt: operation.reservedAt,
+    afterVersion: operation.version,
+  });
+  if (manifestAuditWrite.id === operationAuditWrite.id) {
+    throw new StoreInvariantError('Assistant Route reservation audit identities must be distinct');
+  }
+  return Object.freeze({
+    session,
+    message,
+    ...(focus === undefined ? {} : { focus }),
+    manifest,
+    operation,
+    manifestAuditWrite,
+    operationAuditWrite,
+  });
+}
+
+function normalizeInteractionRouteResultCommit(
+  input: CommitInteractionRouteResult,
+): NormalizedInteractionRouteResultCommit {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'message',
+      'currentOperation',
+      'decision',
+      'nextOperation',
+      'decisionAuditWrite',
+      'operationAuditWrite',
+    ],
+    ['focus', 'manifest', 'proposal', 'proposalAuditWrite'],
+    'Interaction Route result input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const focus =
+    input.focus === undefined
+      ? undefined
+      : decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const manifest =
+    input.manifest === undefined
+      ? undefined
+      : decodeFrontstageContextManifest(input.manifest, canonicalAuthorityDigests);
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const proposal =
+    input.proposal === undefined
+      ? undefined
+      : decodeRouteProposal(input.proposal, canonicalAuthorityDigests);
+  const decision = decodeRouteDecision(input.decision, canonicalAuthorityDigests);
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  if (currentOperation.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Current Route Operation must be RESERVED');
+  }
+  if (nextOperation.state !== InteractionOperationState.COMPLETED) {
+    throw new StoreInvariantError('Next Route Operation must be COMPLETED');
+  }
+  assertInteractionRouteResultChainInvariant({
+    session,
+    currentMessage: message,
+    ...(focus === undefined ? {} : { focus }),
+    ...(manifest === undefined ? {} : { manifest }),
+    currentOperation,
+    ...(proposal === undefined ? {} : { proposal }),
+    decision,
+    nextOperation,
+  });
+  if ((proposal === undefined) !== (input.proposalAuditWrite === undefined)) {
+    throw new StoreInvariantError('Route Proposal and Proposal audit must be supplied together');
+  }
+  const proposalAuditWrite =
+    proposal === undefined || input.proposalAuditWrite === undefined
+      ? undefined
+      : normalizeExactInteractionAuditWrite(input.proposalAuditWrite, {
+          recordType: 'Route Proposal audit',
+          aggregateType: InteractionAuditAggregateType.ROUTE_PROPOSAL,
+          aggregateId: proposal.id,
+          eventType: InteractionAuditEventType.ROUTE_PROPOSAL_RECORDED,
+          payloadDigest: proposal.proposalDigest,
+          occurredAt: proposal.observedAt,
+        });
+  const decisionAuditWrite = normalizeExactInteractionAuditWrite(input.decisionAuditWrite, {
+    recordType: 'Route Decision audit',
+    aggregateType: InteractionAuditAggregateType.ROUTE_DECISION,
+    aggregateId: decision.id,
+    eventType: InteractionAuditEventType.ROUTE_DECISION_RECORDED,
+    payloadDigest: decision.decisionDigest,
+    occurredAt: decision.decidedAt,
+  });
+  const operationAuditWrite = normalizeExactInteractionAuditWrite(input.operationAuditWrite, {
+    recordType: 'Route Operation completion audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+    aggregateId: nextOperation.id,
+    eventType: InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+    payloadDigest: nextOperation.operationDigest,
+    occurredAt: nextOperation.completedAt,
+    beforeVersion: currentOperation.version,
+    afterVersion: nextOperation.version,
+  });
+  const auditIds = [
+    ...(proposalAuditWrite === undefined ? [] : [proposalAuditWrite.id]),
+    decisionAuditWrite.id,
+    operationAuditWrite.id,
+  ];
+  if (new Set(auditIds).size !== auditIds.length) {
+    throw new StoreInvariantError('Route result audit identities must be distinct');
+  }
+  return Object.freeze({
+    session,
+    message,
+    ...(focus === undefined ? {} : { focus }),
+    ...(manifest === undefined ? {} : { manifest }),
+    currentOperation,
+    ...(proposal === undefined ? {} : { proposal }),
+    decision,
+    nextOperation,
+    ...(proposalAuditWrite === undefined ? {} : { proposalAuditWrite }),
+    decisionAuditWrite,
+    operationAuditWrite,
+  });
 }
 
 function normalizeInteractionOperationTerminalization(
@@ -1697,6 +2022,23 @@ function interactionOperationReservationDigest(operation: InteractionOperation):
   return sha256Digest(
     canonicalAuthorityDigests.digest(interactionOperationReservationProjection(operation)),
   );
+}
+
+function interactionOperationReservationRecord(
+  operation: InteractionOperation,
+): ReservedInteractionOperation {
+  const projection = interactionOperationReservationProjection(operation);
+  const reserved = decodeInteractionOperation(
+    {
+      ...projection,
+      operationDigest: canonicalAuthorityDigests.digest(projection),
+    },
+    canonicalAuthorityDigests,
+  );
+  if (reserved.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Interaction Operation reservation projection did not decode');
+  }
+  return reserved;
 }
 
 function isSameOrWithin(path: string, parent: string): boolean {
@@ -3189,6 +3531,7 @@ export class SqliteControlStore
     IntakeControlStore,
     ProjectReadCleanupControlStore,
     InteractionOperationControlStore,
+    InteractionRouteResultControlStore,
     InteractionFocusControlStore
 {
   readonly #database: Database.Database;
@@ -3668,6 +4011,7 @@ export class SqliteControlStore
           ? { status: 'REPLAYED', operation: existing }
           : { status: 'OPERATION_CONFLICT', currentOperation: existing };
       }
+      assertCompanionFreeInteractionOperation(input.operation);
 
       const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
       if (retainedSession === undefined) {
@@ -3692,6 +4036,15 @@ export class SqliteControlStore
       if (active !== undefined) {
         return { status: 'SESSION_OPERATION_BUSY', currentOperation: active };
       }
+      if (input.operation.operationKind === InteractionOperationKind.ROUTE) {
+        const existingRoute = this.getRouteInteractionOperationForMessageInsideTransaction(
+          input.operation.sessionId,
+          input.operation.messageRef.id,
+        );
+        if (existingRoute !== undefined) {
+          return { status: 'OPERATION_CONFLICT', currentOperation: existingRoute };
+        }
+      }
 
       this.insertAuditEvent(input.auditWrite);
       this.probe(InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE);
@@ -3710,6 +4063,278 @@ export class SqliteControlStore
       }
       this.probe(InteractionTransactionStep.BEFORE_COMMIT);
       return { status: 'RESERVED', operation: persisted };
+    });
+  }
+
+  public reserveAssistantRouteOperation(
+    rawInput: ReserveAssistantRouteOperation,
+  ): AssistantRouteOperationReservationResult {
+    this.assertOpen();
+    const input = normalizeAssistantRouteOperationReservation(rawInput);
+    return this.runImmediate(() => {
+      const existingOperation = this.getInteractionOperationInsideTransaction(input.operation.id);
+      if (existingOperation !== undefined) {
+        const existingManifest = this.getFrontstageContextManifestInsideTransaction(
+          input.manifest.id,
+        );
+        if (
+          interactionOperationReservationDigest(existingOperation) ===
+            input.operation.operationDigest &&
+          existingManifest !== undefined &&
+          sameCanonicalAuthority(existingManifest, input.manifest)
+        ) {
+          return {
+            status: 'REPLAYED',
+            manifest: existingManifest,
+            operation: existingOperation,
+          };
+        }
+        return { status: 'OPERATION_CONFLICT', currentOperation: existingOperation };
+      }
+      const existingManifest = this.getFrontstageContextManifestInsideTransaction(
+        input.manifest.id,
+      );
+      if (existingManifest !== undefined) {
+        return { status: 'CONTEXT_MANIFEST_CONFLICT', currentManifest: existingManifest };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        return { status: 'SESSION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
+      if (retainedMessage === undefined) {
+        return { status: 'MESSAGE_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedMessage, input.message)) {
+        return { status: 'MESSAGE_CONFLICT', currentMessage: retainedMessage };
+      }
+      let retainedFocus: FocusBinding | undefined;
+      if (input.focus !== undefined) {
+        retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+        if (retainedFocus === undefined) {
+          throw new StoreInvariantError(
+            `Retained Interaction Session ${retainedSession.id} lost its current Focus`,
+          );
+        }
+        if (!sameCanonicalAuthority(retainedFocus, input.focus)) {
+          throw new StoreInvariantError(
+            `Retained Interaction Session ${retainedSession.id} has substituted Focus authority`,
+          );
+        }
+      }
+      assertFrontstageContextManifestReservationChain({
+        session: retainedSession,
+        currentMessage: retainedMessage,
+        ...(retainedFocus === undefined ? {} : { focus: retainedFocus }),
+        manifest: input.manifest,
+        operation: input.operation,
+      });
+      const active = this.getReservedInteractionOperationInsideTransaction(input.session.id);
+      if (active !== undefined) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: active };
+      }
+      const existingRoute = this.getRouteInteractionOperationForMessageInsideTransaction(
+        input.operation.sessionId,
+        input.operation.messageRef.id,
+      );
+      if (existingRoute !== undefined) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: existingRoute };
+      }
+
+      this.insertAuditEvent(input.manifestAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_CONTEXT_MANIFEST_AUDIT_WRITE);
+      this.insertFrontstageContextManifest(input.manifest);
+      this.probe(InteractionTransactionStep.AFTER_CONTEXT_MANIFEST_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.manifestAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_CONTEXT_MANIFEST_MEMBERSHIP_WRITE);
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_RESERVATION_AUDIT_WRITE);
+      this.insertInteractionOperation(input.operation);
+      this.probe(InteractionTransactionStep.AFTER_OPERATION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ASSISTANT_ROUTE_RESERVATION_MEMBERSHIP_WRITE);
+
+      const persistedManifest = this.getFrontstageContextManifestInsideTransaction(
+        input.manifest.id,
+      );
+      const persistedOperation = this.getInteractionOperationInsideTransaction(input.operation.id);
+      if (
+        persistedManifest === undefined ||
+        !sameCanonicalAuthority(persistedManifest, input.manifest) ||
+        persistedOperation?.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(persistedOperation, input.operation)
+      ) {
+        throw new StoreInvariantError(
+          'The Assistant Route reservation was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'RESERVED',
+        manifest: persistedManifest,
+        operation: persistedOperation,
+      };
+    });
+  }
+
+  public commitInteractionRouteResult(
+    rawInput: CommitInteractionRouteResult,
+  ): InteractionRouteResultCommitResult {
+    this.assertOpen();
+    const input = normalizeInteractionRouteResultCommit(rawInput);
+    return this.runImmediate(() => {
+      const retainedOperation = this.getInteractionOperationInsideTransaction(
+        input.currentOperation.id,
+      );
+      const retainedDecision = this.getInteractionRouteDecisionInsideTransaction(input.decision.id);
+      const retainedProposal =
+        input.proposal === undefined
+          ? undefined
+          : this.getInteractionRouteProposalInsideTransaction(input.proposal.id);
+      if (
+        retainedOperation !== undefined &&
+        sameCanonicalAuthority(retainedOperation, input.nextOperation) &&
+        retainedOperation.state === InteractionOperationState.COMPLETED &&
+        retainedDecision !== undefined &&
+        sameCanonicalAuthority(retainedDecision, input.decision) &&
+        (input.proposal === undefined
+          ? retainedProposal === undefined
+          : retainedProposal !== undefined &&
+            sameCanonicalAuthority(retainedProposal, input.proposal))
+      ) {
+        return {
+          status: 'REPLAYED',
+          ...(retainedProposal === undefined ? {} : { proposal: retainedProposal }),
+          decision: retainedDecision,
+          operation: retainedOperation,
+        };
+      }
+      if (retainedOperation === undefined) {
+        return { status: 'OPERATION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedOperation, input.currentOperation)) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
+      }
+      if (retainedProposal !== undefined && input.proposal !== undefined) {
+        return { status: 'ROUTE_PROPOSAL_CONFLICT', currentProposal: retainedProposal };
+      }
+      if (retainedDecision !== undefined) {
+        return { status: 'ROUTE_DECISION_CONFLICT', currentDecision: retainedDecision };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        throw new StoreInvariantError(
+          `Retained Route Operation ${retainedOperation.id} lost its Session`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
+      if (retainedMessage === undefined) {
+        throw new StoreInvariantError(
+          `Retained Route Operation ${retainedOperation.id} lost its Message`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedMessage, input.message)) {
+        throw new StoreInvariantError(
+          `Retained Route Operation ${retainedOperation.id} has substituted Message authority`,
+        );
+      }
+      let retainedFocus: FocusBinding | undefined;
+      if (input.focus !== undefined) {
+        retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+        if (retainedFocus === undefined) {
+          throw new StoreInvariantError(
+            `Retained Route Operation ${retainedOperation.id} lost its Focus`,
+          );
+        }
+        if (!sameCanonicalAuthority(retainedFocus, input.focus)) {
+          throw new StoreInvariantError(
+            `Retained Route Operation ${retainedOperation.id} has substituted Focus authority`,
+          );
+        }
+      }
+      let retainedManifest: FrontstageContextManifest | undefined;
+      if (input.manifest !== undefined) {
+        retainedManifest = this.getFrontstageContextManifestInsideTransaction(input.manifest.id);
+        if (retainedManifest === undefined) {
+          throw new StoreInvariantError(
+            `Retained Route Operation ${retainedOperation.id} lost its Context Manifest`,
+          );
+        }
+        if (!sameCanonicalAuthority(retainedManifest, input.manifest)) {
+          throw new StoreInvariantError(
+            `Retained Route Operation ${retainedOperation.id} has substituted Context Manifest authority`,
+          );
+        }
+      }
+      assertInteractionRouteResultChainInvariant({
+        session: retainedSession,
+        currentMessage: retainedMessage,
+        ...(retainedFocus === undefined ? {} : { focus: retainedFocus }),
+        ...(retainedManifest === undefined ? {} : { manifest: retainedManifest }),
+        currentOperation: input.currentOperation,
+        ...(input.proposal === undefined ? {} : { proposal: input.proposal }),
+        decision: input.decision,
+        nextOperation: input.nextOperation,
+      });
+
+      if (input.proposal !== undefined && input.proposalAuditWrite !== undefined) {
+        this.insertAuditEvent(input.proposalAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_ROUTE_PROPOSAL_AUDIT_WRITE);
+        this.insertInteractionRouteProposal(input.proposal);
+        this.probe(InteractionTransactionStep.AFTER_ROUTE_PROPOSAL_WRITE);
+        this.appendInteractionAuditMembership(input.session.id, input.proposalAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_ROUTE_PROPOSAL_MEMBERSHIP_WRITE);
+      }
+      this.insertAuditEvent(input.decisionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ROUTE_DECISION_AUDIT_WRITE);
+      this.insertInteractionRouteDecision(input.decision);
+      this.probe(InteractionTransactionStep.AFTER_ROUTE_DECISION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.decisionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ROUTE_DECISION_MEMBERSHIP_WRITE);
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ROUTE_COMPLETION_AUDIT_WRITE);
+      this.updateInteractionOperation(input.currentOperation, input.nextOperation);
+      this.probe(InteractionTransactionStep.AFTER_ROUTE_COMPLETION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ROUTE_COMPLETION_MEMBERSHIP_WRITE);
+
+      const persistedProposal =
+        input.proposal === undefined
+          ? undefined
+          : this.getInteractionRouteProposalInsideTransaction(input.proposal.id);
+      const persistedDecision = this.getInteractionRouteDecisionInsideTransaction(
+        input.decision.id,
+      );
+      const persistedOperation = this.getInteractionOperationInsideTransaction(
+        input.nextOperation.id,
+      );
+      if (
+        (input.proposal === undefined
+          ? persistedProposal !== undefined
+          : persistedProposal === undefined ||
+            !sameCanonicalAuthority(persistedProposal, input.proposal)) ||
+        persistedDecision === undefined ||
+        !sameCanonicalAuthority(persistedDecision, input.decision) ||
+        persistedOperation?.state !== InteractionOperationState.COMPLETED ||
+        !sameCanonicalAuthority(persistedOperation, input.nextOperation)
+      ) {
+        throw new StoreInvariantError('The Route result was not immediately readable');
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'APPLIED',
+        ...(persistedProposal === undefined ? {} : { proposal: persistedProposal }),
+        decision: persistedDecision,
+        operation: persistedOperation,
+      };
     });
   }
 
@@ -3763,6 +4388,33 @@ export class SqliteControlStore
   ): InteractionOperation | undefined {
     this.assertOpen();
     return this.runRead(() => this.getInteractionOperationInsideTransaction(operationIdentifier));
+  }
+
+  public getFrontstageContextManifest(
+    manifestIdentifier: FrontstageContextManifestId,
+  ): FrontstageContextManifest | undefined {
+    this.assertOpen();
+    return this.runRead(() =>
+      this.getFrontstageContextManifestInsideTransaction(manifestIdentifier),
+    );
+  }
+
+  public getInteractionRouteProposal(
+    proposalIdentifier: RouteProposalId,
+  ): RouteProposal | undefined {
+    this.assertOpen();
+    return this.runRead(() =>
+      this.getInteractionRouteProposalInsideTransaction(proposalIdentifier),
+    );
+  }
+
+  public getInteractionRouteDecision(
+    decisionIdentifier: RouteDecisionId,
+  ): RouteDecision | undefined {
+    this.assertOpen();
+    return this.runRead(() =>
+      this.getInteractionRouteDecisionInsideTransaction(decisionIdentifier),
+    );
   }
 
   public listReservedInteractionOperations(
@@ -6381,6 +7033,171 @@ export class SqliteControlStore
     return focus;
   }
 
+  private decodeRetainedFrontstageContextManifestRow(rawRow: unknown): FrontstageContextManifest {
+    const row = retainedFrontstageContextManifestRowSchema.parse(rawRow);
+    const manifest = decodeFrontstageContextManifest(
+      parseJson(row.record_json, 'Frontstage Context Manifest'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      manifest.id !== row.id ||
+      manifest.schemaVersion !== row.schema_version ||
+      manifest.sessionId !== row.session_id ||
+      manifest.operationId !== row.operation_id ||
+      manifest.reservedOperationVersion !== row.reserved_operation_version ||
+      manifest.currentMessageRef.id !== row.current_message_id ||
+      manifest.currentMessageRef.digest !== row.current_message_digest ||
+      manifest.currentMessageContentDigest !== row.current_message_content_digest ||
+      manifest.currentMessageContentByteLength !== row.current_message_content_byte_length ||
+      (manifest.focusRef?.id ?? null) !== row.focus_id ||
+      (manifest.focusRef?.digest ?? null) !== row.focus_digest ||
+      manifest.configuration.id !== row.configuration_id ||
+      manifest.configuration.version !== row.configuration_version ||
+      manifest.configuration.digest !== row.configuration_digest ||
+      manifest.contextCompiler.id !== row.context_compiler_id ||
+      manifest.contextCompiler.version !== row.context_compiler_version ||
+      manifest.contextCompiler.digest !== row.context_compiler_digest ||
+      manifest.assistantProfile.id !== row.assistant_profile_id ||
+      manifest.assistantProfile.version !== row.assistant_profile_version ||
+      manifest.assistantProfile.digest !== row.assistant_profile_digest ||
+      manifest.assistantAdapter.id !== row.assistant_adapter_id ||
+      manifest.assistantAdapter.version !== row.assistant_adapter_version ||
+      manifest.assistantAdapter.digest !== row.assistant_adapter_digest ||
+      manifest.responseContract.id !== row.response_contract_id ||
+      manifest.responseContract.version !== row.response_contract_version ||
+      manifest.responseContract.digest !== row.response_contract_digest ||
+      manifest.routingPolicy.id !== row.routing_policy_id ||
+      manifest.routingPolicy.version !== row.routing_policy_version ||
+      manifest.routingPolicy.digest !== row.routing_policy_digest ||
+      manifest.retentionProfile.id !== row.retention_profile_id ||
+      manifest.retentionProfile.version !== row.retention_profile_version ||
+      manifest.retentionProfile.digest !== row.retention_profile_digest ||
+      manifest.budgetProfile.id !== row.budget_profile_id ||
+      manifest.budgetProfile.version !== row.budget_profile_version ||
+      manifest.budgetProfile.digest !== row.budget_profile_digest ||
+      manifest.packageDigest !== row.package_digest ||
+      manifest.packageByteLength !== row.package_byte_length ||
+      manifest.createdAt !== row.created_at ||
+      manifest.manifestDigest !== row.manifest_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Frontstage Context Manifest ${manifest.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return manifest;
+  }
+
+  private getFrontstageContextManifestInsideTransaction(
+    manifestIdentifier: FrontstageContextManifestId,
+  ): FrontstageContextManifest | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, operation_id, reserved_operation_version,
+                current_message_id, current_message_digest, current_message_content_digest,
+                current_message_content_byte_length, focus_id, focus_digest,
+                configuration_id, configuration_version, configuration_digest,
+                context_compiler_id, context_compiler_version, context_compiler_digest,
+                assistant_profile_id, assistant_profile_version, assistant_profile_digest,
+                assistant_adapter_id, assistant_adapter_version, assistant_adapter_digest,
+                response_contract_id, response_contract_version, response_contract_digest,
+                routing_policy_id, routing_policy_version, routing_policy_digest,
+                retention_profile_id, retention_profile_version, retention_profile_digest,
+                budget_profile_id, budget_profile_version, budget_profile_digest,
+                package_digest, package_byte_length, created_at, manifest_digest, record_json
+           FROM frontstage_context_manifests
+          WHERE id = ?`,
+      )
+      .get(manifestIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedFrontstageContextManifestRow(rawRow);
+  }
+
+  private decodeRetainedInteractionRouteProposalRow(rawRow: unknown): RouteProposal {
+    const row = retainedInteractionRouteProposalRowSchema.parse(rawRow);
+    const proposal = decodeRouteProposal(
+      parseJson(row.record_json, 'Interaction Route Proposal'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      proposal.id !== row.id ||
+      proposal.schemaVersion !== row.schema_version ||
+      proposal.sessionId !== row.session_id ||
+      proposal.operationId !== row.operation_id ||
+      proposal.messageRef.id !== row.message_id ||
+      proposal.messageRef.digest !== row.message_digest ||
+      proposal.kind !== row.proposal_kind ||
+      proposal.proposalDigest !== row.proposal_digest ||
+      proposal.observedAt !== row.observed_at
+    ) {
+      throw new StoreInvariantError(
+        `Retained Route Proposal ${proposal.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return proposal;
+  }
+
+  private getInteractionRouteProposalInsideTransaction(
+    proposalIdentifier: RouteProposalId,
+  ): RouteProposal | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, operation_id, message_id, message_digest,
+                proposal_kind, proposal_digest, observed_at, record_json
+           FROM interaction_route_proposals
+          WHERE id = ?`,
+      )
+      .get(proposalIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionRouteProposalRow(rawRow);
+  }
+
+  private decodeRetainedInteractionRouteDecisionRow(rawRow: unknown): RouteDecision {
+    const row = retainedInteractionRouteDecisionRowSchema.parse(rawRow);
+    const decision = decodeRouteDecision(
+      parseJson(row.record_json, 'Interaction Route Decision'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      decision.id !== row.id ||
+      decision.schemaVersion !== row.schema_version ||
+      decision.sessionId !== row.session_id ||
+      decision.expectedSessionVersion !== row.expected_session_version ||
+      decision.messageRef.id !== row.message_id ||
+      decision.messageRef.digest !== row.message_digest ||
+      (decision.proposalRef?.id ?? null) !== row.proposal_id ||
+      (decision.proposalRef?.digest ?? null) !== row.proposal_digest ||
+      (decision.focusRef?.id ?? null) !== row.focus_id ||
+      (decision.focusRef?.digest ?? null) !== row.focus_digest ||
+      decision.outcome !== row.outcome ||
+      decision.decidedAt !== row.decided_at ||
+      decision.decisionDigest !== row.decision_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Route Decision ${decision.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return decision;
+  }
+
+  private getInteractionRouteDecisionInsideTransaction(
+    decisionIdentifier: RouteDecisionId,
+  ): RouteDecision | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, expected_session_version, message_id,
+                message_digest, proposal_id, proposal_digest, focus_id, focus_digest,
+                outcome, decided_at, decision_digest, record_json
+           FROM interaction_route_decisions
+          WHERE id = ?`,
+      )
+      .get(decisionIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionRouteDecisionRow(rawRow);
+  }
+
   private decodeRetainedInteractionOperationRow(rawRow: unknown): InteractionOperation {
     const row = retainedInteractionOperationRowSchema.parse(rawRow);
     const operation = decodeInteractionOperation(
@@ -6485,6 +7302,31 @@ export class SqliteControlStore
       );
     }
     return operation;
+  }
+
+  private getRouteInteractionOperationForMessageInsideTransaction(
+    sessionIdentifier: InteractionSessionId,
+    messageIdentifier: InteractionMessageId,
+  ): InteractionOperation | undefined {
+    const rows = z.array(z.object({ id: z.string().min(1) }).strict()).parse(
+      this.#database
+        .prepare(
+          `SELECT id
+               FROM interaction_operations
+              WHERE session_id = ? AND message_id = ? AND operation_kind = 'ROUTE'
+              ORDER BY id`,
+        )
+        .all(sessionIdentifier, messageIdentifier),
+    );
+    if (rows.length > 1) {
+      throw new StoreInvariantError(
+        `Interaction Message ${messageIdentifier} has multiple Route Operations`,
+      );
+    }
+    const row = rows[0];
+    return row === undefined
+      ? undefined
+      : this.getInteractionOperationInsideTransaction(interactionOperationId(row.id));
   }
 
   private getInteractionRetainedMessageTotals(
@@ -6631,6 +7473,120 @@ export class SqliteControlStore
       );
   }
 
+  private insertFrontstageContextManifest(manifest: FrontstageContextManifest): void {
+    this.#database
+      .prepare(
+        `INSERT INTO frontstage_context_manifests(
+           id, schema_version, session_id, operation_id, reserved_operation_version,
+           current_message_id, current_message_digest, current_message_content_digest,
+           current_message_content_byte_length, focus_id, focus_digest,
+           configuration_id, configuration_version, configuration_digest,
+           context_compiler_id, context_compiler_version, context_compiler_digest,
+           assistant_profile_id, assistant_profile_version, assistant_profile_digest,
+           assistant_adapter_id, assistant_adapter_version, assistant_adapter_digest,
+           response_contract_id, response_contract_version, response_contract_digest,
+           routing_policy_id, routing_policy_version, routing_policy_digest,
+           retention_profile_id, retention_profile_version, retention_profile_digest,
+           budget_profile_id, budget_profile_version, budget_profile_digest,
+           package_digest, package_byte_length, created_at, manifest_digest, record_json
+         ) VALUES (
+           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         )`,
+      )
+      .run(
+        manifest.id,
+        manifest.schemaVersion,
+        manifest.sessionId,
+        manifest.operationId,
+        manifest.reservedOperationVersion,
+        manifest.currentMessageRef.id,
+        manifest.currentMessageRef.digest,
+        manifest.currentMessageContentDigest,
+        manifest.currentMessageContentByteLength,
+        manifest.focusRef?.id ?? null,
+        manifest.focusRef?.digest ?? null,
+        manifest.configuration.id,
+        manifest.configuration.version,
+        manifest.configuration.digest,
+        manifest.contextCompiler.id,
+        manifest.contextCompiler.version,
+        manifest.contextCompiler.digest,
+        manifest.assistantProfile.id,
+        manifest.assistantProfile.version,
+        manifest.assistantProfile.digest,
+        manifest.assistantAdapter.id,
+        manifest.assistantAdapter.version,
+        manifest.assistantAdapter.digest,
+        manifest.responseContract.id,
+        manifest.responseContract.version,
+        manifest.responseContract.digest,
+        manifest.routingPolicy.id,
+        manifest.routingPolicy.version,
+        manifest.routingPolicy.digest,
+        manifest.retentionProfile.id,
+        manifest.retentionProfile.version,
+        manifest.retentionProfile.digest,
+        manifest.budgetProfile.id,
+        manifest.budgetProfile.version,
+        manifest.budgetProfile.digest,
+        manifest.packageDigest,
+        manifest.packageByteLength,
+        manifest.createdAt,
+        manifest.manifestDigest,
+        serializeJson(decodeJsonValue(manifest)),
+      );
+  }
+
+  private insertInteractionRouteProposal(proposal: RouteProposal): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_route_proposals(
+           id, schema_version, session_id, operation_id, message_id, message_digest,
+           proposal_kind, proposal_digest, observed_at, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        proposal.id,
+        proposal.schemaVersion,
+        proposal.sessionId,
+        proposal.operationId,
+        proposal.messageRef.id,
+        proposal.messageRef.digest,
+        proposal.kind,
+        proposal.proposalDigest,
+        proposal.observedAt,
+        serializeJson(decodeJsonValue(proposal)),
+      );
+  }
+
+  private insertInteractionRouteDecision(decision: RouteDecision): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_route_decisions(
+           id, schema_version, session_id, expected_session_version, message_id,
+           message_digest, proposal_id, proposal_digest, focus_id, focus_digest,
+           outcome, decided_at, decision_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        decision.id,
+        decision.schemaVersion,
+        decision.sessionId,
+        decision.expectedSessionVersion,
+        decision.messageRef.id,
+        decision.messageRef.digest,
+        decision.proposalRef?.id ?? null,
+        decision.proposalRef?.digest ?? null,
+        decision.focusRef?.id ?? null,
+        decision.focusRef?.digest ?? null,
+        decision.outcome,
+        decision.decidedAt,
+        decision.decisionDigest,
+        serializeJson(decodeJsonValue(decision)),
+      );
+  }
+
   private insertInteractionOperation(operation: ReservedInteractionOperation): void {
     this.#database
       .prepare(
@@ -6665,7 +7621,7 @@ export class SqliteControlStore
 
   private updateInteractionOperation(
     currentOperation: ReservedInteractionOperation,
-    nextOperation: FailedOrInterruptedInteractionOperation,
+    nextOperation: FailedOrInterruptedInteractionOperation | CompletedInteractionOperation,
   ): void {
     const update = this.#database
       .prepare(
@@ -6729,9 +7685,13 @@ export class SqliteControlStore
     if (!migrationApplied) {
       return;
     }
+    const routeResultMigrationApplied = this.#appliedMigrations.some(
+      (migration) => migration.name === INTERACTION_ROUTE_RESULT_MIGRATION_NAME,
+    );
     const unimplementedTableNames = [
-      'interaction_route_proposals',
-      'interaction_route_decisions',
+      ...(routeResultMigrationApplied
+        ? []
+        : ['interaction_route_proposals', 'interaction_route_decisions']),
       'interaction_pending_actions',
       'interaction_pending_action_resolutions',
       'interaction_action_reservations',
@@ -6871,6 +7831,75 @@ export class SqliteControlStore
       const operationById = new Map<string, InteractionOperation>(
         operations.map((operation) => [operation.id, operation]),
       );
+      const manifestRows = routeResultMigrationApplied
+        ? z.array(retainedFrontstageContextManifestRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, operation_id,
+                        reserved_operation_version, current_message_id, current_message_digest,
+                        current_message_content_digest, current_message_content_byte_length,
+                        focus_id, focus_digest, configuration_id, configuration_version,
+                        configuration_digest, context_compiler_id, context_compiler_version,
+                        context_compiler_digest, assistant_profile_id, assistant_profile_version,
+                        assistant_profile_digest, assistant_adapter_id, assistant_adapter_version,
+                        assistant_adapter_digest, response_contract_id, response_contract_version,
+                        response_contract_digest, routing_policy_id, routing_policy_version,
+                        routing_policy_digest, retention_profile_id, retention_profile_version,
+                        retention_profile_digest, budget_profile_id, budget_profile_version,
+                        budget_profile_digest, package_digest, package_byte_length, created_at,
+                        manifest_digest, record_json
+                   FROM frontstage_context_manifests
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const manifests = manifestRows.map((row) =>
+        this.decodeRetainedFrontstageContextManifestRow(row),
+      );
+      const manifestById = new Map<string, FrontstageContextManifest>(
+        manifests.map((manifest) => [manifest.id, manifest]),
+      );
+      const proposalRows = routeResultMigrationApplied
+        ? z.array(retainedInteractionRouteProposalRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, operation_id, message_id,
+                        message_digest, proposal_kind, proposal_digest, observed_at, record_json
+                   FROM interaction_route_proposals
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const proposals = proposalRows.map((row) =>
+        this.decodeRetainedInteractionRouteProposalRow(row),
+      );
+      const proposalById = new Map<string, RouteProposal>(
+        proposals.map((proposal) => [proposal.id, proposal]),
+      );
+      const decisionRows = routeResultMigrationApplied
+        ? z.array(retainedInteractionRouteDecisionRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, expected_session_version, message_id,
+                        message_digest, proposal_id, proposal_digest, focus_id, focus_digest,
+                        outcome, decided_at, decision_digest, record_json
+                   FROM interaction_route_decisions
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const decisions = decisionRows.map((row) =>
+        this.decodeRetainedInteractionRouteDecisionRow(row),
+      );
+      const decisionById = new Map<string, RouteDecision>(
+        decisions.map((decision) => [decision.id, decision]),
+      );
+      const referencedProposalIds = new Set<string>();
+      const referencedDecisionIds = new Set<string>();
+      const routeMessageIds = new Set<string>();
       for (const operation of operations) {
         const session = sessionById.get(operation.sessionId);
         const message = messageById.get(operation.messageRef.id);
@@ -6880,7 +7909,6 @@ export class SqliteControlStore
           message.messageDigest !== operation.messageRef.digest ||
           operation.expectedSessionVersion > session.version ||
           operation.reservedAt < message.createdAt ||
-          operation.state === InteractionOperationState.COMPLETED ||
           (operation.state === InteractionOperationState.RESERVED &&
             !(
               (session.state === InteractionSessionState.OPEN &&
@@ -6893,6 +7921,90 @@ export class SqliteControlStore
             `Retained Interaction Operation ${operation.id} has no implemented valid closure`,
           );
         }
+        if (operation.operationKind === InteractionOperationKind.ROUTE) {
+          if (routeMessageIds.has(operation.messageRef.id)) {
+            throw new StoreInvariantError(
+              `Retained Interaction Message ${operation.messageRef.id} has multiple Route Operations`,
+            );
+          }
+          routeMessageIds.add(operation.messageRef.id);
+        }
+        const reservedOperation = interactionOperationReservationRecord(operation);
+        const manifest =
+          operation.contextManifestRef === undefined
+            ? undefined
+            : manifestById.get(operation.contextManifestRef.id);
+        if (operation.assistantProfile !== undefined) {
+          if (
+            manifest === undefined ||
+            manifest.manifestDigest !== operation.contextManifestRef?.digest
+          ) {
+            throw new StoreInvariantError(
+              `Retained Assistant Route Operation ${operation.id} lost its exact Context Manifest`,
+            );
+          }
+          const manifestFocus =
+            manifest.focusRef === undefined ? undefined : focusById.get(manifest.focusRef.id);
+          assertFrontstageContextManifestAuthorityChainInvariant({
+            session,
+            currentMessage: message,
+            ...(manifestFocus === undefined ? {} : { focus: manifestFocus }),
+            manifest,
+            operation: reservedOperation,
+          });
+        } else if (manifests.some((candidate) => candidate.operationId === operation.id)) {
+          throw new StoreInvariantError(
+            `Retained proposal-free Operation ${operation.id} has an unexpected Context Manifest`,
+          );
+        }
+        if (operation.state === InteractionOperationState.COMPLETED) {
+          if (operation.operationKind !== 'ROUTE' || operation.result.kind !== 'ROUTE_DECIDED') {
+            throw new StoreInvariantError(
+              `Retained completed Interaction Operation ${operation.id} has no result-specific owner`,
+            );
+          }
+          const decision = decisionById.get(operation.result.routeDecisionRef.id);
+          const proposal =
+            operation.result.routeProposalRef === undefined
+              ? undefined
+              : proposalById.get(operation.result.routeProposalRef.id);
+          const decisionFocus =
+            decision?.focusRef === undefined ? undefined : focusById.get(decision.focusRef.id);
+          if (decision === undefined) {
+            throw new StoreInvariantError(
+              `Retained Route Operation ${operation.id} lost its exact Decision`,
+            );
+          }
+          assertInteractionRouteResultAuthorityChainInvariant({
+            session,
+            currentMessage: message,
+            ...(decisionFocus === undefined ? {} : { focus: decisionFocus }),
+            ...(manifest === undefined ? {} : { manifest }),
+            currentOperation: reservedOperation,
+            ...(proposal === undefined ? {} : { proposal }),
+            decision,
+            nextOperation: operation,
+          });
+          if (referencedDecisionIds.has(decision.id)) {
+            throw new StoreInvariantError(
+              `Retained Route Decision ${decision.id} has multiple Operation owners`,
+            );
+          }
+          referencedDecisionIds.add(decision.id);
+          if (proposal !== undefined) {
+            referencedProposalIds.add(proposal.id);
+          }
+        }
+      }
+      if (
+        manifests.length !==
+          operations.filter((operation) => operation.assistantProfile !== undefined).length ||
+        proposals.some((proposal) => !referencedProposalIds.has(proposal.id)) ||
+        decisions.some((decision) => !referencedDecisionIds.has(decision.id))
+      ) {
+        throw new StoreInvariantError(
+          'Retained Context Manifest, Route Proposal, or Route Decision has no exact Operation owner',
+        );
       }
 
       const membershipRows = z.array(retainedInteractionAuditMembershipRowSchema).parse(
@@ -6916,8 +8028,8 @@ export class SqliteControlStore
             .prepare(
               `SELECT id
                  FROM audit_events
-                WHERE aggregate_type IN (?, ?, ?, ?)
-                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                WHERE aggregate_type IN (?, ?, ?, ?, ?, ?, ?)
+                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ORDER BY id`,
             )
             .all(
@@ -6925,6 +8037,9 @@ export class SqliteControlStore
               InteractionAuditAggregateType.INTERACTION_MESSAGE,
               InteractionAuditAggregateType.INTERACTION_OPERATION,
               InteractionAuditAggregateType.FOCUS_BINDING,
+              InteractionAuditAggregateType.FRONTSTAGE_CONTEXT_MANIFEST,
+              InteractionAuditAggregateType.ROUTE_PROPOSAL,
+              InteractionAuditAggregateType.ROUTE_DECISION,
               InteractionAuditEventType.INTERACTION_SESSION_OPENED,
               InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
               InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
@@ -6934,6 +8049,9 @@ export class SqliteControlStore
               InteractionAuditEventType.INTERACTION_OPERATION_FAILED,
               InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED,
               InteractionAuditEventType.FOCUS_BINDING_RECORDED,
+              InteractionAuditEventType.FRONTSTAGE_CONTEXT_MANIFEST_RECORDED,
+              InteractionAuditEventType.ROUTE_PROPOSAL_RECORDED,
+              InteractionAuditEventType.ROUTE_DECISION_RECORDED,
             ),
         )
         .map((row) => auditEventId(row.id));
@@ -6945,7 +8063,7 @@ export class SqliteControlStore
         relatedAuditIds.some((id) => !membershipAuditIdSet.has(id))
       ) {
         throw new StoreInvariantError(
-          'Retained Interaction Session/Message/Operation/Focus authority has an orphan or substituted audit',
+          'Retained Interaction authority has an orphan or substituted audit',
         );
       }
 
@@ -6982,6 +8100,9 @@ export class SqliteControlStore
           (operation) => operation.sessionId === session.id,
         );
         const sessionFocuses = focuses.filter((focus) => focus.sessionId === session.id);
+        const sessionManifests = manifests.filter((manifest) => manifest.sessionId === session.id);
+        const sessionProposals = proposals.filter((proposal) => proposal.sessionId === session.id);
+        const sessionDecisions = decisions.filter((decision) => decision.sessionId === session.id);
         const operationAuditCount = sessionOperations.reduce(
           (count, operation) =>
             count + (operation.state === InteractionOperationState.RESERVED ? 1 : 2),
@@ -6990,7 +8111,13 @@ export class SqliteControlStore
         if (
           sessionAudits.length !== session.version ||
           sessionMembership.length !==
-            session.version + sessionMessages.length + operationAuditCount + sessionFocuses.length
+            session.version +
+              sessionMessages.length +
+              operationAuditCount +
+              sessionFocuses.length +
+              sessionManifests.length +
+              sessionProposals.length +
+              sessionDecisions.length
         ) {
           throw new StoreInvariantError(
             `Retained Interaction Session ${session.id} audit cardinality is invalid`,
@@ -7108,6 +8235,100 @@ export class SqliteControlStore
           }
         }
 
+        for (const manifest of sessionManifests) {
+          const manifestAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.FRONTSTAGE_CONTEXT_MANIFEST &&
+              row.aggregate_id === manifest.id,
+          );
+          const manifestAudit = manifestAudits[0];
+          const following =
+            manifestAudit === undefined ? undefined : sessionMembership[manifestAudit.position + 1];
+          if (
+            manifestAudits.length !== 1 ||
+            manifestAudit?.event_type !==
+              InteractionAuditEventType.FRONTSTAGE_CONTEXT_MANIFEST_RECORDED ||
+            manifestAudit.before_version !== null ||
+            manifestAudit.after_version !== null ||
+            manifestAudit.payload_digest !== manifest.manifestDigest ||
+            manifestAudit.occurred_at !== manifest.createdAt ||
+            following?.aggregate_type !== InteractionAuditAggregateType.INTERACTION_OPERATION ||
+            following.aggregate_id !== manifest.operationId ||
+            following.event_type !== InteractionAuditEventType.INTERACTION_OPERATION_RESERVED
+          ) {
+            throw new StoreInvariantError(
+              `Retained Frontstage Context Manifest ${manifest.id} lost its atomic reservation audit`,
+            );
+          }
+        }
+
+        for (const proposal of sessionProposals) {
+          const proposalAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.ROUTE_PROPOSAL &&
+              row.aggregate_id === proposal.id,
+          );
+          const proposalAudit = proposalAudits[0];
+          const following =
+            proposalAudit === undefined ? undefined : sessionMembership[proposalAudit.position + 1];
+          const owningDecisions = sessionDecisions.filter(
+            (decision) =>
+              decision.proposalRef?.id === proposal.id &&
+              decision.proposalRef.digest === proposal.proposalDigest,
+          );
+          const owningDecision = owningDecisions[0];
+          if (
+            proposalAudits.length !== 1 ||
+            owningDecisions.length !== 1 ||
+            proposalAudit?.event_type !== InteractionAuditEventType.ROUTE_PROPOSAL_RECORDED ||
+            proposalAudit.before_version !== null ||
+            proposalAudit.after_version !== null ||
+            proposalAudit.payload_digest !== proposal.proposalDigest ||
+            proposalAudit.occurred_at !== proposal.observedAt ||
+            following?.aggregate_type !== InteractionAuditAggregateType.ROUTE_DECISION ||
+            following.aggregate_id !== owningDecision?.id ||
+            following.event_type !== InteractionAuditEventType.ROUTE_DECISION_RECORDED
+          ) {
+            throw new StoreInvariantError(
+              `Retained Route Proposal ${proposal.id} lost its atomic Decision audit`,
+            );
+          }
+        }
+
+        for (const decision of sessionDecisions) {
+          const decisionAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.ROUTE_DECISION &&
+              row.aggregate_id === decision.id,
+          );
+          const decisionAudit = decisionAudits[0];
+          const following =
+            decisionAudit === undefined ? undefined : sessionMembership[decisionAudit.position + 1];
+          const owningOperation = sessionOperations.find(
+            (operation) =>
+              operation.state === InteractionOperationState.COMPLETED &&
+              operation.operationKind === 'ROUTE' &&
+              operation.result.kind === 'ROUTE_DECIDED' &&
+              operation.result.routeDecisionRef.id === decision.id,
+          );
+          if (
+            decisionAudits.length !== 1 ||
+            decisionAudit?.event_type !== InteractionAuditEventType.ROUTE_DECISION_RECORDED ||
+            decisionAudit.before_version !== null ||
+            decisionAudit.after_version !== null ||
+            decisionAudit.payload_digest !== decision.decisionDigest ||
+            decisionAudit.occurred_at !== decision.decidedAt ||
+            owningOperation === undefined ||
+            following?.aggregate_type !== InteractionAuditAggregateType.INTERACTION_OPERATION ||
+            following.aggregate_id !== owningOperation.id ||
+            following.event_type !== InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED
+          ) {
+            throw new StoreInvariantError(
+              `Retained Route Decision ${decision.id} lost its atomic completion audit`,
+            );
+          }
+        }
+
         for (const operation of sessionOperations) {
           const operationAudits = sessionMembership.filter(
             (row) =>
@@ -7166,9 +8387,11 @@ export class SqliteControlStore
           if (
             operation.version !== 2 ||
             terminalAudit?.event_type !==
-              (operation.state === InteractionOperationState.FAILED
-                ? InteractionAuditEventType.INTERACTION_OPERATION_FAILED
-                : InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED) ||
+              (operation.state === InteractionOperationState.COMPLETED
+                ? InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED
+                : operation.state === InteractionOperationState.FAILED
+                  ? InteractionAuditEventType.INTERACTION_OPERATION_FAILED
+                  : InteractionAuditEventType.INTERACTION_OPERATION_INTERRUPTED) ||
             terminalAudit.before_version !== 1 ||
             terminalAudit.after_version !== 2 ||
             terminalAudit.payload_digest !== operation.operationDigest ||
@@ -7209,6 +8432,29 @@ export class SqliteControlStore
           if (focus?.sessionId !== membership.session_id) {
             throw new StoreInvariantError(
               `Retained Interaction Focus audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (
+          membership.aggregate_type === InteractionAuditAggregateType.FRONTSTAGE_CONTEXT_MANIFEST
+        ) {
+          const manifest = manifestById.get(membership.aggregate_id);
+          if (manifest?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Frontstage Context Manifest audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (membership.aggregate_type === InteractionAuditAggregateType.ROUTE_PROPOSAL) {
+          const proposal = proposalById.get(membership.aggregate_id);
+          if (proposal?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Route Proposal audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (membership.aggregate_type === InteractionAuditAggregateType.ROUTE_DECISION) {
+          const decision = decisionById.get(membership.aggregate_id);
+          if (decision?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Route Decision audit ${membership.id} crosses Session authority`,
             );
           }
         } else if (

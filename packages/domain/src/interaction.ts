@@ -763,6 +763,17 @@ export interface FrontstageContextManifestReservationChain {
   readonly operation: ReservedInteractionOperation;
 }
 
+export interface InteractionRouteResultChain {
+  readonly session: InteractionSession;
+  readonly currentMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly manifest?: FrontstageContextManifest;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly proposal?: RouteProposal;
+  readonly decision: RouteDecision;
+  readonly nextOperation: CompletedInteractionOperation;
+}
+
 export interface InteractionClarificationHandoffChain {
   readonly session: InteractionSession;
   readonly message: InteractionMessage;
@@ -1925,18 +1936,24 @@ function isAuthorizedResolution(resolution: PendingActionResolution): boolean {
 }
 
 /**
- * Owns the non-circular reservation relationship: the Manifest binds the
- * preallocated Route Operation identity/version, while the Operation binds the
- * final Manifest digest.
+ * Owns the immutable non-circular Manifest/reservation relationship. This
+ * historical form deliberately does not claim that the retained Session has
+ * not advanced since reservation.
  */
-export function assertFrontstageContextManifestReservationChain(
+export function assertFrontstageContextManifestAuthorityChainInvariant(
   chain: FrontstageContextManifestReservationChain,
 ): void {
   const { session, currentMessage, focus, manifest, operation } = chain;
+  assertInteractionSessionInvariant(session);
+  assertInteractionMessageInvariant(currentMessage);
   assertFrontstageContextManifestInvariant(manifest);
-  assertInteractionOperationReservationChain({ session, message: currentMessage, operation });
+  assertInitialInteractionOperationInvariant(operation);
 
   if (
+    currentMessage.role !== InteractionMessageRole.USER ||
+    currentMessage.retention !== InteractionContentRetention.RETAINED ||
+    currentMessage.sessionId !== session.id ||
+    currentMessage.principalRef !== session.principalRef ||
     manifest.sessionId !== session.id ||
     !sameDigestRef(manifest.currentMessageRef, {
       id: currentMessage.id,
@@ -1946,6 +1963,9 @@ export function assertFrontstageContextManifestReservationChain(
     manifest.currentMessageContentByteLength !== currentMessage.contentByteLength ||
     manifest.operationId !== operation.id ||
     manifest.reservedOperationVersion !== operation.version ||
+    operation.sessionId !== session.id ||
+    operation.expectedSessionVersion > session.version ||
+    !sameDigestRef(operation.messageRef, manifest.currentMessageRef) ||
     operation.operationKind !== InteractionOperationKind.ROUTE ||
     operation.contextManifestRef === undefined ||
     !sameDigestRef(operation.contextManifestRef, {
@@ -1967,10 +1987,7 @@ export function assertFrontstageContextManifestReservationChain(
     throw new DomainInvariantError('Frontstage Context Manifest reservation has invalid causality');
   }
 
-  if (
-    !sameOptionalDigestRef(manifest.focusRef, session.currentFocusRef) ||
-    (manifest.focusRef === undefined) !== (focus === undefined)
-  ) {
+  if ((manifest.focusRef === undefined) !== (focus === undefined)) {
     throw new DomainInvariantError(
       'Frontstage Context Manifest must bind the exact current Focus presence',
     );
@@ -1979,7 +1996,7 @@ export function assertFrontstageContextManifestReservationChain(
     assertFocusBindingInvariant(focus);
     if (
       focus.sessionId !== session.id ||
-      focus.basedOnSessionVersion >= session.version ||
+      focus.basedOnSessionVersion >= operation.expectedSessionVersion ||
       !sameDigestRef(manifest.focusRef, { id: focus.id, digest: focus.focusDigest }) ||
       focus.createdAt > manifest.createdAt
     ) {
@@ -2023,6 +2040,186 @@ export function assertFrontstageContextManifestReservationChain(
       'Frontstage Context without Question Focus must record only a not-present Question source',
     );
   }
+}
+
+/**
+ * Owns creation-time freshness in addition to the immutable authority chain.
+ */
+export function assertFrontstageContextManifestReservationChain(
+  chain: FrontstageContextManifestReservationChain,
+): void {
+  const { session, currentMessage, focus, manifest, operation } = chain;
+  assertCurrentRetainedUserMessage(session, currentMessage);
+  if (
+    operation.expectedSessionVersion !== session.version ||
+    !sameOptionalDigestRef(manifest.focusRef, session.currentFocusRef) ||
+    (focus === undefined) !== (session.currentFocusRef === undefined)
+  ) {
+    throw new DomainInvariantError(
+      'Frontstage Context Manifest must bind the exact current Session, Message, and Focus',
+    );
+  }
+  assertFrontstageContextManifestAuthorityChainInvariant(chain);
+}
+
+/**
+ * Owns the complete trusted Route-result relationship. The Proposal remains
+ * untrusted input and the Decision remains Runtime authority; persistence may
+ * enforce atomicity and exact retained equality but cannot reinterpret either.
+ */
+export function assertInteractionRouteResultAuthorityChainInvariant(
+  chain: InteractionRouteResultChain,
+): void {
+  const {
+    session,
+    currentMessage,
+    focus,
+    manifest,
+    currentOperation,
+    proposal,
+    decision,
+    nextOperation,
+  } = chain;
+  assertInteractionSessionInvariant(session);
+  assertInteractionMessageInvariant(currentMessage);
+  assertRouteDecisionInvariant(decision);
+  assertInitialInteractionOperationInvariant(currentOperation);
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+
+  if (
+    currentMessage.role !== InteractionMessageRole.USER ||
+    currentMessage.retention !== InteractionContentRetention.RETAINED ||
+    currentMessage.sessionId !== session.id ||
+    currentMessage.principalRef !== session.principalRef ||
+    currentOperation.operationKind !== InteractionOperationKind.ROUTE ||
+    currentOperation.expectedSessionVersion > session.version ||
+    currentOperation.sessionId !== session.id ||
+    !sameDigestRef(currentOperation.messageRef, {
+      id: currentMessage.id,
+      digest: currentMessage.messageDigest,
+    }) ||
+    nextOperation.result.kind !== InteractionOperationResultKind.ROUTE_DECIDED ||
+    decision.sessionId !== session.id ||
+    decision.expectedSessionVersion !== currentOperation.expectedSessionVersion ||
+    !sameDigestRef(decision.messageRef, currentOperation.messageRef) ||
+    !sameOptionalDigestRef(
+      decision.focusRef,
+      focus === undefined ? undefined : { id: focus.id, digest: focus.focusDigest },
+    ) ||
+    !sameVersionedDigestRef(decision.routingPolicy, session.routingPolicy) ||
+    !sameDigestRef(nextOperation.result.routeDecisionRef, {
+      id: decision.id,
+      digest: decision.decisionDigest,
+    })
+  ) {
+    throw new DomainInvariantError(
+      'Route result must bind the exact current Session, Message, Decision, and Operation',
+    );
+  }
+
+  if (
+    focus !== undefined &&
+    (focus.sessionId !== session.id ||
+      focus.basedOnSessionVersion >= currentOperation.expectedSessionVersion)
+  ) {
+    throw new DomainInvariantError('Route result must bind the exact current Focus');
+  }
+  if (focus !== undefined) {
+    assertFocusBindingInvariant(focus);
+  }
+
+  const assistantBound = currentOperation.assistantProfile !== undefined;
+  if (
+    assistantBound !== (manifest !== undefined) ||
+    assistantBound !== (proposal !== undefined) ||
+    assistantBound !== (decision.source === InteractionRouteDecisionSource.ASSISTANT_PROPOSAL) ||
+    assistantBound !== (nextOperation.result.routeProposalRef !== undefined)
+  ) {
+    throw new DomainInvariantError(
+      'Route result Assistant bindings, Manifest, Proposal, Decision, and result must agree',
+    );
+  }
+
+  if (manifest !== undefined && proposal !== undefined) {
+    assertFrontstageContextManifestAuthorityChainInvariant({
+      session,
+      currentMessage,
+      ...(focus === undefined ? {} : { focus }),
+      manifest,
+      operation: currentOperation,
+    });
+    assertRouteProposalInvariant(proposal);
+    if (
+      proposal.sessionId !== session.id ||
+      proposal.operationId !== currentOperation.id ||
+      !sameDigestRef(proposal.messageRef, currentOperation.messageRef) ||
+      !sameDigestRef(proposal.contextManifestRef, {
+        id: manifest.id,
+        digest: manifest.manifestDigest,
+      }) ||
+      !sameVersionedDigestRef(proposal.assistantProfile, manifest.assistantProfile) ||
+      !sameVersionedDigestRef(proposal.assistantAdapter, manifest.assistantAdapter) ||
+      !sameVersionedDigestRef(proposal.responseContract, manifest.responseContract) ||
+      decision.proposalRef === undefined ||
+      !sameDigestRef(decision.proposalRef, {
+        id: proposal.id,
+        digest: proposal.proposalDigest,
+      }) ||
+      nextOperation.result.routeProposalRef === undefined ||
+      !sameDigestRef(nextOperation.result.routeProposalRef, {
+        id: proposal.id,
+        digest: proposal.proposalDigest,
+      }) ||
+      (decision.outcome === InteractionRouteDecisionOutcome.ANSWER &&
+        proposal.kind !== FrontstageProposalKind.ANSWER_PROPOSAL)
+    ) {
+      throw new DomainInvariantError(
+        'Assistant Route result must bind its exact Manifest, Proposal, Decision, and result',
+      );
+    }
+    if (
+      proposal.kind === FrontstageProposalKind.ROUTE_PROPOSAL &&
+      proposal.candidateGoalIds.some(
+        (candidateGoalId) =>
+          !manifest.selectedGoalSummaries.some(
+            (selection) => selection.goalTarget.goalId === candidateGoalId,
+          ),
+      )
+    ) {
+      throw new DomainInvariantError(
+        'Assistant Route Proposal may reference only selected Goal summaries',
+      );
+    }
+  }
+
+  if (
+    currentMessage.createdAt > currentOperation.reservedAt ||
+    currentOperation.reservedAt > (proposal?.observedAt ?? decision.decidedAt) ||
+    (proposal !== undefined && proposal.observedAt > decision.decidedAt) ||
+    decision.decidedAt > nextOperation.completedAt
+  ) {
+    throw new DomainInvariantError('Route result has invalid causal ordering');
+  }
+}
+
+/** Owns current-Session freshness for a new Route result commit. */
+export function assertInteractionRouteResultChainInvariant(
+  chain: InteractionRouteResultChain,
+): void {
+  const { session, currentMessage, focus, currentOperation } = chain;
+  assertCurrentRetainedUserMessage(session, currentMessage);
+  if (
+    currentOperation.expectedSessionVersion !== session.version ||
+    (focus === undefined) !== (session.currentFocusRef === undefined) ||
+    (focus !== undefined &&
+      session.currentFocusRef !== undefined &&
+      !sameDigestRef(session.currentFocusRef, { id: focus.id, digest: focus.focusDigest }))
+  ) {
+    throw new DomainInvariantError(
+      'Route result must bind the exact current Session, Message, and Focus',
+    );
+  }
+  assertInteractionRouteResultAuthorityChainInvariant(chain);
 }
 
 /**

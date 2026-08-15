@@ -28,6 +28,7 @@ import {
   InteractionOperationState,
   InteractionPublicCapability,
   InteractionRouteDecisionOutcome,
+  InteractionRouteDecisionSource,
   InteractionSessionState,
   InteractionSessionTerminalReason,
   InteractionActionRequestSource,
@@ -44,6 +45,8 @@ import {
   assertInteractionFocusUpdate,
   assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
+  assertInteractionRouteResultAuthorityChainInvariant,
+  assertInteractionRouteResultChainInvariant,
   assertInteractionSessionTransition,
   assertInteractionUserMessageAdmission,
   commandId,
@@ -2115,6 +2118,384 @@ void test('P0 Frontstage Context Manifest binds one exact Route reservation', ()
         operation: falseQuestionOmissionOperation,
       }),
     /without Question Focus must record only a not-present Question source/,
+  );
+});
+
+void test('B1 Route result chain keeps Proposal untrusted and Decision Runtime-owned', () => {
+  const fixtures = createFixtures();
+  const decisionBase = {
+    id: routeDecisionId('route-decision_b1-assistant'),
+    schemaVersion: 1 as const,
+    sessionId: fixtures.contextSession.id,
+    expectedSessionVersion: fixtures.contextSession.version,
+    messageRef: fixtures.contextManifestOperation.messageRef,
+    focusRef: { id: fixtures.focus.id, digest: fixtures.focus.focusDigest },
+    proposalRef: { id: fixtures.proposal.id, digest: fixtures.proposal.proposalDigest },
+    source: InteractionRouteDecisionSource.ASSISTANT_PROPOSAL,
+    routingPolicy: fixtures.contextSession.routingPolicy,
+    allowedRoutes: [InteractionRouteDecisionOutcome.PROPOSE_INTAKE_ACTION],
+    reasonTrace: [
+      {
+        ruleId: 'b1-runtime-route',
+        policyDigest: fixtures.contextSession.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [fixtures.message.messageDigest, fixtures.proposal.proposalDigest],
+      },
+    ],
+    outcome: InteractionRouteDecisionOutcome.PROPOSE_INTAKE_ACTION,
+    actionKind: PendingActionKind.SUBMIT_GOVERNED_INTAKE,
+    decidedAt: NOW,
+  } satisfies RouteDecisionProjectionInput;
+  const decision = decodeRouteDecision(
+    { ...decisionBase, decisionDigest: digest(routeDecisionProjection(decisionBase)) },
+    digests,
+  );
+  const operationBase = {
+    ...interactionOperationReservationProjection(fixtures.contextManifestOperation),
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ROUTE_DECIDED,
+      routeDecisionRef: { id: decision.id, digest: decision.decisionDigest },
+      routeProposalRef: {
+        id: fixtures.proposal.id,
+        digest: fixtures.proposal.proposalDigest,
+      },
+    },
+    completedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeInteractionOperation(
+    {
+      ...operationBase,
+      operationDigest: digest(interactionOperationProjection(operationBase)),
+    },
+    digests,
+  );
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('B1 Route fixture must complete');
+  }
+  const chain = {
+    session: fixtures.contextSession,
+    currentMessage: fixtures.message,
+    focus: fixtures.focus,
+    manifest: fixtures.contextManifest,
+    currentOperation: fixtures.contextManifestOperation,
+    proposal: fixtures.proposal,
+    decision,
+    nextOperation: completed,
+  };
+  assert.doesNotThrow(() => assertInteractionRouteResultChainInvariant(chain));
+
+  const deterministicDecisionBase = {
+    id: routeDecisionId('route-decision_b1-proposal-free-version'),
+    schemaVersion: 1 as const,
+    sessionId: fixtures.contextSession.id,
+    expectedSessionVersion: fixtures.contextSession.version,
+    messageRef: fixtures.contextManifestOperation.messageRef,
+    focusRef: { id: fixtures.focus.id, digest: fixtures.focus.focusDigest },
+    source: InteractionRouteDecisionSource.READ_ONLY_GOAL_QUERY,
+    routingPolicy: fixtures.contextSession.routingPolicy,
+    allowedRoutes: [InteractionRouteDecisionOutcome.LIST_GOALS],
+    reasonTrace: [
+      {
+        ruleId: 'b1-proposal-free-version',
+        policyDigest: fixtures.contextSession.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [fixtures.message.messageDigest],
+      },
+    ],
+    outcome: InteractionRouteDecisionOutcome.LIST_GOALS,
+    decidedAt: NOW,
+  } satisfies RouteDecisionProjectionInput;
+  const deterministicDecision = decodeRouteDecision(
+    {
+      ...deterministicDecisionBase,
+      decisionDigest: digest(routeDecisionProjection(deterministicDecisionBase)),
+    },
+    digests,
+  );
+  const invalidReservedBase = {
+    id: interactionOperationId('interaction-operation_b1-proposal-free-version'),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(2),
+    sessionId: fixtures.contextSession.id,
+    expectedSessionVersion: fixtures.contextSession.version,
+    messageRef: fixtures.contextManifestOperation.messageRef,
+    operationKind: InteractionOperationKind.ROUTE,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const invalidReserved = decodeInteractionOperation(
+    {
+      ...invalidReservedBase,
+      operationDigest: digest(interactionOperationProjection(invalidReservedBase)),
+    },
+    digests,
+  );
+  if (invalidReserved.state !== InteractionOperationState.RESERVED) {
+    assert.fail('B1 proposal-free invalid reservation fixture must remain reserved');
+  }
+  const invalidCompletionBase = {
+    ...invalidReservedBase,
+    version: interactionOperationVersion(3),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ROUTE_DECIDED,
+      routeDecisionRef: {
+        id: deterministicDecision.id,
+        digest: deterministicDecision.decisionDigest,
+      },
+    },
+    completedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const invalidCompletion = decodeInteractionOperation(
+    {
+      ...invalidCompletionBase,
+      operationDigest: digest(interactionOperationProjection(invalidCompletionBase)),
+    },
+    digests,
+  );
+  if (invalidCompletion.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('B1 proposal-free invalid completion fixture must remain completed');
+  }
+  assert.throws(
+    () =>
+      assertInteractionRouteResultAuthorityChainInvariant({
+        session: fixtures.contextSession,
+        currentMessage: fixtures.message,
+        focus: fixtures.focus,
+        currentOperation: invalidReserved,
+        decision: deterministicDecision,
+        nextOperation: invalidCompletion,
+      }),
+    /initial Interaction Operation must use version 1/u,
+  );
+
+  const wrongKindAnswerDecisionBase = {
+    id: routeDecisionId('route-decision_b1-wrong-kind-answer'),
+    schemaVersion: 1 as const,
+    sessionId: fixtures.contextSession.id,
+    expectedSessionVersion: fixtures.contextSession.version,
+    messageRef: fixtures.contextManifestOperation.messageRef,
+    focusRef: { id: fixtures.focus.id, digest: fixtures.focus.focusDigest },
+    proposalRef: { id: fixtures.proposal.id, digest: fixtures.proposal.proposalDigest },
+    source: InteractionRouteDecisionSource.ASSISTANT_PROPOSAL,
+    routingPolicy: fixtures.contextSession.routingPolicy,
+    allowedRoutes: [InteractionRouteDecisionOutcome.ANSWER],
+    reasonTrace: [
+      {
+        ruleId: 'b1-runtime-answer-route',
+        policyDigest: fixtures.contextSession.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [fixtures.message.messageDigest, fixtures.proposal.proposalDigest],
+      },
+    ],
+    outcome: InteractionRouteDecisionOutcome.ANSWER,
+    answerProposalRef: { id: fixtures.proposal.id, digest: fixtures.proposal.proposalDigest },
+    decidedAt: NOW,
+  } satisfies RouteDecisionProjectionInput;
+  const wrongKindAnswerDecision = decodeRouteDecision(
+    {
+      ...wrongKindAnswerDecisionBase,
+      decisionDigest: digest(routeDecisionProjection(wrongKindAnswerDecisionBase)),
+    },
+    digests,
+  );
+  const wrongKindAnswerOperationBase = {
+    ...interactionOperationReservationProjection(fixtures.contextManifestOperation),
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ROUTE_DECIDED,
+      routeDecisionRef: {
+        id: wrongKindAnswerDecision.id,
+        digest: wrongKindAnswerDecision.decisionDigest,
+      },
+      routeProposalRef: {
+        id: fixtures.proposal.id,
+        digest: fixtures.proposal.proposalDigest,
+      },
+    },
+    completedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const wrongKindAnswerOperation = decodeInteractionOperation(
+    {
+      ...wrongKindAnswerOperationBase,
+      operationDigest: digest(interactionOperationProjection(wrongKindAnswerOperationBase)),
+    },
+    digests,
+  );
+  if (wrongKindAnswerOperation.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('Wrong-kind B1 Answer fixture must complete');
+  }
+  assert.throws(
+    () =>
+      assertInteractionRouteResultChainInvariant({
+        ...chain,
+        decision: wrongKindAnswerDecision,
+        nextOperation: wrongKindAnswerOperation,
+      }),
+    /exact Manifest, Proposal, Decision, and result/u,
+  );
+
+  const { sessionDigest, ...sessionProjection } = fixtures.contextSession;
+  void sessionDigest;
+  const advancedSessionBase = {
+    ...sessionProjection,
+    version: interactionSessionVersion(fixtures.contextSession.version + 1),
+    updatedAt: LATER,
+  } satisfies InteractionSessionProjectionInput;
+  const advancedSession = decodeInteractionSession(
+    {
+      ...advancedSessionBase,
+      sessionDigest: digest(interactionSessionProjection(advancedSessionBase)),
+    },
+    digests,
+  );
+  assert.doesNotThrow(() =>
+    assertInteractionRouteResultAuthorityChainInvariant({ ...chain, session: advancedSession }),
+  );
+  assert.throws(
+    () => assertInteractionRouteResultChainInvariant({ ...chain, session: advancedSession }),
+    /exact current Session, Message, and Focus|current Session and Message/u,
+  );
+
+  const substitutedProposalBase = {
+    ...fixtures.proposal,
+    assistantAdapter: {
+      ...fixtures.proposal.assistantAdapter,
+      digest: ZERO,
+    },
+  } satisfies RouteProposalProjectionInput;
+  const substitutedProposal = decodeRouteProposal(
+    {
+      ...substitutedProposalBase,
+      proposalDigest: digest(routeProposalProjection(substitutedProposalBase)),
+    },
+    digests,
+  );
+  const substitutedProposalDecisionBase = {
+    ...decisionBase,
+    proposalRef: { id: substitutedProposal.id, digest: substitutedProposal.proposalDigest },
+  } satisfies RouteDecisionProjectionInput;
+  const substitutedProposalDecision = decodeRouteDecision(
+    {
+      ...substitutedProposalDecisionBase,
+      decisionDigest: digest(routeDecisionProjection(substitutedProposalDecisionBase)),
+    },
+    digests,
+  );
+  const substitutedProposalResultBase = {
+    ...operationBase,
+    result: {
+      kind: InteractionOperationResultKind.ROUTE_DECIDED,
+      routeDecisionRef: {
+        id: substitutedProposalDecision.id,
+        digest: substitutedProposalDecision.decisionDigest,
+      },
+      routeProposalRef: {
+        id: substitutedProposal.id,
+        digest: substitutedProposal.proposalDigest,
+      },
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const substitutedProposalResult = decodeInteractionOperation(
+    {
+      ...substitutedProposalResultBase,
+      operationDigest: digest(interactionOperationProjection(substitutedProposalResultBase)),
+    },
+    digests,
+  );
+  if (substitutedProposalResult.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('Substituted B1 Proposal result fixture must remain completed');
+  }
+  assert.throws(
+    () =>
+      assertInteractionRouteResultAuthorityChainInvariant({
+        ...chain,
+        proposal: substitutedProposal,
+        decision: substitutedProposalDecision,
+        nextOperation: substitutedProposalResult,
+      }),
+    /exact Manifest, Proposal, Decision, and result/u,
+  );
+
+  assert.throws(
+    () =>
+      assertInteractionRouteResultAuthorityChainInvariant({
+        session: chain.session,
+        currentMessage: chain.currentMessage,
+        focus: chain.focus,
+        currentOperation: chain.currentOperation,
+        proposal: chain.proposal,
+        decision: chain.decision,
+        nextOperation: chain.nextOperation,
+      }),
+    /Assistant bindings, Manifest, Proposal, Decision, and result must agree/u,
+  );
+
+  const { decisionDigest: ignoredDecisionDigest, ...decisionProjection } = decision;
+  void ignoredDecisionDigest;
+  const substitutedDecisionBase = {
+    ...decisionProjection,
+    id: routeDecisionId('route-decision_b1-substituted'),
+  } satisfies RouteDecisionProjectionInput;
+  const substitutedDecision = decodeRouteDecision(
+    {
+      ...substitutedDecisionBase,
+      decisionDigest: digest(routeDecisionProjection(substitutedDecisionBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertInteractionRouteResultAuthorityChainInvariant({
+        ...chain,
+        decision: substitutedDecision,
+      }),
+    /exact current Session, Message, Decision, and Operation/u,
+  );
+
+  const substitutedResultBase = {
+    ...operationBase,
+    result: {
+      ...operationBase.result,
+      routeDecisionRef: { id: decision.id, digest: ZERO },
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const substitutedResult = decodeInteractionOperation(
+    {
+      ...substitutedResultBase,
+      operationDigest: digest(interactionOperationProjection(substitutedResultBase)),
+    },
+    digests,
+  );
+  if (substitutedResult.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('Substituted B1 Route result fixture must remain completed');
+  }
+  assert.throws(
+    () =>
+      assertInteractionRouteResultAuthorityChainInvariant({
+        ...chain,
+        nextOperation: substitutedResult,
+      }),
+    /exact current Session, Message, Decision, and Operation/u,
+  );
+
+  const crossSessionBase = {
+    ...sessionProjection,
+    id: interactionSessionId('interaction-session_b1-cross-session'),
+  } satisfies InteractionSessionProjectionInput;
+  const crossSession = decodeInteractionSession(
+    {
+      ...crossSessionBase,
+      sessionDigest: digest(interactionSessionProjection(crossSessionBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () => assertInteractionRouteResultAuthorityChainInvariant({ ...chain, session: crossSession }),
+    /exact current Session, Message, Decision, and Operation/u,
   );
 });
 
