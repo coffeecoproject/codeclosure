@@ -750,6 +750,16 @@ export interface PendingActionResolutionOperationResultChain {
   readonly nextOperation: CompletedInteractionOperation;
 }
 
+export interface AuthorizedIntakeActionHandoffOperationResultChain extends InteractionActionChain {
+  readonly session: InteractionSession;
+  readonly operationMessage: InteractionMessage;
+  readonly reservation: InteractionActionReservation;
+  readonly handoff: AuthorizedIntakeActionMessageHandoff;
+  readonly outcome?: never;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+}
+
 export interface FrontstageAnswerChain {
   readonly session: InteractionSession;
   readonly originatingMessage: InteractionMessage;
@@ -2786,6 +2796,49 @@ export function assertPendingActionResolutionOperationResultInvariant(
     (reservation !== undefined && reservation.reservedAt > nextOperation.completedAt)
   ) {
     throw new DomainInvariantError('Action Confirmation Operation has invalid causal ordering');
+  }
+}
+
+export function assertAuthorizedIntakeActionHandoffOperationResultInvariant(
+  chain: AuthorizedIntakeActionHandoffOperationResultChain,
+): void {
+  const { session, operationMessage, reservation, handoff, currentOperation, nextOperation } =
+    chain;
+  assertInteractionActionPersistenceChainInvariant(chain);
+  assertInteractionOperationReservationChain({
+    session,
+    message: operationMessage,
+    operation: currentOperation,
+  });
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  const authorizingMessage =
+    chain.resolution.disposition === PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED
+      ? chain.originatingMessage
+      : chain.resolutionMessage;
+  if (
+    authorizingMessage === undefined ||
+    !sameDigestRef(currentOperation.messageRef, {
+      id: authorizingMessage.id,
+      digest: authorizingMessage.messageDigest,
+    }) ||
+    currentOperation.operationKind !== InteractionOperationKind.INTAKE_HANDOFF ||
+    currentOperation.sessionId !== chain.pendingAction.sessionId ||
+    nextOperation.result.kind !== InteractionOperationResultKind.INTAKE_HANDOFF_RECORDED ||
+    !sameDigestRef(nextOperation.result.handoffRef, {
+      id: handoff.id,
+      digest: handoff.handoffDigest,
+    })
+  ) {
+    throw new DomainInvariantError(
+      'Intake Handoff Operation must bind its exact authorized Handoff result',
+    );
+  }
+  if (
+    reservation.reservedAt > currentOperation.reservedAt ||
+    currentOperation.reservedAt > handoff.createdAt ||
+    handoff.createdAt > nextOperation.completedAt
+  ) {
+    throw new DomainInvariantError('Intake Handoff Operation has invalid causal ordering');
   }
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -57,6 +57,7 @@ const migrationNames = Object.freeze([
   '0038_interaction_focus_authority.sql',
   '0039_interaction_route_result_authority.sql',
   '0040_interaction_pending_action_authority.sql',
+  '0041_interaction_public_action_authority.sql',
 ]);
 
 const schemaRowSchema = z.object({
@@ -72,6 +73,7 @@ const ledgerRowSchema = z.object({
   applied_at: z.string().min(1),
 });
 const integrityRowSchema = z.object({ integrity_check: z.literal('ok') });
+const countRowSchema = z.object({ count: z.number().int().nonnegative() }).strict();
 
 function checksum(source: string): string {
   return `sha256:${createHash('sha256').update(source, 'utf8').digest('hex')}`;
@@ -170,12 +172,12 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
     })),
   );
   assert.deepEqual(firstInspection, {
-    counts: { table: 86, index: 37, trigger: 283, view: 0 },
+    counts: { table: 86, index: 38, trigger: 287, view: 0 },
     foreignKeyViolationCount: 0,
     integrity: [{ integrity_check: 'ok' }],
     ledger: expectedLedger,
     nonStrictTables: [],
-    schemaDigest: 'sha256:cf2e1e3f27e62a5db004dbd4e2863792a58402e327cf840e44a8e8a39f2573b5',
+    schemaDigest: 'sha256:e85b69419f062ef5d1d7d62cccd02fc56b75cbf617eccc2b72b779302e389620',
   });
 
   const reopened = new Database(filename);
@@ -189,4 +191,95 @@ void test('[I-006][I-009] migration ledger and reopened SQLite schema match one 
 
   assert.deepEqual(appliedIdentity(replayedApplication), appliedIdentity(firstApplication));
   assert.deepEqual(reopenedInspection, firstInspection);
+});
+
+void test('0041 rejects a non-empty F1 Handoff skeleton without changing its prior schema', (t) => {
+  const sourceDirectory = defaultMigrationsDirectory();
+  const temporaryRoot = mkdtempSync(join(tmpdir(), 'codeclosure-m26-b3-migration-guard-'));
+  t.after(() => rmSync(temporaryRoot, { force: true, recursive: true }));
+  const migrationsDirectory = join(temporaryRoot, 'migrations');
+  mkdirSync(migrationsDirectory);
+  for (const name of migrationNames.slice(0, -1)) {
+    copyFileSync(join(sourceDirectory, name), join(migrationsDirectory, name));
+  }
+
+  const filename = join(temporaryRoot, 'state.sqlite');
+  const database = new Database(filename);
+  database.pragma('foreign_keys = ON');
+  applyMigrations(database, migrationsDirectory, () => appliedAt);
+  database.pragma('foreign_keys = OFF');
+  database
+    .prepare(
+      `INSERT INTO interaction_message_handoffs (
+         id, schema_version, session_id, message_id, message_digest,
+         pending_action_id, pending_action_digest, resolution_id, resolution_digest,
+         reservation_id, reservation_digest, intake_command_id,
+         admitted_content_digest, created_at, handoff_digest, record_json
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      'interaction-handoff_unexpected-f1-row',
+      'interaction-session_unexpected-f1-row',
+      'interaction-message_unexpected-f1-row',
+      `sha256:${'1'.repeat(64)}`,
+      'pending-action_unexpected-f1-row',
+      `sha256:${'2'.repeat(64)}`,
+      'pending-action-resolution_unexpected-f1-row',
+      `sha256:${'3'.repeat(64)}`,
+      'interaction-action-reservation_unexpected-f1-row',
+      `sha256:${'4'.repeat(64)}`,
+      'command_unexpected-f1-row',
+      `sha256:${'5'.repeat(64)}`,
+      '2026-08-15T00:00:00.000Z',
+      `sha256:${'6'.repeat(64)}`,
+      JSON.stringify({
+        id: 'interaction-handoff_unexpected-f1-row',
+        sessionId: 'interaction-session_unexpected-f1-row',
+        messageRef: { id: 'interaction-message_unexpected-f1-row' },
+        intakeCommandId: 'command_unexpected-f1-row',
+        admittedContentDigest: `sha256:${'5'.repeat(64)}`,
+        handoffDigest: `sha256:${'6'.repeat(64)}`,
+      }),
+    );
+  database.pragma('foreign_keys = ON');
+  const migration0041 = migrationNames.at(-1);
+  assert.ok(migration0041);
+  copyFileSync(join(sourceDirectory, migration0041), join(migrationsDirectory, migration0041));
+
+  assert.throws(
+    () => applyMigrations(database, migrationsDirectory, () => appliedAt),
+    /CHECK constraint failed/u,
+  );
+  assert.equal(
+    countRowSchema.parse(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
+      .count,
+    migrationNames.length - 1,
+  );
+  assert.equal(
+    countRowSchema.parse(
+      database.prepare('SELECT COUNT(*) AS count FROM interaction_message_handoffs').get(),
+    ).count,
+    1,
+  );
+  assert.equal(
+    countRowSchema.parse(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM pragma_table_info('interaction_message_handoffs') WHERE name = 'handoff_kind'",
+        )
+        .get(),
+    ).count,
+    0,
+  );
+  assert.equal(
+    countRowSchema.parse(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'interaction_handoff_migration_guard'",
+        )
+        .get(),
+    ).count,
+    0,
+  );
+  database.close();
 });

@@ -1,5 +1,6 @@
 import type {
   AuditEventId,
+  AuthorizedIntakeActionMessageHandoff,
   CommandId,
   CompletedInteractionOperation,
   ConfirmationGrammar,
@@ -16,6 +17,10 @@ import type {
   InteractionOperationKind,
   InteractionActionReservation,
   InteractionActionReservationId,
+  InteractionActionOutcome,
+  InteractionActionOutcomeId,
+  InteractionMessageHandoffId,
+  InteractionPublicCapability,
   InteractionRoutingPolicy,
   InteractionSession,
   InteractionSessionId,
@@ -532,6 +537,109 @@ export interface InteractionPendingActionControlStore extends InteractionRouteRe
     reservationId: InteractionActionReservationId,
   ): InteractionActionReservation | undefined;
   getUnresolvedInteractionPendingAction(sessionId: InteractionSessionId): PendingAction | undefined;
+}
+
+export interface CommitAuthorizedIntakeActionHandoff {
+  readonly session: InteractionSession;
+  readonly operationMessage: InteractionMessage;
+  readonly originatingMessage: InteractionMessage;
+  readonly resolutionMessage?: InteractionMessage;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution: PendingActionResolution;
+  readonly reservation: InteractionActionReservation;
+  readonly handoff: AuthorizedIntakeActionMessageHandoff;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly handoffAuditWrite: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type AuthorizedIntakeActionHandoffCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      handoff: AuthorizedIntakeActionMessageHandoff;
+      operation: CompletedInteractionOperation;
+    }>
+  | Readonly<{ status: 'OPERATION_NOT_FOUND' | 'ACTION_RESERVATION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'MESSAGE_HANDOFF_CONFLICT';
+      currentHandoff: AuthorizedIntakeActionMessageHandoff;
+    }>
+  | Readonly<{
+      status: 'ACTION_RESERVATION_CONFLICT';
+      currentReservation: InteractionActionReservation;
+    }>;
+
+/**
+ * The caller allocates identities only. The Store resolves the exact retained
+ * Reservation and public-command outcome, then uses the Runtime mapper to
+ * author the Action Outcome and audit atomically.
+ */
+export interface CommitInteractionActionOutcome {
+  readonly reservationId: InteractionActionReservationId;
+  readonly outcomeId: InteractionActionOutcomeId;
+  readonly auditEventId: AuditEventId;
+}
+
+export type InteractionActionOutcomeCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      outcome: InteractionActionOutcome;
+    }>
+  | Readonly<{ status: 'ACTION_RESERVATION_NOT_FOUND' | 'PUBLIC_COMMAND_OUTCOME_NOT_RETAINED' }>
+  | Readonly<{
+      status: 'ACTION_OUTCOME_CONFLICT';
+      currentOutcome: InteractionActionOutcome;
+    }>;
+
+export const InteractionPublicOutcomeRetentionState = {
+  NOT_RETAINED: 'NOT_RETAINED',
+  RETAINED: 'RETAINED',
+} as const;
+export type InteractionPublicOutcomeRetentionState =
+  (typeof InteractionPublicOutcomeRetentionState)[keyof typeof InteractionPublicOutcomeRetentionState];
+
+export interface InteractionUnresolvedActionReservationDescriptor {
+  readonly reservationRef: Readonly<{
+    id: InteractionActionReservationId;
+    digest: Sha256Digest;
+  }>;
+  readonly publicCapability: InteractionPublicCapability;
+  readonly commandId: CommandId;
+  readonly canonicalCommandInputDigest: Sha256Digest;
+  readonly publicOutcomeState: InteractionPublicOutcomeRetentionState;
+}
+
+/**
+ * B3 persists only the action-authorized Intake member and never invokes or
+ * retries a public capability. Clarification Handoff ownership remains closed
+ * until B4.
+ */
+export interface InteractionPublicActionControlStore extends InteractionPendingActionControlStore {
+  commitAuthorizedIntakeActionHandoff(
+    input: CommitAuthorizedIntakeActionHandoff,
+  ): AuthorizedIntakeActionHandoffCommitResult;
+  commitInteractionActionOutcome(
+    input: CommitInteractionActionOutcome,
+  ): InteractionActionOutcomeCommitResult;
+  getInteractionMessageHandoff(
+    handoffId: InteractionMessageHandoffId,
+  ): AuthorizedIntakeActionMessageHandoff | undefined;
+  getInteractionActionOutcome(
+    outcomeId: InteractionActionOutcomeId,
+  ): InteractionActionOutcome | undefined;
+  getUnresolvedInteractionActionReservation(
+    reservationId: InteractionActionReservationId,
+  ): InteractionUnresolvedActionReservationDescriptor | undefined;
 }
 
 export interface RecordInteractionFocusBinding {

@@ -10,12 +10,15 @@ import Database from 'better-sqlite3';
 import {
   auditEventId,
   commandId,
+  createGoal,
+  createWorkflow,
   decodeFrontstageContextManifest,
   decodeDirectActionGrammar,
   decodeFocusBinding,
   decodeInteractionMessage,
   decodeInteractionOperation,
   decodeInteractionActionReservation,
+  decodeInteractionMessageHandoff,
   decodePendingAction,
   decodePendingActionResolution,
   decodeInteractionRoutingPolicy,
@@ -25,6 +28,8 @@ import {
   directActionGrammarProjection,
   focusBindingId,
   focusBindingProjection,
+  goalId,
+  goalRevision,
   frontstageContextManifestId,
   frontstageContextManifestProjection,
   FrontstageContextOmissionReason,
@@ -34,11 +39,13 @@ import {
   InteractionContentRetention,
   InteractionFocusKind,
   InteractionMessageRole,
+  InteractionMessageHandoffKind,
   InteractionOperationFailureReason,
   InteractionOperationKind,
   InteractionOperationResultKind,
   InteractionOperationState,
   InteractionConfirmationRequirement,
+  InteractionActionOutcomeDisposition,
   InteractionPublicCapability,
   PendingActionDerivation,
   PendingActionKind,
@@ -54,6 +61,9 @@ import {
   interactionOperationVersion,
   interactionActionReservationId,
   interactionActionReservationProjection,
+  interactionActionOutcomeId,
+  interactionMessageHandoffId,
+  interactionMessageHandoffProjection,
   interactionSessionId,
   interactionSessionProjection,
   interactionSessionVersion,
@@ -67,7 +77,11 @@ import {
   routeDecisionProjection,
   routeProposalId,
   routeProposalProjection,
+  successCriterionId,
+  workflowId,
+  decideWorkflow,
   type CompletedInteractionOperation,
+  type AuthorizedIntakeActionMessageHandoff,
   type InteractionActionReservation,
   type FocusBinding,
   type FocusBindingProjectionInput,
@@ -75,6 +89,8 @@ import {
   type FrontstageContextManifestId,
   type FrontstageContextManifestProjectionInput,
   type InteractionMessage,
+  type RetainedInteractionMessage,
+  type InteractionMessageHandoffProjectionInput,
   type InteractionOperationProjectionInput,
   type PendingAction,
   type PendingActionProjectionInput,
@@ -83,6 +99,7 @@ import {
   type ReservedInteractionOperation,
   type InteractionSessionProjectionInput,
   type InteractionSession,
+  type WorkflowInstance,
   type RouteDecision,
   type RouteDecisionId,
   type RouteDecisionProjectionInput,
@@ -94,12 +111,16 @@ import {
   CanonicalJsonSha256DigestProvider,
   InteractionAuditAggregateType,
   InteractionAuditEventType,
+  InteractionPublicOutcomeRetentionState,
+  RuntimeErrorCode,
   createM26InteractionPolicies,
+  goalAndWorkflowCreationPayloadProjection,
   type AdmitInteractionUserMessage,
   type CompanionFreeReservedInteractionOperation,
   type CommitInteractionRouteResult,
   type CommitInteractionPendingActionProposal,
   type CommitInteractionActionConfirmation,
+  type CommitAuthorizedIntakeActionHandoff,
   type CreateInteractionSession,
   type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
@@ -203,6 +224,45 @@ function installInput(policies: InteractionPolicySet): InstallInteractionPolicie
       ),
     }),
   });
+}
+
+function createReadyGoalAuthority(store: SqliteControlStore, suffix: string): WorkflowInstance {
+  const createdAt = isoTimestamp('2026-08-14T00:59:00.000Z');
+  const goal = createGoal({
+    id: goalId(`goal_${fixtureIdentifierSuffix(suffix)}`),
+    revision: goalRevision(1),
+    objective: `Exercise ${suffix} public outcome authority`,
+    successCriteria: [
+      {
+        id: successCriterionId(`criterion_${fixtureIdentifierSuffix(suffix)}`),
+        description: 'The retained public command remains exact',
+        required: true,
+      },
+    ],
+    scope: {
+      projectPath: `/fixture/frontstage/${suffix}`,
+      allowedPaths: ['src/**'],
+    },
+    nonGoals: ['worker execution'],
+    createdAt,
+  });
+  const workflow = createWorkflow({
+    id: workflowId(`workflow_${fixtureIdentifierSuffix(suffix)}`),
+    goalId: goal.id,
+    goalRevision: goal.revision,
+    createdAt,
+  });
+  const result = store.createGoalWithWorkflow({
+    commandId: commandId(`command_create-${fixtureIdentifierSuffix(suffix)}`),
+    inputDigest: digests.digest({ kind: 'create-goal', suffix }),
+    goal,
+    workflow,
+    auditEventId: auditEventId(`audit_goal-create-${fixtureIdentifierSuffix(suffix)}`),
+    workflowAuditEventId: auditEventId(`audit_workflow-create-${fixtureIdentifierSuffix(suffix)}`),
+    payloadDigest: digests.digest(goalAndWorkflowCreationPayloadProjection(goal, workflow)),
+  });
+  assert.equal(result.status, 'APPLIED');
+  return workflow;
 }
 
 function createInitialSession(
@@ -354,7 +414,7 @@ function createUserMessage(
   suffix: string,
   content: string,
   createdAt: string,
-): InteractionMessage {
+): RetainedInteractionMessage {
   const retainedAt = isoTimestamp(createdAt);
   const id = interactionMessageId(`interaction-message_${fixtureIdentifierSuffix(suffix)}`);
   const base = {
@@ -369,10 +429,14 @@ function createUserMessage(
     contentByteLength: Buffer.byteLength(content, 'utf8'),
     createdAt: retainedAt,
   };
-  return decodeInteractionMessage(
+  const message = decodeInteractionMessage(
     { ...base, messageDigest: digests.digest(interactionMessageProjection(base)) },
     digests,
   );
+  if (message.retention !== InteractionContentRetention.RETAINED) {
+    throw new TypeError('Fixture user Message must retain its exact content');
+  }
+  return message;
 }
 
 function createSessionInput(session: InteractionSession, suffix: string): CreateInteractionSession {
@@ -922,6 +986,45 @@ function createActionRouteDecision(
   );
 }
 
+function createCancelGoalRouteDecision(
+  session: InteractionSession,
+  message: InteractionMessage,
+  workflow: WorkflowInstance,
+  suffix: string,
+): RouteDecision {
+  const base = {
+    id: routeDecisionId(`route-decision_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    source: InteractionRouteDecisionSource.DIRECT_ACTION,
+    routingPolicy: session.routingPolicy,
+    allowedRoutes: [InteractionRouteDecisionOutcome.PROPOSE_GOAL_CONTROL],
+    reasonTrace: [
+      {
+        ruleId: 'fixture-direct-cancel-goal',
+        policyDigest: session.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [message.messageDigest],
+      },
+    ],
+    outcome: InteractionRouteDecisionOutcome.PROPOSE_GOAL_CONTROL,
+    actionKind: PendingActionKind.CANCEL_GOAL,
+    goalTarget: {
+      goalId: workflow.goalId,
+      goalRevision: workflow.goalRevision,
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+    },
+    decidedAt: isoTimestamp('2026-08-14T01:00:03.000Z'),
+  } satisfies RouteDecisionProjectionInput;
+  return decodeRouteDecision(
+    { ...base, decisionDigest: digests.digest(routeDecisionProjection(base)) },
+    digests,
+  );
+}
+
 function createReservedActionOperation(
   session: InteractionSession,
   message: InteractionMessage,
@@ -988,6 +1091,53 @@ function createPendingAction(
     actionDerivation: PendingActionDerivation.ROUTED_ACTION,
     expiresAt: isoTimestamp(timestamps.expiresAt ?? '2026-08-14T01:00:10.000Z'),
     createdAt: isoTimestamp(timestamps.createdAt ?? '2026-08-14T01:00:04.000Z'),
+  } satisfies PendingActionProjectionInput;
+  return decodePendingAction(
+    { ...base, pendingActionDigest: digests.digest(pendingActionProjection(base)) },
+    digests,
+  );
+}
+
+function createCancelGoalPendingAction(
+  session: InteractionSession,
+  message: InteractionMessage,
+  decision: RouteDecision,
+  workflow: WorkflowInstance,
+  suffix: string,
+): PendingAction {
+  const base = {
+    id: pendingActionId(`pending-action_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    principalRef: session.principalRef,
+    projectRef: session.projectRef,
+    originatingMessageRef: { id: message.id, digest: message.messageDigest },
+    routeDecisionRef: { id: decision.id, digest: decision.decisionDigest },
+    preallocatedCommandId: commandId(`command_${fixtureIdentifierSuffix(suffix)}`),
+    canonicalCommandInputDigest: digests.digest({ kind: 'cancel-goal-command', suffix }),
+    publicCapability: InteractionPublicCapability.CANCEL_GOAL,
+    routingPolicy: session.routingPolicy,
+    confirmationPolicy: session.confirmationPolicy,
+    confirmationRequirement: InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    reasonTrace: [
+      ...decision.reasonTrace,
+      {
+        ruleId: 'fixture-cancel-confirmation-policy',
+        policyDigest: session.confirmationPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [decision.decisionDigest],
+      },
+    ],
+    kind: PendingActionKind.CANCEL_GOAL,
+    actionDerivation: PendingActionDerivation.ROUTED_ACTION,
+    goalTarget: {
+      goalId: workflow.goalId,
+      goalRevision: workflow.goalRevision,
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+    },
+    expiresAt: isoTimestamp('2026-08-14T01:00:10.000Z'),
+    createdAt: isoTimestamp('2026-08-14T01:00:04.000Z'),
   } satisfies PendingActionProjectionInput;
   return decodePendingAction(
     { ...base, pendingActionDigest: digests.digest(pendingActionProjection(base)) },
@@ -1082,6 +1232,143 @@ function createActionReservation(
     },
     digests,
   );
+}
+
+function createReservedIntakeHandoffOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  reservedAt = '2026-08-14T01:00:04.600Z',
+): CompanionFreeReservedInteractionOperation {
+  const base = {
+    id: interactionOperationId(`interaction-operation_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    operationKind: InteractionOperationKind.INTAKE_HANDOFF,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: isoTimestamp(reservedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const operation = decodeOperationProjection(base);
+  assertCompanionFreeReservedFixtureOperation(operation);
+  if (operation.operationKind !== InteractionOperationKind.INTAKE_HANDOFF) {
+    throw new TypeError('Fixture Intake Handoff Operation did not remain reserved');
+  }
+  return operation;
+}
+
+function createAuthorizedIntakeActionHandoff(
+  session: InteractionSession,
+  message: RetainedInteractionMessage,
+  pendingAction: PendingAction,
+  resolution: PendingActionResolution,
+  reservation: InteractionActionReservation,
+  suffix: string,
+  createdAt = '2026-08-14T01:00:04.700Z',
+): AuthorizedIntakeActionMessageHandoff {
+  const base = {
+    id: interactionMessageHandoffId(
+      `interaction-message-handoff_${fixtureIdentifierSuffix(suffix)}`,
+    ),
+    schemaVersion: 1 as const,
+    kind: InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION,
+    sessionId: session.id,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    pendingActionRef: { id: pendingAction.id, digest: pendingAction.pendingActionDigest },
+    resolutionRef: { id: resolution.id, digest: resolution.resolutionDigest },
+    reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+    admittedUserContent: message.content,
+    admittedContentDigest: message.contentDigest,
+    intakeCommandId: reservation.commandId,
+    createdAt: isoTimestamp(createdAt),
+  } satisfies InteractionMessageHandoffProjectionInput;
+  const handoff = decodeInteractionMessageHandoff(
+    { ...base, handoffDigest: digests.digest(interactionMessageHandoffProjection(base)) },
+    digests,
+  );
+  if (handoff.kind !== InteractionMessageHandoffKind.AUTHORIZED_INTAKE_ACTION) {
+    throw new TypeError('Fixture did not create an authorized Intake Action Handoff');
+  }
+  return handoff;
+}
+
+function completeIntakeHandoffOperation(
+  operation: ReservedInteractionOperation,
+  handoff: AuthorizedIntakeActionMessageHandoff,
+  completedAt = '2026-08-14T01:00:04.800Z',
+): CompletedInteractionOperation {
+  const base = {
+    id: operation.id,
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.INTAKE_HANDOFF_RECORDED,
+      handoffRef: { id: handoff.id, digest: handoff.handoffDigest },
+    },
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp(completedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeOperationProjection(base);
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Fixture Intake Handoff Operation did not complete');
+  }
+  return completed;
+}
+
+function createAuthorizedIntakeActionHandoffCommitInput(
+  session: InteractionSession,
+  operationMessage: InteractionMessage,
+  originatingMessage: InteractionMessage,
+  decision: RouteDecision,
+  pendingAction: PendingAction,
+  resolution: PendingActionResolution,
+  reservation: InteractionActionReservation,
+  handoff: AuthorizedIntakeActionMessageHandoff,
+  operation: ReservedInteractionOperation,
+  completedOperation: CompletedInteractionOperation,
+  suffix: string,
+  resolutionMessage?: InteractionMessage,
+): CommitAuthorizedIntakeActionHandoff {
+  return Object.freeze({
+    session,
+    operationMessage,
+    originatingMessage,
+    ...(resolutionMessage === undefined ? {} : { resolutionMessage }),
+    routeDecision: decision,
+    pendingAction,
+    resolution,
+    reservation,
+    handoff,
+    currentOperation: operation,
+    nextOperation: completedOperation,
+    handoffAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'intake-handoff',
+      InteractionAuditAggregateType.INTERACTION_MESSAGE_HANDOFF,
+      handoff.id,
+      InteractionAuditEventType.INTERACTION_MESSAGE_HANDOFF_RECORDED,
+      handoff.handoffDigest,
+      handoff.createdAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'intake-handoff-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      completedOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      completedOperation.operationDigest,
+      completedOperation.completedAt,
+      operation.version,
+      completedOperation.version,
+    ),
+  });
 }
 
 function completePendingActionProposalOperation(
@@ -1303,7 +1590,7 @@ function preparePendingActionProposal(
   confirmationRequirement: InteractionConfirmationRequirement,
 ): Readonly<{
   session: InteractionSession;
-  message: InteractionMessage;
+  message: RetainedInteractionMessage;
   decision: RouteDecision;
   pendingAction: PendingAction;
   operation: ReservedInteractionOperation;
@@ -1379,7 +1666,7 @@ function prepareResponseBoundConfirmation(
     | typeof PendingActionResolutionDisposition.UNCLEAR,
 ): Readonly<{
   session: InteractionSession;
-  message: InteractionMessage;
+  message: RetainedInteractionMessage;
   resolution: PendingActionResolution;
   reservation?: InteractionActionReservation;
   operation: ReservedInteractionOperation;
@@ -1449,6 +1736,286 @@ function prepareResponseBoundConfirmation(
       reservation,
     ),
   });
+}
+
+function prepareDirectAuthorizedIntakeHandoff(
+  store: SqliteControlStore,
+  policies: InteractionPolicySet,
+  suffix: string,
+): Readonly<{
+  input: CommitAuthorizedIntakeActionHandoff;
+  handoff: AuthorizedIntakeActionMessageHandoff;
+  reservation: InteractionActionReservation;
+  completedOperation: CompletedInteractionOperation;
+}> {
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    suffix,
+    InteractionConfirmationRequirement.DIRECT_USER_MESSAGE_SUFFICIENT,
+  );
+  const resolution = createPendingActionResolution(
+    prepared.pendingAction,
+    suffix,
+    PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED,
+  );
+  const reservation = createActionReservation(prepared.pendingAction, resolution, suffix);
+  assert.equal(
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        suffix,
+        resolution,
+        reservation,
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const operation = createReservedIntakeHandoffOperation(
+    prepared.session,
+    prepared.message,
+    suffix,
+  );
+  assert.equal(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(prepared.session, prepared.message, operation, suffix),
+    ).status,
+    'RESERVED',
+  );
+  const handoff = createAuthorizedIntakeActionHandoff(
+    prepared.session,
+    prepared.message,
+    prepared.pendingAction,
+    resolution,
+    reservation,
+    suffix,
+  );
+  const completedOperation = completeIntakeHandoffOperation(operation, handoff);
+  return Object.freeze({
+    input: createAuthorizedIntakeActionHandoffCommitInput(
+      prepared.session,
+      prepared.message,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      resolution,
+      reservation,
+      handoff,
+      operation,
+      completedOperation,
+      suffix,
+    ),
+    handoff,
+    reservation,
+    completedOperation,
+  });
+}
+
+function prepareSeparatelyConfirmedIntakeHandoff(
+  store: SqliteControlStore,
+  policies: InteractionPolicySet,
+  suffix: string,
+): Readonly<{
+  input: CommitAuthorizedIntakeActionHandoff;
+  handoff: AuthorizedIntakeActionMessageHandoff;
+  reservation: InteractionActionReservation;
+  operationMessage: RetainedInteractionMessage;
+  originatingMessage: RetainedInteractionMessage;
+  completedOperation: CompletedInteractionOperation;
+}> {
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    suffix,
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  assert.equal(
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        suffix,
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const confirmed = prepareResponseBoundConfirmation(
+    store,
+    prepared,
+    suffix,
+    PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+  );
+  assert.equal(store.commitInteractionActionConfirmation(confirmed.input).status, 'APPLIED');
+  if (confirmed.reservation === undefined) {
+    throw new TypeError('Confirmed Intake Action must retain its Action Reservation');
+  }
+  const operation = createReservedIntakeHandoffOperation(
+    confirmed.session,
+    confirmed.message,
+    suffix,
+    '2026-08-14T01:00:07.600Z',
+  );
+  assert.equal(
+    store.reserveInteractionOperation(
+      createOperationReservationInput(confirmed.session, confirmed.message, operation, suffix),
+    ).status,
+    'RESERVED',
+  );
+  const handoff = createAuthorizedIntakeActionHandoff(
+    confirmed.session,
+    prepared.message,
+    prepared.pendingAction,
+    confirmed.resolution,
+    confirmed.reservation,
+    suffix,
+    '2026-08-14T01:00:07.700Z',
+  );
+  const completedOperation = completeIntakeHandoffOperation(
+    operation,
+    handoff,
+    '2026-08-14T01:00:07.800Z',
+  );
+  return Object.freeze({
+    input: createAuthorizedIntakeActionHandoffCommitInput(
+      confirmed.session,
+      confirmed.message,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      confirmed.resolution,
+      confirmed.reservation,
+      handoff,
+      operation,
+      completedOperation,
+      suffix,
+      confirmed.message,
+    ),
+    handoff,
+    reservation: confirmed.reservation,
+    operationMessage: confirmed.message,
+    originatingMessage: prepared.message,
+    completedOperation,
+  });
+}
+
+function prepareConfirmedCancelAction(
+  store: SqliteControlStore,
+  policies: InteractionPolicySet,
+  suffix: string,
+): Readonly<{
+  workflow: WorkflowInstance;
+  reservation: InteractionActionReservation;
+}> {
+  const workflow = createReadyGoalAuthority(store, suffix);
+  const initial = createInitialSession(policies, suffix);
+  store.createInteractionSession(createSessionInput(initial, `${suffix}-session`));
+  const message = createUserMessage(
+    initial,
+    `${suffix}-request`,
+    '/goal cancel',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, `${suffix}-message`),
+  );
+  const routeOperation = createReservedOperation(
+    session,
+    message,
+    `${suffix}-route`,
+    '2026-08-14T01:00:02.000Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, routeOperation, `${suffix}-route`),
+  );
+  const decision = createCancelGoalRouteDecision(session, message, workflow, `${suffix}-route`);
+  store.commitInteractionRouteResult(
+    createRouteResultCommitInput(
+      session,
+      message,
+      routeOperation,
+      decision,
+      completeRouteOperation(routeOperation, decision),
+      `${suffix}-route`,
+    ),
+  );
+  const operation = createReservedActionOperation(
+    session,
+    message,
+    `${suffix}-proposal`,
+    InteractionOperationKind.ACTION_PROPOSAL,
+    '2026-08-14T01:00:03.600Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, `${suffix}-proposal`),
+  );
+  const pendingAction = createCancelGoalPendingAction(session, message, decision, workflow, suffix);
+  const completedOperation = completePendingActionProposalOperation(operation, pendingAction);
+  assert.equal(
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        session,
+        message,
+        decision,
+        pendingAction,
+        operation,
+        completedOperation,
+        suffix,
+      ),
+    ).status,
+    'APPLIED',
+  );
+  const confirmed = prepareResponseBoundConfirmation(
+    store,
+    { session, message, decision, pendingAction, operation, completedOperation },
+    suffix,
+    PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+  );
+  assert.equal(store.commitInteractionActionConfirmation(confirmed.input).status, 'APPLIED');
+  if (confirmed.reservation === undefined) {
+    throw new TypeError('Confirmed Goal cancellation must retain its Action Reservation');
+  }
+  return Object.freeze({ workflow, reservation: confirmed.reservation });
+}
+
+function commitCancellationPublicOutcome(
+  store: SqliteControlStore,
+  workflow: WorkflowInstance,
+  reservation: InteractionActionReservation,
+): void {
+  const cancellation = decideWorkflow(workflow, {
+    type: 'CANCEL_WORKFLOW',
+    commandId: reservation.commandId,
+    workflowId: workflow.id,
+    expectedVersion: workflow.version,
+    occurredAt: isoTimestamp('2026-08-14T01:00:08.000Z'),
+    reason: 'The explicitly confirmed user cancelled the Goal.',
+  });
+  if (!cancellation.accepted) {
+    throw new TypeError(`Fixture cancellation was rejected: ${cancellation.rejection.code}`);
+  }
+  const event = cancellation.events[0];
+  assert.equal(
+    store.commitWorkflowEvent({
+      inputDigest: reservation.canonicalCommandInputDigest,
+      target: { aggregateType: 'GOAL', aggregateId: workflow.goalId },
+      event,
+      auditEventId: auditEventId(
+        `audit_${fixtureIdentifierSuffix(reservation.commandId)}-public-workflow`,
+      ),
+      payloadDigest: digests.digest({ event }),
+    }).status,
+    'APPLIED',
+  );
 }
 
 function terminalizeOperation(
@@ -1974,6 +2541,7 @@ function insertActionReservationChain(
     'DROP TRIGGER IF EXISTS interaction_pending_action_resolutions_exact_authority_guard',
   );
   database.exec('DROP TRIGGER IF EXISTS interaction_action_reservations_exact_authority_guard');
+  database.exec('DROP TRIGGER IF EXISTS processed_commands_outcome_insert_guard');
   const messageId = `interaction-message_${suffix}`;
   const messageDigest = insertUserMessage(database, sessionId, messageId);
   const decisionId = `route-decision_${suffix}`;
@@ -2121,8 +2689,42 @@ function insertActionOutcome(
   suffix: string,
 ): void {
   const id = `interaction-action-outcome_${suffix}`;
-  const publicCommandOutcomeDigest = digests.digest({ id, kind: 'public-outcome' });
-  const resultProjectionDigest = digests.digest({ id, kind: 'result-projection' });
+  const output = {
+    schemaVersion: 1,
+    commandId: reservation.commandId,
+    ok: true,
+    goalId: 'goal_action-outcome-fixture',
+    workflowVersion: 1,
+    phase: 'DISCOVERY',
+    runStatus: 'RUNNING',
+  };
+  const publicOutcome = {
+    schemaVersion: 3,
+    disposition: 'APPLIED',
+    target: { aggregateType: 'GOAL', aggregateId: 'goal_action-outcome-fixture' },
+    goalId: 'goal_action-outcome-fixture',
+    workflow: {
+      id: 'workflow_action-outcome-fixture',
+      version: 1,
+      phase: 'DISCOVERY',
+      runStatus: 'RUNNING',
+    },
+    output,
+  };
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO processed_commands(
+         command_id, input_digest, aggregate_type, aggregate_id, outcome_json, completed_at
+       ) VALUES (?, ?, 'GOAL', 'goal_action-outcome-fixture', ?, ?)`,
+    )
+    .run(
+      reservation.commandId,
+      reservation.canonicalCommandInputDigest,
+      JSON.stringify(publicOutcome),
+      INSTALLED_AT,
+    );
+  const publicCommandOutcomeDigest = digests.digest(publicOutcome);
+  const resultProjectionDigest = digests.digest(output);
   const outcomeDigest = digests.digest({ id, reservationId: reservation.id });
   database
     .prepare(
@@ -6898,7 +7500,7 @@ void test('Slice 2 Message causal backstop rejects absent and cross-Session Oper
             'interaction-message_missing-operation',
           );
         })(),
-      /FOREIGN KEY constraint failed/u,
+      /FOREIGN KEY constraint failed|exact retained public authority/u,
     );
 
     const userMessageId = 'interaction-message_causal-user';
@@ -6922,12 +7524,304 @@ void test('Slice 2 Message causal backstop rejects absent and cross-Session Oper
             'interaction-message_cross-session-operation',
           );
         })(),
-      /FOREIGN KEY constraint failed/u,
+      /FOREIGN KEY constraint failed|exact retained public authority/u,
     );
   } finally {
     database.close();
   }
 });
+
+void test('B3 commits one authorized Intake Handoff, replays exactly, and detects its unresolved Reservation', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const { input, handoff, reservation, completedOperation } = prepareDirectAuthorizedIntakeHandoff(
+    store,
+    policies,
+    'b3-direct-handoff',
+  );
+  assert.deepEqual(store.commitAuthorizedIntakeActionHandoff(input), {
+    status: 'APPLIED',
+    handoff,
+    operation: completedOperation,
+  });
+  assert.deepEqual(store.commitAuthorizedIntakeActionHandoff(input), {
+    status: 'REPLAYED',
+    handoff,
+    operation: completedOperation,
+  });
+  assert.deepEqual(store.getInteractionMessageHandoff(handoff.id), handoff);
+  assert.deepEqual(store.getUnresolvedInteractionActionReservation(reservation.id), {
+    reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+    publicCapability: InteractionPublicCapability.SUBMIT_INTAKE,
+    commandId: reservation.commandId,
+    canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+    publicOutcomeState: InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+  });
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionMessageHandoff(handoff.id), handoff);
+  reopened.close();
+});
+
+void test('B3 separately confirmed Intake Handoff preserves the originating request bytes', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const prepared = prepareSeparatelyConfirmedIntakeHandoff(store, policies, 'b3-confirmed-handoff');
+  const committed = store.commitAuthorizedIntakeActionHandoff(prepared.input);
+  assert.equal(committed.status, 'APPLIED');
+  assert.equal(prepared.handoff.messageRef.id, prepared.originatingMessage.id);
+  assert.notEqual(prepared.handoff.messageRef.id, prepared.operationMessage.id);
+  assert.equal(prepared.handoff.admittedUserContent, prepared.originatingMessage.content);
+  assert.equal(prepared.handoff.admittedContentDigest, prepared.originatingMessage.contentDigest);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionMessageHandoff(prepared.handoff.id), prepared.handoff);
+  reopened.close();
+});
+
+void test('B3 SQLite keeps the clarification Handoff writer closed until B4', (t) => {
+  const filename = temporaryDatabase(t);
+  const database = new Database(filename);
+  try {
+    database.pragma('foreign_keys = ON');
+    applyMigrations(database, defaultMigrationsDirectory(), () => INSTALLED_AT);
+    database.pragma('foreign_keys = OFF');
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO interaction_message_handoffs(
+               id, schema_version, handoff_kind, session_id, message_id, message_digest,
+               pending_action_id, pending_action_digest, resolution_id, resolution_digest,
+               reservation_id, reservation_digest, focus_id, focus_digest, intake_run_id,
+               intake_run_version, clarification_question_id, question_spec_digest,
+               question_digest, canonical_command_input_digest, intake_command_id,
+               admitted_user_content, admitted_content_digest, created_at, handoff_digest,
+               record_json
+             ) VALUES (?, 1, 'INTAKE_CLARIFICATION', ?, ?, ?, NULL, NULL, NULL, NULL,
+                       NULL, NULL, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            'interaction-message-handoff_b3-premature-clarification',
+            'interaction-session_b3-premature-clarification',
+            'interaction-message_b3-premature-clarification',
+            digests.digest({ kind: 'message' }),
+            'focus-binding_b3-premature-clarification',
+            digests.digest({ kind: 'focus' }),
+            'intake_b3-premature-clarification',
+            'clarification-question_b3-premature-clarification',
+            digests.digest({ kind: 'question-spec' }),
+            digests.digest({ kind: 'question' }),
+            digests.digest({ kind: 'command-input' }),
+            'command_b3-premature-clarification',
+            '澄清回答',
+            digests.digestUtf8('澄清回答'),
+            '2026-08-15T00:00:00.000Z',
+            digests.digest({ kind: 'handoff' }),
+            JSON.stringify({ kind: InteractionMessageHandoffKind.INTAKE_CLARIFICATION }),
+          ),
+      /Intake clarification Handoff has no B3 Store owner/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+for (const step of [
+  InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_WRITE,
+  InteractionTransactionStep.AFTER_MESSAGE_HANDOFF_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+] as const) {
+  void test(`B3 authorized Intake Handoff rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    const prepared = prepareDirectAuthorizedIntakeHandoff(
+      setup,
+      policies,
+      `b3-handoff-rollback-${step}`,
+    );
+    setup.close();
+
+    const failing = SqliteControlStore.open({
+      filename,
+      transactionProbe: (observed) => {
+        if (observed === step) {
+          throw new Error('fixture failure');
+        }
+      },
+    });
+    assert.throws(
+      () => failing.commitAuthorizedIntakeActionHandoff(prepared.input),
+      /fixture failure/u,
+    );
+    failing.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.equal(reopened.getInteractionMessageHandoff(prepared.handoff.id), undefined);
+    assert.equal(
+      reopened.getInteractionOperation(prepared.completedOperation.id)?.state,
+      InteractionOperationState.RESERVED,
+    );
+    reopened.close();
+  });
+}
+
+void test('B3 derives one Goal-control Action Outcome from retained public authority and strictly reopens', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const { workflow, reservation } = prepareConfirmedCancelAction(
+    store,
+    policies,
+    'b3-cancel-outcome',
+  );
+  assert.equal(
+    store.getUnresolvedInteractionActionReservation(reservation.id)?.publicOutcomeState,
+    InteractionPublicOutcomeRetentionState.NOT_RETAINED,
+  );
+
+  commitCancellationPublicOutcome(store, workflow, reservation);
+  assert.equal(
+    store.getUnresolvedInteractionActionReservation(reservation.id)?.publicOutcomeState,
+    InteractionPublicOutcomeRetentionState.RETAINED,
+  );
+  const outcomeId = interactionActionOutcomeId('interaction-action-outcome_b3-cancel-outcome');
+  const outcomeInput = {
+    reservationId: reservation.id,
+    outcomeId,
+    auditEventId: auditEventId('audit_b3-cancel-action-outcome'),
+  };
+  const committed = store.commitInteractionActionOutcome(outcomeInput);
+  assert.equal(committed.status, 'APPLIED');
+  assert.equal(committed.outcome.commandId, reservation.commandId);
+  assert.equal(
+    committed.outcome.canonicalCommandInputDigest,
+    reservation.canonicalCommandInputDigest,
+  );
+  assert.equal(committed.outcome.disposition, InteractionActionOutcomeDisposition.APPLIED);
+  assert.equal(store.getUnresolvedInteractionActionReservation(reservation.id), undefined);
+  assert.deepEqual(store.commitInteractionActionOutcome(outcomeInput), {
+    status: 'REPLAYED',
+    outcome: committed.outcome,
+  });
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionActionOutcome(outcomeId), committed.outcome);
+  reopened.close();
+});
+
+void test('B3 retains a rejected Goal-control public outcome without changing its disposition', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const { workflow, reservation } = prepareConfirmedCancelAction(
+    store,
+    policies,
+    'b3-cancel-rejected-outcome',
+  );
+  assert.equal(
+    store.recordCommandRejection({
+      commandId: reservation.commandId,
+      inputDigest: reservation.canonicalCommandInputDigest,
+      target: { aggregateType: 'GOAL', aggregateId: workflow.goalId },
+      workflowId: workflow.id,
+      observedWorkflowVersion: workflow.version,
+      error: {
+        code: RuntimeErrorCode.DOMAIN_REJECTED,
+        message: 'The deterministic cancellation was rejected.',
+        retryable: false,
+        detailCode: 'B3_REJECTED_CANCELLATION_FIXTURE',
+      },
+      completedAt: isoTimestamp('2026-08-14T01:00:08.000Z'),
+    }).status,
+    'APPLIED',
+  );
+
+  const outcomeId = interactionActionOutcomeId(
+    'interaction-action-outcome_b3-cancel-rejected-outcome',
+  );
+  const input = {
+    reservationId: reservation.id,
+    outcomeId,
+    auditEventId: auditEventId('audit_b3-cancel-rejected-action-outcome'),
+  };
+  const committed = store.commitInteractionActionOutcome(input);
+  assert.equal(committed.status, 'APPLIED');
+  assert.equal(committed.outcome.disposition, InteractionActionOutcomeDisposition.REJECTED);
+  assert.deepEqual(store.commitInteractionActionOutcome(input), {
+    status: 'REPLAYED',
+    outcome: committed.outcome,
+  });
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionActionOutcome(outcomeId), committed.outcome);
+  reopened.close();
+});
+
+for (const step of [
+  InteractionTransactionStep.AFTER_ACTION_OUTCOME_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_OUTCOME_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_OUTCOME_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+] as const) {
+  void test(`B3 Goal-control Action Outcome rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const suffix = `b3-outcome-rollback-${fixtureIdentifierSuffix(step)}`;
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    const { workflow, reservation } = prepareConfirmedCancelAction(setup, policies, suffix);
+    commitCancellationPublicOutcome(setup, workflow, reservation);
+    setup.close();
+
+    const outcomeId = interactionActionOutcomeId(`interaction-action-outcome_${suffix}`);
+    const failing = SqliteControlStore.open({
+      filename,
+      transactionProbe: (observed) => {
+        if (observed === step) {
+          throw new Error('fixture failure');
+        }
+      },
+    });
+    assert.throws(
+      () =>
+        failing.commitInteractionActionOutcome({
+          reservationId: reservation.id,
+          outcomeId,
+          auditEventId: auditEventId(`audit_${suffix}`),
+        }),
+      /fixture failure/u,
+    );
+    failing.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.equal(reopened.getInteractionActionOutcome(outcomeId), undefined);
+    assert.deepEqual(reopened.getUnresolvedInteractionActionReservation(reservation.id), {
+      reservationRef: { id: reservation.id, digest: reservation.reservationDigest },
+      publicCapability: InteractionPublicCapability.CANCEL_GOAL,
+      commandId: reservation.commandId,
+      canonicalCommandInputDigest: reservation.canonicalCommandInputDigest,
+      publicOutcomeState: InteractionPublicOutcomeRetentionState.RETAINED,
+    });
+    reopened.close();
+  });
+}
 
 void test('Slice 2 Action Outcome binds the exact Reservation Session', (t) => {
   const filename = temporaryDatabase(t);
@@ -6952,7 +7846,7 @@ void test('Slice 2 Action Outcome binds the exact Reservation Session', (t) => {
     assert.throws(
       () =>
         insertActionOutcome(database, substitutedSessionId, reservation, 'cross-session-adversary'),
-      /FOREIGN KEY constraint failed/u,
+      /FOREIGN KEY constraint failed|exact retained public authority/u,
     );
     assert.doesNotThrow(() =>
       insertActionOutcome(database, reservationSessionId, reservation, 'same-session'),

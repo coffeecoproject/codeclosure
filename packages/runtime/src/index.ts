@@ -19,6 +19,7 @@ export * from './intake-projection.js';
 export * from './intake-retention.js';
 export * from './intake-store.js';
 export * from './interaction-policy.js';
+export * from './interaction-public-command-outcome.js';
 export * from './interaction-store.js';
 export * from './m1-policy.js';
 export * from './m251-policy.js';

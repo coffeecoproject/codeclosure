@@ -693,6 +693,7 @@ void test('[I-006][I-009] ordered migration creates the complete control schema 
       '0038_interaction_focus_authority.sql',
       '0039_interaction_route_result_authority.sql',
       '0040_interaction_pending_action_authority.sql',
+      '0041_interaction_public_action_authority.sql',
     ],
   );
   store.close();
