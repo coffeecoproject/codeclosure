@@ -14,6 +14,8 @@ import type {
   InteractionOperation,
   InteractionOperationId,
   InteractionOperationKind,
+  InteractionActionReservation,
+  InteractionActionReservationId,
   InteractionRoutingPolicy,
   InteractionSession,
   InteractionSessionId,
@@ -21,6 +23,10 @@ import type {
   FailedInteractionOperation,
   InterruptedInteractionOperation,
   ReservedInteractionOperation,
+  PendingAction,
+  PendingActionId,
+  PendingActionResolution,
+  PendingActionResolutionId,
   RouteDecision,
   RouteDecisionId,
   RouteProposal,
@@ -378,6 +384,154 @@ export interface InteractionRouteResultControlStore extends InteractionOperation
   ): FrontstageContextManifest | undefined;
   getInteractionRouteProposal(proposalId: RouteProposalId): RouteProposal | undefined;
   getInteractionRouteDecision(decisionId: RouteDecisionId): RouteDecision | undefined;
+}
+
+export interface CommitInteractionPendingActionProposal {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution?: PendingActionResolution;
+  readonly reservation?: InteractionActionReservation;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly pendingActionAuditWrite: InteractionAuditWrite;
+  readonly resolutionAuditWrite?: InteractionAuditWrite;
+  readonly reservationAuditWrite?: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionPendingActionProposalCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      pendingAction: PendingAction;
+      resolution?: PendingActionResolution;
+      reservation?: InteractionActionReservation;
+      operation: CompletedInteractionOperation;
+    }>
+  | Readonly<{ status: 'OPERATION_NOT_FOUND' | 'ROUTE_DECISION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'PENDING_ACTION_CONFLICT';
+      currentPendingAction: PendingAction;
+    }>
+  | Readonly<{
+      status: 'PENDING_ACTION_RESOLUTION_CONFLICT';
+      currentResolution: PendingActionResolution;
+    }>
+  | Readonly<{
+      status: 'ACTION_RESERVATION_CONFLICT';
+      currentReservation: InteractionActionReservation;
+    }>;
+
+export interface CommitInteractionActionConfirmation {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly responseMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution: PendingActionResolution;
+  readonly reservation?: InteractionActionReservation;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly resolutionAuditWrite: InteractionAuditWrite;
+  readonly reservationAuditWrite?: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionActionConfirmationCommitResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      resolution: PendingActionResolution;
+      reservation?: InteractionActionReservation;
+      operation: CompletedInteractionOperation;
+    }>
+  | Readonly<{
+      status: 'OPERATION_NOT_FOUND' | 'PENDING_ACTION_NOT_FOUND';
+    }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | Readonly<{
+      status: 'OPERATION_CONFLICT';
+      currentOperation: InteractionOperation;
+    }>
+  | Readonly<{
+      status: 'PENDING_ACTION_CONFLICT';
+      currentPendingAction: PendingAction;
+    }>
+  | Readonly<{
+      status: 'PENDING_ACTION_RESOLUTION_CONFLICT';
+      currentResolution: PendingActionResolution;
+    }>
+  | Readonly<{
+      status: 'ACTION_RESERVATION_CONFLICT';
+      currentReservation: InteractionActionReservation;
+    }>;
+
+export interface RecordInteractionPendingActionTerminalResolution {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution: PendingActionResolution;
+  readonly resolutionAuditWrite: InteractionAuditWrite;
+}
+
+export type InteractionPendingActionTerminalResolutionRecordResult =
+  | Readonly<{
+      status: 'APPLIED' | 'REPLAYED';
+      resolution: PendingActionResolution;
+    }>
+  | Readonly<{ status: 'PENDING_ACTION_NOT_FOUND' }>
+  | Readonly<{
+      status: 'VERSION_CONFLICT';
+      currentSession: InteractionSession;
+    }>
+  | InteractionSessionOperationBusyResult
+  | Readonly<{
+      status: 'PENDING_ACTION_CONFLICT';
+      currentPendingAction: PendingAction;
+    }>
+  | Readonly<{
+      status: 'PENDING_ACTION_RESOLUTION_CONFLICT';
+      currentResolution: PendingActionResolution;
+    }>;
+
+/**
+ * Pending Action persistence owns only immutable authority, atomic audit,
+ * replay/conflict classification, and strict reopen. It invokes no public
+ * capability and derives no authorization policy inside the Store.
+ */
+export interface InteractionPendingActionControlStore extends InteractionRouteResultControlStore {
+  commitInteractionPendingActionProposal(
+    input: CommitInteractionPendingActionProposal,
+  ): InteractionPendingActionProposalCommitResult;
+  commitInteractionActionConfirmation(
+    input: CommitInteractionActionConfirmation,
+  ): InteractionActionConfirmationCommitResult;
+  recordInteractionPendingActionTerminalResolution(
+    input: RecordInteractionPendingActionTerminalResolution,
+  ): InteractionPendingActionTerminalResolutionRecordResult;
+  getInteractionPendingAction(actionId: PendingActionId): PendingAction | undefined;
+  getInteractionPendingActionResolution(
+    resolutionId: PendingActionResolutionId,
+  ): PendingActionResolution | undefined;
+  getInteractionActionReservation(
+    reservationId: InteractionActionReservationId,
+  ): InteractionActionReservation | undefined;
+  getUnresolvedInteractionPendingAction(sessionId: InteractionSessionId): PendingAction | undefined;
 }
 
 export interface RecordInteractionFocusBinding {

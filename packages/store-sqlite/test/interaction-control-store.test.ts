@@ -9,11 +9,15 @@ import Database from 'better-sqlite3';
 
 import {
   auditEventId,
+  commandId,
   decodeFrontstageContextManifest,
   decodeDirectActionGrammar,
   decodeFocusBinding,
   decodeInteractionMessage,
   decodeInteractionOperation,
+  decodeInteractionActionReservation,
+  decodePendingAction,
+  decodePendingActionResolution,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
   decodeRouteDecision,
@@ -34,6 +38,11 @@ import {
   InteractionOperationKind,
   InteractionOperationResultKind,
   InteractionOperationState,
+  InteractionConfirmationRequirement,
+  InteractionPublicCapability,
+  PendingActionDerivation,
+  PendingActionKind,
+  PendingActionResolutionDisposition,
   InteractionRouteDecisionOutcome,
   InteractionRouteDecisionSource,
   InteractionSessionState,
@@ -43,16 +52,23 @@ import {
   interactionOperationId,
   interactionOperationProjection,
   interactionOperationVersion,
+  interactionActionReservationId,
+  interactionActionReservationProjection,
   interactionSessionId,
   interactionSessionProjection,
   interactionSessionVersion,
   isoTimestamp,
   principalId,
+  pendingActionId,
+  pendingActionProjection,
+  pendingActionResolutionId,
+  pendingActionResolutionProjection,
   routeDecisionId,
   routeDecisionProjection,
   routeProposalId,
   routeProposalProjection,
   type CompletedInteractionOperation,
+  type InteractionActionReservation,
   type FocusBinding,
   type FocusBindingProjectionInput,
   type FrontstageContextManifest,
@@ -60,6 +76,10 @@ import {
   type FrontstageContextManifestProjectionInput,
   type InteractionMessage,
   type InteractionOperationProjectionInput,
+  type PendingAction,
+  type PendingActionProjectionInput,
+  type PendingActionResolution,
+  type PendingActionResolutionProjectionInput,
   type ReservedInteractionOperation,
   type InteractionSessionProjectionInput,
   type InteractionSession,
@@ -78,6 +98,8 @@ import {
   type AdmitInteractionUserMessage,
   type CompanionFreeReservedInteractionOperation,
   type CommitInteractionRouteResult,
+  type CommitInteractionPendingActionProposal,
+  type CommitInteractionActionConfirmation,
   type CreateInteractionSession,
   type FailedOrInterruptedInteractionOperation,
   type InstallInteractionPolicies,
@@ -86,6 +108,7 @@ import {
   type InteractionPolicySet,
   type ReserveInteractionOperation,
   type RecordInteractionFocusBinding,
+  type RecordInteractionPendingActionTerminalResolution,
   type TerminalizeInteractionOperation,
   type TransitionInteractionSession,
 } from '@codeclosure/runtime';
@@ -431,6 +454,19 @@ function decodeOperationProjection(
     { ...base, operationDigest: digests.digest(interactionOperationProjection(base)) },
     digests,
   );
+}
+
+function assertCompanionFreeReservedFixtureOperation(
+  operation: ReturnType<typeof decodeInteractionOperation>,
+): asserts operation is CompanionFreeReservedInteractionOperation {
+  if (
+    operation.state !== InteractionOperationState.RESERVED ||
+    operation.operationKind === InteractionOperationKind.INTAKE_CLARIFICATION ||
+    operation.contextManifestRef !== undefined ||
+    operation.assistantProfile !== undefined
+  ) {
+    throw new TypeError('Fixture Operation did not remain companion-free and reserved');
+  }
 }
 
 function createReservedOperation(
@@ -849,6 +885,568 @@ function createRouteResultCommitInput(
       nextOperation.completedAt,
       currentOperation.version,
       nextOperation.version,
+    ),
+  });
+}
+
+function createActionRouteDecision(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  decidedAt = '2026-08-14T01:00:03.000Z',
+): RouteDecision {
+  const base = {
+    id: routeDecisionId(`route-decision_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    source: InteractionRouteDecisionSource.DIRECT_ACTION,
+    routingPolicy: session.routingPolicy,
+    allowedRoutes: [InteractionRouteDecisionOutcome.PROPOSE_INTAKE_ACTION],
+    reasonTrace: [
+      {
+        ruleId: 'fixture-direct-intake-action',
+        policyDigest: session.routingPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [message.messageDigest],
+      },
+    ],
+    outcome: InteractionRouteDecisionOutcome.PROPOSE_INTAKE_ACTION,
+    actionKind: PendingActionKind.SUBMIT_GOVERNED_INTAKE,
+    decidedAt: isoTimestamp(decidedAt),
+  } satisfies RouteDecisionProjectionInput;
+  return decodeRouteDecision(
+    { ...base, decisionDigest: digests.digest(routeDecisionProjection(base)) },
+    digests,
+  );
+}
+
+function createReservedActionOperation(
+  session: InteractionSession,
+  message: InteractionMessage,
+  suffix: string,
+  operationKind:
+    | typeof InteractionOperationKind.ACTION_PROPOSAL
+    | typeof InteractionOperationKind.ACTION_CONFIRMATION,
+  reservedAt: string,
+): CompanionFreeReservedInteractionOperation {
+  const base = {
+    id: interactionOperationId(`interaction-operation_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: session.id,
+    expectedSessionVersion: session.version,
+    messageRef: { id: message.id, digest: message.messageDigest },
+    operationKind,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: isoTimestamp(reservedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const operation = decodeOperationProjection(base);
+  assertCompanionFreeReservedFixtureOperation(operation);
+  if (
+    operation.operationKind !== InteractionOperationKind.ACTION_PROPOSAL &&
+    operation.operationKind !== InteractionOperationKind.ACTION_CONFIRMATION
+  ) {
+    throw new TypeError('Fixture Action Operation did not remain reserved');
+  }
+  return operation;
+}
+
+function createPendingAction(
+  session: InteractionSession,
+  message: InteractionMessage,
+  decision: RouteDecision,
+  suffix: string,
+  confirmationRequirement: InteractionConfirmationRequirement,
+  timestamps: Readonly<{ createdAt?: string; expiresAt?: string }> = {},
+): PendingAction {
+  const base = {
+    id: pendingActionId(`pending-action_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    sessionId: session.id,
+    principalRef: session.principalRef,
+    projectRef: session.projectRef,
+    originatingMessageRef: { id: message.id, digest: message.messageDigest },
+    routeDecisionRef: { id: decision.id, digest: decision.decisionDigest },
+    preallocatedCommandId: commandId(`command_${fixtureIdentifierSuffix(suffix)}`),
+    canonicalCommandInputDigest: digests.digest({ kind: 'intake-command', suffix }),
+    publicCapability: InteractionPublicCapability.SUBMIT_INTAKE,
+    routingPolicy: session.routingPolicy,
+    confirmationPolicy: session.confirmationPolicy,
+    confirmationRequirement,
+    reasonTrace: [
+      ...decision.reasonTrace,
+      {
+        ruleId: 'fixture-confirmation-policy',
+        policyDigest: session.confirmationPolicy.digest,
+        outcome: 'MATCHED' as const,
+        inputDigests: [decision.decisionDigest],
+      },
+    ],
+    kind: PendingActionKind.SUBMIT_GOVERNED_INTAKE,
+    actionDerivation: PendingActionDerivation.ROUTED_ACTION,
+    expiresAt: isoTimestamp(timestamps.expiresAt ?? '2026-08-14T01:00:10.000Z'),
+    createdAt: isoTimestamp(timestamps.createdAt ?? '2026-08-14T01:00:04.000Z'),
+  } satisfies PendingActionProjectionInput;
+  return decodePendingAction(
+    { ...base, pendingActionDigest: digests.digest(pendingActionProjection(base)) },
+    digests,
+  );
+}
+
+function createPendingActionResolution(
+  pendingAction: PendingAction,
+  suffix: string,
+  disposition: PendingActionResolution['disposition'],
+  responseMessage?: InteractionMessage,
+): PendingActionResolution {
+  const common = {
+    id: pendingActionResolutionId(`pending-action-resolution_${fixtureIdentifierSuffix(suffix)}`),
+    schemaVersion: 1 as const,
+    pendingActionRef: { id: pendingAction.id, digest: pendingAction.pendingActionDigest },
+    confirmationPolicy: pendingAction.confirmationPolicy,
+  };
+  const base =
+    disposition === PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED
+      ? ({
+          ...common,
+          disposition,
+          authorizingMessageRef: pendingAction.originatingMessageRef,
+          resolvedAt: isoTimestamp('2026-08-14T01:00:04.100Z'),
+        } satisfies PendingActionResolutionProjectionInput)
+      : disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
+        ? ({
+            ...common,
+            disposition,
+            originatingMessageRef: pendingAction.originatingMessageRef,
+            authorizingMessageRef: {
+              id: responseMessage?.id ?? interactionMessageId('interaction-message_missing'),
+              digest:
+                responseMessage?.messageDigest ?? digests.digest({ kind: 'missing-response' }),
+            },
+            resolvedAt: isoTimestamp('2026-08-14T01:00:07.000Z'),
+          } satisfies PendingActionResolutionProjectionInput)
+        : disposition === PendingActionResolutionDisposition.DECLINED ||
+            disposition === PendingActionResolutionDisposition.UNCLEAR
+          ? ({
+              ...common,
+              disposition,
+              responseMessageRef: {
+                id: responseMessage?.id ?? interactionMessageId('interaction-message_missing'),
+                digest:
+                  responseMessage?.messageDigest ?? digests.digest({ kind: 'missing-response' }),
+              },
+              resolvedAt: isoTimestamp('2026-08-14T01:00:07.000Z'),
+            } satisfies PendingActionResolutionProjectionInput)
+          : ({
+              ...common,
+              disposition,
+              resolvedAt: isoTimestamp(
+                disposition === PendingActionResolutionDisposition.EXPIRED
+                  ? '2026-08-14T01:00:10.000Z'
+                  : '2026-08-14T01:00:08.000Z',
+              ),
+            } satisfies PendingActionResolutionProjectionInput);
+  return decodePendingActionResolution(
+    { ...base, resolutionDigest: digests.digest(pendingActionResolutionProjection(base)) },
+    digests,
+  );
+}
+
+function createActionReservation(
+  pendingAction: PendingAction,
+  resolution: PendingActionResolution,
+  suffix: string,
+): InteractionActionReservation {
+  const base = {
+    id: interactionActionReservationId(
+      `interaction-action-reservation_${fixtureIdentifierSuffix(suffix)}`,
+    ),
+    schemaVersion: 1 as const,
+    pendingActionRef: { id: pendingAction.id, digest: pendingAction.pendingActionDigest },
+    resolutionRef: { id: resolution.id, digest: resolution.resolutionDigest },
+    publicCapability: pendingAction.publicCapability,
+    commandId: pendingAction.preallocatedCommandId,
+    canonicalCommandInputDigest: pendingAction.canonicalCommandInputDigest,
+    reservedAt: isoTimestamp(
+      resolution.disposition === PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED
+        ? '2026-08-14T01:00:04.200Z'
+        : '2026-08-14T01:00:07.100Z',
+    ),
+  };
+  return decodeInteractionActionReservation(
+    {
+      ...base,
+      reservationDigest: digests.digest(interactionActionReservationProjection(base)),
+    },
+    digests,
+  );
+}
+
+function completePendingActionProposalOperation(
+  operation: ReservedInteractionOperation,
+  pendingAction: PendingAction,
+  completedAt = '2026-08-14T01:00:04.500Z',
+): CompletedInteractionOperation {
+  const base = {
+    id: operation.id,
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.PENDING_ACTION_RECORDED,
+      pendingActionRef: { id: pendingAction.id, digest: pendingAction.pendingActionDigest },
+    },
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp(completedAt),
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeOperationProjection(base);
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Fixture Action Proposal Operation did not complete');
+  }
+  return completed;
+}
+
+function completeActionConfirmationOperation(
+  operation: ReservedInteractionOperation,
+  resolution: PendingActionResolution,
+  reservation?: InteractionActionReservation,
+): CompletedInteractionOperation {
+  const base = {
+    id: operation.id,
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(operation.version + 1),
+    sessionId: operation.sessionId,
+    expectedSessionVersion: operation.expectedSessionVersion,
+    messageRef: operation.messageRef,
+    operationKind: operation.operationKind,
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED,
+      resolutionRef: { id: resolution.id, digest: resolution.resolutionDigest },
+      ...(reservation === undefined
+        ? {}
+        : { reservationRef: { id: reservation.id, digest: reservation.reservationDigest } }),
+    },
+    reservedAt: operation.reservedAt,
+    completedAt: isoTimestamp('2026-08-14T01:00:07.500Z'),
+  } satisfies InteractionOperationProjectionInput;
+  const completed = decodeOperationProjection(base);
+  if (completed.state !== InteractionOperationState.COMPLETED) {
+    throw new TypeError('Fixture Action Confirmation Operation did not complete');
+  }
+  return completed;
+}
+
+function createPendingActionProposalCommitInput(
+  session: InteractionSession,
+  message: InteractionMessage,
+  decision: RouteDecision,
+  pendingAction: PendingAction,
+  currentOperation: ReservedInteractionOperation,
+  nextOperation: CompletedInteractionOperation,
+  suffix: string,
+  resolution?: PendingActionResolution,
+  reservation?: InteractionActionReservation,
+): CommitInteractionPendingActionProposal {
+  return Object.freeze({
+    session,
+    message,
+    routeDecision: decision,
+    pendingAction,
+    ...(resolution === undefined ? {} : { resolution }),
+    ...(reservation === undefined ? {} : { reservation }),
+    currentOperation,
+    nextOperation,
+    pendingActionAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'pending-action',
+      InteractionAuditAggregateType.PENDING_ACTION,
+      pendingAction.id,
+      InteractionAuditEventType.PENDING_ACTION_RECORDED,
+      pendingAction.pendingActionDigest,
+      pendingAction.createdAt,
+    ),
+    ...(resolution === undefined
+      ? {}
+      : {
+          resolutionAuditWrite: createInteractionAuditWrite(
+            suffix,
+            'resolution',
+            InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION,
+            resolution.id,
+            InteractionAuditEventType.PENDING_ACTION_RESOLVED,
+            resolution.resolutionDigest,
+            resolution.resolvedAt,
+          ),
+        }),
+    ...(reservation === undefined
+      ? {}
+      : {
+          reservationAuditWrite: createInteractionAuditWrite(
+            suffix,
+            'action-reservation',
+            InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION,
+            reservation.id,
+            InteractionAuditEventType.INTERACTION_ACTION_RESERVED,
+            reservation.reservationDigest,
+            reservation.reservedAt,
+          ),
+        }),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'action-proposal-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      nextOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      nextOperation.operationDigest,
+      nextOperation.completedAt,
+      currentOperation.version,
+      nextOperation.version,
+    ),
+  });
+}
+
+function createActionConfirmationCommitInput(
+  session: InteractionSession,
+  originatingMessage: InteractionMessage,
+  responseMessage: InteractionMessage,
+  decision: RouteDecision,
+  pendingAction: PendingAction,
+  resolution: PendingActionResolution,
+  currentOperation: ReservedInteractionOperation,
+  nextOperation: CompletedInteractionOperation,
+  suffix: string,
+  reservation?: InteractionActionReservation,
+): CommitInteractionActionConfirmation {
+  return Object.freeze({
+    session,
+    originatingMessage,
+    responseMessage,
+    routeDecision: decision,
+    pendingAction,
+    resolution,
+    ...(reservation === undefined ? {} : { reservation }),
+    currentOperation,
+    nextOperation,
+    resolutionAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'resolution',
+      InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION,
+      resolution.id,
+      InteractionAuditEventType.PENDING_ACTION_RESOLVED,
+      resolution.resolutionDigest,
+      resolution.resolvedAt,
+    ),
+    ...(reservation === undefined
+      ? {}
+      : {
+          reservationAuditWrite: createInteractionAuditWrite(
+            suffix,
+            'action-reservation',
+            InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION,
+            reservation.id,
+            InteractionAuditEventType.INTERACTION_ACTION_RESERVED,
+            reservation.reservationDigest,
+            reservation.reservedAt,
+          ),
+        }),
+    operationAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'action-confirmation-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      nextOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      nextOperation.operationDigest,
+      nextOperation.completedAt,
+      currentOperation.version,
+      nextOperation.version,
+    ),
+  });
+}
+
+function createTerminalResolutionRecordInput(
+  session: InteractionSession,
+  originatingMessage: InteractionMessage,
+  decision: RouteDecision,
+  pendingAction: PendingAction,
+  resolution: PendingActionResolution,
+  suffix: string,
+): RecordInteractionPendingActionTerminalResolution {
+  return Object.freeze({
+    session,
+    originatingMessage,
+    routeDecision: decision,
+    pendingAction,
+    resolution,
+    resolutionAuditWrite: createInteractionAuditWrite(
+      suffix,
+      'terminal-resolution',
+      InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION,
+      resolution.id,
+      InteractionAuditEventType.PENDING_ACTION_RESOLVED,
+      resolution.resolutionDigest,
+      resolution.resolvedAt,
+    ),
+  });
+}
+
+function preparePendingActionProposal(
+  store: SqliteControlStore,
+  policies: InteractionPolicySet,
+  suffix: string,
+  confirmationRequirement: InteractionConfirmationRequirement,
+): Readonly<{
+  session: InteractionSession;
+  message: InteractionMessage;
+  decision: RouteDecision;
+  pendingAction: PendingAction;
+  operation: ReservedInteractionOperation;
+  completedOperation: CompletedInteractionOperation;
+}> {
+  const initial = createInitialSession(policies, suffix);
+  store.createInteractionSession(createSessionInput(initial, `${suffix}-session`));
+  const message = createUserMessage(
+    initial,
+    `${suffix}-request`,
+    '/intake implement payment idempotency',
+    '2026-08-14T01:00:01.000Z',
+  );
+  const session = transitionSession(initial, InteractionSessionState.OPEN, message.createdAt);
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(initial, message, session, `${suffix}-message`),
+  );
+  const routeOperation = createReservedOperation(
+    session,
+    message,
+    `${suffix}-route`,
+    '2026-08-14T01:00:02.000Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, routeOperation, `${suffix}-route`),
+  );
+  const decision = createActionRouteDecision(session, message, `${suffix}-route`);
+  const completedRoute = completeRouteOperation(routeOperation, decision);
+  store.commitInteractionRouteResult(
+    createRouteResultCommitInput(
+      session,
+      message,
+      routeOperation,
+      decision,
+      completedRoute,
+      `${suffix}-route`,
+    ),
+  );
+  const operation = createReservedActionOperation(
+    session,
+    message,
+    `${suffix}-proposal`,
+    InteractionOperationKind.ACTION_PROPOSAL,
+    '2026-08-14T01:00:03.600Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, `${suffix}-proposal`),
+  );
+  const pendingAction = createPendingAction(
+    session,
+    message,
+    decision,
+    suffix,
+    confirmationRequirement,
+  );
+  return Object.freeze({
+    session,
+    message,
+    decision,
+    pendingAction,
+    operation,
+    completedOperation: completePendingActionProposalOperation(operation, pendingAction),
+  });
+}
+
+function prepareResponseBoundConfirmation(
+  store: SqliteControlStore,
+  prepared: ReturnType<typeof preparePendingActionProposal>,
+  suffix: string,
+  disposition:
+    | typeof PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
+    | typeof PendingActionResolutionDisposition.DECLINED
+    | typeof PendingActionResolutionDisposition.UNCLEAR,
+): Readonly<{
+  session: InteractionSession;
+  message: InteractionMessage;
+  resolution: PendingActionResolution;
+  reservation?: InteractionActionReservation;
+  operation: ReservedInteractionOperation;
+  completedOperation: CompletedInteractionOperation;
+  input: CommitInteractionActionConfirmation;
+}> {
+  const message = createUserMessage(
+    prepared.session,
+    `${suffix}-response`,
+    disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
+      ? '确认执行'
+      : disposition === PendingActionResolutionDisposition.DECLINED
+        ? '取消'
+        : '我还不确定',
+    '2026-08-14T01:00:06.000Z',
+  );
+  const session = transitionSession(
+    prepared.session,
+    InteractionSessionState.OPEN,
+    message.createdAt,
+  );
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(prepared.session, message, session, `${suffix}-response`),
+  );
+  const operation = createReservedActionOperation(
+    session,
+    message,
+    `${suffix}-confirmation`,
+    InteractionOperationKind.ACTION_CONFIRMATION,
+    '2026-08-14T01:00:06.500Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(session, message, operation, `${suffix}-confirmation`),
+  );
+  const resolution = createPendingActionResolution(
+    prepared.pendingAction,
+    suffix,
+    disposition,
+    message,
+  );
+  const reservation =
+    disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
+      ? createActionReservation(prepared.pendingAction, resolution, suffix)
+      : undefined;
+  const completedOperation = completeActionConfirmationOperation(
+    operation,
+    resolution,
+    reservation,
+  );
+  return Object.freeze({
+    session,
+    message,
+    resolution,
+    ...(reservation === undefined ? {} : { reservation }),
+    operation,
+    completedOperation,
+    input: createActionConfirmationCommitInput(
+      session,
+      prepared.message,
+      message,
+      prepared.decision,
+      prepared.pendingAction,
+      resolution,
+      operation,
+      completedOperation,
+      suffix,
+      reservation,
     ),
   });
 }
@@ -1367,7 +1965,15 @@ function insertActionReservationChain(
   commandId: string;
   canonicalCommandInputDigest: string;
 }> {
+  // This adversarial fixture isolates the pre-existing Action Outcome foreign-key
+  // relationship. The B2 transaction/trigger chain has separate positive and
+  // failure-closed coverage and must not be fabricated here.
   database.exec('DROP TRIGGER IF EXISTS interaction_route_decisions_exact_authority_guard');
+  database.exec('DROP TRIGGER IF EXISTS interaction_pending_actions_exact_authority_guard');
+  database.exec(
+    'DROP TRIGGER IF EXISTS interaction_pending_action_resolutions_exact_authority_guard',
+  );
+  database.exec('DROP TRIGGER IF EXISTS interaction_action_reservations_exact_authority_guard');
   const messageId = `interaction-message_${suffix}`;
   const messageDigest = insertUserMessage(database, sessionId, messageId);
   const decisionId = `route-decision_${suffix}`;
@@ -3698,6 +4304,966 @@ for (const step of routeResultRollbackSteps) {
   });
 }
 
+void test('B2 direct Pending Action proposal atomically authorizes, reserves, replays, and reopens', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    'b2-direct-action',
+    InteractionConfirmationRequirement.DIRECT_USER_MESSAGE_SUFFICIENT,
+  );
+  const resolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-direct-action',
+    PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED,
+  );
+  const reservation = createActionReservation(
+    prepared.pendingAction,
+    resolution,
+    'b2-direct-action',
+  );
+  const input = createPendingActionProposalCommitInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    prepared.operation,
+    prepared.completedOperation,
+    'b2-direct-action',
+    resolution,
+    reservation,
+  );
+
+  assert.deepEqual(store.commitInteractionPendingActionProposal(input), {
+    status: 'APPLIED',
+    pendingAction: prepared.pendingAction,
+    resolution,
+    reservation,
+    operation: prepared.completedOperation,
+  });
+  assert.deepEqual(store.commitInteractionPendingActionProposal(input), {
+    status: 'REPLAYED',
+    pendingAction: prepared.pendingAction,
+    resolution,
+    reservation,
+    operation: prepared.completedOperation,
+  });
+  assert.deepEqual(
+    store.getInteractionPendingAction(prepared.pendingAction.id),
+    prepared.pendingAction,
+  );
+  assert.deepEqual(store.getInteractionPendingActionResolution(resolution.id), resolution);
+  assert.deepEqual(store.getInteractionActionReservation(reservation.id), reservation);
+  assert.equal(store.getUnresolvedInteractionPendingAction(prepared.session.id), undefined);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(
+    reopened.getInteractionPendingAction(prepared.pendingAction.id),
+    prepared.pendingAction,
+  );
+  assert.deepEqual(reopened.getInteractionPendingActionResolution(resolution.id), resolution);
+  assert.deepEqual(reopened.getInteractionActionReservation(reservation.id), reservation);
+  reopened.close();
+});
+
+void test('B2 separate confirmation preserves one unresolved Action until its exact response commits', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    'b2-separate-action',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  const proposalInput = createPendingActionProposalCommitInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    prepared.operation,
+    prepared.completedOperation,
+    'b2-separate-action',
+  );
+  assert.equal(store.commitInteractionPendingActionProposal(proposalInput).status, 'APPLIED');
+  assert.deepEqual(
+    store.getUnresolvedInteractionPendingAction(prepared.session.id),
+    prepared.pendingAction,
+  );
+
+  const responseMessage = createUserMessage(
+    prepared.session,
+    'b2-separate-action-response',
+    '确认执行',
+    '2026-08-14T01:00:06.000Z',
+  );
+  const responseSession = transitionSession(
+    prepared.session,
+    InteractionSessionState.OPEN,
+    responseMessage.createdAt,
+  );
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      prepared.session,
+      responseMessage,
+      responseSession,
+      'b2-separate-action-response',
+    ),
+  );
+  const confirmationOperation = createReservedActionOperation(
+    responseSession,
+    responseMessage,
+    'b2-separate-action-confirmation',
+    InteractionOperationKind.ACTION_CONFIRMATION,
+    '2026-08-14T01:00:06.500Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      responseSession,
+      responseMessage,
+      confirmationOperation,
+      'b2-separate-action-confirmation',
+    ),
+  );
+  const resolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-separate-action',
+    PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+    responseMessage,
+  );
+  const reservation = createActionReservation(
+    prepared.pendingAction,
+    resolution,
+    'b2-separate-action',
+  );
+  const completedOperation = completeActionConfirmationOperation(
+    confirmationOperation,
+    resolution,
+    reservation,
+  );
+  const confirmationInput = createActionConfirmationCommitInput(
+    responseSession,
+    prepared.message,
+    responseMessage,
+    prepared.decision,
+    prepared.pendingAction,
+    resolution,
+    confirmationOperation,
+    completedOperation,
+    'b2-separate-action',
+    reservation,
+  );
+  assert.deepEqual(store.commitInteractionActionConfirmation(confirmationInput), {
+    status: 'APPLIED',
+    resolution,
+    reservation,
+    operation: completedOperation,
+  });
+  assert.deepEqual(store.commitInteractionActionConfirmation(confirmationInput), {
+    status: 'REPLAYED',
+    resolution,
+    reservation,
+    operation: completedOperation,
+  });
+  assert.deepEqual(store.commitInteractionPendingActionProposal(proposalInput), {
+    status: 'REPLAYED',
+    pendingAction: prepared.pendingAction,
+    operation: prepared.completedOperation,
+  });
+  assert.equal(store.getUnresolvedInteractionPendingAction(responseSession.id), undefined);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionPendingActionResolution(resolution.id), resolution);
+  assert.deepEqual(reopened.getInteractionActionReservation(reservation.id), reservation);
+  reopened.close();
+});
+
+void test('B2 response-free terminal Resolution closes an unresolved Action without inventing an Operation', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    'b2-expired-action',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  const proposalInput = createPendingActionProposalCommitInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    prepared.operation,
+    prepared.completedOperation,
+    'b2-expired-action',
+  );
+  store.commitInteractionPendingActionProposal(proposalInput);
+  const resolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-expired-action',
+    PendingActionResolutionDisposition.EXPIRED,
+  );
+  const input = createTerminalResolutionRecordInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    resolution,
+    'b2-expired-action',
+  );
+  assert.deepEqual(store.recordInteractionPendingActionTerminalResolution(input), {
+    status: 'APPLIED',
+    resolution,
+  });
+  assert.deepEqual(store.recordInteractionPendingActionTerminalResolution(input), {
+    status: 'REPLAYED',
+    resolution,
+  });
+  assert.deepEqual(store.commitInteractionPendingActionProposal(proposalInput), {
+    status: 'REPLAYED',
+    pendingAction: prepared.pendingAction,
+    operation: prepared.completedOperation,
+  });
+  assert.equal(store.getUnresolvedInteractionPendingAction(prepared.session.id), undefined);
+  store.close();
+
+  const reopened = SqliteControlStore.open({ filename });
+  assert.deepEqual(reopened.getInteractionPendingActionResolution(resolution.id), resolution);
+  reopened.close();
+});
+
+for (const disposition of [
+  PendingActionResolutionDisposition.DECLINED,
+  PendingActionResolutionDisposition.UNCLEAR,
+] as const) {
+  void test(`B2 ${disposition} response completes confirmation without a Reservation`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const store = SqliteControlStore.open({ filename });
+    store.installInteractionPolicies(installInput(policies));
+    const prepared = preparePendingActionProposal(
+      store,
+      policies,
+      `b2-${disposition}`,
+      InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    );
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        `b2-${disposition}`,
+      ),
+    );
+    const confirmation = prepareResponseBoundConfirmation(
+      store,
+      prepared,
+      `b2-${disposition}`,
+      disposition,
+    );
+    assert.deepEqual(store.commitInteractionActionConfirmation(confirmation.input), {
+      status: 'APPLIED',
+      resolution: confirmation.resolution,
+      operation: confirmation.completedOperation,
+    });
+    assert.equal(store.getUnresolvedInteractionPendingAction(confirmation.session.id), undefined);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.deepEqual(
+      reopened.getInteractionPendingActionResolution(confirmation.resolution.id),
+      confirmation.resolution,
+    );
+    reopened.close();
+  });
+}
+
+for (const disposition of [
+  PendingActionResolutionDisposition.STALE_AUTHORITY,
+  PendingActionResolutionDisposition.CONFLICT,
+  PendingActionResolutionDisposition.INTERRUPTED,
+] as const) {
+  void test(`B2 response-free ${disposition} closes independently and strictly reopens`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const store = SqliteControlStore.open({ filename });
+    store.installInteractionPolicies(installInput(policies));
+    const prepared = preparePendingActionProposal(
+      store,
+      policies,
+      `b2-${disposition}`,
+      InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    );
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        `b2-${disposition}`,
+      ),
+    );
+    const resolution = createPendingActionResolution(
+      prepared.pendingAction,
+      `b2-${disposition}`,
+      disposition,
+    );
+    const result = store.recordInteractionPendingActionTerminalResolution(
+      createTerminalResolutionRecordInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        resolution,
+        `b2-${disposition}`,
+      ),
+    );
+    assert.deepEqual(result, { status: 'APPLIED', resolution });
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.deepEqual(reopened.getInteractionPendingActionResolution(resolution.id), resolution);
+    reopened.close();
+  });
+}
+
+void test('B2 competing Pending Action proposals produce one winner and one typed loser', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    setup,
+    policies,
+    'b2-competing-proposal',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  const competingAction = createPendingAction(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    'b2-competing-proposal-second',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  const competingCompletion = completePendingActionProposalOperation(
+    prepared.operation,
+    competingAction,
+  );
+  const winningInput = createPendingActionProposalCommitInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    prepared.operation,
+    prepared.completedOperation,
+    'b2-competing-proposal-first',
+  );
+  const competingInput = createPendingActionProposalCommitInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    competingAction,
+    prepared.operation,
+    competingCompletion,
+    'b2-competing-proposal-second',
+  );
+  setup.close();
+
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(firstStore.commitInteractionPendingActionProposal(winningInput).status, 'APPLIED');
+    assert.deepEqual(secondStore.commitInteractionPendingActionProposal(competingInput), {
+      status: 'OPERATION_CONFLICT',
+      currentOperation: prepared.completedOperation,
+    });
+    assert.deepEqual(
+      secondStore.getUnresolvedInteractionPendingAction(prepared.session.id),
+      prepared.pendingAction,
+    );
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
+void test('B2 competing Action Confirmations retain one exact Resolution and Reservation winner', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    setup,
+    policies,
+    'b2-competing-confirmation',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  setup.commitInteractionPendingActionProposal(
+    createPendingActionProposalCommitInput(
+      prepared.session,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      prepared.operation,
+      prepared.completedOperation,
+      'b2-competing-confirmation',
+    ),
+  );
+  const winning = prepareResponseBoundConfirmation(
+    setup,
+    prepared,
+    'b2-competing-confirmation-first',
+    PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+  );
+  const competingResolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-competing-confirmation-second',
+    PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+    winning.message,
+  );
+  const competingReservation = createActionReservation(
+    prepared.pendingAction,
+    competingResolution,
+    'b2-competing-confirmation-second',
+  );
+  const competingCompletion = completeActionConfirmationOperation(
+    winning.operation,
+    competingResolution,
+    competingReservation,
+  );
+  const competingInput = createActionConfirmationCommitInput(
+    winning.session,
+    prepared.message,
+    winning.message,
+    prepared.decision,
+    prepared.pendingAction,
+    competingResolution,
+    winning.operation,
+    competingCompletion,
+    'b2-competing-confirmation-second',
+    competingReservation,
+  );
+  setup.close();
+
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(firstStore.commitInteractionActionConfirmation(winning.input).status, 'APPLIED');
+    assert.deepEqual(secondStore.commitInteractionActionConfirmation(competingInput), {
+      status: 'OPERATION_CONFLICT',
+      currentOperation: winning.completedOperation,
+    });
+    assert.deepEqual(
+      secondStore.getInteractionPendingActionResolution(winning.resolution.id),
+      winning.resolution,
+    );
+    assert.deepEqual(
+      secondStore.getInteractionActionReservation(
+        winning.reservation?.id ?? competingReservation.id,
+      ),
+      winning.reservation,
+    );
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
+void test('B2 competing response-free Resolutions produce one winner and one typed conflict', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    setup,
+    policies,
+    'b2-competing-terminal',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  setup.commitInteractionPendingActionProposal(
+    createPendingActionProposalCommitInput(
+      prepared.session,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      prepared.operation,
+      prepared.completedOperation,
+      'b2-competing-terminal',
+    ),
+  );
+  const winningResolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-competing-terminal-first',
+    PendingActionResolutionDisposition.CONFLICT,
+  );
+  const competingResolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-competing-terminal-second',
+    PendingActionResolutionDisposition.INTERRUPTED,
+  );
+  const winningInput = createTerminalResolutionRecordInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    winningResolution,
+    'b2-competing-terminal-first',
+  );
+  const competingInput = createTerminalResolutionRecordInput(
+    prepared.session,
+    prepared.message,
+    prepared.decision,
+    prepared.pendingAction,
+    competingResolution,
+    'b2-competing-terminal-second',
+  );
+  setup.close();
+
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(
+      firstStore.recordInteractionPendingActionTerminalResolution(winningInput).status,
+      'APPLIED',
+    );
+    assert.deepEqual(secondStore.recordInteractionPendingActionTerminalResolution(competingInput), {
+      status: 'PENDING_ACTION_RESOLUTION_CONFLICT',
+      currentResolution: winningResolution,
+    });
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
+void test('B2 response-free Resolution cannot strand an already reserved confirmation Operation', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const prepared = preparePendingActionProposal(
+    store,
+    policies,
+    'b2-terminal-busy',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  store.commitInteractionPendingActionProposal(
+    createPendingActionProposalCommitInput(
+      prepared.session,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      prepared.operation,
+      prepared.completedOperation,
+      'b2-terminal-busy',
+    ),
+  );
+  const confirmation = prepareResponseBoundConfirmation(
+    store,
+    prepared,
+    'b2-terminal-busy',
+    PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+  );
+  const terminalResolution = createPendingActionResolution(
+    prepared.pendingAction,
+    'b2-terminal-busy',
+    PendingActionResolutionDisposition.INTERRUPTED,
+  );
+  assert.deepEqual(
+    store.recordInteractionPendingActionTerminalResolution(
+      createTerminalResolutionRecordInput(
+        confirmation.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        terminalResolution,
+        'b2-terminal-busy',
+      ),
+    ),
+    {
+      status: 'SESSION_OPERATION_BUSY',
+      currentOperation: confirmation.operation,
+    },
+  );
+  assert.equal(store.getInteractionPendingActionResolution(terminalResolution.id), undefined);
+  store.close();
+});
+
+void test('B2 a second unresolved Pending Action is rejected by the retained derived owner', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const store = SqliteControlStore.open({ filename });
+  store.installInteractionPolicies(installInput(policies));
+  const first = preparePendingActionProposal(
+    store,
+    policies,
+    'b2-one-unresolved-first',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  );
+  store.commitInteractionPendingActionProposal(
+    createPendingActionProposalCommitInput(
+      first.session,
+      first.message,
+      first.decision,
+      first.pendingAction,
+      first.operation,
+      first.completedOperation,
+      'b2-one-unresolved-first',
+    ),
+  );
+
+  const secondMessage = createUserMessage(
+    first.session,
+    'b2-one-unresolved-second',
+    '/intake another request',
+    '2026-08-14T01:00:05.000Z',
+  );
+  const secondSession = transitionSession(
+    first.session,
+    InteractionSessionState.OPEN,
+    secondMessage.createdAt,
+  );
+  store.admitInteractionUserMessage(
+    createUserMessageAdmissionInput(
+      first.session,
+      secondMessage,
+      secondSession,
+      'b2-one-unresolved-second',
+    ),
+  );
+  const routeOperation = createReservedOperation(
+    secondSession,
+    secondMessage,
+    'b2-one-unresolved-second-route',
+    '2026-08-14T01:00:05.100Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      secondSession,
+      secondMessage,
+      routeOperation,
+      'b2-one-unresolved-second-route',
+    ),
+  );
+  const decision = createActionRouteDecision(
+    secondSession,
+    secondMessage,
+    'b2-one-unresolved-second-route',
+    '2026-08-14T01:00:05.200Z',
+  );
+  const completedRoute = completeRouteOperation(
+    routeOperation,
+    decision,
+    undefined,
+    '2026-08-14T01:00:05.300Z',
+  );
+  store.commitInteractionRouteResult(
+    createRouteResultCommitInput(
+      secondSession,
+      secondMessage,
+      routeOperation,
+      decision,
+      completedRoute,
+      'b2-one-unresolved-second-route',
+    ),
+  );
+  const actionOperation = createReservedActionOperation(
+    secondSession,
+    secondMessage,
+    'b2-one-unresolved-second-proposal',
+    InteractionOperationKind.ACTION_PROPOSAL,
+    '2026-08-14T01:00:05.400Z',
+  );
+  store.reserveInteractionOperation(
+    createOperationReservationInput(
+      secondSession,
+      secondMessage,
+      actionOperation,
+      'b2-one-unresolved-second-proposal',
+    ),
+  );
+  const secondAction = createPendingAction(
+    secondSession,
+    secondMessage,
+    decision,
+    'b2-one-unresolved-second',
+    InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    {
+      createdAt: '2026-08-14T01:00:05.500Z',
+      expiresAt: '2026-08-14T01:00:15.000Z',
+    },
+  );
+  const completedActionOperation = completePendingActionProposalOperation(
+    actionOperation,
+    secondAction,
+    '2026-08-14T01:00:05.600Z',
+  );
+  assert.deepEqual(
+    store.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        secondSession,
+        secondMessage,
+        decision,
+        secondAction,
+        actionOperation,
+        completedActionOperation,
+        'b2-one-unresolved-second',
+      ),
+    ),
+    { status: 'PENDING_ACTION_CONFLICT', currentPendingAction: first.pendingAction },
+  );
+  assert.deepEqual(
+    store.terminalizeInteractionOperation(
+      createOperationTerminalInput(
+        actionOperation,
+        terminalizeOperation(
+          actionOperation,
+          InteractionOperationState.FAILED,
+          '2026-08-14T01:00:05.600Z',
+        ),
+        'b2-one-unresolved-second',
+      ),
+    ).status,
+    'APPLIED',
+  );
+  assert.deepEqual(
+    store.getUnresolvedInteractionPendingAction(secondSession.id),
+    first.pendingAction,
+  );
+  store.close();
+});
+
+const pendingActionProposalRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_PENDING_ACTION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_RESERVATION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_RESERVATION_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_RESERVATION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of pendingActionProposalRollbackSteps) {
+  void test(`B2 direct Pending Action proposal rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    const prepared = preparePendingActionProposal(
+      setup,
+      policies,
+      `b2-proposal-rollback-${step}`,
+      InteractionConfirmationRequirement.DIRECT_USER_MESSAGE_SUFFICIENT,
+    );
+    const resolution = createPendingActionResolution(
+      prepared.pendingAction,
+      `b2-proposal-rollback-${step}`,
+      PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED,
+    );
+    const reservation = createActionReservation(
+      prepared.pendingAction,
+      resolution,
+      `b2-proposal-rollback-${step}`,
+    );
+    const input = createPendingActionProposalCommitInput(
+      prepared.session,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      prepared.operation,
+      prepared.completedOperation,
+      `b2-proposal-rollback-${step}`,
+      resolution,
+      reservation,
+    );
+    setup.close();
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(() => store.commitInteractionPendingActionProposal(input), /fixture failure/u);
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.equal(reopened.getInteractionPendingAction(prepared.pendingAction.id), undefined);
+    assert.equal(reopened.getInteractionPendingActionResolution(resolution.id), undefined);
+    assert.equal(reopened.getInteractionActionReservation(reservation.id), undefined);
+    assert.deepEqual(reopened.getInteractionOperation(prepared.operation.id), prepared.operation);
+    reopened.close();
+  });
+}
+
+const actionConfirmationRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_RESERVATION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_RESERVATION_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_RESERVATION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_WRITE,
+  InteractionTransactionStep.AFTER_ACTION_COMPLETION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const [stepIndex, step] of actionConfirmationRollbackSteps.entries()) {
+  void test(`B2 Action Confirmation rolls back at ${step}`, (t) => {
+    const fixtureSuffix = `b2-confirmation-rollback-${stepIndex}`;
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    const prepared = preparePendingActionProposal(
+      setup,
+      policies,
+      fixtureSuffix,
+      InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    );
+    setup.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        fixtureSuffix,
+      ),
+    );
+    const confirmation = prepareResponseBoundConfirmation(
+      setup,
+      prepared,
+      fixtureSuffix,
+      PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+    );
+    setup.close();
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () => store.commitInteractionActionConfirmation(confirmation.input),
+      /fixture failure/u,
+    );
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.equal(
+      reopened.getInteractionPendingActionResolution(confirmation.resolution.id),
+      undefined,
+    );
+    if (confirmation.reservation !== undefined) {
+      assert.equal(
+        reopened.getInteractionActionReservation(confirmation.reservation.id),
+        undefined,
+      );
+    }
+    assert.deepEqual(
+      reopened.getInteractionOperation(confirmation.operation.id),
+      confirmation.operation,
+    );
+    assert.deepEqual(
+      reopened.getUnresolvedInteractionPendingAction(confirmation.session.id),
+      prepared.pendingAction,
+    );
+    reopened.close();
+  });
+}
+
+const terminalResolutionRollbackSteps = Object.freeze([
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_WRITE,
+  InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE,
+  InteractionTransactionStep.BEFORE_COMMIT,
+]);
+
+for (const step of terminalResolutionRollbackSteps) {
+  void test(`B2 response-free terminal Resolution rolls back at ${step}`, (t) => {
+    const filename = temporaryDatabase(t);
+    const policies = createM26InteractionPolicies(digests);
+    const setup = SqliteControlStore.open({ filename });
+    setup.installInteractionPolicies(installInput(policies));
+    const prepared = preparePendingActionProposal(
+      setup,
+      policies,
+      `b2-terminal-rollback-${step}`,
+      InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+    );
+    setup.commitInteractionPendingActionProposal(
+      createPendingActionProposalCommitInput(
+        prepared.session,
+        prepared.message,
+        prepared.decision,
+        prepared.pendingAction,
+        prepared.operation,
+        prepared.completedOperation,
+        `b2-terminal-rollback-${step}`,
+      ),
+    );
+    const resolution = createPendingActionResolution(
+      prepared.pendingAction,
+      `b2-terminal-rollback-${step}`,
+      PendingActionResolutionDisposition.INTERRUPTED,
+    );
+    const input = createTerminalResolutionRecordInput(
+      prepared.session,
+      prepared.message,
+      prepared.decision,
+      prepared.pendingAction,
+      resolution,
+      `b2-terminal-rollback-${step}`,
+    );
+    setup.close();
+    const store = SqliteControlStore.open({
+      filename,
+      transactionProbe(observed) {
+        if (observed === step) {
+          throw new Error(`fixture failure at ${step}`);
+        }
+      },
+    });
+    assert.throws(
+      () => store.recordInteractionPendingActionTerminalResolution(input),
+      /fixture failure/u,
+    );
+    store.close();
+
+    const reopened = SqliteControlStore.open({ filename });
+    assert.equal(reopened.getInteractionPendingActionResolution(resolution.id), undefined);
+    assert.deepEqual(
+      reopened.getUnresolvedInteractionPendingAction(prepared.session.id),
+      prepared.pendingAction,
+    );
+    reopened.close();
+  });
+}
+
 void test('B1 historical Intake Clarification replays and failure-closes without reopening creation', (t) => {
   const filename = temporaryDatabase(t);
   const policies = createM26InteractionPolicies(digests);
@@ -4937,7 +6503,7 @@ void test('Slice 2 strict reopen rejects an orphan Route Proposal', (t) => {
 
   assert.throws(
     () => SqliteControlStore.open({ filename }),
-    /Route Proposal, or Route Decision has no exact Operation owner/u,
+    /Interaction result authority has no exact Operation owner/u,
   );
 });
 

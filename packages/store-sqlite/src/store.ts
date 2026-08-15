@@ -35,7 +35,9 @@ import {
   IntentExecutionDisposition,
   IntentProjectionField,
   InteractionOperationKind,
+  InteractionOperationResultKind,
   InteractionOperationState,
+  PendingActionResolutionDisposition,
   InteractionSessionState,
   RecoveryReconciliationDisposition,
   RecoveryReconciliationPurpose,
@@ -119,6 +121,9 @@ import {
   decodeFrontstageContextManifest,
   decodeInteractionMessage,
   decodeInteractionOperation,
+  decodeInteractionActionReservation,
+  decodePendingAction,
+  decodePendingActionResolution,
   decodeInteractionRoutingPolicy,
   decodeInteractionSession,
   decodeRouteDecision,
@@ -142,10 +147,15 @@ import {
   assertFrontstageContextManifestAuthorityChainInvariant,
   assertFrontstageContextManifestReservationChain,
   assertInteractionFocusUpdate,
+  assertInteractionActionPersistenceChainInvariant,
   assertInteractionOperationReservationChain,
   assertInteractionOperationTransition,
   assertInteractionRouteResultChainInvariant,
   assertInteractionRouteResultAuthorityChainInvariant,
+  assertPendingActionAuthorityChainInvariant,
+  assertPendingActionProposalAuthorityChainInvariant,
+  assertPendingActionProposalCommitChainInvariant,
+  assertPendingActionResolutionOperationResultInvariant,
   assertInteractionSessionTransition,
   assertInteractionUserMessageAdmission,
   assertInteractionUserMessageAdmissionBinding,
@@ -265,6 +275,12 @@ import {
   type InteractionSessionId,
   type CompletedInteractionOperation,
   type ReservedInteractionOperation,
+  type InteractionActionReservation,
+  type InteractionActionReservationId,
+  type PendingAction,
+  type PendingActionId,
+  type PendingActionResolution,
+  type PendingActionResolutionId,
   type RouteDecision,
   type RouteDecisionId,
   type RouteProposal,
@@ -422,12 +438,18 @@ import {
   type InteractionAuditWrite,
   type InteractionFocusBindingRecordResult,
   type InteractionFocusControlStore,
+  type InteractionPendingActionControlStore,
   type InteractionOperationControlStore,
   type InteractionRouteResultControlStore,
   type AssistantRouteOperationReservationResult,
   type CommitInteractionRouteResult,
+  type CommitInteractionActionConfirmation,
+  type CommitInteractionPendingActionProposal,
   type CompanionFreeReservedInteractionOperation,
   type InteractionRouteResultCommitResult,
+  type InteractionActionConfirmationCommitResult,
+  type InteractionPendingActionProposalCommitResult,
+  type InteractionPendingActionTerminalResolutionRecordResult,
   type InteractionOperationReservationResult,
   type InteractionOperationTerminalResult,
   type InteractionPolicyInstallResult,
@@ -436,6 +458,7 @@ import {
   type InteractionSessionTransitionResult,
   type InteractionUserMessageAdmissionResult,
   type RecordInteractionFocusBinding,
+  type RecordInteractionPendingActionTerminalResolution,
   type ReserveAssistantRouteOperation,
   type ReserveInteractionOperation,
   type TerminalizeInteractionOperation,
@@ -680,6 +703,21 @@ export const InteractionTransactionStep = {
   AFTER_ROUTE_COMPLETION_AUDIT_WRITE: 'AFTER_INTERACTION_ROUTE_COMPLETION_AUDIT_WRITE',
   AFTER_ROUTE_COMPLETION_WRITE: 'AFTER_INTERACTION_ROUTE_COMPLETION_WRITE',
   AFTER_ROUTE_COMPLETION_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_ROUTE_COMPLETION_MEMBERSHIP_WRITE',
+  AFTER_PENDING_ACTION_AUDIT_WRITE: 'AFTER_INTERACTION_PENDING_ACTION_AUDIT_WRITE',
+  AFTER_PENDING_ACTION_WRITE: 'AFTER_INTERACTION_PENDING_ACTION_WRITE',
+  AFTER_PENDING_ACTION_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_PENDING_ACTION_MEMBERSHIP_WRITE',
+  AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE:
+    'AFTER_INTERACTION_PENDING_ACTION_RESOLUTION_AUDIT_WRITE',
+  AFTER_PENDING_ACTION_RESOLUTION_WRITE: 'AFTER_INTERACTION_PENDING_ACTION_RESOLUTION_WRITE',
+  AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE:
+    'AFTER_INTERACTION_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE',
+  AFTER_ACTION_RESERVATION_AUDIT_WRITE: 'AFTER_INTERACTION_ACTION_RESERVATION_AUDIT_WRITE',
+  AFTER_ACTION_RESERVATION_WRITE: 'AFTER_INTERACTION_ACTION_RESERVATION_WRITE',
+  AFTER_ACTION_RESERVATION_MEMBERSHIP_WRITE:
+    'AFTER_INTERACTION_ACTION_RESERVATION_MEMBERSHIP_WRITE',
+  AFTER_ACTION_COMPLETION_AUDIT_WRITE: 'AFTER_INTERACTION_ACTION_COMPLETION_AUDIT_WRITE',
+  AFTER_ACTION_COMPLETION_WRITE: 'AFTER_INTERACTION_ACTION_COMPLETION_WRITE',
+  AFTER_ACTION_COMPLETION_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_ACTION_COMPLETION_MEMBERSHIP_WRITE',
   AFTER_FOCUS_AUDIT_WRITE: 'AFTER_INTERACTION_FOCUS_AUDIT_WRITE',
   AFTER_FOCUS_WRITE: 'AFTER_INTERACTION_FOCUS_WRITE',
   AFTER_AUDIT_MEMBERSHIP_WRITE: 'AFTER_INTERACTION_AUDIT_MEMBERSHIP_WRITE',
@@ -1305,6 +1343,61 @@ const retainedInteractionRouteDecisionRowSchema = z
   })
   .strict();
 
+const retainedInteractionPendingActionRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    originating_message_id: z.string().min(1),
+    originating_message_digest: z.string().min(1),
+    route_decision_id: z.string().min(1),
+    route_decision_digest: z.string().min(1),
+    focus_id: z.string().nullable(),
+    focus_digest: z.string().nullable(),
+    action_kind: z.string().min(1),
+    confirmation_requirement: z.string().min(1),
+    public_capability: z.string().min(1),
+    preallocated_command_id: z.string().min(1),
+    canonical_command_input_digest: z.string().min(1),
+    expires_at: z.string().min(1),
+    created_at: z.string().min(1),
+    pending_action_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
+const retainedInteractionPendingActionResolutionRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    pending_action_id: z.string().min(1),
+    pending_action_digest: z.string().min(1),
+    disposition: z.string().min(1),
+    resolved_at: z.string().min(1),
+    resolution_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
+const retainedInteractionActionReservationRowSchema = z
+  .object({
+    id: z.string().min(1),
+    schema_version: z.number().int().positive(),
+    session_id: z.string().min(1),
+    pending_action_id: z.string().min(1),
+    pending_action_digest: z.string().min(1),
+    resolution_id: z.string().min(1),
+    resolution_digest: z.string().min(1),
+    public_capability: z.string().min(1),
+    command_id: z.string().min(1),
+    canonical_command_input_digest: z.string().min(1),
+    reserved_at: z.string().min(1),
+    reservation_digest: z.string().min(1),
+    record_json: z.string().min(1),
+  })
+  .strict();
+
 const retainedInteractionAuditMembershipRowSchema = z
   .object({
     session_id: z.string().min(1),
@@ -1367,6 +1460,7 @@ function systemNow(): IsoTimestamp {
 const canonicalAuthorityDigests = new CanonicalJsonSha256DigestProvider();
 const INTERACTION_MIGRATION_NAME = '0037_frontstage_interaction.sql';
 const INTERACTION_ROUTE_RESULT_MIGRATION_NAME = '0039_interaction_route_result_authority.sql';
+const INTERACTION_PENDING_ACTION_MIGRATION_NAME = '0040_interaction_pending_action_authority.sql';
 
 interface NormalizedInteractionPolicyInstall {
   readonly policies: InteractionPolicySet;
@@ -1422,6 +1516,48 @@ interface NormalizedInteractionRouteResultCommit {
   readonly proposalAuditWrite?: InteractionAuditWrite;
   readonly decisionAuditWrite: InteractionAuditWrite;
   readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionPendingActionProposalCommit {
+  readonly session: InteractionSession;
+  readonly message: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution?: PendingActionResolution;
+  readonly reservation?: InteractionActionReservation;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly pendingActionAuditWrite: InteractionAuditWrite;
+  readonly resolutionAuditWrite?: InteractionAuditWrite;
+  readonly reservationAuditWrite?: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionActionConfirmationCommit {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly responseMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution: PendingActionResolution;
+  readonly reservation?: InteractionActionReservation;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+  readonly resolutionAuditWrite: InteractionAuditWrite;
+  readonly reservationAuditWrite?: InteractionAuditWrite;
+  readonly operationAuditWrite: InteractionAuditWrite;
+}
+
+interface NormalizedInteractionPendingActionTerminalResolutionRecord {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+  readonly resolution: PendingActionResolution;
+  readonly resolutionAuditWrite: InteractionAuditWrite;
 }
 
 interface NormalizedInteractionOperationTerminalization {
@@ -1929,6 +2065,368 @@ function normalizeInteractionRouteResultCommit(
     ...(proposalAuditWrite === undefined ? {} : { proposalAuditWrite }),
     decisionAuditWrite,
     operationAuditWrite,
+  });
+}
+
+function normalizePendingActionAuditWrite(
+  auditWrite: InteractionAuditWrite,
+  pendingAction: PendingAction,
+): InteractionAuditWrite {
+  return normalizeExactInteractionAuditWrite(auditWrite, {
+    recordType: 'Pending Action record audit',
+    aggregateType: InteractionAuditAggregateType.PENDING_ACTION,
+    aggregateId: pendingAction.id,
+    eventType: InteractionAuditEventType.PENDING_ACTION_RECORDED,
+    payloadDigest: pendingAction.pendingActionDigest,
+    occurredAt: pendingAction.createdAt,
+  });
+}
+
+function normalizePendingActionResolutionAuditWrite(
+  auditWrite: InteractionAuditWrite,
+  resolution: PendingActionResolution,
+): InteractionAuditWrite {
+  return normalizeExactInteractionAuditWrite(auditWrite, {
+    recordType: 'Pending Action Resolution audit',
+    aggregateType: InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION,
+    aggregateId: resolution.id,
+    eventType: InteractionAuditEventType.PENDING_ACTION_RESOLVED,
+    payloadDigest: resolution.resolutionDigest,
+    occurredAt: resolution.resolvedAt,
+  });
+}
+
+function normalizeInteractionActionReservationAuditWrite(
+  auditWrite: InteractionAuditWrite,
+  reservation: InteractionActionReservation,
+): InteractionAuditWrite {
+  return normalizeExactInteractionAuditWrite(auditWrite, {
+    recordType: 'Interaction Action Reservation audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION,
+    aggregateId: reservation.id,
+    eventType: InteractionAuditEventType.INTERACTION_ACTION_RESERVED,
+    payloadDigest: reservation.reservationDigest,
+    occurredAt: reservation.reservedAt,
+  });
+}
+
+function normalizePendingActionOperationCompletionAuditWrite(
+  auditWrite: InteractionAuditWrite,
+  currentOperation: ReservedInteractionOperation,
+  nextOperation: CompletedInteractionOperation,
+): InteractionAuditWrite {
+  return normalizeExactInteractionAuditWrite(auditWrite, {
+    recordType: 'Pending Action Operation completion audit',
+    aggregateType: InteractionAuditAggregateType.INTERACTION_OPERATION,
+    aggregateId: nextOperation.id,
+    eventType: InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+    payloadDigest: nextOperation.operationDigest,
+    occurredAt: nextOperation.completedAt,
+    beforeVersion: currentOperation.version,
+    afterVersion: nextOperation.version,
+  });
+}
+
+function assertDistinctInteractionAuditWrites(
+  auditWrites: readonly InteractionAuditWrite[],
+  recordType: string,
+): void {
+  if (new Set(auditWrites.map((auditWrite) => auditWrite.id)).size !== auditWrites.length) {
+    throw new StoreInvariantError(`${recordType} audit identities must be distinct`);
+  }
+}
+
+function normalizeInteractionPendingActionProposalCommit(
+  input: CommitInteractionPendingActionProposal,
+): NormalizedInteractionPendingActionProposalCommit {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'message',
+      'routeDecision',
+      'pendingAction',
+      'currentOperation',
+      'nextOperation',
+      'pendingActionAuditWrite',
+      'operationAuditWrite',
+    ],
+    ['focus', 'resolution', 'reservation', 'resolutionAuditWrite', 'reservationAuditWrite'],
+    'Interaction Pending Action Proposal input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const message = decodeInteractionMessage(input.message, canonicalAuthorityDigests);
+  const focus =
+    input.focus === undefined
+      ? undefined
+      : decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const routeDecision = decodeRouteDecision(input.routeDecision, canonicalAuthorityDigests);
+  const pendingAction = decodePendingAction(input.pendingAction, canonicalAuthorityDigests);
+  const resolution =
+    input.resolution === undefined
+      ? undefined
+      : decodePendingActionResolution(input.resolution, canonicalAuthorityDigests);
+  const reservation =
+    input.reservation === undefined
+      ? undefined
+      : decodeInteractionActionReservation(input.reservation, canonicalAuthorityDigests);
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  if (currentOperation.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Current Action Proposal Operation must be RESERVED');
+  }
+  if (nextOperation.state !== InteractionOperationState.COMPLETED) {
+    throw new StoreInvariantError('Next Action Proposal Operation must be COMPLETED');
+  }
+  assertPendingActionProposalCommitChainInvariant({
+    session,
+    originatingMessage: message,
+    ...(focus === undefined ? {} : { focus }),
+    routeDecision,
+    pendingAction,
+    ...(resolution === undefined ? {} : { resolution }),
+    ...(reservation === undefined ? {} : { reservation }),
+    currentOperation,
+    nextOperation,
+  });
+  if ((resolution === undefined) !== (input.resolutionAuditWrite === undefined)) {
+    throw new StoreInvariantError('Pending Action Resolution and audit must be supplied together');
+  }
+  if ((reservation === undefined) !== (input.reservationAuditWrite === undefined)) {
+    throw new StoreInvariantError('Action Reservation and audit must be supplied together');
+  }
+  const pendingActionAuditWrite = normalizePendingActionAuditWrite(
+    input.pendingActionAuditWrite,
+    pendingAction,
+  );
+  const resolutionAuditWrite =
+    resolution === undefined || input.resolutionAuditWrite === undefined
+      ? undefined
+      : normalizePendingActionResolutionAuditWrite(input.resolutionAuditWrite, resolution);
+  const reservationAuditWrite =
+    reservation === undefined || input.reservationAuditWrite === undefined
+      ? undefined
+      : normalizeInteractionActionReservationAuditWrite(input.reservationAuditWrite, reservation);
+  const operationAuditWrite = normalizePendingActionOperationCompletionAuditWrite(
+    input.operationAuditWrite,
+    currentOperation,
+    nextOperation,
+  );
+  assertDistinctInteractionAuditWrites(
+    [
+      pendingActionAuditWrite,
+      ...(resolutionAuditWrite === undefined ? [] : [resolutionAuditWrite]),
+      ...(reservationAuditWrite === undefined ? [] : [reservationAuditWrite]),
+      operationAuditWrite,
+    ],
+    'Pending Action Proposal',
+  );
+  return Object.freeze({
+    session,
+    message,
+    ...(focus === undefined ? {} : { focus }),
+    routeDecision,
+    pendingAction,
+    ...(resolution === undefined ? {} : { resolution }),
+    ...(reservation === undefined ? {} : { reservation }),
+    currentOperation,
+    nextOperation,
+    pendingActionAuditWrite,
+    ...(resolutionAuditWrite === undefined ? {} : { resolutionAuditWrite }),
+    ...(reservationAuditWrite === undefined ? {} : { reservationAuditWrite }),
+    operationAuditWrite,
+  });
+}
+
+function normalizeInteractionActionConfirmationCommit(
+  input: CommitInteractionActionConfirmation,
+): NormalizedInteractionActionConfirmationCommit {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'originatingMessage',
+      'responseMessage',
+      'routeDecision',
+      'pendingAction',
+      'resolution',
+      'currentOperation',
+      'nextOperation',
+      'resolutionAuditWrite',
+      'operationAuditWrite',
+    ],
+    ['focus', 'reservation', 'reservationAuditWrite'],
+    'Interaction Action Confirmation input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const originatingMessage = decodeInteractionMessage(
+    input.originatingMessage,
+    canonicalAuthorityDigests,
+  );
+  const responseMessage = decodeInteractionMessage(
+    input.responseMessage,
+    canonicalAuthorityDigests,
+  );
+  const focus =
+    input.focus === undefined
+      ? undefined
+      : decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const routeDecision = decodeRouteDecision(input.routeDecision, canonicalAuthorityDigests);
+  const pendingAction = decodePendingAction(input.pendingAction, canonicalAuthorityDigests);
+  const resolution = decodePendingActionResolution(input.resolution, canonicalAuthorityDigests);
+  const reservation =
+    input.reservation === undefined
+      ? undefined
+      : decodeInteractionActionReservation(input.reservation, canonicalAuthorityDigests);
+  const currentOperation = decodeInteractionOperation(
+    input.currentOperation,
+    canonicalAuthorityDigests,
+  );
+  const nextOperation = decodeInteractionOperation(input.nextOperation, canonicalAuthorityDigests);
+  if (currentOperation.state !== InteractionOperationState.RESERVED) {
+    throw new StoreInvariantError('Current Action Confirmation Operation must be RESERVED');
+  }
+  if (nextOperation.state !== InteractionOperationState.COMPLETED) {
+    throw new StoreInvariantError('Next Action Confirmation Operation must be COMPLETED');
+  }
+  assertPendingActionAuthorityChainInvariant({
+    session,
+    originatingMessage,
+    ...(focus === undefined ? {} : { focus }),
+    routeDecision,
+    pendingAction,
+  });
+  assertInteractionActionPersistenceChainInvariant({
+    originatingMessage,
+    resolutionMessage: responseMessage,
+    routeDecision,
+    pendingAction,
+    resolution,
+    ...(reservation === undefined ? {} : { reservation }),
+  });
+  assertInteractionOperationReservationChain({
+    session,
+    message: responseMessage,
+    operation: currentOperation,
+  });
+  assertPendingActionResolutionOperationResultInvariant({
+    pendingAction,
+    resolution,
+    ...(reservation === undefined ? {} : { reservation }),
+    currentOperation,
+    nextOperation,
+  });
+  if ((reservation === undefined) !== (input.reservationAuditWrite === undefined)) {
+    throw new StoreInvariantError('Action Reservation and audit must be supplied together');
+  }
+  const resolutionAuditWrite = normalizePendingActionResolutionAuditWrite(
+    input.resolutionAuditWrite,
+    resolution,
+  );
+  const reservationAuditWrite =
+    reservation === undefined || input.reservationAuditWrite === undefined
+      ? undefined
+      : normalizeInteractionActionReservationAuditWrite(input.reservationAuditWrite, reservation);
+  const operationAuditWrite = normalizePendingActionOperationCompletionAuditWrite(
+    input.operationAuditWrite,
+    currentOperation,
+    nextOperation,
+  );
+  assertDistinctInteractionAuditWrites(
+    [
+      resolutionAuditWrite,
+      ...(reservationAuditWrite === undefined ? [] : [reservationAuditWrite]),
+      operationAuditWrite,
+    ],
+    'Action Confirmation',
+  );
+  return Object.freeze({
+    session,
+    originatingMessage,
+    responseMessage,
+    ...(focus === undefined ? {} : { focus }),
+    routeDecision,
+    pendingAction,
+    resolution,
+    ...(reservation === undefined ? {} : { reservation }),
+    currentOperation,
+    nextOperation,
+    resolutionAuditWrite,
+    ...(reservationAuditWrite === undefined ? {} : { reservationAuditWrite }),
+    operationAuditWrite,
+  });
+}
+
+const responseFreePendingActionResolutionDispositions: ReadonlySet<
+  PendingActionResolution['disposition']
+> = new Set([
+  PendingActionResolutionDisposition.EXPIRED,
+  PendingActionResolutionDisposition.STALE_AUTHORITY,
+  PendingActionResolutionDisposition.CONFLICT,
+  PendingActionResolutionDisposition.INTERRUPTED,
+]);
+
+function normalizeInteractionPendingActionTerminalResolutionRecord(
+  input: RecordInteractionPendingActionTerminalResolution,
+): NormalizedInteractionPendingActionTerminalResolutionRecord {
+  assertExactObjectKeys(
+    input,
+    [
+      'session',
+      'originatingMessage',
+      'routeDecision',
+      'pendingAction',
+      'resolution',
+      'resolutionAuditWrite',
+    ],
+    ['focus'],
+    'Interaction Pending Action terminal Resolution input',
+  );
+  const session = decodeInteractionSession(input.session, canonicalAuthorityDigests);
+  const originatingMessage = decodeInteractionMessage(
+    input.originatingMessage,
+    canonicalAuthorityDigests,
+  );
+  const focus =
+    input.focus === undefined
+      ? undefined
+      : decodeFocusBinding(input.focus, canonicalAuthorityDigests);
+  const routeDecision = decodeRouteDecision(input.routeDecision, canonicalAuthorityDigests);
+  const pendingAction = decodePendingAction(input.pendingAction, canonicalAuthorityDigests);
+  const resolution = decodePendingActionResolution(input.resolution, canonicalAuthorityDigests);
+  if (!responseFreePendingActionResolutionDispositions.has(resolution.disposition)) {
+    throw new StoreInvariantError(
+      'This transaction accepts only a response-free Pending Action Resolution',
+    );
+  }
+  assertPendingActionAuthorityChainInvariant({
+    session,
+    originatingMessage,
+    ...(focus === undefined ? {} : { focus }),
+    routeDecision,
+    pendingAction,
+  });
+  assertInteractionActionPersistenceChainInvariant({
+    originatingMessage,
+    routeDecision,
+    pendingAction,
+    resolution,
+  });
+  const resolutionAuditWrite = normalizePendingActionResolutionAuditWrite(
+    input.resolutionAuditWrite,
+    resolution,
+  );
+  return Object.freeze({
+    session,
+    originatingMessage,
+    ...(focus === undefined ? {} : { focus }),
+    routeDecision,
+    pendingAction,
+    resolution,
+    resolutionAuditWrite,
   });
 }
 
@@ -3532,6 +4030,7 @@ export class SqliteControlStore
     ProjectReadCleanupControlStore,
     InteractionOperationControlStore,
     InteractionRouteResultControlStore,
+    InteractionPendingActionControlStore,
     InteractionFocusControlStore
 {
   readonly #database: Database.Database;
@@ -4216,7 +4715,10 @@ export class SqliteControlStore
       if (retainedOperation === undefined) {
         return { status: 'OPERATION_NOT_FOUND' };
       }
-      if (!sameCanonicalAuthority(retainedOperation, input.currentOperation)) {
+      if (
+        retainedOperation.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(retainedOperation, input.currentOperation)
+      ) {
         return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
       }
       if (retainedProposal !== undefined && input.proposal !== undefined) {
@@ -4338,6 +4840,504 @@ export class SqliteControlStore
     });
   }
 
+  public commitInteractionPendingActionProposal(
+    rawInput: CommitInteractionPendingActionProposal,
+  ): InteractionPendingActionProposalCommitResult {
+    this.assertOpen();
+    const input = normalizeInteractionPendingActionProposalCommit(rawInput);
+    return this.runImmediate(() => {
+      const retainedOperation = this.getInteractionOperationInsideTransaction(
+        input.currentOperation.id,
+      );
+      const retainedActionById = this.getInteractionPendingActionInsideTransaction(
+        input.pendingAction.id,
+      );
+      const retainedActionByDecision =
+        this.getInteractionPendingActionByRouteDecisionInsideTransaction(input.routeDecision.id);
+      const retainedResolution =
+        input.resolution === undefined
+          ? undefined
+          : this.getInteractionPendingActionResolutionInsideTransaction(input.resolution.id);
+      const retainedReservation =
+        input.reservation === undefined
+          ? undefined
+          : this.getInteractionActionReservationInsideTransaction(input.reservation.id);
+      // A later confirmation or response-free terminal transaction may own the
+      // retained Resolution. It cannot retroactively change Proposal replay.
+      if (
+        retainedOperation?.state === InteractionOperationState.COMPLETED &&
+        sameCanonicalAuthority(retainedOperation, input.nextOperation) &&
+        retainedActionById !== undefined &&
+        sameCanonicalAuthority(retainedActionById, input.pendingAction) &&
+        (input.resolution === undefined ||
+          (retainedResolution !== undefined &&
+            sameCanonicalAuthority(retainedResolution, input.resolution))) &&
+        (input.reservation === undefined ||
+          (retainedReservation !== undefined &&
+            sameCanonicalAuthority(retainedReservation, input.reservation)))
+      ) {
+        return {
+          status: 'REPLAYED',
+          pendingAction: retainedActionById,
+          ...(retainedResolution === undefined ? {} : { resolution: retainedResolution }),
+          ...(retainedReservation === undefined ? {} : { reservation: retainedReservation }),
+          operation: retainedOperation,
+        };
+      }
+      if (retainedOperation === undefined) {
+        return { status: 'OPERATION_NOT_FOUND' };
+      }
+      if (
+        retainedOperation.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(retainedOperation, input.currentOperation)
+      ) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
+      }
+      const conflictingAction = retainedActionById ?? retainedActionByDecision;
+      if (conflictingAction !== undefined) {
+        return { status: 'PENDING_ACTION_CONFLICT', currentPendingAction: conflictingAction };
+      }
+      const unresolvedAction = this.getUnresolvedInteractionPendingActionInsideTransaction(
+        input.session.id,
+      );
+      if (unresolvedAction !== undefined) {
+        return { status: 'PENDING_ACTION_CONFLICT', currentPendingAction: unresolvedAction };
+      }
+      if (retainedResolution !== undefined) {
+        return {
+          status: 'PENDING_ACTION_RESOLUTION_CONFLICT',
+          currentResolution: retainedResolution,
+        };
+      }
+      if (retainedReservation !== undefined) {
+        return {
+          status: 'ACTION_RESERVATION_CONFLICT',
+          currentReservation: retainedReservation,
+        };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        throw new StoreInvariantError(
+          `Retained Action Proposal Operation ${retainedOperation.id} lost its Session`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedMessage = this.getInteractionMessageInsideTransaction(input.message.id);
+      if (
+        retainedMessage === undefined ||
+        !sameCanonicalAuthority(retainedMessage, input.message)
+      ) {
+        throw new StoreInvariantError(
+          `Retained Action Proposal Operation ${retainedOperation.id} lost its exact Message`,
+        );
+      }
+      const retainedDecision = this.getInteractionRouteDecisionInsideTransaction(
+        input.routeDecision.id,
+      );
+      if (retainedDecision === undefined) {
+        return { status: 'ROUTE_DECISION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedDecision, input.routeDecision)) {
+        throw new StoreInvariantError(
+          `Retained Action Proposal Operation ${retainedOperation.id} has substituted Route Decision authority`,
+        );
+      }
+      let retainedFocus: FocusBinding | undefined;
+      if (input.focus !== undefined) {
+        retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+        if (retainedFocus === undefined || !sameCanonicalAuthority(retainedFocus, input.focus)) {
+          throw new StoreInvariantError(
+            `Retained Action Proposal Operation ${retainedOperation.id} lost its exact Focus`,
+          );
+        }
+      }
+      assertPendingActionProposalCommitChainInvariant({
+        session: retainedSession,
+        originatingMessage: retainedMessage,
+        ...(retainedFocus === undefined ? {} : { focus: retainedFocus }),
+        routeDecision: retainedDecision,
+        pendingAction: input.pendingAction,
+        ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
+        ...(input.reservation === undefined ? {} : { reservation: input.reservation }),
+        currentOperation: retainedOperation,
+        nextOperation: input.nextOperation,
+      });
+
+      this.insertAuditEvent(input.pendingActionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_AUDIT_WRITE);
+      this.insertInteractionPendingAction(input.pendingAction);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.pendingActionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_MEMBERSHIP_WRITE);
+      if (input.resolution !== undefined && input.resolutionAuditWrite !== undefined) {
+        this.insertAuditEvent(input.resolutionAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE);
+        this.insertInteractionPendingActionResolution(input.session.id, input.resolution);
+        this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_WRITE);
+        this.appendInteractionAuditMembership(input.session.id, input.resolutionAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE);
+      }
+      if (input.reservation !== undefined && input.reservationAuditWrite !== undefined) {
+        this.insertAuditEvent(input.reservationAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_ACTION_RESERVATION_AUDIT_WRITE);
+        this.insertInteractionActionReservation(input.session.id, input.reservation);
+        this.probe(InteractionTransactionStep.AFTER_ACTION_RESERVATION_WRITE);
+        this.appendInteractionAuditMembership(input.session.id, input.reservationAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_ACTION_RESERVATION_MEMBERSHIP_WRITE);
+      }
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ACTION_COMPLETION_AUDIT_WRITE);
+      this.updateInteractionOperation(retainedOperation, input.nextOperation);
+      this.probe(InteractionTransactionStep.AFTER_ACTION_COMPLETION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ACTION_COMPLETION_MEMBERSHIP_WRITE);
+
+      const persistedAction = this.getInteractionPendingActionInsideTransaction(
+        input.pendingAction.id,
+      );
+      const persistedResolution =
+        input.resolution === undefined
+          ? undefined
+          : this.getInteractionPendingActionResolutionInsideTransaction(input.resolution.id);
+      const persistedReservation =
+        input.reservation === undefined
+          ? undefined
+          : this.getInteractionActionReservationInsideTransaction(input.reservation.id);
+      const persistedOperation = this.getInteractionOperationInsideTransaction(
+        input.nextOperation.id,
+      );
+      if (
+        persistedAction === undefined ||
+        !sameCanonicalAuthority(persistedAction, input.pendingAction) ||
+        (input.resolution === undefined
+          ? persistedResolution !== undefined
+          : persistedResolution === undefined ||
+            !sameCanonicalAuthority(persistedResolution, input.resolution)) ||
+        (input.reservation === undefined
+          ? persistedReservation !== undefined
+          : persistedReservation === undefined ||
+            !sameCanonicalAuthority(persistedReservation, input.reservation)) ||
+        persistedOperation?.state !== InteractionOperationState.COMPLETED ||
+        !sameCanonicalAuthority(persistedOperation, input.nextOperation)
+      ) {
+        throw new StoreInvariantError('The Pending Action Proposal was not immediately readable');
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'APPLIED',
+        pendingAction: persistedAction,
+        ...(persistedResolution === undefined ? {} : { resolution: persistedResolution }),
+        ...(persistedReservation === undefined ? {} : { reservation: persistedReservation }),
+        operation: persistedOperation,
+      };
+    });
+  }
+
+  public commitInteractionActionConfirmation(
+    rawInput: CommitInteractionActionConfirmation,
+  ): InteractionActionConfirmationCommitResult {
+    this.assertOpen();
+    const input = normalizeInteractionActionConfirmationCommit(rawInput);
+    return this.runImmediate(() => {
+      const retainedOperation = this.getInteractionOperationInsideTransaction(
+        input.currentOperation.id,
+      );
+      const retainedAction = this.getInteractionPendingActionInsideTransaction(
+        input.pendingAction.id,
+      );
+      const retainedResolutionById = this.getInteractionPendingActionResolutionInsideTransaction(
+        input.resolution.id,
+      );
+      const retainedResolutionByAction =
+        this.getInteractionPendingActionResolutionByActionInsideTransaction(input.pendingAction.id);
+      const retainedReservationById =
+        input.reservation === undefined
+          ? undefined
+          : this.getInteractionActionReservationInsideTransaction(input.reservation.id);
+      const retainedReservationByAction =
+        this.getInteractionActionReservationByActionInsideTransaction(input.pendingAction.id);
+      if (
+        retainedOperation?.state === InteractionOperationState.COMPLETED &&
+        sameCanonicalAuthority(retainedOperation, input.nextOperation) &&
+        retainedAction !== undefined &&
+        sameCanonicalAuthority(retainedAction, input.pendingAction) &&
+        retainedResolutionById !== undefined &&
+        sameCanonicalAuthority(retainedResolutionById, input.resolution) &&
+        (input.reservation === undefined
+          ? retainedReservationByAction === undefined
+          : retainedReservationById !== undefined &&
+            sameCanonicalAuthority(retainedReservationById, input.reservation))
+      ) {
+        return {
+          status: 'REPLAYED',
+          resolution: retainedResolutionById,
+          ...(retainedReservationById === undefined
+            ? {}
+            : { reservation: retainedReservationById }),
+          operation: retainedOperation,
+        };
+      }
+      if (retainedOperation === undefined) {
+        return { status: 'OPERATION_NOT_FOUND' };
+      }
+      if (
+        retainedOperation.state !== InteractionOperationState.RESERVED ||
+        !sameCanonicalAuthority(retainedOperation, input.currentOperation)
+      ) {
+        return { status: 'OPERATION_CONFLICT', currentOperation: retainedOperation };
+      }
+      if (retainedAction === undefined) {
+        return { status: 'PENDING_ACTION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedAction, input.pendingAction)) {
+        return { status: 'PENDING_ACTION_CONFLICT', currentPendingAction: retainedAction };
+      }
+      const conflictingResolution = retainedResolutionById ?? retainedResolutionByAction;
+      if (conflictingResolution !== undefined) {
+        return {
+          status: 'PENDING_ACTION_RESOLUTION_CONFLICT',
+          currentResolution: conflictingResolution,
+        };
+      }
+      const conflictingReservation = retainedReservationById ?? retainedReservationByAction;
+      if (conflictingReservation !== undefined) {
+        return {
+          status: 'ACTION_RESERVATION_CONFLICT',
+          currentReservation: conflictingReservation,
+        };
+      }
+
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        throw new StoreInvariantError(
+          `Retained Action Confirmation Operation ${retainedOperation.id} lost its Session`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const retainedOriginatingMessage = this.getInteractionMessageInsideTransaction(
+        input.originatingMessage.id,
+      );
+      const retainedResponseMessage = this.getInteractionMessageInsideTransaction(
+        input.responseMessage.id,
+      );
+      const retainedDecision = this.getInteractionRouteDecisionInsideTransaction(
+        input.routeDecision.id,
+      );
+      if (
+        retainedOriginatingMessage === undefined ||
+        !sameCanonicalAuthority(retainedOriginatingMessage, input.originatingMessage) ||
+        retainedResponseMessage === undefined ||
+        !sameCanonicalAuthority(retainedResponseMessage, input.responseMessage) ||
+        retainedDecision === undefined ||
+        !sameCanonicalAuthority(retainedDecision, input.routeDecision)
+      ) {
+        throw new StoreInvariantError(
+          `Retained Action Confirmation Operation ${retainedOperation.id} lost its exact historical authority`,
+        );
+      }
+      let retainedFocus: FocusBinding | undefined;
+      if (input.focus !== undefined) {
+        retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+        if (retainedFocus === undefined || !sameCanonicalAuthority(retainedFocus, input.focus)) {
+          throw new StoreInvariantError(
+            `Retained Action Confirmation Operation ${retainedOperation.id} lost its exact Focus`,
+          );
+        }
+      }
+      assertPendingActionAuthorityChainInvariant({
+        session: retainedSession,
+        originatingMessage: retainedOriginatingMessage,
+        ...(retainedFocus === undefined ? {} : { focus: retainedFocus }),
+        routeDecision: retainedDecision,
+        pendingAction: retainedAction,
+      });
+      assertInteractionActionPersistenceChainInvariant({
+        originatingMessage: retainedOriginatingMessage,
+        resolutionMessage: retainedResponseMessage,
+        routeDecision: retainedDecision,
+        pendingAction: retainedAction,
+        resolution: input.resolution,
+        ...(input.reservation === undefined ? {} : { reservation: input.reservation }),
+      });
+      assertInteractionOperationReservationChain({
+        session: retainedSession,
+        message: retainedResponseMessage,
+        operation: retainedOperation,
+      });
+      assertPendingActionResolutionOperationResultInvariant({
+        pendingAction: retainedAction,
+        resolution: input.resolution,
+        ...(input.reservation === undefined ? {} : { reservation: input.reservation }),
+        currentOperation: retainedOperation,
+        nextOperation: input.nextOperation,
+      });
+
+      this.insertAuditEvent(input.resolutionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE);
+      this.insertInteractionPendingActionResolution(input.session.id, input.resolution);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.resolutionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE);
+      if (input.reservation !== undefined && input.reservationAuditWrite !== undefined) {
+        this.insertAuditEvent(input.reservationAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_ACTION_RESERVATION_AUDIT_WRITE);
+        this.insertInteractionActionReservation(input.session.id, input.reservation);
+        this.probe(InteractionTransactionStep.AFTER_ACTION_RESERVATION_WRITE);
+        this.appendInteractionAuditMembership(input.session.id, input.reservationAuditWrite);
+        this.probe(InteractionTransactionStep.AFTER_ACTION_RESERVATION_MEMBERSHIP_WRITE);
+      }
+      this.insertAuditEvent(input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ACTION_COMPLETION_AUDIT_WRITE);
+      this.updateInteractionOperation(retainedOperation, input.nextOperation);
+      this.probe(InteractionTransactionStep.AFTER_ACTION_COMPLETION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.operationAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_ACTION_COMPLETION_MEMBERSHIP_WRITE);
+
+      const persistedResolution = this.getInteractionPendingActionResolutionInsideTransaction(
+        input.resolution.id,
+      );
+      const persistedReservation =
+        input.reservation === undefined
+          ? undefined
+          : this.getInteractionActionReservationInsideTransaction(input.reservation.id);
+      const persistedOperation = this.getInteractionOperationInsideTransaction(
+        input.nextOperation.id,
+      );
+      if (
+        persistedResolution === undefined ||
+        !sameCanonicalAuthority(persistedResolution, input.resolution) ||
+        (input.reservation === undefined
+          ? persistedReservation !== undefined
+          : persistedReservation === undefined ||
+            !sameCanonicalAuthority(persistedReservation, input.reservation)) ||
+        persistedOperation?.state !== InteractionOperationState.COMPLETED ||
+        !sameCanonicalAuthority(persistedOperation, input.nextOperation)
+      ) {
+        throw new StoreInvariantError('The Action Confirmation was not immediately readable');
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return {
+        status: 'APPLIED',
+        resolution: persistedResolution,
+        ...(persistedReservation === undefined ? {} : { reservation: persistedReservation }),
+        operation: persistedOperation,
+      };
+    });
+  }
+
+  public recordInteractionPendingActionTerminalResolution(
+    rawInput: RecordInteractionPendingActionTerminalResolution,
+  ): InteractionPendingActionTerminalResolutionRecordResult {
+    this.assertOpen();
+    const input = normalizeInteractionPendingActionTerminalResolutionRecord(rawInput);
+    return this.runImmediate(() => {
+      const retainedAction = this.getInteractionPendingActionInsideTransaction(
+        input.pendingAction.id,
+      );
+      const retainedResolutionById = this.getInteractionPendingActionResolutionInsideTransaction(
+        input.resolution.id,
+      );
+      const retainedResolutionByAction =
+        this.getInteractionPendingActionResolutionByActionInsideTransaction(input.pendingAction.id);
+      if (
+        retainedAction !== undefined &&
+        sameCanonicalAuthority(retainedAction, input.pendingAction) &&
+        retainedResolutionById !== undefined &&
+        sameCanonicalAuthority(retainedResolutionById, input.resolution)
+      ) {
+        return { status: 'REPLAYED', resolution: retainedResolutionById };
+      }
+      if (retainedAction === undefined) {
+        return { status: 'PENDING_ACTION_NOT_FOUND' };
+      }
+      if (!sameCanonicalAuthority(retainedAction, input.pendingAction)) {
+        return { status: 'PENDING_ACTION_CONFLICT', currentPendingAction: retainedAction };
+      }
+      const conflictingResolution = retainedResolutionById ?? retainedResolutionByAction;
+      if (conflictingResolution !== undefined) {
+        return {
+          status: 'PENDING_ACTION_RESOLUTION_CONFLICT',
+          currentResolution: conflictingResolution,
+        };
+      }
+      const retainedSession = this.getInteractionSessionInsideTransaction(input.session.id);
+      if (retainedSession === undefined) {
+        throw new StoreInvariantError(
+          `Retained Pending Action ${retainedAction.id} lost its Session`,
+        );
+      }
+      if (!sameCanonicalAuthority(retainedSession, input.session)) {
+        return { status: 'VERSION_CONFLICT', currentSession: retainedSession };
+      }
+      const activeOperation = this.getReservedInteractionOperationInsideTransaction(
+        retainedSession.id,
+      );
+      if (activeOperation !== undefined) {
+        return { status: 'SESSION_OPERATION_BUSY', currentOperation: activeOperation };
+      }
+      const retainedOriginatingMessage = this.getInteractionMessageInsideTransaction(
+        input.originatingMessage.id,
+      );
+      const retainedDecision = this.getInteractionRouteDecisionInsideTransaction(
+        input.routeDecision.id,
+      );
+      if (
+        retainedOriginatingMessage === undefined ||
+        !sameCanonicalAuthority(retainedOriginatingMessage, input.originatingMessage) ||
+        retainedDecision === undefined ||
+        !sameCanonicalAuthority(retainedDecision, input.routeDecision)
+      ) {
+        throw new StoreInvariantError(
+          `Retained Pending Action ${retainedAction.id} lost its exact historical authority`,
+        );
+      }
+      let retainedFocus: FocusBinding | undefined;
+      if (input.focus !== undefined) {
+        retainedFocus = this.getInteractionFocusBindingInsideTransaction(input.focus.id);
+        if (retainedFocus === undefined || !sameCanonicalAuthority(retainedFocus, input.focus)) {
+          throw new StoreInvariantError(
+            `Retained Pending Action ${retainedAction.id} lost its exact Focus`,
+          );
+        }
+      }
+      assertPendingActionAuthorityChainInvariant({
+        session: retainedSession,
+        originatingMessage: retainedOriginatingMessage,
+        ...(retainedFocus === undefined ? {} : { focus: retainedFocus }),
+        routeDecision: retainedDecision,
+        pendingAction: retainedAction,
+      });
+      assertInteractionActionPersistenceChainInvariant({
+        originatingMessage: retainedOriginatingMessage,
+        routeDecision: retainedDecision,
+        pendingAction: retainedAction,
+        resolution: input.resolution,
+      });
+
+      this.insertAuditEvent(input.resolutionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_AUDIT_WRITE);
+      this.insertInteractionPendingActionResolution(input.session.id, input.resolution);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_WRITE);
+      this.appendInteractionAuditMembership(input.session.id, input.resolutionAuditWrite);
+      this.probe(InteractionTransactionStep.AFTER_PENDING_ACTION_RESOLUTION_MEMBERSHIP_WRITE);
+      const persisted = this.getInteractionPendingActionResolutionInsideTransaction(
+        input.resolution.id,
+      );
+      if (persisted === undefined || !sameCanonicalAuthority(persisted, input.resolution)) {
+        throw new StoreInvariantError(
+          'The terminal Pending Action Resolution was not immediately readable',
+        );
+      }
+      this.probe(InteractionTransactionStep.BEFORE_COMMIT);
+      return { status: 'APPLIED', resolution: persisted };
+    });
+  }
+
   public terminalizeInteractionOperation(
     rawInput: TerminalizeInteractionOperation,
   ): InteractionOperationTerminalResult {
@@ -4414,6 +5414,38 @@ export class SqliteControlStore
     this.assertOpen();
     return this.runRead(() =>
       this.getInteractionRouteDecisionInsideTransaction(decisionIdentifier),
+    );
+  }
+
+  public getInteractionPendingAction(actionIdentifier: PendingActionId): PendingAction | undefined {
+    this.assertOpen();
+    return this.runRead(() => this.getInteractionPendingActionInsideTransaction(actionIdentifier));
+  }
+
+  public getInteractionPendingActionResolution(
+    resolutionIdentifier: PendingActionResolutionId,
+  ): PendingActionResolution | undefined {
+    this.assertOpen();
+    return this.runRead(() =>
+      this.getInteractionPendingActionResolutionInsideTransaction(resolutionIdentifier),
+    );
+  }
+
+  public getInteractionActionReservation(
+    reservationIdentifier: InteractionActionReservationId,
+  ): InteractionActionReservation | undefined {
+    this.assertOpen();
+    return this.runRead(() =>
+      this.getInteractionActionReservationInsideTransaction(reservationIdentifier),
+    );
+  }
+
+  public getUnresolvedInteractionPendingAction(
+    sessionIdentifier: InteractionSessionId,
+  ): PendingAction | undefined {
+    this.assertOpen();
+    return this.runRead(() =>
+      this.getUnresolvedInteractionPendingActionInsideTransaction(sessionIdentifier),
     );
   }
 
@@ -7198,6 +8230,229 @@ export class SqliteControlStore
       : this.decodeRetainedInteractionRouteDecisionRow(rawRow);
   }
 
+  private decodeRetainedInteractionPendingActionRow(rawRow: unknown): PendingAction {
+    const row = retainedInteractionPendingActionRowSchema.parse(rawRow);
+    const pendingAction = decodePendingAction(
+      parseJson(row.record_json, 'Interaction Pending Action'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      pendingAction.id !== row.id ||
+      pendingAction.schemaVersion !== row.schema_version ||
+      pendingAction.sessionId !== row.session_id ||
+      pendingAction.originatingMessageRef.id !== row.originating_message_id ||
+      pendingAction.originatingMessageRef.digest !== row.originating_message_digest ||
+      pendingAction.routeDecisionRef.id !== row.route_decision_id ||
+      pendingAction.routeDecisionRef.digest !== row.route_decision_digest ||
+      (pendingAction.focusRef?.id ?? null) !== row.focus_id ||
+      (pendingAction.focusRef?.digest ?? null) !== row.focus_digest ||
+      pendingAction.kind !== row.action_kind ||
+      pendingAction.confirmationRequirement !== row.confirmation_requirement ||
+      pendingAction.publicCapability !== row.public_capability ||
+      pendingAction.preallocatedCommandId !== row.preallocated_command_id ||
+      pendingAction.canonicalCommandInputDigest !== row.canonical_command_input_digest ||
+      pendingAction.expiresAt !== row.expires_at ||
+      pendingAction.createdAt !== row.created_at ||
+      pendingAction.pendingActionDigest !== row.pending_action_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Pending Action ${pendingAction.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return pendingAction;
+  }
+
+  private getInteractionPendingActionInsideTransaction(
+    actionIdentifier: PendingActionId,
+  ): PendingAction | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, originating_message_id,
+                originating_message_digest, route_decision_id, route_decision_digest,
+                focus_id, focus_digest, action_kind, confirmation_requirement,
+                public_capability, preallocated_command_id, canonical_command_input_digest,
+                expires_at, created_at, pending_action_digest, record_json
+           FROM interaction_pending_actions
+          WHERE id = ?`,
+      )
+      .get(actionIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionPendingActionRow(rawRow);
+  }
+
+  private getInteractionPendingActionByRouteDecisionInsideTransaction(
+    decisionIdentifier: RouteDecisionId,
+  ): PendingAction | undefined {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, originating_message_id,
+                originating_message_digest, route_decision_id, route_decision_digest,
+                focus_id, focus_digest, action_kind, confirmation_requirement,
+                public_capability, preallocated_command_id, canonical_command_input_digest,
+                expires_at, created_at, pending_action_digest, record_json
+           FROM interaction_pending_actions
+          WHERE route_decision_id = ?
+          ORDER BY id`,
+      )
+      .all(decisionIdentifier);
+    if (rows.length > 1) {
+      throw new StoreInvariantError(
+        `Route Decision ${decisionIdentifier} has multiple Pending Actions`,
+      );
+    }
+    const row = rows[0];
+    return row === undefined ? undefined : this.decodeRetainedInteractionPendingActionRow(row);
+  }
+
+  private getUnresolvedInteractionPendingActionInsideTransaction(
+    sessionIdentifier: InteractionSessionId,
+  ): PendingAction | undefined {
+    const rows = this.#database
+      .prepare(
+        `SELECT action.id, action.schema_version, action.session_id,
+                action.originating_message_id, action.originating_message_digest,
+                action.route_decision_id, action.route_decision_digest,
+                action.focus_id, action.focus_digest, action.action_kind,
+                action.confirmation_requirement, action.public_capability,
+                action.preallocated_command_id, action.canonical_command_input_digest,
+                action.expires_at, action.created_at, action.pending_action_digest,
+                action.record_json
+           FROM interaction_pending_actions AS action
+           LEFT JOIN interaction_pending_action_resolutions AS resolution
+             ON resolution.pending_action_id = action.id
+          WHERE action.session_id = ?
+            AND resolution.id IS NULL
+          ORDER BY action.id`,
+      )
+      .all(sessionIdentifier);
+    if (rows.length > 1) {
+      throw new StoreInvariantError(
+        `Interaction Session ${sessionIdentifier} has multiple unresolved Pending Actions`,
+      );
+    }
+    const row = rows[0];
+    return row === undefined ? undefined : this.decodeRetainedInteractionPendingActionRow(row);
+  }
+
+  private decodeRetainedInteractionPendingActionResolutionRow(
+    rawRow: unknown,
+  ): PendingActionResolution {
+    const row = retainedInteractionPendingActionResolutionRowSchema.parse(rawRow);
+    const resolution = decodePendingActionResolution(
+      parseJson(row.record_json, 'Interaction Pending Action Resolution'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      resolution.id !== row.id ||
+      resolution.schemaVersion !== row.schema_version ||
+      resolution.pendingActionRef.id !== row.pending_action_id ||
+      resolution.pendingActionRef.digest !== row.pending_action_digest ||
+      resolution.disposition !== row.disposition ||
+      resolution.resolvedAt !== row.resolved_at ||
+      resolution.resolutionDigest !== row.resolution_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Pending Action Resolution ${resolution.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return resolution;
+  }
+
+  private getInteractionPendingActionResolutionInsideTransaction(
+    resolutionIdentifier: PendingActionResolutionId,
+  ): PendingActionResolution | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, pending_action_id, pending_action_digest,
+                disposition, resolved_at, resolution_digest, record_json
+           FROM interaction_pending_action_resolutions
+          WHERE id = ?`,
+      )
+      .get(resolutionIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionPendingActionResolutionRow(rawRow);
+  }
+
+  private getInteractionPendingActionResolutionByActionInsideTransaction(
+    actionIdentifier: PendingActionId,
+  ): PendingActionResolution | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, pending_action_id, pending_action_digest,
+                disposition, resolved_at, resolution_digest, record_json
+           FROM interaction_pending_action_resolutions
+          WHERE pending_action_id = ?`,
+      )
+      .get(actionIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionPendingActionResolutionRow(rawRow);
+  }
+
+  private decodeRetainedInteractionActionReservationRow(
+    rawRow: unknown,
+  ): InteractionActionReservation {
+    const row = retainedInteractionActionReservationRowSchema.parse(rawRow);
+    const reservation = decodeInteractionActionReservation(
+      parseJson(row.record_json, 'Interaction Action Reservation'),
+      canonicalAuthorityDigests,
+    );
+    if (
+      reservation.id !== row.id ||
+      reservation.schemaVersion !== row.schema_version ||
+      reservation.pendingActionRef.id !== row.pending_action_id ||
+      reservation.pendingActionRef.digest !== row.pending_action_digest ||
+      reservation.resolutionRef.id !== row.resolution_id ||
+      reservation.resolutionRef.digest !== row.resolution_digest ||
+      reservation.publicCapability !== row.public_capability ||
+      reservation.commandId !== row.command_id ||
+      reservation.canonicalCommandInputDigest !== row.canonical_command_input_digest ||
+      reservation.reservedAt !== row.reserved_at ||
+      reservation.reservationDigest !== row.reservation_digest
+    ) {
+      throw new StoreInvariantError(
+        `Retained Interaction Action Reservation ${reservation.id} materialized columns differ from its authority JSON`,
+      );
+    }
+    return reservation;
+  }
+
+  private getInteractionActionReservationInsideTransaction(
+    reservationIdentifier: InteractionActionReservationId,
+  ): InteractionActionReservation | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, pending_action_id, pending_action_digest,
+                resolution_id, resolution_digest, public_capability, command_id,
+                canonical_command_input_digest, reserved_at, reservation_digest, record_json
+           FROM interaction_action_reservations
+          WHERE id = ?`,
+      )
+      .get(reservationIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionActionReservationRow(rawRow);
+  }
+
+  private getInteractionActionReservationByActionInsideTransaction(
+    actionIdentifier: PendingActionId,
+  ): InteractionActionReservation | undefined {
+    const rawRow = this.#database
+      .prepare(
+        `SELECT id, schema_version, session_id, pending_action_id, pending_action_digest,
+                resolution_id, resolution_digest, public_capability, command_id,
+                canonical_command_input_digest, reserved_at, reservation_digest, record_json
+           FROM interaction_action_reservations
+          WHERE pending_action_id = ?`,
+      )
+      .get(actionIdentifier);
+    return rawRow === undefined
+      ? undefined
+      : this.decodeRetainedInteractionActionReservationRow(rawRow);
+  }
+
   private decodeRetainedInteractionOperationRow(rawRow: unknown): InteractionOperation {
     const row = retainedInteractionOperationRowSchema.parse(rawRow);
     const operation = decodeInteractionOperation(
@@ -7587,6 +8842,92 @@ export class SqliteControlStore
       );
   }
 
+  private insertInteractionPendingAction(pendingAction: PendingAction): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_pending_actions(
+           id, schema_version, session_id, originating_message_id,
+           originating_message_digest, route_decision_id, route_decision_digest,
+           focus_id, focus_digest, action_kind, confirmation_requirement,
+           public_capability, preallocated_command_id, canonical_command_input_digest,
+           expires_at, created_at, pending_action_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        pendingAction.id,
+        pendingAction.schemaVersion,
+        pendingAction.sessionId,
+        pendingAction.originatingMessageRef.id,
+        pendingAction.originatingMessageRef.digest,
+        pendingAction.routeDecisionRef.id,
+        pendingAction.routeDecisionRef.digest,
+        pendingAction.focusRef?.id ?? null,
+        pendingAction.focusRef?.digest ?? null,
+        pendingAction.kind,
+        pendingAction.confirmationRequirement,
+        pendingAction.publicCapability,
+        pendingAction.preallocatedCommandId,
+        pendingAction.canonicalCommandInputDigest,
+        pendingAction.expiresAt,
+        pendingAction.createdAt,
+        pendingAction.pendingActionDigest,
+        serializeJson(decodeJsonValue(pendingAction)),
+      );
+  }
+
+  private insertInteractionPendingActionResolution(
+    sessionIdentifier: InteractionSessionId,
+    resolution: PendingActionResolution,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_pending_action_resolutions(
+           id, schema_version, session_id, pending_action_id, pending_action_digest,
+           disposition, resolved_at, resolution_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        resolution.id,
+        resolution.schemaVersion,
+        sessionIdentifier,
+        resolution.pendingActionRef.id,
+        resolution.pendingActionRef.digest,
+        resolution.disposition,
+        resolution.resolvedAt,
+        resolution.resolutionDigest,
+        serializeJson(decodeJsonValue(resolution)),
+      );
+  }
+
+  private insertInteractionActionReservation(
+    sessionIdentifier: InteractionSessionId,
+    reservation: InteractionActionReservation,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO interaction_action_reservations(
+           id, schema_version, session_id, pending_action_id, pending_action_digest,
+           resolution_id, resolution_digest, public_capability, command_id,
+           canonical_command_input_digest, reserved_at, reservation_digest, record_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        reservation.id,
+        reservation.schemaVersion,
+        sessionIdentifier,
+        reservation.pendingActionRef.id,
+        reservation.pendingActionRef.digest,
+        reservation.resolutionRef.id,
+        reservation.resolutionRef.digest,
+        reservation.publicCapability,
+        reservation.commandId,
+        reservation.canonicalCommandInputDigest,
+        reservation.reservedAt,
+        reservation.reservationDigest,
+        serializeJson(decodeJsonValue(reservation)),
+      );
+  }
+
   private insertInteractionOperation(operation: ReservedInteractionOperation): void {
     this.#database
       .prepare(
@@ -7688,13 +9029,20 @@ export class SqliteControlStore
     const routeResultMigrationApplied = this.#appliedMigrations.some(
       (migration) => migration.name === INTERACTION_ROUTE_RESULT_MIGRATION_NAME,
     );
+    const pendingActionMigrationApplied = this.#appliedMigrations.some(
+      (migration) => migration.name === INTERACTION_PENDING_ACTION_MIGRATION_NAME,
+    );
     const unimplementedTableNames = [
       ...(routeResultMigrationApplied
         ? []
         : ['interaction_route_proposals', 'interaction_route_decisions']),
-      'interaction_pending_actions',
-      'interaction_pending_action_resolutions',
-      'interaction_action_reservations',
+      ...(pendingActionMigrationApplied
+        ? []
+        : [
+            'interaction_pending_actions',
+            'interaction_pending_action_resolutions',
+            'interaction_action_reservations',
+          ]),
       'interaction_action_outcomes',
       'interaction_message_handoffs',
       'frontstage_answers',
@@ -7897,8 +9245,88 @@ export class SqliteControlStore
       const decisionById = new Map<string, RouteDecision>(
         decisions.map((decision) => [decision.id, decision]),
       );
+      const pendingActionRows = pendingActionMigrationApplied
+        ? z.array(retainedInteractionPendingActionRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, originating_message_id,
+                        originating_message_digest, route_decision_id, route_decision_digest,
+                        focus_id, focus_digest, action_kind, confirmation_requirement,
+                        public_capability, preallocated_command_id,
+                        canonical_command_input_digest, expires_at, created_at,
+                        pending_action_digest, record_json
+                   FROM interaction_pending_actions
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const pendingActions = pendingActionRows.map((row) =>
+        this.decodeRetainedInteractionPendingActionRow(row),
+      );
+      const pendingActionById = new Map<string, PendingAction>(
+        pendingActions.map((pendingAction) => [pendingAction.id, pendingAction]),
+      );
+      const resolutionRows = pendingActionMigrationApplied
+        ? z.array(retainedInteractionPendingActionResolutionRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, pending_action_id,
+                        pending_action_digest, disposition, resolved_at, resolution_digest,
+                        record_json
+                   FROM interaction_pending_action_resolutions
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const resolutions = resolutionRows.map((row) =>
+        this.decodeRetainedInteractionPendingActionResolutionRow(row),
+      );
+      const resolutionById = new Map<string, PendingActionResolution>(
+        resolutions.map((resolution) => [resolution.id, resolution]),
+      );
+      const resolutionByActionId = new Map<string, PendingActionResolution>(
+        resolutions.map((resolution) => [resolution.pendingActionRef.id, resolution]),
+      );
+      if (resolutionByActionId.size !== resolutions.length) {
+        throw new StoreInvariantError(
+          'Retained Pending Action Resolution authority has duplicate Action owners',
+        );
+      }
+      const reservationRows = pendingActionMigrationApplied
+        ? z.array(retainedInteractionActionReservationRowSchema).parse(
+            this.#database
+              .prepare(
+                `SELECT id, schema_version, session_id, pending_action_id,
+                        pending_action_digest, resolution_id, resolution_digest,
+                        public_capability, command_id, canonical_command_input_digest,
+                        reserved_at, reservation_digest, record_json
+                   FROM interaction_action_reservations
+                  ORDER BY id`,
+              )
+              .all(),
+          )
+        : [];
+      const reservations = reservationRows.map((row) =>
+        this.decodeRetainedInteractionActionReservationRow(row),
+      );
+      const reservationById = new Map<string, InteractionActionReservation>(
+        reservations.map((reservation) => [reservation.id, reservation]),
+      );
+      const reservationByActionId = new Map<string, InteractionActionReservation>(
+        reservations.map((reservation) => [reservation.pendingActionRef.id, reservation]),
+      );
+      if (reservationByActionId.size !== reservations.length) {
+        throw new StoreInvariantError(
+          'Retained Interaction Action Reservation authority has duplicate Action owners',
+        );
+      }
       const referencedProposalIds = new Set<string>();
       const referencedDecisionIds = new Set<string>();
+      const referencedPendingActionIds = new Set<string>();
+      const operationOwnedResolutionIds = new Set<string>();
+      const referencedReservationIds = new Set<string>();
       const routeMessageIds = new Set<string>();
       for (const operation of operations) {
         const session = sessionById.get(operation.sessionId);
@@ -7958,52 +9386,242 @@ export class SqliteControlStore
           );
         }
         if (operation.state === InteractionOperationState.COMPLETED) {
-          if (operation.operationKind !== 'ROUTE' || operation.result.kind !== 'ROUTE_DECIDED') {
+          if (
+            operation.operationKind === InteractionOperationKind.ROUTE &&
+            operation.result.kind === InteractionOperationResultKind.ROUTE_DECIDED
+          ) {
+            const decision = decisionById.get(operation.result.routeDecisionRef.id);
+            const proposal =
+              operation.result.routeProposalRef === undefined
+                ? undefined
+                : proposalById.get(operation.result.routeProposalRef.id);
+            const decisionFocus =
+              decision?.focusRef === undefined ? undefined : focusById.get(decision.focusRef.id);
+            if (decision === undefined) {
+              throw new StoreInvariantError(
+                `Retained Route Operation ${operation.id} lost its exact Decision`,
+              );
+            }
+            assertInteractionRouteResultAuthorityChainInvariant({
+              session,
+              currentMessage: message,
+              ...(decisionFocus === undefined ? {} : { focus: decisionFocus }),
+              ...(manifest === undefined ? {} : { manifest }),
+              currentOperation: reservedOperation,
+              ...(proposal === undefined ? {} : { proposal }),
+              decision,
+              nextOperation: operation,
+            });
+            if (referencedDecisionIds.has(decision.id)) {
+              throw new StoreInvariantError(
+                `Retained Route Decision ${decision.id} has multiple Operation owners`,
+              );
+            }
+            referencedDecisionIds.add(decision.id);
+            if (proposal !== undefined) {
+              referencedProposalIds.add(proposal.id);
+            }
+          } else if (
+            operation.operationKind === InteractionOperationKind.ACTION_PROPOSAL &&
+            operation.result.kind === InteractionOperationResultKind.PENDING_ACTION_RECORDED
+          ) {
+            const pendingAction = pendingActionById.get(operation.result.pendingActionRef.id);
+            const decision =
+              pendingAction === undefined
+                ? undefined
+                : decisionById.get(pendingAction.routeDecisionRef.id);
+            const originatingMessage =
+              pendingAction === undefined
+                ? undefined
+                : messageById.get(pendingAction.originatingMessageRef.id);
+            const actionFocus =
+              pendingAction?.focusRef === undefined
+                ? undefined
+                : focusById.get(pendingAction.focusRef.id);
+            if (
+              pendingAction === undefined ||
+              decision === undefined ||
+              originatingMessage === undefined
+            ) {
+              throw new StoreInvariantError(
+                `Retained Action Proposal Operation ${operation.id} lost its exact Pending Action authority`,
+              );
+            }
+            const retainedResolution = resolutionByActionId.get(pendingAction.id);
+            const proposalResolution =
+              retainedResolution?.disposition ===
+              PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED
+                ? retainedResolution
+                : undefined;
+            const retainedReservation = reservationByActionId.get(pendingAction.id);
+            const proposalReservation =
+              proposalResolution === undefined ? undefined : retainedReservation;
+            assertPendingActionProposalAuthorityChainInvariant({
+              session,
+              originatingMessage,
+              ...(actionFocus === undefined ? {} : { focus: actionFocus }),
+              routeDecision: decision,
+              pendingAction,
+              ...(proposalResolution === undefined ? {} : { resolution: proposalResolution }),
+              ...(proposalReservation === undefined ? {} : { reservation: proposalReservation }),
+              currentOperation: reservedOperation,
+              nextOperation: operation,
+            });
+            if (referencedPendingActionIds.has(pendingAction.id)) {
+              throw new StoreInvariantError(
+                `Retained Pending Action ${pendingAction.id} has multiple Proposal Operation owners`,
+              );
+            }
+            referencedPendingActionIds.add(pendingAction.id);
+            if (proposalResolution !== undefined) {
+              operationOwnedResolutionIds.add(proposalResolution.id);
+            }
+            if (proposalReservation !== undefined) {
+              referencedReservationIds.add(proposalReservation.id);
+            }
+          } else if (
+            operation.operationKind === InteractionOperationKind.ACTION_CONFIRMATION &&
+            operation.result.kind === InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED
+          ) {
+            const resolution = resolutionById.get(operation.result.resolutionRef.id);
+            const pendingAction =
+              resolution === undefined
+                ? undefined
+                : pendingActionById.get(resolution.pendingActionRef.id);
+            const decision =
+              pendingAction === undefined
+                ? undefined
+                : decisionById.get(pendingAction.routeDecisionRef.id);
+            const originatingMessage =
+              pendingAction === undefined
+                ? undefined
+                : messageById.get(pendingAction.originatingMessageRef.id);
+            const actionFocus =
+              pendingAction?.focusRef === undefined
+                ? undefined
+                : focusById.get(pendingAction.focusRef.id);
+            const reservation =
+              operation.result.reservationRef === undefined
+                ? undefined
+                : reservationById.get(operation.result.reservationRef.id);
+            if (
+              resolution === undefined ||
+              pendingAction === undefined ||
+              decision === undefined ||
+              originatingMessage === undefined
+            ) {
+              throw new StoreInvariantError(
+                `Retained Action Confirmation Operation ${operation.id} lost its exact Resolution authority`,
+              );
+            }
+            assertPendingActionAuthorityChainInvariant({
+              session,
+              originatingMessage,
+              ...(actionFocus === undefined ? {} : { focus: actionFocus }),
+              routeDecision: decision,
+              pendingAction,
+            });
+            assertInteractionActionPersistenceChainInvariant({
+              originatingMessage,
+              resolutionMessage: message,
+              routeDecision: decision,
+              pendingAction,
+              resolution,
+              ...(reservation === undefined ? {} : { reservation }),
+            });
+            assertPendingActionResolutionOperationResultInvariant({
+              pendingAction,
+              resolution,
+              ...(reservation === undefined ? {} : { reservation }),
+              currentOperation: reservedOperation,
+              nextOperation: operation,
+            });
+            if (operationOwnedResolutionIds.has(resolution.id)) {
+              throw new StoreInvariantError(
+                `Retained Pending Action Resolution ${resolution.id} has multiple Operation owners`,
+              );
+            }
+            operationOwnedResolutionIds.add(resolution.id);
+            if (reservation !== undefined) {
+              referencedReservationIds.add(reservation.id);
+            }
+          } else {
             throw new StoreInvariantError(
               `Retained completed Interaction Operation ${operation.id} has no result-specific owner`,
             );
           }
-          const decision = decisionById.get(operation.result.routeDecisionRef.id);
-          const proposal =
-            operation.result.routeProposalRef === undefined
-              ? undefined
-              : proposalById.get(operation.result.routeProposalRef.id);
-          const decisionFocus =
-            decision?.focusRef === undefined ? undefined : focusById.get(decision.focusRef.id);
-          if (decision === undefined) {
+        }
+      }
+      const actionRouteDecisionIds = new Set<string>();
+      const unresolvedSessionIds = new Set<string>();
+      for (const pendingAction of pendingActions) {
+        const session = sessionById.get(pendingAction.sessionId);
+        const originatingMessage = messageById.get(pendingAction.originatingMessageRef.id);
+        const decision = decisionById.get(pendingAction.routeDecisionRef.id);
+        const actionFocus =
+          pendingAction.focusRef === undefined
+            ? undefined
+            : focusById.get(pendingAction.focusRef.id);
+        if (session === undefined || originatingMessage === undefined || decision === undefined) {
+          throw new StoreInvariantError(
+            `Retained Pending Action ${pendingAction.id} lost its exact historical authority`,
+          );
+        }
+        assertPendingActionAuthorityChainInvariant({
+          session,
+          originatingMessage,
+          ...(actionFocus === undefined ? {} : { focus: actionFocus }),
+          routeDecision: decision,
+          pendingAction,
+        });
+        if (
+          !referencedPendingActionIds.has(pendingAction.id) ||
+          actionRouteDecisionIds.has(pendingAction.routeDecisionRef.id)
+        ) {
+          throw new StoreInvariantError(
+            `Retained Pending Action ${pendingAction.id} has no unique Proposal/Route Decision owner`,
+          );
+        }
+        actionRouteDecisionIds.add(pendingAction.routeDecisionRef.id);
+
+        const resolution = resolutionByActionId.get(pendingAction.id);
+        if (resolution === undefined) {
+          if (unresolvedSessionIds.has(pendingAction.sessionId)) {
             throw new StoreInvariantError(
-              `Retained Route Operation ${operation.id} lost its exact Decision`,
+              `Retained Interaction Session ${pendingAction.sessionId} has multiple unresolved Pending Actions`,
             );
           }
-          assertInteractionRouteResultAuthorityChainInvariant({
-            session,
-            currentMessage: message,
-            ...(decisionFocus === undefined ? {} : { focus: decisionFocus }),
-            ...(manifest === undefined ? {} : { manifest }),
-            currentOperation: reservedOperation,
-            ...(proposal === undefined ? {} : { proposal }),
-            decision,
-            nextOperation: operation,
+          unresolvedSessionIds.add(pendingAction.sessionId);
+          continue;
+        }
+        if (!operationOwnedResolutionIds.has(resolution.id)) {
+          if (!responseFreePendingActionResolutionDispositions.has(resolution.disposition)) {
+            throw new StoreInvariantError(
+              `Retained Pending Action Resolution ${resolution.id} has no exact Operation owner`,
+            );
+          }
+          assertInteractionActionPersistenceChainInvariant({
+            originatingMessage,
+            routeDecision: decision,
+            pendingAction,
+            resolution,
           });
-          if (referencedDecisionIds.has(decision.id)) {
-            throw new StoreInvariantError(
-              `Retained Route Decision ${decision.id} has multiple Operation owners`,
-            );
-          }
-          referencedDecisionIds.add(decision.id);
-          if (proposal !== undefined) {
-            referencedProposalIds.add(proposal.id);
-          }
         }
       }
       if (
         manifests.length !==
           operations.filter((operation) => operation.assistantProfile !== undefined).length ||
         proposals.some((proposal) => !referencedProposalIds.has(proposal.id)) ||
-        decisions.some((decision) => !referencedDecisionIds.has(decision.id))
+        decisions.some((decision) => !referencedDecisionIds.has(decision.id)) ||
+        resolutions.some(
+          (resolution) =>
+            !operationOwnedResolutionIds.has(resolution.id) &&
+            !responseFreePendingActionResolutionDispositions.has(resolution.disposition),
+        ) ||
+        reservations.some((reservation) => !referencedReservationIds.has(reservation.id))
       ) {
         throw new StoreInvariantError(
-          'Retained Context Manifest, Route Proposal, or Route Decision has no exact Operation owner',
+          'Retained Interaction result authority has no exact Operation owner',
         );
       }
 
@@ -8028,8 +9646,8 @@ export class SqliteControlStore
             .prepare(
               `SELECT id
                  FROM audit_events
-                WHERE aggregate_type IN (?, ?, ?, ?, ?, ?, ?)
-                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                WHERE aggregate_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   OR event_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ORDER BY id`,
             )
             .all(
@@ -8040,6 +9658,9 @@ export class SqliteControlStore
               InteractionAuditAggregateType.FRONTSTAGE_CONTEXT_MANIFEST,
               InteractionAuditAggregateType.ROUTE_PROPOSAL,
               InteractionAuditAggregateType.ROUTE_DECISION,
+              InteractionAuditAggregateType.PENDING_ACTION,
+              InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION,
+              InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION,
               InteractionAuditEventType.INTERACTION_SESSION_OPENED,
               InteractionAuditEventType.INTERACTION_SESSION_TRANSITIONED,
               InteractionAuditEventType.INTERACTION_MESSAGE_ADMITTED,
@@ -8052,6 +9673,9 @@ export class SqliteControlStore
               InteractionAuditEventType.FRONTSTAGE_CONTEXT_MANIFEST_RECORDED,
               InteractionAuditEventType.ROUTE_PROPOSAL_RECORDED,
               InteractionAuditEventType.ROUTE_DECISION_RECORDED,
+              InteractionAuditEventType.PENDING_ACTION_RECORDED,
+              InteractionAuditEventType.PENDING_ACTION_RESOLVED,
+              InteractionAuditEventType.INTERACTION_ACTION_RESERVED,
             ),
         )
         .map((row) => auditEventId(row.id));
@@ -8103,6 +9727,17 @@ export class SqliteControlStore
         const sessionManifests = manifests.filter((manifest) => manifest.sessionId === session.id);
         const sessionProposals = proposals.filter((proposal) => proposal.sessionId === session.id);
         const sessionDecisions = decisions.filter((decision) => decision.sessionId === session.id);
+        const sessionPendingActions = pendingActions.filter(
+          (pendingAction) => pendingAction.sessionId === session.id,
+        );
+        const sessionResolutions = resolutions.filter(
+          (resolution) =>
+            pendingActionById.get(resolution.pendingActionRef.id)?.sessionId === session.id,
+        );
+        const sessionReservations = reservations.filter(
+          (reservation) =>
+            pendingActionById.get(reservation.pendingActionRef.id)?.sessionId === session.id,
+        );
         const operationAuditCount = sessionOperations.reduce(
           (count, operation) =>
             count + (operation.state === InteractionOperationState.RESERVED ? 1 : 2),
@@ -8117,7 +9752,10 @@ export class SqliteControlStore
               sessionFocuses.length +
               sessionManifests.length +
               sessionProposals.length +
-              sessionDecisions.length
+              sessionDecisions.length +
+              sessionPendingActions.length +
+              sessionResolutions.length +
+              sessionReservations.length
         ) {
           throw new StoreInvariantError(
             `Retained Interaction Session ${session.id} audit cardinality is invalid`,
@@ -8329,6 +9967,144 @@ export class SqliteControlStore
           }
         }
 
+        for (const pendingAction of sessionPendingActions) {
+          const actionAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.PENDING_ACTION &&
+              row.aggregate_id === pendingAction.id,
+          );
+          const actionAudit = actionAudits[0];
+          const proposalOperation = sessionOperations.find(
+            (operation) =>
+              operation.state === InteractionOperationState.COMPLETED &&
+              operation.operationKind === InteractionOperationKind.ACTION_PROPOSAL &&
+              operation.result.kind === InteractionOperationResultKind.PENDING_ACTION_RECORDED &&
+              operation.result.pendingActionRef.id === pendingAction.id,
+          );
+          const resolution = resolutionByActionId.get(pendingAction.id);
+          const proposalResolution =
+            resolution?.disposition === PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED
+              ? resolution
+              : undefined;
+          const firstFollowing =
+            actionAudit === undefined ? undefined : sessionMembership[actionAudit.position + 1];
+          const expectedFollowingAggregate =
+            proposalResolution === undefined
+              ? InteractionAuditAggregateType.INTERACTION_OPERATION
+              : InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION;
+          const expectedFollowingId = proposalResolution?.id ?? proposalOperation?.id;
+          if (
+            actionAudits.length !== 1 ||
+            actionAudit?.event_type !== InteractionAuditEventType.PENDING_ACTION_RECORDED ||
+            actionAudit.before_version !== null ||
+            actionAudit.after_version !== null ||
+            actionAudit.payload_digest !== pendingAction.pendingActionDigest ||
+            actionAudit.occurred_at !== pendingAction.createdAt ||
+            proposalOperation === undefined ||
+            firstFollowing?.aggregate_type !== expectedFollowingAggregate ||
+            firstFollowing.aggregate_id !== expectedFollowingId
+          ) {
+            throw new StoreInvariantError(
+              `Retained Pending Action ${pendingAction.id} lost its atomic Proposal audit`,
+            );
+          }
+        }
+
+        for (const resolution of sessionResolutions) {
+          const resolutionAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION &&
+              row.aggregate_id === resolution.id,
+          );
+          const resolutionAudit = resolutionAudits[0];
+          const pendingAction = pendingActionById.get(resolution.pendingActionRef.id);
+          const reservation = reservationByActionId.get(resolution.pendingActionRef.id);
+          const following =
+            resolutionAudit === undefined
+              ? undefined
+              : sessionMembership[resolutionAudit.position + 1];
+          const responseFree = responseFreePendingActionResolutionDispositions.has(
+            resolution.disposition,
+          );
+          const owningOperation = responseFree
+            ? undefined
+            : sessionOperations.find(
+                (operation) =>
+                  operation.state === InteractionOperationState.COMPLETED &&
+                  ((operation.operationKind === InteractionOperationKind.ACTION_PROPOSAL &&
+                    operation.result.kind ===
+                      InteractionOperationResultKind.PENDING_ACTION_RECORDED &&
+                    operation.result.pendingActionRef.id === pendingAction?.id) ||
+                    (operation.operationKind === InteractionOperationKind.ACTION_CONFIRMATION &&
+                      operation.result.kind ===
+                        InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED &&
+                      operation.result.resolutionRef.id === resolution.id)),
+              );
+          const expectedFollowingAggregate =
+            reservation === undefined
+              ? InteractionAuditAggregateType.INTERACTION_OPERATION
+              : InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION;
+          const expectedFollowingId = reservation?.id ?? owningOperation?.id;
+          if (
+            resolutionAudits.length !== 1 ||
+            pendingAction === undefined ||
+            resolutionAudit?.event_type !== InteractionAuditEventType.PENDING_ACTION_RESOLVED ||
+            resolutionAudit.before_version !== null ||
+            resolutionAudit.after_version !== null ||
+            resolutionAudit.payload_digest !== resolution.resolutionDigest ||
+            resolutionAudit.occurred_at !== resolution.resolvedAt ||
+            (!responseFree &&
+              (owningOperation === undefined ||
+                following?.aggregate_type !== expectedFollowingAggregate ||
+                following.aggregate_id !== expectedFollowingId))
+          ) {
+            throw new StoreInvariantError(
+              `Retained Pending Action Resolution ${resolution.id} lost its exact atomic audit`,
+            );
+          }
+        }
+
+        for (const reservation of sessionReservations) {
+          const reservationAudits = sessionMembership.filter(
+            (row) =>
+              row.aggregate_type === InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION &&
+              row.aggregate_id === reservation.id,
+          );
+          const reservationAudit = reservationAudits[0];
+          const following =
+            reservationAudit === undefined
+              ? undefined
+              : sessionMembership[reservationAudit.position + 1];
+          const owningOperation = sessionOperations.find(
+            (operation) =>
+              operation.state === InteractionOperationState.COMPLETED &&
+              ((operation.operationKind === InteractionOperationKind.ACTION_PROPOSAL &&
+                operation.result.kind === InteractionOperationResultKind.PENDING_ACTION_RECORDED &&
+                operation.result.pendingActionRef.id === reservation.pendingActionRef.id) ||
+                (operation.operationKind === InteractionOperationKind.ACTION_CONFIRMATION &&
+                  operation.result.kind ===
+                    InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED &&
+                  operation.result.reservationRef?.id === reservation.id)),
+          );
+          if (
+            reservationAudits.length !== 1 ||
+            reservationAudit?.event_type !==
+              InteractionAuditEventType.INTERACTION_ACTION_RESERVED ||
+            reservationAudit.before_version !== null ||
+            reservationAudit.after_version !== null ||
+            reservationAudit.payload_digest !== reservation.reservationDigest ||
+            reservationAudit.occurred_at !== reservation.reservedAt ||
+            owningOperation === undefined ||
+            following?.aggregate_type !== InteractionAuditAggregateType.INTERACTION_OPERATION ||
+            following.aggregate_id !== owningOperation.id ||
+            following.event_type !== InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED
+          ) {
+            throw new StoreInvariantError(
+              `Retained Interaction Action Reservation ${reservation.id} lost its exact atomic audit`,
+            );
+          }
+        }
+
         for (const operation of sessionOperations) {
           const operationAudits = sessionMembership.filter(
             (row) =>
@@ -8455,6 +10231,39 @@ export class SqliteControlStore
           if (decision?.sessionId !== membership.session_id) {
             throw new StoreInvariantError(
               `Retained Route Decision audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (membership.aggregate_type === InteractionAuditAggregateType.PENDING_ACTION) {
+          const pendingAction = pendingActionById.get(membership.aggregate_id);
+          if (pendingAction?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Pending Action audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (
+          membership.aggregate_type === InteractionAuditAggregateType.PENDING_ACTION_RESOLUTION
+        ) {
+          const resolution = resolutionById.get(membership.aggregate_id);
+          const pendingAction =
+            resolution === undefined
+              ? undefined
+              : pendingActionById.get(resolution.pendingActionRef.id);
+          if (pendingAction?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Pending Action Resolution audit ${membership.id} crosses Session authority`,
+            );
+          }
+        } else if (
+          membership.aggregate_type === InteractionAuditAggregateType.INTERACTION_ACTION_RESERVATION
+        ) {
+          const reservation = reservationById.get(membership.aggregate_id);
+          const pendingAction =
+            reservation === undefined
+              ? undefined
+              : pendingActionById.get(reservation.pendingActionRef.id);
+          if (pendingAction?.sessionId !== membership.session_id) {
+            throw new StoreInvariantError(
+              `Retained Interaction Action Reservation audit ${membership.id} crosses Session authority`,
             );
           }
         } else if (
