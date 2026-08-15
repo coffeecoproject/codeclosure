@@ -777,9 +777,11 @@ Intake Handoff Domain contracts passed bounded P0 review on 2026-08-15. B1's
 result-specific deterministic and Assistant Route transactions, exact
 retained Manifest/Proposal/Decision authority, typed conflict results, SQLite
 guards, and strict reopen passed bounded review and were committed as
-`35280f5` on 2026-08-15. B2 onward have not started, and this does not complete
-Slice 2 or claim `M26-D03` through `M26-D07`. The M2.5.1 entry condition has
-been satisfied. The
+`35280f5` on 2026-08-15. B2's Pending Action authority-prefix,
+persisted-chain closure, and result-specific Domain relationship alignment is
+in progress; its Store transactions and B3 onward have not started. This does
+not complete Slice 2 or claim `M26-D03` through `M26-D07`. The M2.5.1 entry
+condition has been satisfied. The
 [M2.6 implementation plan](plans/m2.6-unified-frontstage-interaction.md), [acceptance
 plan](plans/m2.6-acceptance-plan.md), and [Frontstage Interaction
 contract](frontstage-interaction.md) define the planned boundary. Deferred

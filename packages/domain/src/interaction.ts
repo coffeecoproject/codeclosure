@@ -716,6 +716,40 @@ export interface InteractionActionChain {
   readonly handoff?: AuthorizedIntakeActionMessageHandoff;
 }
 
+/**
+ * Owns the immutable Session/Message/Decision prefix required before a
+ * Pending Action may enter persistence. Current-session freshness is added by
+ * the creation-time wrapper below so strict reopen can validate historical
+ * authority after the Session advances.
+ */
+export interface PendingActionAuthorityChain {
+  readonly session: InteractionSession;
+  readonly originatingMessage: InteractionMessage;
+  readonly focus?: FocusBinding;
+  readonly routeDecision: RouteDecision;
+  readonly pendingAction: PendingAction;
+}
+
+export interface PendingActionOperationResultChain {
+  readonly pendingAction: PendingAction;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+}
+
+export interface PendingActionProposalAuthorityChain
+  extends PendingActionAuthorityChain, PendingActionOperationResultChain {
+  readonly resolution?: PendingActionResolution;
+  readonly reservation?: InteractionActionReservation;
+}
+
+export interface PendingActionResolutionOperationResultChain {
+  readonly pendingAction: PendingAction;
+  readonly resolution: PendingActionResolution;
+  readonly reservation?: InteractionActionReservation;
+  readonly currentOperation: ReservedInteractionOperation;
+  readonly nextOperation: CompletedInteractionOperation;
+}
+
 export interface FrontstageAnswerChain {
   readonly session: InteractionSession;
   readonly originatingMessage: InteractionMessage;
@@ -2222,25 +2256,14 @@ export function assertInteractionRouteResultChainInvariant(
   assertInteractionRouteResultAuthorityChainInvariant(chain);
 }
 
-/**
- * Checks one immutable action-chain snapshot. Store uniqueness and atomicity
- * remain persistence concerns; this function owns the cross-record meaning.
- */
-export function assertInteractionActionChainInvariant(chain: InteractionActionChain): void {
-  const {
-    originatingMessage,
-    resolutionMessage,
-    routeDecision,
-    pendingAction,
-    resolution,
-    reservation,
-    outcome,
-    handoff,
-  } = chain;
+function assertPendingActionRouteAuthorityInvariant(
+  originatingMessage: InteractionMessage,
+  routeDecision: RouteDecision,
+  pendingAction: PendingAction,
+): asserts originatingMessage is RetainedInteractionMessage & UserInteractionMessageOrigin {
   assertInteractionMessageInvariant(originatingMessage);
   assertRouteDecisionInvariant(routeDecision);
   assertPendingActionInvariant(pendingAction);
-  assertPendingActionResolutionInvariant(resolution);
   if (
     originatingMessage.role !== InteractionMessageRole.USER ||
     originatingMessage.retention !== InteractionContentRetention.RETAINED ||
@@ -2282,9 +2305,7 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
       digest: routeDecision.decisionDigest,
     }) ||
     !sameOptionalDigestRef(routeDecision.focusRef, pendingAction.focusRef) ||
-    routeDecision.routingPolicy.id !== pendingAction.routingPolicy.id ||
-    routeDecision.routingPolicy.version !== pendingAction.routingPolicy.version ||
-    routeDecision.routingPolicy.digest !== pendingAction.routingPolicy.digest
+    !sameVersionedDigestRef(routeDecision.routingPolicy, pendingAction.routingPolicy)
   ) {
     throw new DomainInvariantError('Pending Action must bind its exact Route Decision authority');
   }
@@ -2328,6 +2349,118 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
   ) {
     throw new DomainInvariantError('Assistant-proposed Action must require a separate response');
   }
+}
+
+export function assertPendingActionAuthorityChainInvariant(
+  chain: PendingActionAuthorityChain,
+): void {
+  const { session, originatingMessage, focus, routeDecision, pendingAction } = chain;
+  assertInteractionSessionInvariant(session);
+  assertPendingActionRouteAuthorityInvariant(originatingMessage, routeDecision, pendingAction);
+  if (
+    pendingAction.sessionId !== session.id ||
+    pendingAction.principalRef !== session.principalRef ||
+    !sameInteractionProjectRef(pendingAction.projectRef, session.projectRef) ||
+    routeDecision.expectedSessionVersion > session.version ||
+    !sameVersionedDigestRef(pendingAction.routingPolicy, session.routingPolicy) ||
+    !sameVersionedDigestRef(pendingAction.confirmationPolicy, session.confirmationPolicy)
+  ) {
+    throw new DomainInvariantError(
+      'Pending Action must bind its exact retained Session and installed policies',
+    );
+  }
+  if ((pendingAction.focusRef === undefined) !== (focus === undefined)) {
+    throw new DomainInvariantError('Pending Action must bind its exact retained Focus presence');
+  }
+  if (focus !== undefined && pendingAction.focusRef !== undefined) {
+    assertFocusBindingInvariant(focus);
+    if (
+      focus.sessionId !== session.id ||
+      !sameDigestRef(pendingAction.focusRef, { id: focus.id, digest: focus.focusDigest }) ||
+      focus.createdAt > pendingAction.createdAt
+    ) {
+      throw new DomainInvariantError('Pending Action must bind its exact retained Focus');
+    }
+  }
+  if (session.openedAt > originatingMessage.createdAt) {
+    throw new DomainInvariantError('Pending Action Session cannot open after its message');
+  }
+}
+
+/** Owns current-Session freshness for a newly persisted Pending Action. */
+export function assertPendingActionCreationChainInvariant(
+  chain: PendingActionAuthorityChain,
+): void {
+  const { session, originatingMessage, pendingAction, routeDecision } = chain;
+  assertCurrentRetainedUserMessage(session, originatingMessage);
+  if (
+    routeDecision.expectedSessionVersion !== session.version ||
+    !sameOptionalDigestRef(pendingAction.focusRef, session.currentFocusRef)
+  ) {
+    throw new DomainInvariantError(
+      'Pending Action must bind the exact current Session, Message, and Focus',
+    );
+  }
+  assertPendingActionAuthorityChainInvariant(chain);
+}
+
+function assertPendingActionReservationBinding(
+  pendingAction: PendingAction,
+  resolution: PendingActionResolution,
+  reservation: InteractionActionReservation | undefined,
+): void {
+  if (!isAuthorizedResolution(resolution) && reservation !== undefined) {
+    throw new DomainInvariantError('A non-authorized Resolution cannot have an Action Reservation');
+  }
+  if (reservation === undefined) {
+    return;
+  }
+  assertInteractionActionReservationInvariant(reservation);
+  if (reservation.reservedAt < resolution.resolvedAt) {
+    throw new DomainInvariantError('Action Reservation cannot precede its Resolution');
+  }
+  if (
+    !sameDigestRef(reservation.pendingActionRef, resolution.pendingActionRef) ||
+    !sameDigestRef(reservation.resolutionRef, {
+      id: resolution.id,
+      digest: resolution.resolutionDigest,
+    }) ||
+    reservation.publicCapability !== pendingAction.publicCapability ||
+    reservation.commandId !== pendingAction.preallocatedCommandId ||
+    reservation.canonicalCommandInputDigest !== pendingAction.canonicalCommandInputDigest
+  ) {
+    throw new DomainInvariantError('Action Reservation must bind the exact authorized Action');
+  }
+}
+
+function pendingActionResolutionResponseRef(
+  resolution: PendingActionResolution,
+): InteractionDigestRef<InteractionMessageId> | undefined {
+  return resolution.disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
+    ? resolution.authorizingMessageRef
+    : resolution.disposition === PendingActionResolutionDisposition.DECLINED ||
+        resolution.disposition === PendingActionResolutionDisposition.UNCLEAR
+      ? resolution.responseMessageRef
+      : undefined;
+}
+
+/**
+ * Checks one immutable action-chain snapshot. Store uniqueness and atomicity
+ * remain persistence concerns; this function owns the cross-record meaning.
+ */
+export function assertInteractionActionChainInvariant(chain: InteractionActionChain): void {
+  const {
+    originatingMessage,
+    resolutionMessage,
+    routeDecision,
+    pendingAction,
+    resolution,
+    reservation,
+    outcome,
+    handoff,
+  } = chain;
+  assertPendingActionRouteAuthorityInvariant(originatingMessage, routeDecision, pendingAction);
+  assertPendingActionResolutionInvariant(resolution);
   if (
     !sameDigestRef(resolution.pendingActionRef, {
       id: pendingAction.id,
@@ -2377,13 +2510,7 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
   ) {
     throw new DomainInvariantError('Separate authorization must bind the originating gated Action');
   }
-  const responseMessageRef =
-    resolution.disposition === PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED
-      ? resolution.authorizingMessageRef
-      : resolution.disposition === PendingActionResolutionDisposition.DECLINED ||
-          resolution.disposition === PendingActionResolutionDisposition.UNCLEAR
-        ? resolution.responseMessageRef
-        : undefined;
+  const responseMessageRef = pendingActionResolutionResponseRef(resolution);
   if (
     responseMessageRef !== undefined &&
     pendingAction.confirmationRequirement !==
@@ -2391,6 +2518,11 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
   ) {
     throw new DomainInvariantError(
       'A response Resolution requires an Action with separate confirmation',
+    );
+  }
+  if (responseMessageRef?.id === pendingAction.originatingMessageRef.id) {
+    throw new DomainInvariantError(
+      'A separate Pending Action response must differ from its originating message',
     );
   }
   if (responseMessageRef === undefined) {
@@ -2427,9 +2559,7 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
       );
     }
   }
-  if (!isAuthorizedResolution(resolution) && reservation !== undefined) {
-    throw new DomainInvariantError('A non-authorized Resolution cannot have an Action Reservation');
-  }
+  assertPendingActionReservationBinding(pendingAction, resolution, reservation);
   if (reservation === undefined) {
     if (outcome !== undefined || handoff !== undefined) {
       throw new DomainInvariantError('Action Outcome or handoff requires an Action Reservation');
@@ -2437,22 +2567,6 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
     return;
   }
 
-  assertInteractionActionReservationInvariant(reservation);
-  if (reservation.reservedAt < resolution.resolvedAt) {
-    throw new DomainInvariantError('Action Reservation cannot precede its Resolution');
-  }
-  if (
-    !sameDigestRef(reservation.pendingActionRef, resolution.pendingActionRef) ||
-    !sameDigestRef(reservation.resolutionRef, {
-      id: resolution.id,
-      digest: resolution.resolutionDigest,
-    }) ||
-    reservation.publicCapability !== pendingAction.publicCapability ||
-    reservation.commandId !== pendingAction.preallocatedCommandId ||
-    reservation.canonicalCommandInputDigest !== pendingAction.canonicalCommandInputDigest
-  ) {
-    throw new DomainInvariantError('Action Reservation must bind the exact authorized Action');
-  }
   if (outcome !== undefined) {
     assertInteractionActionOutcomeInvariant(outcome);
     if (outcome.completedAt < reservation.reservedAt) {
@@ -2502,6 +2616,176 @@ export function assertInteractionActionChainInvariant(chain: InteractionActionCh
         'Intake handoff must preserve the exact authorized user message',
       );
     }
+  }
+}
+
+/**
+ * Owns the persistence closure that is intentionally stronger than the Slice
+ * 1 in-memory relationship: an authorized Resolution and its Reservation must
+ * enter authority together.
+ */
+export function assertInteractionActionPersistenceChainInvariant(
+  chain: InteractionActionChain,
+): void {
+  assertInteractionActionChainInvariant(chain);
+  if (isAuthorizedResolution(chain.resolution) !== (chain.reservation !== undefined)) {
+    throw new DomainInvariantError(
+      'A persisted authorized Resolution requires its exact Action Reservation',
+    );
+  }
+}
+
+export function assertPendingActionOperationResultInvariant(
+  chain: PendingActionOperationResultChain,
+): void {
+  const { pendingAction, currentOperation, nextOperation } = chain;
+  assertPendingActionInvariant(pendingAction);
+  assertInitialInteractionOperationInvariant(currentOperation);
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  if (
+    currentOperation.operationKind !== InteractionOperationKind.ACTION_PROPOSAL ||
+    currentOperation.sessionId !== pendingAction.sessionId ||
+    !sameDigestRef(currentOperation.messageRef, pendingAction.originatingMessageRef) ||
+    nextOperation.result.kind !== InteractionOperationResultKind.PENDING_ACTION_RECORDED ||
+    !sameDigestRef(nextOperation.result.pendingActionRef, {
+      id: pendingAction.id,
+      digest: pendingAction.pendingActionDigest,
+    })
+  ) {
+    throw new DomainInvariantError(
+      'Action Proposal Operation must bind its exact Pending Action result',
+    );
+  }
+  if (
+    currentOperation.reservedAt > pendingAction.createdAt ||
+    pendingAction.createdAt > nextOperation.completedAt
+  ) {
+    throw new DomainInvariantError('Action Proposal Operation has invalid causal ordering');
+  }
+}
+
+/**
+ * Owns the complete retained Action Proposal result. A directly authorizable
+ * Action enters persistence with its exact authorization and Reservation;
+ * separately confirmed work enters unresolved and cannot acquire either here.
+ */
+export function assertPendingActionProposalAuthorityChainInvariant(
+  chain: PendingActionProposalAuthorityChain,
+): void {
+  const {
+    originatingMessage,
+    routeDecision,
+    pendingAction,
+    resolution,
+    reservation,
+    currentOperation,
+    nextOperation,
+  } = chain;
+  assertPendingActionAuthorityChainInvariant(chain);
+  assertPendingActionOperationResultInvariant(chain);
+  if (
+    currentOperation.expectedSessionVersion !== routeDecision.expectedSessionVersion ||
+    routeDecision.decidedAt > currentOperation.reservedAt
+  ) {
+    throw new DomainInvariantError(
+      'Action Proposal Operation must follow its exact Route Decision authority',
+    );
+  }
+
+  const directlyAuthorized =
+    pendingAction.confirmationRequirement ===
+    InteractionConfirmationRequirement.DIRECT_USER_MESSAGE_SUFFICIENT;
+  if (
+    directlyAuthorized !== (resolution !== undefined) ||
+    directlyAuthorized !== (reservation !== undefined)
+  ) {
+    throw new DomainInvariantError(
+      'A direct Action Proposal requires its exact Resolution and Reservation while a separate Action Proposal must remain unresolved',
+    );
+  }
+  if (resolution === undefined || reservation === undefined) {
+    return;
+  }
+  if (resolution.disposition !== PendingActionResolutionDisposition.DIRECT_USER_AUTHORIZED) {
+    throw new DomainInvariantError(
+      'A direct Action Proposal requires a direct user authorization Resolution',
+    );
+  }
+  assertInteractionActionPersistenceChainInvariant({
+    originatingMessage,
+    routeDecision,
+    pendingAction,
+    resolution,
+    reservation,
+  });
+  if (reservation.reservedAt > nextOperation.completedAt) {
+    throw new DomainInvariantError(
+      'A direct Action Reservation cannot follow its Action Proposal completion',
+    );
+  }
+}
+
+/** Owns current-Session freshness for a new Action Proposal commit. */
+export function assertPendingActionProposalCommitChainInvariant(
+  chain: PendingActionProposalAuthorityChain,
+): void {
+  const { session, originatingMessage, currentOperation } = chain;
+  assertPendingActionCreationChainInvariant(chain);
+  assertInteractionOperationReservationChain({
+    session,
+    message: originatingMessage,
+    operation: currentOperation,
+  });
+  assertPendingActionProposalAuthorityChainInvariant(chain);
+}
+
+export function assertPendingActionResolutionOperationResultInvariant(
+  chain: PendingActionResolutionOperationResultChain,
+): void {
+  const { pendingAction, resolution, reservation, currentOperation, nextOperation } = chain;
+  assertPendingActionInvariant(pendingAction);
+  assertPendingActionResolutionInvariant(resolution);
+  assertInitialInteractionOperationInvariant(currentOperation);
+  assertInteractionOperationTransition(currentOperation, nextOperation);
+  assertPendingActionReservationBinding(pendingAction, resolution, reservation);
+  const responseMessageRef = pendingActionResolutionResponseRef(resolution);
+  if (responseMessageRef === undefined) {
+    throw new DomainInvariantError(
+      'A response-free Pending Action Resolution has no Action Confirmation Operation',
+    );
+  }
+  if (
+    !sameDigestRef(resolution.pendingActionRef, {
+      id: pendingAction.id,
+      digest: pendingAction.pendingActionDigest,
+    }) ||
+    !sameVersionedDigestRef(resolution.confirmationPolicy, pendingAction.confirmationPolicy) ||
+    isAuthorizedResolution(resolution) !== (reservation !== undefined) ||
+    currentOperation.operationKind !== InteractionOperationKind.ACTION_CONFIRMATION ||
+    currentOperation.sessionId !== pendingAction.sessionId ||
+    !sameDigestRef(currentOperation.messageRef, responseMessageRef) ||
+    nextOperation.result.kind !== InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED ||
+    !sameDigestRef(nextOperation.result.resolutionRef, {
+      id: resolution.id,
+      digest: resolution.resolutionDigest,
+    }) ||
+    !sameOptionalDigestRef(
+      nextOperation.result.reservationRef,
+      reservation === undefined
+        ? undefined
+        : { id: reservation.id, digest: reservation.reservationDigest },
+    )
+  ) {
+    throw new DomainInvariantError(
+      'Action Confirmation Operation must bind its exact Resolution and Reservation result',
+    );
+  }
+  if (
+    currentOperation.reservedAt > resolution.resolvedAt ||
+    resolution.resolvedAt > nextOperation.completedAt ||
+    (reservation !== undefined && reservation.reservedAt > nextOperation.completedAt)
+  ) {
+    throw new DomainInvariantError('Action Confirmation Operation has invalid causal ordering');
   }
 }
 

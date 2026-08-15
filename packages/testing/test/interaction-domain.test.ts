@@ -41,6 +41,7 @@ import {
   assertInitialInteractionOperationInvariant,
   assertInitialInteractionSessionInvariant,
   assertInteractionActionChainInvariant,
+  assertInteractionActionPersistenceChainInvariant,
   assertInteractionClarificationHandoffChainInvariant,
   assertInteractionFocusUpdate,
   assertInteractionOperationReservationChain,
@@ -49,6 +50,12 @@ import {
   assertInteractionRouteResultChainInvariant,
   assertInteractionSessionTransition,
   assertInteractionUserMessageAdmission,
+  assertPendingActionAuthorityChainInvariant,
+  assertPendingActionCreationChainInvariant,
+  assertPendingActionOperationResultInvariant,
+  assertPendingActionProposalAuthorityChainInvariant,
+  assertPendingActionProposalCommitChainInvariant,
+  assertPendingActionResolutionOperationResultInvariant,
   commandId,
   clarificationQuestionId,
   decodeFocusBinding,
@@ -2778,6 +2785,576 @@ void test('P0 clarification Handoff preserves existing M2.5 Question authority',
         handoff: handoff as never,
       }),
     /authorized Intake Action handoff/,
+  );
+});
+
+void test('B2 Pending Action persistence prefix and result owners stay exact', () => {
+  const fixtures = createFixtures();
+  const currentDecisionBase = {
+    ...fixtures.decision,
+    id: routeDecisionId('route-decision_b2-pending-action'),
+    expectedSessionVersion: fixtures.contextSession.version,
+  } satisfies RouteDecisionProjectionInput;
+  const currentDecision = decodeRouteDecision(
+    {
+      ...currentDecisionBase,
+      decisionDigest: digest(routeDecisionProjection(currentDecisionBase)),
+    },
+    digests,
+  );
+  const currentActionBase = {
+    ...fixtures.pendingAction,
+    id: pendingActionId('pending-action_b2-persistence'),
+    routeDecisionRef: { id: currentDecision.id, digest: currentDecision.decisionDigest },
+    preallocatedCommandId: commandId('command_b2-persistence'),
+  } satisfies PendingActionProjectionInput;
+  const currentAction = decodePendingAction(
+    {
+      ...currentActionBase,
+      pendingActionDigest: digest(pendingActionProjection(currentActionBase)),
+    },
+    digests,
+  );
+  const actionAuthority = {
+    session: fixtures.contextSession,
+    originatingMessage: fixtures.message,
+    focus: fixtures.focus,
+    routeDecision: currentDecision,
+    pendingAction: currentAction,
+  };
+  assert.doesNotThrow(() => assertPendingActionCreationChainInvariant(actionAuthority));
+
+  const advancedSessionBase = {
+    ...fixtures.contextSession,
+    version: interactionSessionVersion(3),
+    updatedAt: MIDDLE,
+  } satisfies InteractionSessionProjectionInput;
+  const advancedSession = decodeInteractionSession(
+    {
+      ...advancedSessionBase,
+      sessionDigest: digest(interactionSessionProjection(advancedSessionBase)),
+    },
+    digests,
+  );
+  assert.doesNotThrow(() =>
+    assertPendingActionAuthorityChainInvariant({ ...actionAuthority, session: advancedSession }),
+  );
+  assert.throws(
+    () =>
+      assertPendingActionCreationChainInvariant({
+        ...actionAuthority,
+        session: advancedSession,
+      }),
+    /exact current Session, Message, and Focus|current Session and Message/,
+  );
+
+  const substitutedProjectSessionBase = {
+    ...fixtures.contextSession,
+    projectRef: {
+      ...fixtures.contextSession.projectRef,
+      identityDigest: TWO,
+    },
+  } satisfies InteractionSessionProjectionInput;
+  const substitutedProjectSession = decodeInteractionSession(
+    {
+      ...substitutedProjectSessionBase,
+      sessionDigest: digest(interactionSessionProjection(substitutedProjectSessionBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertPendingActionAuthorityChainInvariant({
+        ...actionAuthority,
+        session: substitutedProjectSession,
+      }),
+    /exact retained Session and installed policies/,
+  );
+
+  const directResolutionBase = {
+    ...fixtures.resolution,
+    id: pendingActionResolutionId('pending-action-resolution_b2-persistence'),
+    pendingActionRef: { id: currentAction.id, digest: currentAction.pendingActionDigest },
+  } satisfies PendingActionResolutionProjectionInput;
+  const directResolution = decodePendingActionResolution(
+    {
+      ...directResolutionBase,
+      resolutionDigest: digest(pendingActionResolutionProjection(directResolutionBase)),
+    },
+    digests,
+  );
+  const directReservationBase = {
+    ...fixtures.reservation,
+    id: interactionActionReservationId('interaction-action-reservation_b2-persistence'),
+    pendingActionRef: directResolution.pendingActionRef,
+    resolutionRef: { id: directResolution.id, digest: directResolution.resolutionDigest },
+    commandId: currentAction.preallocatedCommandId,
+  } satisfies InteractionActionReservationProjectionInput;
+  const directReservation = decodeInteractionActionReservation(
+    {
+      ...directReservationBase,
+      reservationDigest: digest(interactionActionReservationProjection(directReservationBase)),
+    },
+    digests,
+  );
+  const directPersistenceChain = {
+    originatingMessage: fixtures.message,
+    routeDecision: currentDecision,
+    pendingAction: currentAction,
+    resolution: directResolution,
+  };
+  assert.throws(
+    () => assertInteractionActionPersistenceChainInvariant(directPersistenceChain),
+    /authorized Resolution requires its exact Action Reservation/,
+  );
+  assert.doesNotThrow(() =>
+    assertInteractionActionPersistenceChainInvariant({
+      ...directPersistenceChain,
+      reservation: directReservation,
+    }),
+  );
+
+  const proposalOperationBase = {
+    id: interactionOperationId('interaction-operation_b2-action-proposal'),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: currentAction.sessionId,
+    expectedSessionVersion: currentDecision.expectedSessionVersion,
+    messageRef: currentAction.originatingMessageRef,
+    operationKind: InteractionOperationKind.ACTION_PROPOSAL,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const proposalOperation = decodeInteractionOperation(
+    {
+      ...proposalOperationBase,
+      operationDigest: digest(interactionOperationProjection(proposalOperationBase)),
+    },
+    digests,
+  );
+  if (proposalOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('B2 Action Proposal Operation fixture must remain reserved');
+  }
+  const completedProposalOperationBase = {
+    ...proposalOperation,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.PENDING_ACTION_RECORDED,
+      pendingActionRef: { id: currentAction.id, digest: currentAction.pendingActionDigest },
+    },
+    completedAt: NOW,
+  } satisfies InteractionOperationProjectionInput;
+  const completedProposalOperation = decodeInteractionOperation(
+    {
+      ...completedProposalOperationBase,
+      operationDigest: digest(interactionOperationProjection(completedProposalOperationBase)),
+    },
+    digests,
+  );
+  if (completedProposalOperation.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('B2 Action Proposal Operation fixture must complete');
+  }
+  assert.doesNotThrow(() =>
+    assertPendingActionOperationResultInvariant({
+      pendingAction: currentAction,
+      currentOperation: proposalOperation,
+      nextOperation: completedProposalOperation,
+    }),
+  );
+  const directProposalChain = {
+    ...actionAuthority,
+    currentOperation: proposalOperation,
+    nextOperation: completedProposalOperation,
+  };
+  assert.throws(
+    () => assertPendingActionProposalCommitChainInvariant(directProposalChain),
+    /direct Action Proposal requires its exact Resolution and Reservation/,
+  );
+  assert.doesNotThrow(() =>
+    assertPendingActionProposalCommitChainInvariant({
+      ...directProposalChain,
+      resolution: directResolution,
+      reservation: directReservation,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    assertPendingActionProposalAuthorityChainInvariant({
+      ...directProposalChain,
+      session: advancedSession,
+      resolution: directResolution,
+      reservation: directReservation,
+    }),
+  );
+  const lateDirectReservationBase = {
+    id: interactionActionReservationId('interaction-action-reservation_b2-late'),
+    schemaVersion: 1 as const,
+    pendingActionRef: directResolution.pendingActionRef,
+    resolutionRef: { id: directResolution.id, digest: directResolution.resolutionDigest },
+    publicCapability: currentAction.publicCapability,
+    commandId: currentAction.preallocatedCommandId,
+    canonicalCommandInputDigest: currentAction.canonicalCommandInputDigest,
+    reservedAt: MIDDLE,
+  } satisfies InteractionActionReservationProjectionInput;
+  const lateDirectReservation = decodeInteractionActionReservation(
+    {
+      ...lateDirectReservationBase,
+      reservationDigest: digest(interactionActionReservationProjection(lateDirectReservationBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertPendingActionProposalCommitChainInvariant({
+        ...directProposalChain,
+        resolution: directResolution,
+        reservation: lateDirectReservation,
+      }),
+    /cannot follow its Action Proposal completion/,
+  );
+  const substitutedProposalResultBase = {
+    ...completedProposalOperation,
+    result: {
+      kind: InteractionOperationResultKind.PENDING_ACTION_RECORDED,
+      pendingActionRef: { id: currentAction.id, digest: THREE },
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const substitutedProposalResult = decodeInteractionOperation(
+    {
+      ...substitutedProposalResultBase,
+      operationDigest: digest(interactionOperationProjection(substitutedProposalResultBase)),
+    },
+    digests,
+  );
+  if (substitutedProposalResult.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('Substituted B2 Action Proposal Operation must remain completed');
+  }
+  assert.throws(
+    () =>
+      assertPendingActionOperationResultInvariant({
+        pendingAction: currentAction,
+        currentOperation: proposalOperation,
+        nextOperation: substitutedProposalResult,
+      }),
+    /exact Pending Action result/,
+  );
+
+  const separateActionBase = {
+    ...currentAction,
+    id: pendingActionId('pending-action_b2-separate-response'),
+    preallocatedCommandId: commandId('command_b2-separate-response'),
+    confirmationRequirement: InteractionConfirmationRequirement.SEPARATE_RESPONSE_REQUIRED,
+  } satisfies PendingActionProjectionInput;
+  const separateAction = decodePendingAction(
+    {
+      ...separateActionBase,
+      pendingActionDigest: digest(pendingActionProjection(separateActionBase)),
+    },
+    digests,
+  );
+  const completedSeparateProposalOperationBase = {
+    ...completedProposalOperation,
+    result: {
+      kind: InteractionOperationResultKind.PENDING_ACTION_RECORDED,
+      pendingActionRef: { id: separateAction.id, digest: separateAction.pendingActionDigest },
+    },
+  } satisfies InteractionOperationProjectionInput;
+  const completedSeparateProposalOperation = decodeInteractionOperation(
+    {
+      ...completedSeparateProposalOperationBase,
+      operationDigest: digest(
+        interactionOperationProjection(completedSeparateProposalOperationBase),
+      ),
+    },
+    digests,
+  );
+  if (completedSeparateProposalOperation.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('Separate B2 Action Proposal Operation fixture must complete');
+  }
+  const separateProposalChain = {
+    ...actionAuthority,
+    pendingAction: separateAction,
+    currentOperation: proposalOperation,
+    nextOperation: completedSeparateProposalOperation,
+  };
+  assert.doesNotThrow(() => assertPendingActionProposalCommitChainInvariant(separateProposalChain));
+  const sameMessageDeclineBase = {
+    id: pendingActionResolutionId('pending-action-resolution_b2-same-message'),
+    schemaVersion: 1 as const,
+    pendingActionRef: { id: separateAction.id, digest: separateAction.pendingActionDigest },
+    confirmationPolicy: separateAction.confirmationPolicy,
+    disposition: PendingActionResolutionDisposition.DECLINED,
+    responseMessageRef: separateAction.originatingMessageRef,
+    resolvedAt: NOW,
+  } satisfies PendingActionResolutionProjectionInput;
+  const sameMessageDecline = decodePendingActionResolution(
+    {
+      ...sameMessageDeclineBase,
+      resolutionDigest: digest(pendingActionResolutionProjection(sameMessageDeclineBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertPendingActionProposalCommitChainInvariant({
+        ...separateProposalChain,
+        resolution: sameMessageDecline,
+      }),
+    /separate Action Proposal must remain unresolved/,
+  );
+  assert.throws(
+    () =>
+      assertInteractionActionChainInvariant({
+        originatingMessage: fixtures.message,
+        resolutionMessage: fixtures.message,
+        routeDecision: currentDecision,
+        pendingAction: separateAction,
+        resolution: sameMessageDecline,
+      }),
+    /response must differ from its originating message/,
+  );
+
+  const responseContent = '不确认';
+  const responseMessageBase = {
+    ...fixtures.message,
+    id: interactionMessageId('interaction-message_b2-decline'),
+    content: responseContent,
+    contentDigest: digests.digestUtf8(responseContent),
+    contentByteLength: Buffer.byteLength(responseContent, 'utf8'),
+    createdAt: MIDDLE,
+  } satisfies InteractionMessageProjectionInput;
+  const responseMessage = decodeInteractionMessage(
+    {
+      ...responseMessageBase,
+      messageDigest: digest(interactionMessageProjection(responseMessageBase)),
+    },
+    digests,
+  );
+  const declinedResolutionBase = {
+    id: pendingActionResolutionId('pending-action-resolution_b2-decline'),
+    schemaVersion: 1 as const,
+    pendingActionRef: sameMessageDecline.pendingActionRef,
+    confirmationPolicy: sameMessageDecline.confirmationPolicy,
+    disposition: PendingActionResolutionDisposition.DECLINED,
+    responseMessageRef: { id: responseMessage.id, digest: responseMessage.messageDigest },
+    resolvedAt: MIDDLE,
+  } satisfies PendingActionResolutionProjectionInput;
+  const declinedResolution = decodePendingActionResolution(
+    {
+      ...declinedResolutionBase,
+      resolutionDigest: digest(pendingActionResolutionProjection(declinedResolutionBase)),
+    },
+    digests,
+  );
+  assert.doesNotThrow(() =>
+    assertInteractionActionPersistenceChainInvariant({
+      originatingMessage: fixtures.message,
+      resolutionMessage: responseMessage,
+      routeDecision: currentDecision,
+      pendingAction: separateAction,
+      resolution: declinedResolution,
+    }),
+  );
+
+  const confirmationOperationBase = {
+    id: interactionOperationId('interaction-operation_b2-action-confirmation'),
+    schemaVersion: 1 as const,
+    version: interactionOperationVersion(1),
+    sessionId: separateAction.sessionId,
+    expectedSessionVersion: interactionSessionVersion(3),
+    messageRef: { id: responseMessage.id, digest: responseMessage.messageDigest },
+    operationKind: InteractionOperationKind.ACTION_CONFIRMATION,
+    state: InteractionOperationState.RESERVED,
+    reservedAt: MIDDLE,
+  } satisfies InteractionOperationProjectionInput;
+  const confirmationOperation = decodeInteractionOperation(
+    {
+      ...confirmationOperationBase,
+      operationDigest: digest(interactionOperationProjection(confirmationOperationBase)),
+    },
+    digests,
+  );
+  if (confirmationOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('B2 Action Confirmation Operation fixture must remain reserved');
+  }
+  const completedConfirmationOperationBase = {
+    ...confirmationOperation,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED,
+      resolutionRef: {
+        id: declinedResolution.id,
+        digest: declinedResolution.resolutionDigest,
+      },
+    },
+    completedAt: MIDDLE,
+  } satisfies InteractionOperationProjectionInput;
+  const completedConfirmationOperation = decodeInteractionOperation(
+    {
+      ...completedConfirmationOperationBase,
+      operationDigest: digest(interactionOperationProjection(completedConfirmationOperationBase)),
+    },
+    digests,
+  );
+  if (completedConfirmationOperation.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('B2 Action Confirmation Operation fixture must complete');
+  }
+  assert.doesNotThrow(() =>
+    assertPendingActionResolutionOperationResultInvariant({
+      pendingAction: separateAction,
+      resolution: declinedResolution,
+      currentOperation: confirmationOperation,
+      nextOperation: completedConfirmationOperation,
+    }),
+  );
+
+  const confirmedContent = '确认';
+  const confirmedMessageBase = {
+    ...fixtures.message,
+    id: interactionMessageId('interaction-message_b2-confirmed'),
+    content: confirmedContent,
+    contentDigest: digests.digestUtf8(confirmedContent),
+    contentByteLength: Buffer.byteLength(confirmedContent, 'utf8'),
+    createdAt: MIDDLE,
+  } satisfies InteractionMessageProjectionInput;
+  const confirmedMessage = decodeInteractionMessage(
+    {
+      ...confirmedMessageBase,
+      messageDigest: digest(interactionMessageProjection(confirmedMessageBase)),
+    },
+    digests,
+  );
+  const confirmedResolutionBase = {
+    id: pendingActionResolutionId('pending-action-resolution_b2-confirmed'),
+    schemaVersion: 1 as const,
+    pendingActionRef: { id: separateAction.id, digest: separateAction.pendingActionDigest },
+    confirmationPolicy: separateAction.confirmationPolicy,
+    disposition: PendingActionResolutionDisposition.SEPARATE_RESPONSE_CONFIRMED,
+    originatingMessageRef: separateAction.originatingMessageRef,
+    authorizingMessageRef: { id: confirmedMessage.id, digest: confirmedMessage.messageDigest },
+    resolvedAt: MIDDLE,
+  } satisfies PendingActionResolutionProjectionInput;
+  const confirmedResolution = decodePendingActionResolution(
+    {
+      ...confirmedResolutionBase,
+      resolutionDigest: digest(pendingActionResolutionProjection(confirmedResolutionBase)),
+    },
+    digests,
+  );
+  const confirmedReservationBase = {
+    id: interactionActionReservationId('interaction-action-reservation_b2-confirmed'),
+    schemaVersion: 1 as const,
+    pendingActionRef: confirmedResolution.pendingActionRef,
+    resolutionRef: { id: confirmedResolution.id, digest: confirmedResolution.resolutionDigest },
+    publicCapability: separateAction.publicCapability,
+    commandId: separateAction.preallocatedCommandId,
+    canonicalCommandInputDigest: separateAction.canonicalCommandInputDigest,
+    reservedAt: MIDDLE,
+  } satisfies InteractionActionReservationProjectionInput;
+  const confirmedReservation = decodeInteractionActionReservation(
+    {
+      ...confirmedReservationBase,
+      reservationDigest: digest(interactionActionReservationProjection(confirmedReservationBase)),
+    },
+    digests,
+  );
+  assert.doesNotThrow(() =>
+    assertInteractionActionPersistenceChainInvariant({
+      originatingMessage: fixtures.message,
+      resolutionMessage: confirmedMessage,
+      routeDecision: currentDecision,
+      pendingAction: separateAction,
+      resolution: confirmedResolution,
+      reservation: confirmedReservation,
+    }),
+  );
+  const confirmedOperationBase = {
+    ...confirmationOperation,
+    id: interactionOperationId('interaction-operation_b2-confirmed'),
+    messageRef: { id: confirmedMessage.id, digest: confirmedMessage.messageDigest },
+  } satisfies InteractionOperationProjectionInput;
+  const confirmedOperation = decodeInteractionOperation(
+    {
+      ...confirmedOperationBase,
+      operationDigest: digest(interactionOperationProjection(confirmedOperationBase)),
+    },
+    digests,
+  );
+  if (confirmedOperation.state !== InteractionOperationState.RESERVED) {
+    assert.fail('Confirmed B2 Action Confirmation Operation fixture must remain reserved');
+  }
+  const completedConfirmedOperationBase = {
+    ...confirmedOperation,
+    version: interactionOperationVersion(2),
+    state: InteractionOperationState.COMPLETED,
+    result: {
+      kind: InteractionOperationResultKind.ACTION_RESOLUTION_RECORDED,
+      resolutionRef: {
+        id: confirmedResolution.id,
+        digest: confirmedResolution.resolutionDigest,
+      },
+      reservationRef: {
+        id: confirmedReservation.id,
+        digest: confirmedReservation.reservationDigest,
+      },
+    },
+    completedAt: MIDDLE,
+  } satisfies InteractionOperationProjectionInput;
+  const completedConfirmedOperation = decodeInteractionOperation(
+    {
+      ...completedConfirmedOperationBase,
+      operationDigest: digest(interactionOperationProjection(completedConfirmedOperationBase)),
+    },
+    digests,
+  );
+  if (completedConfirmedOperation.state !== InteractionOperationState.COMPLETED) {
+    assert.fail('Confirmed B2 Action Confirmation Operation fixture must complete');
+  }
+  assert.throws(
+    () =>
+      assertPendingActionResolutionOperationResultInvariant({
+        pendingAction: separateAction,
+        resolution: confirmedResolution,
+        currentOperation: confirmedOperation,
+        nextOperation: completedConfirmedOperation,
+      }),
+    /exact Resolution and Reservation result/,
+  );
+  assert.doesNotThrow(() =>
+    assertPendingActionResolutionOperationResultInvariant({
+      pendingAction: separateAction,
+      resolution: confirmedResolution,
+      reservation: confirmedReservation,
+      currentOperation: confirmedOperation,
+      nextOperation: completedConfirmedOperation,
+    }),
+  );
+
+  const expiredResolutionBase = {
+    id: pendingActionResolutionId('pending-action-resolution_b2-expired'),
+    schemaVersion: 1 as const,
+    pendingActionRef: { id: separateAction.id, digest: separateAction.pendingActionDigest },
+    confirmationPolicy: separateAction.confirmationPolicy,
+    disposition: PendingActionResolutionDisposition.EXPIRED,
+    resolvedAt: LATER,
+  } satisfies PendingActionResolutionProjectionInput;
+  const expiredResolution = decodePendingActionResolution(
+    {
+      ...expiredResolutionBase,
+      resolutionDigest: digest(pendingActionResolutionProjection(expiredResolutionBase)),
+    },
+    digests,
+  );
+  assert.throws(
+    () =>
+      assertPendingActionResolutionOperationResultInvariant({
+        pendingAction: separateAction,
+        resolution: expiredResolution,
+        currentOperation: confirmationOperation,
+        nextOperation: completedConfirmationOperation,
+      }),
+    /response-free Pending Action Resolution has no Action Confirmation Operation/,
   );
 });
 
