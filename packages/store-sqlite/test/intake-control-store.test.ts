@@ -3401,12 +3401,63 @@ void test('B4 Intake clarification preserves one Message, Question, Command, and
     assert.equal(rollbackReopen.getInteractionOperation(operation.id), undefined);
     rollbackReopen.close();
   }
+  const competingHandoffBase = {
+    ...handoffBase,
+    id: interactionMessageHandoffId(`interaction-message-handoff_${namespace}-second`),
+  } satisfies InteractionMessageHandoffProjectionInput;
+  const competingHandoff = decodeInteractionMessageHandoff(
+    {
+      ...competingHandoffBase,
+      handoffDigest: digests.digest(interactionMessageHandoffProjection(competingHandoffBase)),
+    },
+    digests,
+  );
+  if (competingHandoff.kind !== InteractionMessageHandoffKind.INTAKE_CLARIFICATION) {
+    throw new Error('Competing fixture did not retain an Intake clarification Handoff');
+  }
+  const competingOperationBase = {
+    ...operationBase,
+    id: interactionOperationId(`interaction-operation_${namespace}-second`),
+  } satisfies InteractionOperationProjectionInput;
+  const competingOperation = decodeInteractionOperation(
+    {
+      ...competingOperationBase,
+      operationDigest: digests.digest(interactionOperationProjection(competingOperationBase)),
+    },
+    digests,
+  );
+  if (competingOperation.state !== InteractionOperationState.RESERVED) {
+    throw new Error('Competing fixture clarification Operation was not reserved');
+  }
+  const competingClarificationReservation = {
+    ...clarificationReservation,
+    handoff: competingHandoff,
+    operation: competingOperation,
+    handoffAuditWrite: {
+      ...clarificationReservation.handoffAuditWrite,
+      id: auditEventId(`audit_interaction-${namespace}-second-handoff`),
+      aggregateId: competingHandoff.id,
+      payloadDigest: competingHandoff.handoffDigest,
+    },
+    operationAuditWrite: {
+      ...clarificationReservation.operationAuditWrite,
+      id: auditEventId(`audit_interaction-${namespace}-second-operation-reserved`),
+      aggregateId: competingOperation.id,
+      payloadDigest: competingOperation.operationDigest,
+    },
+  } as const;
   store = openStore(filename);
   assert.deepEqual(store.reserveInteractionClarificationOperation(clarificationReservation), {
     status: 'RESERVED',
     handoff,
     operation,
   });
+  const competingStore = openStore(filename);
+  assert.deepEqual(
+    competingStore.reserveInteractionClarificationOperation(competingClarificationReservation),
+    { status: 'MESSAGE_HANDOFF_CONFLICT', currentHandoff: handoff },
+  );
+  competingStore.close();
   assert.deepEqual(store.getUnresolvedInteractionClarificationOperation(operation.id), {
     operationRef: { id: operation.id, digest: operation.operationDigest },
     handoffRef: { id: handoff.id, digest: handoff.handoffDigest },

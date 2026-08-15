@@ -8183,6 +8183,82 @@ void test('B4 Frontstage Answer commits its exact Route chain, Message, replay, 
   reopened.close();
 });
 
+void test('B4 competing Frontstage Answer results retain one winner and one typed loser', (t) => {
+  const filename = temporaryDatabase(t);
+  const policies = createM26InteractionPolicies(digests);
+  const setup = SqliteControlStore.open({ filename });
+  setup.installInteractionPolicies(installInput(policies));
+  const prepared = prepareFrontstageAnswerCommit(setup, policies, 'b4-competing-answer');
+  const competingAnswer = createFrontstageAnswer(
+    prepared.input.session,
+    prepared.input.originatingMessage,
+    prepared.input.proposal,
+    prepared.input.routeDecision,
+    'b4-competing-answer-second',
+  );
+  const competingOperation = completePresentationOperation(prepared.currentOperation, {
+    kind: InteractionOperationResultKind.ANSWER_RECORDED,
+    answerRef: { id: competingAnswer.id, digest: competingAnswer.answerDigest },
+  });
+  const competingMessage = createProducedMessage(
+    prepared.input.session,
+    competingOperation,
+    'b4-competing-answer-second-result',
+    competingAnswer.answerContent,
+  );
+  const competingInput: CommitFrontstageAnswerResult = Object.freeze({
+    ...prepared.input,
+    answer: competingAnswer,
+    nextOperation: competingOperation,
+    resultMessage: competingMessage,
+    answerAuditWrite: createInteractionAuditWrite(
+      'b4-competing-answer-second',
+      'answer',
+      InteractionAuditAggregateType.FRONTSTAGE_ANSWER,
+      competingAnswer.id,
+      InteractionAuditEventType.FRONTSTAGE_ANSWER_RECORDED,
+      competingAnswer.answerDigest,
+      competingAnswer.createdAt,
+    ),
+    messageAuditWrite: createInteractionAuditWrite(
+      'b4-competing-answer-second',
+      'answer-message',
+      InteractionAuditAggregateType.INTERACTION_MESSAGE,
+      competingMessage.id,
+      InteractionAuditEventType.INTERACTION_MESSAGE_RECORDED,
+      competingMessage.messageDigest,
+      competingMessage.createdAt,
+    ),
+    operationAuditWrite: createInteractionAuditWrite(
+      'b4-competing-answer-second',
+      'answer-completed',
+      InteractionAuditAggregateType.INTERACTION_OPERATION,
+      competingOperation.id,
+      InteractionAuditEventType.INTERACTION_OPERATION_COMPLETED,
+      competingOperation.operationDigest,
+      competingOperation.completedAt,
+      prepared.currentOperation.version,
+      competingOperation.version,
+    ),
+  });
+  setup.close();
+
+  const firstStore = SqliteControlStore.open({ filename });
+  const secondStore = SqliteControlStore.open({ filename });
+  try {
+    assert.equal(firstStore.commitFrontstageAnswerResult(prepared.input).status, 'APPLIED');
+    assert.deepEqual(secondStore.commitFrontstageAnswerResult(competingInput), {
+      status: 'OPERATION_CONFLICT',
+      currentOperation: prepared.input.nextOperation,
+    });
+    assert.deepEqual(secondStore.getFrontstageAnswer(prepared.answer.id), prepared.answer);
+    assert.equal(secondStore.getFrontstageAnswer(competingAnswer.id), undefined);
+  } finally {
+    firstStore.close();
+    secondStore.close();
+  }
+});
+
 for (const rollbackStep of [
   InteractionTransactionStep.AFTER_FRONTSTAGE_ANSWER_AUDIT_WRITE,
   InteractionTransactionStep.AFTER_FRONTSTAGE_ANSWER_WRITE,
