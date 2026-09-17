@@ -9,6 +9,11 @@ complete.
 
 > LLMs propose. CodeClosure decides what may become complete.
 
+CodeClosure is open source under the Apache License 2.0. Maintainer-reviewed
+contributions are welcome, especially focused fixes, tests, documentation, and
+integration hardening for AI coding workflows. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for contribution guidance.
+
 ## Status
 
 The M0 architecture baseline, bounded M1 deterministic skeleton, and bounded
@@ -72,6 +77,9 @@ Corepack.
 corepack pnpm install
 corepack pnpm gate:quality
 ```
+
+The root package is marked private to prevent accidental registry publication;
+the repository source is licensed under [Apache-2.0](LICENSE).
 
 Current repository commands are:
 
